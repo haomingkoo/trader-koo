@@ -280,16 +280,6 @@
         <div class="chart-toolbar">
           <input id="ticker" list="tickerList" value="SPY" placeholder="Ticker e.g. NVDA" />
           <datalist id="tickerList"></datalist>
-          <select id="months">
-            <option value="3" selected>3M</option>
-            <option value="6">6M</option>
-            <option value="12">1Y</option>
-            <option value="24">2Y</option>
-            <option value="36">3Y</option>
-            <option value="60">5Y</option>
-            <option value="120">10Y</option>
-            <option value="0">ALL</option>
-          </select>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
             <input id="showTrendlines" type="checkbox" style="width:auto; padding:0; margin:0;" />
             <span style="font-size:0.8rem; color:var(--muted);">Show Trendlines</span>
@@ -318,9 +308,6 @@
           <button onclick="loadTickerQuick('^GSPC')">SPX</button>
           <button onclick="loadTickerQuick('^DJI')">DJI</button>
           <button onclick="loadTickerQuick('^TNX')">TNX</button>
-        </div>
-        <div id="chartHelp" class="status" style="margin:0 0 8px 2px;">
-          Display window controls what you see. Structure logic uses wider history behind the scenes for stability.
         </div>
 
         <div class="cards">
@@ -871,7 +858,7 @@
       }
 
       const lastDate = x.length ? x[x.length - 1] : null;
-      const selectedMonths = Number($("months")?.value || DEFAULT_MONTHS);
+      const selectedMonths = DEFAULT_MONTHS; // default view window; use rangeselector to zoom
       const defaultX0 = (() => {
         if (!lastDate) return null;
         if (selectedMonths <= 0) return x.length ? x[0] : null;
@@ -1062,12 +1049,11 @@
         paper_bgcolor: "#121927",
         plot_bgcolor: "#121927",
         font: {color: "#e9eef8"},
-        title: {text: `${ticker} • Chart + Levels`, x: 0.01, y: 0.99, xanchor: "left", yanchor: "top"},
-        margin: isMobile ? {t: 50, l: 45, r: 80, b: 40} : {t: 110, l: 60, r: 235, b: 50},
+        margin: isMobile ? {t: 40, l: 45, r: 80, b: 40} : {t: 40, l: 60, r: 235, b: 50},
         dragmode: "zoom",
         legend: isMobile
           ? {orientation: "h", y: -0.08, x: 0, xanchor: "left", font: {size: 10}}
-          : {orientation: "h", y: 1.18, x: 1, xanchor: "right"},
+          : {orientation: "h", y: -0.04, x: 0, xanchor: "left"},
         xaxis: {
           domain: [0, 1], anchor: "y", rangeslider: {visible: false},
           showgrid: true, gridcolor: "#25334f",
@@ -1196,7 +1182,7 @@
 
     async function loadChart() {
       const ticker = ($("ticker").value || "SPY").trim().toUpperCase();
-      const months = Number($("months").value || DEFAULT_MONTHS);
+      const months = 0; // always fetch all data; view window controlled by rangeselector
       const base = getApiBase();
       const btn = $("loadChartBtn");
       btn.disabled = true;
@@ -1300,7 +1286,6 @@
 
     (async () => {
       activateTab("guide");
-      if ($("months")) $("months").value = String(DEFAULT_MONTHS);
       await initApiBase();
       await initApiKey();
       await refreshServiceStatus();
