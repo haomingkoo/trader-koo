@@ -142,7 +142,7 @@
     }
     .chart-toolbar {
       display: grid;
-      grid-template-columns: 180px 170px 140px 140px 150px 130px 120px 1fr;
+      grid-template-columns: 180px 150px 125px 125px 135px 135px 110px 75px 1fr;
       gap: 10px;
       margin-bottom: 10px;
       align-items: center;
@@ -297,6 +297,10 @@
             <input id="showCvClassLines" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
             <span style="font-size:0.8rem; color:var(--muted);">CV Proxy Lines</span>
           </label>
+          <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
+            <input id="showYoloPatterns" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
+            <span style="font-size:0.8rem; color:var(--muted);">YOLO Patterns</span>
+          </label>
           <button id="loadChartBtn">Load</button>
           <div id="chartStatus" class="status">Select ticker and load</div>
         </div>
@@ -360,31 +364,73 @@
           <div class="label">Candlestick Signals</div>
           <table id="candlesTable"></table>
         </div>
+        <div class="panel">
+          <div class="label">YOLO AI Patterns</div>
+          <table id="yoloPatternsTable"></table>
+        </div>
       </div>
     </section>
 
     <section id="tabGuide" class="panel">
       <div class="guide">
-        <h3>What Do Primary / Secondary / Fallback Mean?</h3>
-        <p><b>Primary</b>: nearest/high-confidence level from multiple touches. <b>Secondary</b>: next best nearby level. <b>Fallback</b>: emergency anchor if one side has no strong detected level.</p>
-        <h3>Support vs Resistance</h3>
-        <p><b>Support</b> is where price tends to bounce. <b>Resistance</b> is where price tends to stall/reject.</p>
-        <h3>Gaps</h3>
-        <p><b>Bull gap</b>: today low above yesterday high. <b>Bear gap</b>: today high below yesterday low. Open gaps remain unfilled.</p>
-        <h3>Trendline Candidates</h3>
-        <p>These are heuristic best-fit candidate lines from recent pivots. They are optional overlays and should be treated as context, not hard signals.</p>
-        <h3>Pattern Candidates (Experimental)</h3>
-        <p>Flags and wedges are geometric candidates generated from recent bars. Use with structure + risk management, not standalone entries.</p>
+        <div style="background:rgba(255,107,107,0.12); border:1px solid #ff6b6b; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
+          <div style="color:#ff8a8a; font-weight:700; font-size:0.95rem; margin-bottom:6px;">⚠ NOT FINANCIAL ADVICE</div>
+          <p style="margin:0; color:var(--muted);">This tool is for research and education only. Nothing shown here constitutes financial advice, a recommendation to buy or sell, or a guarantee of any outcome. Signals can be wrong, delayed, or incomplete. You are solely responsible for your trades, risk management, and any financial losses. Always do your own research and consult a licensed financial adviser before making investment decisions.</p>
+        </div>
+
+        <h3>How to Use This Dashboard</h3>
+        <p>This dashboard has three tabs: <b>Guide</b> (this page), <b>Opportunities (PEG)</b> for screening the S&amp;P 500 by valuation, and <b>Chart + Levels</b> for per-ticker technical analysis.</p>
+        <p>Typical workflow: scan the Opportunities tab for interesting tickers → click a row to jump straight to that ticker's chart → study levels, gaps, and patterns to form a thesis.</p>
+
+        <h3>Opportunities Tab — PEG &amp; Valuation Screening</h3>
+        <p>The table shows all S&amp;P 500 tickers ranked by valuation. Key columns:</p>
+        <p>• <b>Discount %</b>: how far the current price is below the analyst target (positive = upside, negative = already above target). E.g. <i>AAPL at 15% discount</i> means the average analyst target is 15% above the current price.</p>
+        <p>• <b>PEG</b>: Price/Earnings-to-Growth ratio. A PEG below 1.0 is often considered "growth at a reasonable price". E.g. <i>PEG = 0.8 on a fast grower</i> is more attractive than <i>PEG = 3.0 on a slow grower</i>.</p>
+        <p>• <b>Undervalued</b>: discount ≥ 10% AND PEG ≤ 2. <b>Deep Value</b>: stricter — discount ≥ 20% AND PEG ≤ 1.5. <b>Overvalued</b>: price is already above target by more than 10%.</p>
+        <p>Click any row to open that ticker's chart automatically.</p>
+
+        <h3>Support vs Resistance Levels</h3>
+        <p><b>Support</b> is a price zone where buyers have previously stepped in, causing price to bounce up. <b>Resistance</b> is a zone where sellers have pushed price back down.</p>
+        <p>Example: if SPY bounced off $450 three times in the past, $450 is strong support. If it has been rejected at $470 twice, $470 is resistance.</p>
+        <p><b>Primary</b>: highest-confidence level (most recent touches, multiple hits). <b>Secondary</b>: next best level. <b>Fallback</b>: auto-generated anchor when no strong detected level exists on one side.</p>
+
+        <h3>Open Gaps</h3>
+        <p>A <b>bull gap</b> occurs when today's open is above yesterday's high — leaving an unfilled region below. A <b>bear gap</b> is the reverse. Markets often "fill" gaps later.</p>
+        <p>Example: NVDA gaps up 5% on earnings — the gap low and high are marked. If price dips back to that range, it is testing the gap fill zone.</p>
+
+        <h3>Trendlines</h3>
+        <p>Heuristic best-fit lines drawn through recent swing pivots. A rising support trendline connecting higher lows suggests an uptrend. Toggle with the <i>Show Trendlines</i> checkbox.</p>
+        <p>These are candidate lines only — not guaranteed to hold. Use them as context alongside levels.</p>
+
+        <h3>Pattern Candidates (Rule-Based)</h3>
+        <p>Geometric pattern detection (flags, wedges, triangles, double tops/bottoms) from recent price bars. Toggle with <i>Show Patterns</i>.</p>
+        <p>Example: a <i>bull flag</i> is a sharp up-move followed by a tight, slightly downward channel — often resolves to the upside. A <i>head and shoulders</i> is a reversal pattern with three peaks, the middle being highest.</p>
+
+        <h3>YOLO AI Patterns</h3>
+        <p>A YOLOv8 computer-vision model (<a href="https://huggingface.co/foduucom/stockmarket-pattern-detection-yolov8" style="color:var(--blue);" target="_blank" rel="noopener">foduucom/stockmarket-pattern-detection-yolov8</a>) is run nightly on each ticker's candlestick chart image. Detected patterns are stored and shown as dotted bounding boxes on the chart.</p>
+        <p>Pattern types: Head &amp; Shoulders Top/Bottom, M-Head, W-Bottom, Triangle, StockLine. Confidence is shown as a percentage — higher is more certain.</p>
+        <p>Toggle with <i>YOLO Patterns</i> checkbox. These are updated each trading day and do not require any waiting on your end.</p>
+
         <h3>Hybrid Pattern Scores</h3>
-        <p>Hybrid score combines geometry confidence, nearby candlestick alignment, volume regime, and breakout/formation state. This layer is currently rule-based and does not require training.</p>
+        <p>Combines rule-based geometry confidence with candlestick alignment, volume regime, and breakout state into a single score. Higher hybrid confidence means more corroborating evidence.</p>
+
         <h3>CV Proxy Pattern Scores</h3>
-        <p>CV proxy is an image-style shape scorer using normalized OHLC geometry. It is not a trained deep model, but useful for comparison and weak-label bootstrapping.</p>
-        <h3>Not Financial Advice</h3>
-        <p>This tool is for research/education only and is not financial advice. Signals can be wrong, delayed, or incomplete. You are solely responsible for your trades, risk controls, and any financial losses.</p>
+        <p>An image-style shape scorer using normalised OHLC geometry — not a trained deep model, but useful as a secondary signal. Compare with Hybrid scores for consensus.</p>
+
+        <h3>Display Window &amp; Chart Navigation</h3>
+        <p>The <b>3M / 6M / YTD / 1Y / 2Y / ALL</b> buttons at the top-right of the chart change the view window. All data is always loaded — changing the window just zooms in. You can also drag to zoom, double-click to reset, and scroll to zoom.</p>
+        <p>The engine uses a wider history window (up to all available data) for more stable level and pivot calculations, regardless of what is shown on screen.</p>
+
         <h3>Common Pitfalls</h3>
-        <p>Pattern overfitting, survivorship bias, data-snooping, low-liquidity distortions, and regime shifts can all degrade signal quality. Always validate with out-of-sample tests and strict risk limits.</p>
-        <h3>Display Window</h3>
-        <p>The 3M/6M/YTD/1Y/2Y selector changes what is displayed. The engine still uses a wider history window for more stable levels and pivots.</p>
+        <p>• <b>Pattern overfitting</b>: a pattern that worked in backtests may not work going forward.</p>
+        <p>• <b>Survivorship bias</b>: S&amp;P 500 constituents are already winners — they have survived long enough to be listed here.</p>
+        <p>• <b>Regime shifts</b>: patterns and levels from a bull market may not behave the same in a bear market or high-volatility regime.</p>
+        <p>• <b>Low-liquidity distortions</b>: thin stocks can have false breakouts. Always check volume.</p>
+        <p>Use strict position sizing and stop-losses. Never risk more than you can afford to lose.</p>
+
+        <div style="margin-top:16px; padding:10px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:0.82rem;">
+          trader_koo is a personal research tool. All data is sourced from public market feeds and may be delayed or inaccurate. <b>Past performance is not indicative of future results.</b> This is NOT financial advice. Use at your own risk.
+        </div>
       </div>
     </section>
   </div>
@@ -794,11 +840,13 @@
       const trendlines = payload.trendlines || [];
       const patterns = payload.patterns || [];
       const patternOverlays = payload.pattern_overlays || [];
+      const yoloPatterns = payload.yolo_patterns || [];
       const ticker = payload.ticker || "N/A";
       const showTrendlines = $("showTrendlines") ? Boolean($("showTrendlines").checked) : false;
       const showPatterns = $("showPatterns") ? Boolean($("showPatterns").checked) : true;
       const showRuleClassLines = $("showRuleClassLines") ? Boolean($("showRuleClassLines").checked) : true;
       const showCvClassLines = $("showCvClassLines") ? Boolean($("showCvClassLines").checked) : true;
+      const showYoloPatterns = $("showYoloPatterns") ? Boolean($("showYoloPatterns").checked) : true;
 
       const x = chart.map(r => r.date);
       const open = chart.map(r => Number(r.open));
@@ -1046,6 +1094,53 @@
         });
       }
 
+      if (showYoloPatterns && yoloPatterns.length > 0) {
+        const yoloColorMap = {
+          bull: {stroke: "#38d39f", fill: "rgba(56,211,159,0.07)"},
+          bear: {stroke: "#ff6b6b", fill: "rgba(255,107,107,0.07)"},
+          neutral: {stroke: "#f8c24e", fill: "rgba(248,194,78,0.07)"},
+        };
+        const yoloStyle = (nameRaw) => {
+          const n = String(nameRaw || "").toLowerCase();
+          if (n.includes("bottom") || n.includes("w_bottom") || n.includes("shoulders bottom")) return yoloColorMap.bull;
+          if (n.includes("top") || n.includes("m_head") || n.includes("shoulders top")) return yoloColorMap.bear;
+          return yoloColorMap.neutral;
+        };
+        yoloPatterns.forEach((p, idx) => {
+          const y0 = Number(p.y0), y1 = Number(p.y1);
+          if (Number.isNaN(y0) || Number.isNaN(y1)) return;
+          const style = yoloStyle(p.pattern);
+          const conf = Number(p.confidence);
+          shapes.push({
+            type: "rect",
+            xref: "x",
+            yref: "y",
+            x0: p.x0_date,
+            x1: p.x1_date,
+            y0: Math.min(y0, y1),
+            y1: Math.max(y0, y1),
+            line: {color: style.stroke, width: 1.5, dash: "dot"},
+            fillcolor: style.fill,
+          });
+          if (!isMobile && idx < 6) {
+            annotations.push({
+              xref: "x",
+              yref: "y",
+              x: p.x1_date,
+              y: Math.max(y0, y1),
+              text: `${String(p.pattern).replaceAll("_", " ")} ${(conf * 100).toFixed(0)}%`,
+              showarrow: false,
+              xanchor: "left",
+              yanchor: "bottom",
+              xshift: 4,
+              bgcolor: "rgba(18,25,39,0.85)",
+              bordercolor: style.stroke,
+              font: {color: style.stroke, size: 10},
+            });
+          }
+        });
+      }
+
       const layout = {
         paper_bgcolor: "#121927",
         plot_bgcolor: "#121927",
@@ -1235,6 +1330,7 @@
           { sortable: true }
         );
         renderSimpleTable("candlesTable", ["date", "pattern", "bias", "confidence", "explanation"], payload.candlestick_patterns || [], false, null, { sortable: true });
+        renderSimpleTable("yoloPatternsTable", ["pattern", "confidence", "x0_date", "x1_date", "y0", "y1", "as_of_date"], payload.yolo_patterns || [], false, null, { sortable: true });
         $("chartStatus").textContent = `asof ${payload.asof || "-"} • ${ticker}`;
         setGlobalStatus(`Done (${ticker})`);
       } catch (err) {
@@ -1287,6 +1383,7 @@
     $("showPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showRuleClassLines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showCvClassLines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
+    $("showYoloPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
 
     (async () => {
       activateTab("guide");

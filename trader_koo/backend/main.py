@@ -228,6 +228,21 @@ def get_latest_options_summary(conn: sqlite3.Connection, ticker: str) -> dict[st
     }
 
 
+def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, Any]]:
+    if not table_exists(conn, "yolo_patterns"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date, detected_ts
+        FROM yolo_patterns
+        WHERE ticker = ?
+        ORDER BY confidence DESC
+        """,
+        (ticker,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_price_df(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
@@ -430,6 +445,7 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
         "cv_proxy_patterns": _serialize_df(cv_proxy_patterns),
         "hybrid_cv_compare": _serialize_df(hybrid_cv_compare),
         "pattern_overlays": _serialize_df(pattern_overlays),
+        "yolo_patterns": get_yolo_patterns(conn, ticker),
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
             "config": {
@@ -620,6 +636,18 @@ def dashboard(ticker: str, months: int = Query(default=3, ge=0, le=240)) -> dict
     conn = get_conn()
     try:
         return build_dashboard_payload(conn, ticker=ticker, months=months)
+    finally:
+        conn.close()
+
+
+@app.get("/api/yolo/{ticker}")
+def yolo_ticker(ticker: str) -> dict[str, Any]:
+    """Return stored YOLO pattern detections for a ticker."""
+    conn = get_conn()
+    try:
+        t = ticker.upper().strip()
+        patterns = get_yolo_patterns(conn, t)
+        return {"ticker": t, "count": len(patterns), "patterns": patterns}
     finally:
         conn.close()
 
