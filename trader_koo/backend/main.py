@@ -88,6 +88,11 @@ async def lifespan(_app: FastAPI):
 
 
 _ALLOWED_ORIGIN = os.getenv("TRADER_KOO_ALLOWED_ORIGIN", "*")
+PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/config",
+    "/api/status",
+}
 
 app = FastAPI(
     title="trader_koo API",
@@ -112,12 +117,24 @@ app.add_middleware(
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
-    """Require X-API-Key on all /api/* routes except /api/health."""
+    """Require X-API-Key on protected /api/* routes."""
     if API_KEY:
         path = request.url.path
-        if path.startswith("/api/") and path not in ("/api/health", "/api/config"):
+        if path.startswith("/api/") and path not in PUBLIC_API_PATHS:
             provided = request.headers.get("X-API-Key", "")
             if not secrets.compare_digest(provided, API_KEY):
+                xff = request.headers.get("x-forwarded-for", "")
+                client_ip = (xff.split(",")[0].strip() if xff else "") or (request.client.host if request.client else "-")
+                ua = request.headers.get("user-agent", "-")
+                referer = request.headers.get("referer", "-")
+                LOG.warning(
+                    "Unauthorized request blocked method=%s path=%s client_ip=%s user_agent=%s referer=%s",
+                    request.method,
+                    path,
+                    client_ip,
+                    ua,
+                    referer,
+                )
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -242,6 +259,64 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
         (ticker,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _tail_text_file(path: Path, lines: int = 60, max_bytes: int = 64_000) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            read_size = min(size, max_bytes)
+            f.seek(max(0, size - read_size))
+            data = f.read().decode("utf-8", errors="replace")
+        return data.splitlines()[-lines:]
+    except Exception:
+        return []
+
+
+def get_yolo_status(conn: sqlite3.Connection) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "table_exists": table_exists(conn, "yolo_patterns"),
+        "universe_tickers": 0,
+        "summary": {},
+        "timeframes": [],
+    }
+    if not out["table_exists"]:
+        return out
+
+    universe_row = conn.execute("SELECT COUNT(DISTINCT ticker) AS c FROM price_daily").fetchone()
+    out["universe_tickers"] = int(universe_row["c"] or 0) if universe_row else 0
+
+    summary = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS rows_total,
+            COUNT(DISTINCT ticker) AS tickers_total,
+            MAX(detected_ts) AS latest_detected_ts,
+            MAX(as_of_date) AS latest_asof_date
+        FROM yolo_patterns
+        """
+    ).fetchone()
+    out["summary"] = dict(summary) if summary is not None else {}
+
+    tf_rows = conn.execute(
+        """
+        SELECT
+            timeframe,
+            COUNT(*) AS rows_total,
+            COUNT(DISTINCT ticker) AS tickers_total,
+            MAX(detected_ts) AS latest_detected_ts,
+            MAX(as_of_date) AS latest_asof_date,
+            AVG(confidence) AS avg_confidence
+        FROM yolo_patterns
+        GROUP BY timeframe
+        ORDER BY timeframe
+        """
+    ).fetchall()
+    out["timeframes"] = [dict(r) for r in tf_rows]
+    return out
 
 
 def get_price_df(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
@@ -548,6 +623,25 @@ def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
     return {
         "ok": True,
         "message": f"YOLO seed started (timeframe={timeframe}) — tail /data/logs/yolo_patterns.log or check Railway logs",
+    }
+
+
+@app.get("/api/admin/yolo-status")
+def yolo_status(log_lines: int = Query(default=40, ge=0, le=400)) -> dict[str, Any]:
+    """Return YOLO runner status + DB summary + recent log tail."""
+    log_path = Path(os.getenv("TRADER_KOO_YOLO_LOG_PATH", "/data/logs/yolo_patterns.log"))
+    conn = get_conn()
+    try:
+        db_status = get_yolo_status(conn)
+    finally:
+        conn.close()
+    thread_alive = bool(_yolo_seed_thread and _yolo_seed_thread.is_alive())
+    return {
+        "ok": True,
+        "thread_running": thread_alive,
+        "log_path": str(log_path),
+        "log_tail": _tail_text_file(log_path, lines=log_lines),
+        "db": db_status,
     }
 
 
