@@ -3,6 +3,9 @@
 # On first run (empty volume), seeds the DB before starting the server.
 set -euo pipefail
 
+# Make trader_koo importable without installing it as a package
+export PYTHONPATH="/app:${PYTHONPATH:-}"
+
 DB_PATH="${TRADER_KOO_DB_PATH:-trader_koo/data/trader_koo.db}"
 
 if [ ! -f "$DB_PATH" ]; then
