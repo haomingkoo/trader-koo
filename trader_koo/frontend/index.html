@@ -229,6 +229,7 @@
         <div id="globalStatus" class="status">Idle</div>
         <div id="serviceStatus" class="status">Service status unknown</div>
       </div>
+      <button id="triggerUpdateBtn" onclick="triggerUpdate()" style="font-size:0.75rem;padding:3px 10px;">Run Update</button>
       <details class="adv">
         <summary>Advanced</summary>
         <div class="adv-body">
@@ -641,6 +642,24 @@
       } catch (err) {
         setServiceStatus(`API DOWN (${err.message})`, true);
         $("apiResolved").textContent = `API: ${base}`;
+      }
+    }
+
+    async function triggerUpdate() {
+      const base = getApiBase();
+      if (!base) { alert("API base not resolved yet."); return; }
+      const btn = $("triggerUpdateBtn");
+      btn.disabled = true;
+      btn.textContent = "Triggering...";
+      try {
+        const resp = await apiFetch(`${base}/api/admin/trigger-update`, { method: "POST" });
+        if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+        btn.textContent = "Triggered ✓";
+        setTimeout(() => { btn.textContent = "Run Update"; btn.disabled = false; }, 5000);
+      } catch (err) {
+        alert(`Failed: ${err.message}`);
+        btn.textContent = "Run Update";
+        btn.disabled = false;
       }
     }
 
