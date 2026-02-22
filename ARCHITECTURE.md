@@ -8,20 +8,20 @@ This document explains how trader-koo is built — the data flow, module respons
 
 ```
                           ┌────────────────────────────────────────────┐
-                          │              Railway Service                │
-                          │                                             │
-   Browser  ─── HTTPS ──▶│  FastAPI (uvicorn, port 8080)              │
-                          │      │                                      │
+                          │              Railway Service               │
+                          │                                            │
+   Browser  ─── HTTPS ──▶ │  FastAPI (uvicorn, port 8080)              │
+                          │      │                                     │
                           │      ├─ serves index.html (GET /)          │
                           │      ├─ /api/dashboard/{ticker}            │
                           │      ├─ /api/opportunities                 │
                           │      └─ /api/admin/*  (auth required)      │
-                          │                                             │
-                          │  APScheduler (in-process, Mon–Fri 22 UTC) │
-                          │      └─ daily_update.sh                   │
+                          │                                            │
+                          │  APScheduler (in-process, Mon–Fri 22 UTC)  │
+                          │      └─ daily_update.sh                    │
                           │           ├─ update_market_db.py           │
                           │           └─ run_yolo_patterns.py          │
-                          │                                             │
+                          │                                            │
                           │  /data/trader_koo.db  (persistent volume)  │
                           │  /data/logs/                               │
                           │  /data/.ultralytics/  (YOLO model cache)   │
