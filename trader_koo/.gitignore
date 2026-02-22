@@ -13,3 +13,4 @@ data/raw/*
 !data/raw/.gitkeep
 data/*.duckdb
 data/*.parquet
+*.pt
