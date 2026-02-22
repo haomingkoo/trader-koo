@@ -261,6 +261,12 @@ def main() -> None:
 
     LOG.info("Loading YOLO model: %s", YOLO_MODEL_ID)
     try:
+        # PyTorch ≥2.6 defaults weights_only=True, which rejects legacy YOLO weights.
+        # Patch torch.load to keep the old behaviour before importing ultralyticsplus.
+        import torch as _torch
+        _orig_load = _torch.load
+        _torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": kw.get("weights_only", False)})
+
         from ultralyticsplus import YOLO
         model = YOLO(YOLO_MODEL_ID)
         model.overrides.update({
