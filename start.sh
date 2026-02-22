@@ -7,7 +7,7 @@ set -euo pipefail
 PYTHON=/opt/venv/bin/python
 UVICORN=/opt/venv/bin/uvicorn
 
-DB_PATH="${TRADER_KOO_DB_PATH:-trader_koo/data/trader_koo.db}"
+DB_PATH="${TRADER_KOO_DB_PATH:-/data/trader_koo.db}"
 
 if [ ! -f "$DB_PATH" ]; then
     echo "[start.sh] DB not found at $DB_PATH — seeding initial data..."
