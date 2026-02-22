@@ -390,6 +390,7 @@
     const TABLE_STATE = {};
     const DEFAULT_MONTHS = 3;
     let LAST_CHART_PAYLOAD = null;
+    let _apiKey = "";
 
     function fmt(v, d = 2) {
       if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
@@ -511,6 +512,20 @@
       return normalizeBase($("apiBase").value);
     }
 
+    function apiFetch(url, opts = {}) {
+      const headers = { ...(opts.headers || {}) };
+      if (_apiKey) headers["X-API-Key"] = _apiKey;
+      return fetch(url, { ...opts, headers });
+    }
+
+    async function initApiKey() {
+      const base = getApiBase();
+      try {
+        const resp = await fetch(`${base}/api/config`);
+        if (resp.ok) { const cfg = await resp.json(); _apiKey = cfg.api_key || ""; }
+      } catch { /* no-op */ }
+    }
+
     function setApiBase(base, persist = true) {
       const clean = normalizeBase(base);
       $("apiBase").value = clean;
@@ -570,7 +585,7 @@
         return;
       }
       try {
-        const resp = await fetch(`${base}/api/status`);
+        const resp = await apiFetch(`${base}/api/status`);
         if (!resp.ok) throw new Error(`${resp.status}`);
         const payload = await resp.json();
         const run = payload.latest_run || {};
@@ -1077,7 +1092,7 @@
           overvalued_threshold: String(overvaluedThreshold),
           view,
         });
-        const resp = await fetch(`${base}/api/opportunities?${q.toString()}`);
+        const resp = await apiFetch(`${base}/api/opportunities?${q.toString()}`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const payload = await resp.json();
         const rows = payload.rows || [];
@@ -1114,7 +1129,7 @@
       $("chartStatus").textContent = `Loading ${ticker}...`;
       setGlobalStatus(`Loading ${ticker} dashboard...`);
       try {
-        const resp = await fetch(`${base}/api/dashboard/${ticker}?months=${months}`);
+        const resp = await apiFetch(`${base}/api/dashboard/${ticker}?months=${months}`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const payload = await resp.json();
         fillCards(payload);
@@ -1170,7 +1185,7 @@
     async function loadTickerUniverse() {
       const base = getApiBase();
       try {
-        const resp = await fetch(`${base}/api/tickers?limit=2000`);
+        const resp = await apiFetch(`${base}/api/tickers?limit=2000`);
         if (!resp.ok) throw new Error(`${resp.status}`);
         const payload = await resp.json();
         const list = $("tickerList");
@@ -1211,6 +1226,7 @@
       activateTab("guide");
       if ($("months")) $("months").value = String(DEFAULT_MONTHS);
       await initApiBase();
+      await initApiKey();
       await refreshServiceStatus();
       await loadTickerUniverse();
       await loadOpportunities();
