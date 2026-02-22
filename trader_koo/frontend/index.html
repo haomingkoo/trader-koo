@@ -182,11 +182,35 @@
     tr.clickable:hover { background: rgba(106,169,255,0.12); cursor: pointer; }
     .table-wrap { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
     .table-wrap > .panel { min-width: 0; overflow-x: auto; }
+    .mkt-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .mkt-bar button {
+      width: auto;
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      background: #0f1624;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      cursor: pointer;
+    }
+    .mkt-bar button:hover { color: var(--text); border-color: var(--blue); }
+    @media (max-width: 768px) {
+      .op-toolbar { grid-template-columns: 1fr 1fr; }
+      .chart-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chart-toolbar > * { flex: 1 1 130px; min-width: 0; }
+    }
     @media (max-width: 640px) {
       .wrap { padding: 12px; }
       #chart { height: 420px; }
       .table-wrap { grid-template-columns: 1fr; }
       .cards { grid-template-columns: repeat(3, 1fr); }
+      .op-toolbar { grid-template-columns: 1fr 1fr; }
     }
     .guide {
       line-height: 1.5;
@@ -266,7 +290,7 @@
         <button id="loadOpBtn">Load</button>
       </div>
       <div id="opStatus" class="op-status"><span class="status-plain">Auto-loading full S&P500 table...</span></div>
-      <table id="opTable"></table>
+      <div style="overflow-x: auto; max-width: 100%;"><table id="opTable"></table></div>
     </section>
 
     <section id="tabChart" class="hidden">
@@ -302,6 +326,16 @@
           </label>
           <button id="loadChartBtn">Load</button>
           <div id="chartStatus" class="status">Select ticker and load</div>
+        </div>
+        <div class="mkt-bar">
+          <span style="color:var(--muted); font-size:0.75rem;">Market:</span>
+          <button onclick="loadTickerQuick('SPY')">SPY</button>
+          <button onclick="loadTickerQuick('QQQ')">QQQ</button>
+          <button onclick="loadTickerQuick('^VIX')">VIX</button>
+          <button onclick="loadTickerQuick('SVIX')">SVIX</button>
+          <button onclick="loadTickerQuick('^GSPC')">SPX</button>
+          <button onclick="loadTickerQuick('^DJI')">DJI</button>
+          <button onclick="loadTickerQuick('^TNX')">TNX</button>
         </div>
         <div id="chartHelp" class="status" style="margin:0 0 8px 2px;">
           Display window controls what you see. Structure logic uses wider history behind the scenes for stability.
@@ -854,6 +888,7 @@
       const baseDefaultY = computeYRangeForXWindow(x, low, high, defaultX0, defaultX1);
       const defaultY = extendYRangeWithLevelValues(baseDefaultY, levelValues);
 
+      const isMobile = window.innerWidth < 640;
       const shapes = [];
       const annotations = [];
 
@@ -882,10 +917,13 @@
         });
         annotations.push({
           xref: "paper", yref: "y", x: 1.0, y: lvl,
-          text: `${tierLabel} ${String(r.type).toUpperCase()}<br>${fmt(lvl)} (${r.touches ?? "-"})`,
+          text: isMobile
+            ? fmt(lvl)
+            : `${tierLabel} ${String(r.type).toUpperCase()}<br>${fmt(lvl)} (${r.touches ?? "-"})`,
           showarrow: false, xanchor: "left", yanchor: "middle", align: "left",
-          xshift: 6, borderpad: 2,
-          bgcolor: "rgba(18,25,39,0.9)", bordercolor: color, font: {color, size: 11}
+          xshift: 4, borderpad: 2,
+          bgcolor: "rgba(18,25,39,0.9)", bordercolor: color,
+          font: {color, size: isMobile ? 10 : 11}
         });
       });
 
@@ -1006,19 +1044,21 @@
             y1: y1b,
             line: {color, width, dash},
           });
-          annotations.push({
-            xref: "paper",
-            yref: "paper",
-            x: 0.01,
-            y: 0.98 - idx * 0.045,
-            text: `${className.replaceAll("_", " ")} • ${shortSrc} • ${status} • ${fmt(conf, 2)}`,
-            showarrow: false,
-            xanchor: "left",
-            yanchor: "top",
-            bgcolor: "rgba(18,25,39,0.85)",
-            bordercolor: color,
-            font: {color, size: 11},
-          });
+          if (!isMobile) {
+            annotations.push({
+              xref: "paper",
+              yref: "paper",
+              x: 0.01,
+              y: 0.98 - idx * 0.045,
+              text: `${className.replaceAll("_", " ")} • ${shortSrc} • ${status} • ${fmt(conf, 2)}`,
+              showarrow: false,
+              xanchor: "left",
+              yanchor: "top",
+              bgcolor: "rgba(18,25,39,0.85)",
+              bordercolor: color,
+              font: {color, size: 11},
+            });
+          }
         });
       }
 
@@ -1027,9 +1067,11 @@
         plot_bgcolor: "#121927",
         font: {color: "#e9eef8"},
         title: {text: `${ticker} • Chart + Levels`, x: 0.01, y: 0.99, xanchor: "left", yanchor: "top"},
-        margin: {t: 110, l: 60, r: 235, b: 50},
+        margin: isMobile ? {t: 50, l: 45, r: 80, b: 40} : {t: 110, l: 60, r: 235, b: 50},
         dragmode: "zoom",
-        legend: {orientation: "h", y: 1.18, x: 1, xanchor: "right"},
+        legend: isMobile
+          ? {orientation: "h", y: -0.08, x: 0, xanchor: "left", font: {size: 10}}
+          : {orientation: "h", y: 1.18, x: 1, xanchor: "right"},
         xaxis: {
           domain: [0, 1], anchor: "y", rangeslider: {visible: false},
           showgrid: true, gridcolor: "#25334f",
@@ -1135,7 +1177,7 @@
         renderOpFilterHelp(payload.filter_help || null);
         renderSimpleTable(
           "opTable",
-          ["ticker", "price", "pe", "peg", "target_price", "discount_pct", "valuation_label", "target_source", "eps_growth_5y"],
+          ["ticker", "price", "pe", "peg", "target_price", "discount_pct", "valuation_label", "eps_growth_5y"],
           rows,
           true,
           (row) => {
@@ -1235,6 +1277,12 @@
       } catch (err) {
         console.warn("ticker universe load failed", err);
       }
+    }
+
+    function loadTickerQuick(t) {
+      $("ticker").value = t;
+      activateTab("chart");
+      loadChart();
     }
 
     $("loadOpBtn").addEventListener("click", loadOpportunities);
