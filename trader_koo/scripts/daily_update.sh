@@ -6,13 +6,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-# Local dev: use venv. Railway: fall back to system python.
-if [ -f "$PROJECT_DIR/.venv/bin/python" ]; then
+# Local dev: use venv. Railway: use nixpacks venv.
+if [ -f "/opt/venv/bin/python" ]; then
+    PYTHON="/opt/venv/bin/python"
+elif [ -f "$PROJECT_DIR/.venv/bin/python" ]; then
     PYTHON="$PROJECT_DIR/.venv/bin/python"
 else
     PYTHON="$(command -v python3 || command -v python)"
 fi
-LOG_DIR="$PROJECT_DIR/data/logs"
+DB_PATH="${TRADER_KOO_DB_PATH:-/data/trader_koo.db}"
+LOG_DIR="${TRADER_KOO_LOG_DIR:-/data/logs}"
 RUN_LOG="$LOG_DIR/cron_daily.log"
 
 mkdir -p "$LOG_DIR"
@@ -37,6 +40,7 @@ fi
     --fund-min-interval-hours 20 \
     --sleep-min 0.5 \
     --sleep-max 1.2 \
+    --db-path "$DB_PATH" \
     --log-file "$LOG_DIR/update_market_db.log" \
     >> "$RUN_LOG" 2>&1
 
