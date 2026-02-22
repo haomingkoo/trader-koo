@@ -1,0 +1,6 @@
+sample_id,pattern,approved,label_override,status_override,review_notes,reviewer
+QQQ_20251003_120,rising_wedge,,,,,
+QQQ_20251230_120,falling_wedge,,,,,
+QQQ_20251230_120,bull_flag,,,,,
+QQQ_20251230_120,descending_triangle,,,,,
+SPY_20251114_120,bear_flag,,,,,

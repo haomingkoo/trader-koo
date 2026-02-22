@@ -1,0 +1,13 @@
+class_id,class_name
+0,bull_flag
+1,bear_flag
+2,rising_wedge
+3,falling_wedge
+4,ascending_triangle
+5,descending_triangle
+6,symmetrical_triangle
+7,double_top
+8,double_bottom
+9,head_and_shoulders
+10,inverse_head_and_shoulders
+11,cup_and_handle

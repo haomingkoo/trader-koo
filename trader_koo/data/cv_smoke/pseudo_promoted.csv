@@ -1,0 +1,3 @@
+sample_id,pattern,confidence,status,label_source,review_state
+QQQ_20250821_120,rising_wedge,0.95,forming,model_pseudo,auto_promoted
+QQQ_20251003_120,rising_wedge,0.95,forming,model_pseudo,auto_promoted

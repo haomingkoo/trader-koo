@@ -1,0 +1,12 @@
+bull_flag
+bear_flag
+rising_wedge
+falling_wedge
+ascending_triangle
+descending_triangle
+symmetrical_triangle
+double_top
+double_bottom
+head_and_shoulders
+inverse_head_and_shoulders
+cup_and_handle

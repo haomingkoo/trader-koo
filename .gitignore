@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Data — DB and logs live on Railway volume, not in git
+trader_koo/data/*.db
+trader_koo/data/logs/
+
+# Generated CV images (large, reproducible)
+trader_koo/data/cv/images/
+trader_koo/data/cv/images_review/
+trader_koo/data/cv/windows/
+
+# macOS
+.DS_Store
+
+# Env
+.env
+.env.*

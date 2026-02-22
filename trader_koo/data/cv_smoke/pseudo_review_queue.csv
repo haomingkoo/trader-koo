@@ -1,0 +1,3 @@
+sample_id,pattern,confidence,status,label_source,review_state
+SPY_20250821_120,rising_wedge,0.88,forming,model_pseudo,needs_human_review
+SPY_20251003_120,rising_wedge,0.88,forming,model_pseudo,needs_human_review

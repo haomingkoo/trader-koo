@@ -1,0 +1,7 @@
+pandas>=2.1
+requests>=2.31
+yfinance>=0.2.40
+finviz>=1.4.6
+lxml>=5.0
+fastapi>=0.111
+uvicorn>=0.30
