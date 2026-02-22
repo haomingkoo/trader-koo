@@ -7,6 +7,7 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -518,6 +519,36 @@ def trigger_update() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Scheduler job not found")
     job.modify(next_run_time=dt.datetime.now(dt.timezone.utc))
     return {"ok": True, "message": "daily_update triggered — check /data/logs/cron_daily.log"}
+
+
+_yolo_seed_thread: threading.Thread | None = None
+
+
+@app.post("/api/admin/run-yolo-seed")
+def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
+    """Trigger full YOLO seed for all tickers in background (no --only-new)."""
+    global _yolo_seed_thread
+    if _yolo_seed_thread and _yolo_seed_thread.is_alive():
+        return {"ok": False, "message": "Seed already running — wait for it to finish"}
+    script = Path(__file__).resolve().parents[1] / "scripts" / "run_yolo_patterns.py"
+    cmd = [
+        sys.executable, str(script),
+        "--db-path", str(DB_PATH),
+        "--timeframe", timeframe,
+        "--lookback-days", "180",
+        "--weekly-lookback-days", "730",
+        "--sleep", "0.05",
+    ]
+
+    def _run() -> None:
+        subprocess.run(cmd, capture_output=False)
+
+    _yolo_seed_thread = threading.Thread(target=_run, daemon=True)
+    _yolo_seed_thread.start()
+    return {
+        "ok": True,
+        "message": f"YOLO seed started (timeframe={timeframe}) — tail /data/logs/yolo_patterns.log or check Railway logs",
+    }
 
 
 @app.get("/api/status")
