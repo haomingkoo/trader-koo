@@ -80,7 +80,7 @@ async def api_key_middleware(request: Request, call_next):
     """Require X-API-Key on all /api/* routes except /api/health."""
     if API_KEY:
         path = request.url.path
-        if path.startswith("/api/") and path not in ("/api/health",):
+        if path.startswith("/api/") and path not in ("/api/health", "/api/config"):
             provided = request.headers.get("X-API-Key", "")
             if not secrets.compare_digest(provided, API_KEY):
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
@@ -446,6 +446,12 @@ def select_fund_snapshot(conn: sqlite3.Connection, min_complete_tickers: int = 4
         return latest_complete["snapshot_ts"], int(latest_complete["c"] or 0)
 
     return latest_snap, latest_count
+
+
+@app.get("/api/config", include_in_schema=False)
+def config() -> dict[str, Any]:
+    """Public client config — returns API key so the JS frontend can authenticate."""
+    return {"api_key": API_KEY}
 
 
 @app.get("/api/health")
