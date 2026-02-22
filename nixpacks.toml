@@ -1,8 +1,13 @@
 [phases.setup]
 nixPkgs = ["libGL", "glib"]
 
-[phases.install]
+# Override build phase to append opencv-headless force-reinstall.
+# ultralyticsplus pulls in opencv-python (non-headless) which needs libGL;
+# force-reinstalling the headless variant avoids the libGL.so.1 dependency.
+[phases.build]
 cmds = [
+  "pip install torch --index-url https://download.pytorch.org/whl/cpu",
   "pip install -r trader_koo/requirements.txt",
+  "pip install -e .",
   "pip install opencv-python-headless --force-reinstall --quiet",
 ]
