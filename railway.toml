@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pip install -r trader_koo/requirements.txt"
+buildCommand = "pip install -r trader_koo/requirements.txt && pip install -e ."
 
 [deploy]
 startCommand = "bash start.sh"
