@@ -3,7 +3,7 @@ builder = "nixpacks"
 buildCommand = "pip install -r trader_koo/requirements.txt"
 
 [deploy]
-startCommand = "uvicorn trader_koo.backend.main:app --host 0.0.0.0 --port $PORT"
+startCommand = "bash start.sh"
 healthcheckPath = "/api/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 300
 restartPolicyType = "on_failure"
