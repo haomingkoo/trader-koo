@@ -1,184 +1,106 @@
 # trader_koo
 
-Workspace for the swing-trading dashboard build (data + API + UI).
+Chart pattern scanner for S&P 500 equities. Detects head & shoulders, wedges, double tops/bottoms, flags and triangles using rule-based + CV-assisted analysis. FastAPI backend with live visualization dashboard and automated daily data pipeline.
 
-## Structure
-- `data/` local datasets and cache
-- `backend/` API/services
-- `frontend/` web app
-- `scripts/` ingestion / feature jobs
-- `notebooks/` experiments
-- `features/` feature engineering layer (ATR, MA, pivots)
-- `structure/` structure layer (levels, gaps, trendlines)
-- `cv/` CV staging area (dataset + weak-label roadmap)
+## Features
 
-## Suggested next build order
-1. Build local data store (SQLite/DuckDB) in `data/`.
-2. Add ingestion script in `scripts/` for OHLCV + fundamentals.
-3. Add API in `backend/` to serve dashboard-ready payloads.
-4. Add dark-theme frontend in `frontend/`.
+- **Pattern detection** — head & shoulders, inverse H&S, double top/bottom, rising/falling wedge, bull/bear flag, symmetrical triangle
+- **Market context** — VIX, SPY, QQQ, DJI, TNX fetched daily alongside S&P 500 tickers
+- **Fundamentals** — Finviz snapshots (P/E, PEG, EPS, analyst targets) for valuation screening
+- **Live dashboard** — dark-theme frontend served directly by the API; chart overlays for levels, gaps, trendlines and patterns
+- **CV pipeline** — weak-label → human review → gold label loop for training a YOLO chart pattern detector
+- **Daily cron** — automated data refresh script, production-ready for Railway deployment
 
-## Local DB Ingestion (ready)
-`scripts/update_market_db.py` now supports:
-- Finviz fundamentals snapshots
-- Daily OHLCV history
-- Optional options IV snapshots
+## Project structure
 
-Canonical DB path (default): `data/trader_koo.db`
-Use the **Runbook** section below for the exact commands.
-
-### Production-friendly behavior (new)
-- Price data is now incremental by default:
-  - script reads latest stored date per ticker
-  - fetches from a small lookback window (default `--price-lookback-days 10`)
-  - appends/updates only recent rows via upsert
-- Fundamentals/options can be rate-limited by freshness:
-  - `--fund-min-interval-hours 12`
-  - `--options-min-interval-hours 4`
-- Each run writes operational metadata:
-  - `ingest_runs` (job-level status)
-  - `ingest_ticker_status` (per ticker diagnostics)
-- Structured logs are written to:
-  - `trader_koo/data/logs/update_market_db.log`
-
-### Common ingestion commands
-```bash
-# normal incremental refresh
-python scripts/update_market_db.py --tickers "SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,TSLA" --include-options
-
-# faster/smaller refresh cadence (e.g., every 15-30m)
-python scripts/update_market_db.py --tickers "SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,TSLA" --include-options --fund-min-interval-hours 24 --options-min-interval-hours 2
-
-# full backfill refresh (rare)
-python scripts/update_market_db.py --tickers "SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,TSLA" --full-price-refresh --price-start 2018-01-01
+```
+trader_koo/          # Python package
+├── backend/         # FastAPI app
+├── cv/              # CV pipeline (proxy patterns, label management)
+├── data/            # SQLite DB, label CSVs, cache (DB not in git)
+├── features/        # ATR, MAs, pivot detection
+├── frontend/        # Single-page dashboard (served by FastAPI)
+├── scripts/         # Ingestion, pattern detection, label scripts
+└── structure/       # Levels, gaps, trendlines, pattern scoring
 ```
 
-## API + Frontend Starter (ready)
+## Quick start (local)
 
-### Start API
+### 1. Create venv and install deps
 ```bash
-# Option A (recommended, from repo root)
-python -m uvicorn trader_koo.backend.main:app --reload
-
-# Option B (if your cwd is trader_koo/)
-python -m uvicorn backend.main:app --reload
-```
-
-### Open frontend
-Open `http://127.0.0.1:8000` in browser (served by FastAPI).
-
-In the page:
-- API base is auto-detected
-- choose ticker + window
-- click `Load`
-
-### API endpoints
-- `GET /api/health`
-- `GET /api/status`
-- `GET /api/tickers`
-- `GET /api/dashboard/{ticker}?months=3`
-
-`/api/status` is intended for uptime/debug pages and returns:
-- current API/DB availability
-- latest ingestion run status
-- data freshness (prices/fundamentals/options)
-- row/ticker counts
-
-## Persona-aligned refactor (implemented)
-
-The dashboard logic now follows the 4-layer flow from `persona.txt`:
-
-1. `data` layer:
-- canonical schema enforcement (`date, open, high, low, close, volume`)
-- protects against yfinance MultiIndex and malformed columns
-
-2. `features` layer:
-- ATR, ATR%, returns, MA20/50/100/200
-- pivot highs/lows
-
-3. `structure` layer:
-- level zones with touches, last touch date, recency score
-- gap engine with explicit fill logic
-- trendline candidates with slope sanity + touch scoring
-
-4. `viz` layer:
-- chart overlays for levels, gaps, trendlines, and volume
-
-## Runbook
-
-### 1) Install deps
-```bash
-source .venv/bin/activate
+cd ~/dev/trader-koo
+python -m venv trader_koo/.venv
+source trader_koo/.venv/bin/activate
 pip install -r requirements.txt
+pip install matplotlib  # for chart image rendering
 ```
 
-Optional (advanced candlestick engine):
+Optional — larger candlestick pattern set:
 ```bash
 pip install TA-Lib
 ```
 
-If `TA-Lib` is installed, the candlestick detector will automatically use a much larger pattern set (`CDL*` family) in addition to built-in heuristics.
-
-### 2) Ingest/update DB (incremental, production-safe)
+### 2. Ingest market data
 ```bash
-python scripts/update_market_db.py --tickers "SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,TSLA" --include-options
+# Full S&P 500 + market context tickers (VIX, SPY, QQQ, DJI, TNX, SVIX)
+python trader_koo/scripts/update_market_db.py \
+    --use-sp500 \
+    --price-lookback-days 10 \
+    --fund-min-interval-hours 24
+
+# Or a small set for testing
+python trader_koo/scripts/update_market_db.py \
+    --tickers "SPY,QQQ,AAPL,NVDA,MSFT"
 ```
 
-### 3) Start API
+### 3. Start the API
 ```bash
-python -m uvicorn backend.main:app --reload
+# From repo root (~/dev/trader-koo)
+python -m uvicorn trader_koo.backend.main:app --reload
 ```
 
-### 4) Open UI
-- Open `http://127.0.0.1:8000` in browser
-- API base auto-detects (advanced override available)
-- Load opportunities and chart tabs
+### 4. Open dashboard
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) — type a ticker, hit Load.
 
-### 5) Health checks
+### 5. Health check
 ```bash
 curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/status
 ```
 
-## CV Weak-Label Loop (new)
+## API endpoints
 
-Start the CV dataset workflow:
+| Endpoint | Description |
+|---|---|
+| `GET /api/health` | DB liveness check |
+| `GET /api/status` | Data freshness + ingestion run status |
+| `GET /api/tickers` | All tickers in DB |
+| `GET /api/dashboard/{ticker}?months=3` | Full chart payload |
+| `GET /api/opportunities` | Valuation screening (undervalued/overvalued) |
 
+## CV label pipeline
+
+Detect patterns and render chart images:
 ```bash
-cd trader_koo
-source .venv/bin/activate
-
-python scripts/build_cv_weak_labels.py --tickers "SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,TSLA" --render-images
+python trader_koo/scripts/grow_gold_labels.py detect \
+    --render-images \
+    --batch-csv trader_koo/data/cv/batch_samples.csv
 ```
 
-Then:
+Review annotated images in `trader_koo/data/cv/images_review/`, then update `gold_labels.csv`.
 
-1. Review `data/cv/review_queue.csv` and fill `data/cv/review_decisions.csv`.
-2. Build gold labels:
-```bash
-python scripts/apply_cv_review.py --weak-labels-csv data/cv/weak_labels.csv --review-decisions-csv data/cv/review_decisions.csv
-```
-3. Promote high-confidence model predictions later:
-```bash
-python scripts/promote_cv_pseudo_labels.py --model-predictions-csv data/cv/model_predictions.csv --gold-labels-csv data/cv/gold_labels.csv
-```
+## Deployment (Railway)
 
-Details: `trader_koo/cv/README.md`
+See `railway.toml`. Set these environment variables in Railway:
 
-## Common local issues
+| Variable | Value |
+|---|---|
+| `TRADER_KOO_API_KEY` | random secret (enforces auth on all `/api/*` routes) |
+| `TRADER_KOO_DB_PATH` | `/app/trader_koo/data/trader_koo.db` |
+| `TRADER_KOO_ALLOWED_ORIGIN` | your Railway app URL |
 
-### `db_exists: false` in `/api/health`
-- This usually means your ingestion wrote DB to a different folder than the API is reading.
-- Canonical DB path is:
-  - `trader_koo/data/trader_koo.db`
-- You can force path explicitly:
-```bash
-export TRADER_KOO_DB_PATH="/Users/koohaoming/aiap/all-assignments/trader_koo/data/trader_koo.db"
-python -m uvicorn backend.main:app --reload
-```
+Local dev: leave `TRADER_KOO_API_KEY` unset — auth is disabled automatically.
 
-### `.venv/bin/activate` not found
-- If current dir is `trader_koo/`, activate with:
-```bash
-source .venv/bin/activate
-```
+## License
+
+MIT
