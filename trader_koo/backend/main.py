@@ -494,6 +494,16 @@ def health() -> dict[str, Any]:
     return {"ok": db_exists, "db_path": str(DB_PATH), "db_exists": db_exists}
 
 
+@app.post("/api/admin/trigger-update")
+def trigger_update() -> dict[str, Any]:
+    """Trigger daily_update.sh immediately (runs in background via scheduler)."""
+    job = _scheduler.get_job("daily_update")
+    if job is None:
+        raise HTTPException(status_code=500, detail="Scheduler job not found")
+    job.modify(next_run_time=dt.datetime.now(dt.timezone.utc))
+    return {"ok": True, "message": "daily_update triggered — check /data/logs/cron_daily.log"}
+
+
 @app.get("/api/status")
 def status() -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
