@@ -5,11 +5,15 @@ import logging
 import os
 import secrets
 import sqlite3
+import subprocess
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -52,6 +56,35 @@ HYBRID_PATTERN_CFG = HybridPatternConfig()
 CV_PROXY_CFG = CVProxyConfig()
 HYBRID_CV_CMP_CFG = HybridCVCompareConfig()
 
+SCRIPTS_DIR = PROJECT_DIR / "scripts"
+
+
+def _run_daily_update() -> None:
+    script = SCRIPTS_DIR / "daily_update.sh"
+    LOG.info("Scheduler: starting daily_update.sh")
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True)
+    if result.returncode == 0:
+        LOG.info("Scheduler: daily_update.sh completed OK")
+    else:
+        LOG.error("Scheduler: daily_update.sh failed (rc=%d): %s", result.returncode, result.stderr[-500:])
+
+
+_scheduler = BackgroundScheduler(timezone="UTC")
+_scheduler.add_job(
+    _run_daily_update,
+    CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="UTC"),
+    id="daily_update",
+    replace_existing=True,
+)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _scheduler.start()
+    LOG.info("Scheduler started — daily_update runs at 22:00 UTC Mon–Fri")
+    yield
+    _scheduler.shutdown(wait=False)
+
 
 _ALLOWED_ORIGIN = os.getenv("TRADER_KOO_ALLOWED_ORIGIN", "*")
 
@@ -60,6 +93,7 @@ app = FastAPI(
     version="0.2.0",
     docs_url=None,   # disable /docs in production; set TRADER_KOO_DOCS_ENABLED=1 locally
     redoc_url=None,
+    lifespan=lifespan,
 )
 if os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1":
     app.docs_url = "/docs"
