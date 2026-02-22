@@ -202,8 +202,10 @@
     .mkt-bar button:hover { color: var(--text); border-color: var(--blue); }
     @media (max-width: 768px) {
       .op-toolbar { grid-template-columns: 1fr 1fr; }
+      .op-toolbar button { width: auto; justify-self: start; }
       .chart-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
       .chart-toolbar > * { flex: 1 1 130px; min-width: 0; }
+      .chart-toolbar button { flex: 0 0 auto; width: auto; }
     }
     @media (max-width: 640px) {
       .wrap { padding: 12px; }
@@ -211,6 +213,7 @@
       .table-wrap { grid-template-columns: 1fr; }
       .cards { grid-template-columns: repeat(3, 1fr); }
       .op-toolbar { grid-template-columns: 1fr 1fr; }
+      .op-toolbar button { width: auto; justify-self: start; }
     }
     .guide {
       line-height: 1.5;
