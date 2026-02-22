@@ -5,3 +5,4 @@ finviz>=1.4.6
 lxml>=5.0
 fastapi>=0.111
 uvicorn>=0.30
+apscheduler>=3.10,<4
