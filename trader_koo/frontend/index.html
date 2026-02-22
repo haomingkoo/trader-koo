@@ -244,6 +244,7 @@
           <label for="opView">View</label>
           <select id="opView">
             <option value="undervalued">Undervalued</option>
+            <option value="deep_value">Deep Value</option>
             <option value="overvalued">Overvalued</option>
             <option value="all" selected>All (Full Universe)</option>
           </select>
@@ -1094,9 +1095,11 @@
       let ySyncLock = false;
       chartEl.on("plotly_relayout", (ev) => {
         if (ySyncLock) return;
+        const hasXRange = "xaxis.range[0]" in ev || Array.isArray(ev["xaxis.range"]);
+        const allX = ev["xaxis.autorange"] === true;
+        if (!hasXRange && !allX) return; // ignore Y-only or unrelated events — prevents snap-back
         const r0 = ev["xaxis.range[0]"] ?? (Array.isArray(ev["xaxis.range"]) ? ev["xaxis.range"][0] : null);
         const r1 = ev["xaxis.range[1]"] ?? (Array.isArray(ev["xaxis.range"]) ? ev["xaxis.range"][1] : null);
-        const allX = ev["xaxis.autorange"] === true;
         const baseYr = allX
           ? computeYRangeForXWindow(x, low, high, x[0], x[x.length - 1])
           : computeYRangeForXWindow(x, low, high, r0 || x[0], r1 || x[x.length - 1]);
@@ -1124,7 +1127,7 @@
       } else if (name === "undervalued") {
         setOpportunityFilters({ view: "undervalued", minDiscount: 10, maxPeg: 2.0, overvaluedThreshold: -10, limitRows: 500 });
       } else if (name === "deep_value") {
-        setOpportunityFilters({ view: "undervalued", minDiscount: 20, maxPeg: 1.5, overvaluedThreshold: -10, limitRows: 500 });
+        setOpportunityFilters({ view: "deep_value", minDiscount: 20, maxPeg: 1.5, overvaluedThreshold: -10, limitRows: 500 });
       } else if (name === "overvalued") {
         setOpportunityFilters({ view: "overvalued", minDiscount: 10, maxPeg: 2.0, overvaluedThreshold: -10, limitRows: 500 });
       } else {
@@ -1136,6 +1139,7 @@
     async function loadOpportunities() {
       const base = getApiBase();
       const view = String($("opView").value || "all");
+      const apiView = view === "deep_value" ? "undervalued" : view;
       const minDiscount = Number($("minDiscount").value || 10);
       const maxPeg = Number($("maxPeg").value || 2);
       const overvaluedThreshold = Number($("overvaluedThreshold").value || -10);
@@ -1150,7 +1154,7 @@
           min_discount: String(minDiscount),
           max_peg: String(maxPeg),
           overvalued_threshold: String(overvaluedThreshold),
-          view,
+          view: apiView,
         });
         const resp = await apiFetch(`${base}/api/opportunities?${q.toString()}`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
