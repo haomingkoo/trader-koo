@@ -180,7 +180,14 @@
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; }
     th { color: var(--muted); font-weight: 600; }
     tr.clickable:hover { background: rgba(106,169,255,0.12); cursor: pointer; }
-    .table-wrap { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .table-wrap { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+    .table-wrap > .panel { min-width: 0; overflow-x: auto; }
+    @media (max-width: 640px) {
+      .wrap { padding: 12px; }
+      #chart { height: 420px; }
+      .table-wrap { grid-template-columns: 1fr; }
+      .cards { grid-template-columns: repeat(3, 1fr); }
+    }
     .guide {
       line-height: 1.5;
       color: var(--text);
@@ -805,14 +812,43 @@
         { type: "bar", x, y: vol, name: "Volume", marker: {color: volColor}, xaxis:"x2", yaxis:"y2" }
       ];
 
+      const candlePatterns = payload.candlestick_patterns || [];
+      if (candlePatterns.length > 0) {
+        const bullish = candlePatterns.filter(p => String(p.bias || "").toLowerCase() === "bullish");
+        const bearish = candlePatterns.filter(p => String(p.bias || "").toLowerCase() === "bearish");
+        if (bullish.length > 0) {
+          traces.push({
+            type: "scatter", mode: "markers",
+            x: bullish.map(p => p.date),
+            y: bullish.map(p => { const i = x.indexOf(p.date); return i >= 0 ? low[i] * 0.994 : null; }),
+            name: "Bullish Signal",
+            marker: {symbol: "triangle-up", size: 9, color: "#38d39f"},
+            hovertext: bullish.map(p => `${p.pattern} (${fmt(p.confidence)})`),
+            hoverinfo: "text+x", xaxis: "x", yaxis: "y"
+          });
+        }
+        if (bearish.length > 0) {
+          traces.push({
+            type: "scatter", mode: "markers",
+            x: bearish.map(p => p.date),
+            y: bearish.map(p => { const i = x.indexOf(p.date); return i >= 0 ? high[i] * 1.006 : null; }),
+            name: "Bearish Signal",
+            marker: {symbol: "triangle-down", size: 9, color: "#ff6b6b"},
+            hovertext: bearish.map(p => `${p.pattern} (${fmt(p.confidence)})`),
+            hoverinfo: "text+x", xaxis: "x", yaxis: "y"
+          });
+        }
+      }
+
       const lastDate = x.length ? x[x.length - 1] : null;
-      const start3m = (() => {
+      const selectedMonths = Number($("months")?.value || DEFAULT_MONTHS);
+      const defaultX0 = (() => {
         if (!lastDate) return null;
+        if (selectedMonths <= 0) return x.length ? x[0] : null;
         const d = new Date(lastDate);
-        d.setMonth(d.getMonth() - 3);
+        d.setMonth(d.getMonth() - selectedMonths);
         return d.toISOString().slice(0, 10);
       })();
-      const defaultX0 = start3m || (x.length ? x[0] : null);
       const defaultX1 = lastDate || null;
       const levelValues = levels.map((r) => Number(r.level)).filter(Number.isFinite);
       const baseDefaultY = computeYRangeForXWindow(x, low, high, defaultX0, defaultX1);
