@@ -16,7 +16,8 @@ if [ ! -f "$DB_PATH" ]; then
         --tickers "SPY,QQQ,AAPL,NVDA,MSFT,TSLA,AMZN,META,GOOGL,BRK-B" \
         --price-lookback-days 365 \
         --sleep-min 0.3 \
-        --sleep-max 0.8
+        --sleep-max 0.8 \
+        --db-path "$DB_PATH"
     echo "[start.sh] Seeding complete."
 else
     echo "[start.sh] DB found at $DB_PATH — skipping seed."
