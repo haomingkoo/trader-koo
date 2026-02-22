@@ -13,7 +13,7 @@ if [ ! -f "$DB_PATH" ]; then
     echo "[start.sh] DB not found at $DB_PATH — seeding initial data..."
     mkdir -p "$(dirname "$DB_PATH")"
     "$PYTHON" trader_koo/scripts/update_market_db.py \
-        --tickers "SPY,QQQ,AAPL,NVDA,MSFT,TSLA,AMZN,META,GOOGL,BRK-B" \
+        --use-sp500 \
         --price-lookback-days 365 \
         --sleep-min 0.3 \
         --sleep-max 0.8 \
