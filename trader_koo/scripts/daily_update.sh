@@ -44,4 +44,14 @@ fi
     --log-file "$LOG_DIR/update_market_db.log" \
     >> "$RUN_LOG" 2>&1
 
+# ── 2. YOLO pattern detection for all tickers ────────────────────────────────
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting pattern detection..." >> "$RUN_LOG"
+"$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
+    --db-path "$DB_PATH" \
+    --lookback-days 180 \
+    --only-new \
+    --sleep 0.05 \
+    >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection failed (non-fatal)" >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection done." >> "$RUN_LOG"
+
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh" >> "$RUN_LOG"
