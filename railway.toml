@@ -3,7 +3,6 @@ builder = "nixpacks"
 buildCommand = "pip install -r trader_koo/requirements.txt && pip install -e ."
 
 [deploy]
-startCommand = "bash start.sh"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 3600
 restartPolicyType = "on_failure"
