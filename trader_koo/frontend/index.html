@@ -1,0 +1,1221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>trader_koo Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --bg: #0b0f16;
+      --panel: #121927;
+      --muted: #8ea0bd;
+      --text: #e9eef8;
+      --line: #25334f;
+      --green: #38d39f;
+      --red: #ff6b6b;
+      --amber: #f8c24e;
+      --blue: #6aa9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "JetBrains Mono", "IBM Plex Sans", ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: radial-gradient(1200px 600px at 10% -10%, #1d2740 0%, var(--bg) 45%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1360px; margin: 0 auto; padding: 24px; }
+    .title { font-size: 1.6rem; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 14px; }
+    .global-toolbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    details.adv {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #0f1624;
+    }
+    details.adv summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.85rem;
+      user-select: none;
+    }
+    .adv-body { margin-top: 8px; width: 320px; }
+    .status-block { display: flex; flex-direction: column; gap: 4px; }
+    input, select, button {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 10px;
+      outline: none;
+    }
+    .status { color: var(--muted); font-size: 0.9rem; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tab-btn {
+      border: 1px solid var(--line);
+      background: #0f1624;
+      color: var(--muted);
+      padding: 9px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .tab-btn.active {
+      color: white;
+      background: linear-gradient(90deg, #1f7bff, #4e9cff);
+      border: none;
+    }
+    .hidden { display: none; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px;
+    }
+    .op-toolbar {
+      display: grid;
+      grid-template-columns: 170px 150px 150px 140px 170px minmax(170px, 1fr) 120px 120px;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    .preset-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 10px 0;
+    }
+    .preset-toolbar button {
+      width: auto;
+      padding: 8px 12px;
+      border-radius: 9px;
+      font-size: 0.82rem;
+      background: #0f1624;
+      color: var(--text);
+      border: 1px solid var(--line);
+      cursor: pointer;
+    }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { color: var(--muted); font-size: 0.72rem; }
+    .op-help {
+      margin-bottom: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0f1624;
+    }
+    .op-help-title {
+      color: var(--text);
+      font-size: 0.82rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .op-help-grid {
+      display: grid;
+      grid-template-columns: 170px 1fr;
+      gap: 6px 10px;
+      align-items: start;
+    }
+    .op-help-key { color: var(--muted); font-size: 0.8rem; }
+    .op-help-val { color: var(--text); font-size: 0.82rem; }
+    .op-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      min-height: 34px;
+      max-width: 100%;
+      overflow-x: auto;
+      padding: 2px 0;
+    }
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      background: #0f1624;
+      color: var(--text);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 0.78rem;
+      white-space: normal;
+      word-break: break-word;
+    }
+    .status-chip .k { color: var(--muted); }
+    .status-chip .v { color: var(--text); font-weight: 700; }
+    .status-plain {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .chart-toolbar {
+      display: grid;
+      grid-template-columns: 180px 170px 140px 140px 150px 130px 120px 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+      margin: 10px 0 14px;
+    }
+    .card {
+      background: linear-gradient(180deg, #141d2f, #101726);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      min-height: 72px;
+    }
+    .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .value { font-size: 1.05rem; font-weight: 700; margin-top: 8px; }
+    #chart { width: 100%; height: 760px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; }
+    th { color: var(--muted); font-weight: 600; }
+    tr.clickable:hover { background: rgba(106,169,255,0.12); cursor: pointer; }
+    .table-wrap { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .guide {
+      line-height: 1.5;
+      color: var(--text);
+      font-size: 0.92rem;
+    }
+    .guide h3 { margin: 8px 0 6px; font-size: 1rem; }
+    .guide p { margin: 0 0 8px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">trader_koo • Swing Dashboard</div>
+    <div class="global-toolbar">
+      <div class="status-block">
+        <div id="globalStatus" class="status">Idle</div>
+        <div id="serviceStatus" class="status">Service status unknown</div>
+      </div>
+      <details class="adv">
+        <summary>Advanced</summary>
+        <div class="adv-body">
+          <input id="apiBase" value="" placeholder="API Base URL (auto-detected)" />
+        </div>
+      </details>
+    </div>
+    <div class="status-block" style="margin-bottom: 10px;">
+      <div id="apiResolved" class="status">API: auto-detecting...</div>
+    </div>
+
+    <div class="tabs">
+      <button id="tabGuideBtn" class="tab-btn active">Guide</button>
+      <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
+      <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
+    </div>
+
+    <section id="tabOp" class="panel hidden">
+      <div id="opFilterHelp" class="op-help">
+        Default is full S&P500 universe. Use presets for quick screens, then sort/search table.
+      </div>
+      <div class="preset-toolbar">
+        <button id="presetAllBtn" type="button">All S&P 500</button>
+        <button id="presetUndervaluedBtn" type="button">Undervalued</button>
+        <button id="presetDeepValueBtn" type="button">Deep Value</button>
+        <button id="presetOvervaluedBtn" type="button">Overvalued</button>
+        <button id="presetResetBtn" type="button">Reset</button>
+      </div>
+      <div class="op-toolbar">
+        <div class="field">
+          <label for="opView">View</label>
+          <select id="opView">
+            <option value="undervalued">Undervalued</option>
+            <option value="overvalued">Overvalued</option>
+            <option value="all" selected>All (Full Universe)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="minDiscount">Min Discount %</label>
+          <input id="minDiscount" type="number" step="1" value="10" />
+        </div>
+        <div class="field">
+          <label for="maxPeg">Max PEG</label>
+          <input id="maxPeg" type="number" step="0.1" value="2.0" />
+        </div>
+        <div class="field">
+          <label for="overvaluedThreshold">Overvalued Threshold %</label>
+          <input id="overvaluedThreshold" type="number" step="1" value="-10" />
+        </div>
+        <div class="field">
+          <label for="limitRows">Max Rows</label>
+          <input id="limitRows" type="number" step="1" value="500" />
+        </div>
+        <div class="field">
+          <label for="opSearch">Search Table</label>
+          <input id="opSearch" type="text" placeholder="ticker, reason, etc" />
+        </div>
+        <button id="clearOpSearchBtn" type="button">Clear Search</button>
+        <button id="loadOpBtn">Load</button>
+      </div>
+      <div id="opStatus" class="op-status"><span class="status-plain">Auto-loading full S&P500 table...</span></div>
+      <table id="opTable"></table>
+    </section>
+
+    <section id="tabChart" class="hidden">
+      <div class="panel">
+        <div class="chart-toolbar">
+          <input id="ticker" list="tickerList" value="SPY" placeholder="Ticker e.g. NVDA" />
+          <datalist id="tickerList"></datalist>
+          <select id="months">
+            <option value="3" selected>3M</option>
+            <option value="6">6M</option>
+            <option value="12">1Y</option>
+            <option value="24">2Y</option>
+            <option value="36">3Y</option>
+            <option value="60">5Y</option>
+            <option value="120">10Y</option>
+            <option value="0">ALL</option>
+          </select>
+          <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
+            <input id="showTrendlines" type="checkbox" style="width:auto; padding:0; margin:0;" />
+            <span style="font-size:0.8rem; color:var(--muted);">Show Trendlines</span>
+          </label>
+          <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
+            <input id="showPatterns" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
+            <span style="font-size:0.8rem; color:var(--muted);">Show Patterns</span>
+          </label>
+          <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
+            <input id="showRuleClassLines" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
+            <span style="font-size:0.8rem; color:var(--muted);">Rule/Hybrid Lines</span>
+          </label>
+          <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
+            <input id="showCvClassLines" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
+            <span style="font-size:0.8rem; color:var(--muted);">CV Proxy Lines</span>
+          </label>
+          <button id="loadChartBtn">Load</button>
+          <div id="chartStatus" class="status">Select ticker and load</div>
+        </div>
+        <div id="chartHelp" class="status" style="margin:0 0 8px 2px;">
+          Display window controls what you see. Structure logic uses wider history behind the scenes for stability.
+        </div>
+
+        <div class="cards">
+          <div class="card"><div class="label">Price</div><div id="c-price" class="value">-</div></div>
+          <div class="card"><div class="label">PE</div><div id="c-pe" class="value">-</div></div>
+          <div class="card"><div class="label">PEG</div><div id="c-peg" class="value">-</div></div>
+          <div class="card"><div class="label">Target</div><div id="c-target" class="value">-</div></div>
+          <div class="card"><div class="label">Discount %</div><div id="c-discount" class="value">-</div></div>
+          <div class="card"><div class="label">Put/Call OI</div><div id="c-pcr" class="value">-</div></div>
+        </div>
+
+        <div id="chart"></div>
+      </div>
+
+      <div class="table-wrap">
+        <div class="panel">
+          <div class="label">Levels</div>
+          <table id="levelsTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">Open Gaps</div>
+          <table id="gapsTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">Trendlines</div>
+          <table id="trendlinesTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">Pattern Candidates</div>
+          <table id="patternsTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">Hybrid Pattern Scores</div>
+          <table id="hybridPatternsTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">CV Proxy Pattern Scores</div>
+          <table id="cvProxyPatternsTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">Hybrid vs CV Compare</div>
+          <table id="hybridCvCompareTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">Pattern Overlays (Drawn)</div>
+          <table id="patternOverlaysTable"></table>
+        </div>
+        <div class="panel">
+          <div class="label">Candlestick Signals</div>
+          <table id="candlesTable"></table>
+        </div>
+      </div>
+    </section>
+
+    <section id="tabGuide" class="panel">
+      <div class="guide">
+        <h3>What Do Primary / Secondary / Fallback Mean?</h3>
+        <p><b>Primary</b>: nearest/high-confidence level from multiple touches. <b>Secondary</b>: next best nearby level. <b>Fallback</b>: emergency anchor if one side has no strong detected level.</p>
+        <h3>Support vs Resistance</h3>
+        <p><b>Support</b> is where price tends to bounce. <b>Resistance</b> is where price tends to stall/reject.</p>
+        <h3>Gaps</h3>
+        <p><b>Bull gap</b>: today low above yesterday high. <b>Bear gap</b>: today high below yesterday low. Open gaps remain unfilled.</p>
+        <h3>Trendline Candidates</h3>
+        <p>These are heuristic best-fit candidate lines from recent pivots. They are optional overlays and should be treated as context, not hard signals.</p>
+        <h3>Pattern Candidates (Experimental)</h3>
+        <p>Flags and wedges are geometric candidates generated from recent bars. Use with structure + risk management, not standalone entries.</p>
+        <h3>Hybrid Pattern Scores</h3>
+        <p>Hybrid score combines geometry confidence, nearby candlestick alignment, volume regime, and breakout/formation state. This layer is currently rule-based and does not require training.</p>
+        <h3>CV Proxy Pattern Scores</h3>
+        <p>CV proxy is an image-style shape scorer using normalized OHLC geometry. It is not a trained deep model, but useful for comparison and weak-label bootstrapping.</p>
+        <h3>Not Financial Advice</h3>
+        <p>This tool is for research/education only and is not financial advice. Signals can be wrong, delayed, or incomplete. You are solely responsible for your trades, risk controls, and any financial losses.</p>
+        <h3>Common Pitfalls</h3>
+        <p>Pattern overfitting, survivorship bias, data-snooping, low-liquidity distortions, and regime shifts can all degrade signal quality. Always validate with out-of-sample tests and strict risk limits.</p>
+        <h3>Display Window</h3>
+        <p>The 3M/6M/YTD/1Y/2Y selector changes what is displayed. The engine still uses a wider history window for more stable levels and pivots.</p>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const tabOpBtn = $("tabOpBtn");
+    const tabChartBtn = $("tabChartBtn");
+    const tabGuideBtn = $("tabGuideBtn");
+    const tabOp = $("tabOp");
+    const tabChart = $("tabChart");
+    const tabGuide = $("tabGuide");
+    const API_BASE_STORAGE_KEY = "trader_koo_api_base";
+    const TABLE_STATE = {};
+    const DEFAULT_MONTHS = 3;
+    let LAST_CHART_PAYLOAD = null;
+
+    function fmt(v, d = 2) {
+      if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
+      return Number(v).toFixed(d);
+    }
+
+    function escHtml(v) {
+      return String(v ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    const PERCENT_COLUMNS = new Set(["discount_pct", "eps_growth_5y", "atr_pct"]);
+    const DECIMAL_BY_COLUMN = {
+      price: 2,
+      pe: 2,
+      peg: 2,
+      target_price: 2,
+      discount_pct: 2,
+      eps_growth_5y: 2,
+      level: 2,
+      zone_low: 2,
+      zone_high: 2,
+      gap_low: 2,
+      gap_high: 2,
+      score: 2,
+      touches: 0,
+      touch_count: 0,
+      contracts: 0,
+      call_oi: 0,
+      put_oi: 0,
+    };
+
+    function formatTableValue(col, raw) {
+      if (raw === null || raw === undefined || raw === "") return "-";
+      if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return String(raw);
+
+      if (PERCENT_COLUMNS.has(col)) {
+        let v = n;
+        if (col === "eps_growth_5y" && Math.abs(v) <= 2) v *= 100;
+        return `${v.toFixed(DECIMAL_BY_COLUMN[col] ?? 2)}%`;
+      }
+
+      const d = DECIMAL_BY_COLUMN[col] ?? 2;
+      return n.toLocaleString(undefined, {
+        minimumFractionDigits: d,
+        maximumFractionDigits: d,
+      });
+    }
+
+    function renderOpFilterHelp(help) {
+      const el = $("opFilterHelp");
+      if (!el) return;
+      if (!help) {
+        el.innerHTML = `<div class="op-help-title">Filter Guide</div><div class="status-plain">Use presets, then refine using the fields.</div>`;
+        return;
+      }
+      const rows = [
+        ["View", help.view],
+        ["Min Discount %", help.min_discount],
+        ["Max PEG", help.max_peg],
+        ["Overvalued Threshold %", help.overvalued_threshold],
+      ];
+      el.innerHTML = `
+        <div class="op-help-title">Filter Guide</div>
+        <div class="op-help-grid">
+          ${rows.map(([k, v]) => `<div class="op-help-key">${escHtml(k)}</div><div class="op-help-val">${escHtml(v)}</div>`).join("")}
+        </div>
+      `;
+    }
+
+    function renderOpStatus(payload, view, rowCount) {
+      const el = $("opStatus");
+      if (!el) return;
+      const snapRaw = payload.snapshot_ts || "";
+      const snapDate = snapRaw ? new Date(snapRaw) : null;
+      const hasSnap = snapDate && !Number.isNaN(snapDate.getTime());
+      const snapUtc = hasSnap
+        ? snapDate.toISOString().slice(0, 16).replace("T", " ") + " UTC"
+        : (snapRaw || "-");
+      const snapLocal = hasSnap
+        ? snapDate.toLocaleString(undefined, {
+            year: "numeric",
+            month: "short",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+            timeZoneName: "short",
+          })
+        : "-";
+      const sc = payload.source_counts || {};
+      const chips = [
+        ["Snapshot (UTC)", snapUtc],
+        ["Local Time", snapLocal],
+        ["View", view],
+        ["Shown", rowCount ?? 0],
+        ["Eligible", payload.eligible_count ?? "-"],
+        ["Universe", payload.universe_count ?? "-"],
+        ["Analyst", sc.analyst_target ?? 0],
+        ["Model", sc.model_eps_pe ?? 0],
+        ["Other", sc.other ?? 0],
+      ];
+      el.innerHTML = chips
+        .map(([k, v]) => `<span class="status-chip"><span class="k">${escHtml(k)}</span><span class="v">${escHtml(v)}</span></span>`)
+        .join("");
+    }
+
+    function normalizeBase(base) {
+      return String(base || "").trim().replace(/\/+$/, "");
+    }
+
+    function getApiBase() {
+      return normalizeBase($("apiBase").value);
+    }
+
+    function setApiBase(base, persist = true) {
+      const clean = normalizeBase(base);
+      $("apiBase").value = clean;
+      $("apiResolved").textContent = `API: ${clean || "not set"}`;
+      if (persist && clean) localStorage.setItem(API_BASE_STORAGE_KEY, clean);
+    }
+
+    function buildApiCandidates() {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = normalizeBase(params.get("api"));
+      const fromStorage = normalizeBase(localStorage.getItem(API_BASE_STORAGE_KEY));
+      const fromInput = normalizeBase($("apiBase").value);
+      const isHttp = window.location.protocol === "http:" || window.location.protocol === "https:";
+      const sameOrigin = isHttp ? normalizeBase(window.location.origin) : "";
+      const host = window.location.hostname || "127.0.0.1";
+      const host8000 = `http://${host}:8000`;
+      const defaults = ["http://127.0.0.1:8000", "http://localhost:8000"];
+      const candidates = [fromInput, fromQuery, fromStorage, sameOrigin, host8000, ...defaults].filter(Boolean);
+      return [...new Set(candidates)];
+    }
+
+    async function probeApi(base, timeoutMs = 1200) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const resp = await fetch(`${base}/api/health`, { signal: controller.signal });
+        clearTimeout(timer);
+        return resp.ok;
+      } catch {
+        return false;
+      }
+    }
+
+    async function initApiBase() {
+      const candidates = buildApiCandidates();
+      for (const c of candidates) {
+        if (await probeApi(c)) {
+          setApiBase(c, true);
+          return;
+        }
+      }
+      setApiBase(candidates[0] || "http://127.0.0.1:8000", true);
+    }
+
+    function setGlobalStatus(s) { $("globalStatus").textContent = s; }
+    function setServiceStatus(s, bad = false) {
+      const el = $("serviceStatus");
+      el.textContent = s;
+      el.style.color = bad ? "#ff8a8a" : "#8ea0bd";
+    }
+
+    async function refreshServiceStatus() {
+      const base = getApiBase();
+      if (!base) {
+        setServiceStatus("Service status: missing API base", true);
+        $("apiResolved").textContent = "API: missing";
+        return;
+      }
+      try {
+        const resp = await fetch(`${base}/api/status`);
+        if (!resp.ok) throw new Error(`${resp.status}`);
+        const payload = await resp.json();
+        const run = payload.latest_run || {};
+        const txt = [
+          `API ${payload.ok ? "UP" : "DEGRADED"}`,
+          `run=${run.status || "n/a"}`,
+          `tickers=${payload.counts?.tracked_tickers ?? "-"}`,
+          `price_age=${payload.freshness?.price_age_days ?? "-"}d`
+        ].join(" • ");
+        setServiceStatus(txt, !payload.ok);
+        $("apiResolved").textContent = `API: ${base}`;
+      } catch (err) {
+        setServiceStatus(`API DOWN (${err.message})`, true);
+        $("apiResolved").textContent = `API: ${base}`;
+      }
+    }
+
+    function activateTab(which) {
+      if (which === "op") {
+        tabOpBtn.classList.add("active");
+        tabChartBtn.classList.remove("active");
+        tabGuideBtn.classList.remove("active");
+        tabOp.classList.remove("hidden");
+        tabChart.classList.add("hidden");
+        tabGuide.classList.add("hidden");
+      } else if (which === "chart") {
+        tabChartBtn.classList.add("active");
+        tabOpBtn.classList.remove("active");
+        tabGuideBtn.classList.remove("active");
+        tabChart.classList.remove("hidden");
+        tabOp.classList.add("hidden");
+        tabGuide.classList.add("hidden");
+      } else {
+        tabGuideBtn.classList.add("active");
+        tabOpBtn.classList.remove("active");
+        tabChartBtn.classList.remove("active");
+        tabGuide.classList.remove("hidden");
+        tabOp.classList.add("hidden");
+        tabChart.classList.add("hidden");
+      }
+    }
+
+    tabOpBtn.addEventListener("click", () => activateTab("op"));
+    tabChartBtn.addEventListener("click", () => activateTab("chart"));
+    tabGuideBtn.addEventListener("click", () => activateTab("guide"));
+
+    function fillCards(payload) {
+      const f = payload.fundamentals || {};
+      const o = payload.options_summary || {};
+      $("c-price").textContent = fmt(f.price);
+      $("c-pe").textContent = fmt(f.pe);
+      $("c-peg").textContent = fmt(f.peg);
+      $("c-target").textContent = fmt(f.target_price);
+      $("c-discount").textContent = fmt(f.discount_pct);
+      $("c-pcr").textContent = fmt(o.put_call_oi_ratio, 3);
+    }
+
+    function renderSimpleTable(elId, columns, rows, clickable = false, onClick = null, opts = {}) {
+      const state = TABLE_STATE[elId] || { sortCol: null, sortAsc: false };
+      TABLE_STATE[elId] = state;
+      const el = $(elId);
+      let viewRows = [...rows];
+      const searchId = opts.searchInputId || "";
+      if (searchId && $(searchId)) {
+        const q = String($(searchId).value || "").trim().toLowerCase();
+        if (q) {
+          viewRows = viewRows.filter((r) =>
+            columns.some((c) => String(r[c] ?? "").toLowerCase().includes(q))
+          );
+        }
+      }
+
+      if (opts.sortable && state.sortCol) {
+        const col = state.sortCol;
+        const dir = state.sortAsc ? 1 : -1;
+        viewRows.sort((a, b) => {
+          const av = a[col], bv = b[col];
+          const an = Number(av), bn = Number(bv);
+          if (Number.isFinite(an) && Number.isFinite(bn)) return (an - bn) * dir;
+          return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+        });
+      }
+
+      const head = `<tr>${columns.map((c) => {
+        if (!opts.sortable) return `<th>${c}</th>`;
+        const marker = state.sortCol === c ? (state.sortAsc ? " ▲" : " ▼") : "";
+        return `<th data-sort-col="${c}" style="cursor:pointer;">${c}${marker}</th>`;
+      }).join("")}</tr>`;
+
+      const body = viewRows.length
+        ? viewRows.map((r, idx) => {
+            const cls = clickable ? "clickable" : "";
+            return `<tr class="${cls}" data-idx="${idx}">${columns.map(c => `<td>${formatTableValue(c, r[c])}</td>`).join("")}</tr>`;
+          }).join("")
+        : `<tr><td colspan="${columns.length}">No data</td></tr>`;
+      el.innerHTML = head + body;
+
+      if (opts.sortable) {
+        el.querySelectorAll("th[data-sort-col]").forEach((th) => {
+          th.addEventListener("click", () => {
+            const c = th.getAttribute("data-sort-col");
+            if (!c) return;
+            if (state.sortCol === c) state.sortAsc = !state.sortAsc;
+            else {
+              state.sortCol = c;
+              state.sortAsc = true;
+            }
+            renderSimpleTable(elId, columns, rows, clickable, onClick, opts);
+          });
+        });
+      }
+
+      if (searchId && $(searchId)) {
+        $(searchId).oninput = () => renderSimpleTable(elId, columns, rows, clickable, onClick, opts);
+      }
+
+      if (clickable && onClick) {
+        el.querySelectorAll("tr.clickable").forEach((tr) => {
+          tr.addEventListener("click", () => {
+            const idx = Number(tr.getAttribute("data-idx"));
+            onClick(viewRows[idx]);
+          });
+        });
+      }
+    }
+
+    function computeYRangeForXWindow(x, low, high, x0, x1) {
+      if (!x.length) return null;
+      const t0 = x0 ? new Date(x0).getTime() : -Infinity;
+      const t1 = x1 ? new Date(x1).getTime() : Infinity;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (let i = 0; i < x.length; i++) {
+        const t = new Date(x[i]).getTime();
+        if (Number.isNaN(t) || t < t0 || t > t1) continue;
+        const lo = Number(low[i]);
+        const hi = Number(high[i]);
+        if (Number.isFinite(lo)) minY = Math.min(minY, lo);
+        if (Number.isFinite(hi)) maxY = Math.max(maxY, hi);
+      }
+      if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+        const allLow = low.filter(Number.isFinite);
+        const allHigh = high.filter(Number.isFinite);
+        if (!allLow.length || !allHigh.length) return null;
+        minY = Math.min(...allLow);
+        maxY = Math.max(...allHigh);
+      }
+      const span = Math.max(maxY - minY, Math.abs(maxY) * 0.01, 1e-6);
+      const pad = span * 0.08;
+      return [minY - pad, maxY + pad];
+    }
+
+    function extendYRangeWithLevelValues(range, levelValues) {
+      if (!range || !Array.isArray(range) || range.length !== 2) return range;
+      const baseLo = Number(range[0]);
+      const baseHi = Number(range[1]);
+      if (!Number.isFinite(baseLo) || !Number.isFinite(baseHi)) return range;
+      const span = Math.max(baseHi - baseLo, Math.abs(baseHi) * 0.01, 1e-6);
+      const nearLo = baseLo - span * 0.35;
+      const nearHi = baseHi + span * 0.35;
+
+      let lo = baseLo;
+      let hi = baseHi;
+      for (const vRaw of (levelValues || [])) {
+        const v = Number(vRaw);
+        if (!Number.isFinite(v)) continue;
+        if (v < nearLo || v > nearHi) continue;
+        lo = Math.min(lo, v);
+        hi = Math.max(hi, v);
+      }
+      const newSpan = Math.max(hi - lo, Math.abs(hi) * 0.01, 1e-6);
+      const pad = newSpan * 0.08;
+      return [lo - pad, hi + pad];
+    }
+
+    function renderChart(payload) {
+      LAST_CHART_PAYLOAD = payload;
+      const chart = payload.chart || [];
+      const levels = payload.levels || [];
+      const gaps = payload.gaps || [];
+      const trendlines = payload.trendlines || [];
+      const patterns = payload.patterns || [];
+      const patternOverlays = payload.pattern_overlays || [];
+      const ticker = payload.ticker || "N/A";
+      const showTrendlines = $("showTrendlines") ? Boolean($("showTrendlines").checked) : false;
+      const showPatterns = $("showPatterns") ? Boolean($("showPatterns").checked) : true;
+      const showRuleClassLines = $("showRuleClassLines") ? Boolean($("showRuleClassLines").checked) : true;
+      const showCvClassLines = $("showCvClassLines") ? Boolean($("showCvClassLines").checked) : true;
+
+      const x = chart.map(r => r.date);
+      const open = chart.map(r => Number(r.open));
+      const high = chart.map(r => Number(r.high));
+      const low = chart.map(r => Number(r.low));
+      const close = chart.map(r => Number(r.close));
+      const vol = chart.map(r => Number(r.volume || 0));
+      const volColor = chart.map(r => Number(r.close) >= Number(r.open) ? "rgba(56,211,159,0.7)" : "rgba(255,107,107,0.7)");
+
+      const ma = (arr, n) => arr.map((_, i) => {
+        if (i < n - 1) return null;
+        let s = 0;
+        for (let j = i - n + 1; j <= i; j++) s += arr[j];
+        return s / n;
+      });
+
+      const traces = [
+        {
+          type: "candlestick",
+          x, open, high, low, close,
+          name: ticker, xaxis: "x", yaxis: "y",
+          increasing: {line: {color: "#38d39f"}, fillcolor: "rgba(56,211,159,0.85)"},
+          decreasing: {line: {color: "#ff6b6b"}, fillcolor: "rgba(255,107,107,0.85)"}
+        },
+        { type: "scatter", mode: "lines", x, y: ma(close, 20), name: "MA20", line: {color:"#6aa9ff", width:1.2}, xaxis:"x", yaxis:"y" },
+        { type: "scatter", mode: "lines", x, y: ma(close, 50), name: "MA50", line: {color:"#f8c24e", width:1.2}, xaxis:"x", yaxis:"y" },
+        { type: "scatter", mode: "lines", x, y: ma(close, 100), name: "MA100", line: {color:"#38d39f", width:1.2}, xaxis:"x", yaxis:"y" },
+        { type: "scatter", mode: "lines", x, y: ma(close, 200), name: "MA200", line: {color:"#c07bff", width:1.2}, xaxis:"x", yaxis:"y" },
+        { type: "bar", x, y: vol, name: "Volume", marker: {color: volColor}, xaxis:"x2", yaxis:"y2" }
+      ];
+
+      const lastDate = x.length ? x[x.length - 1] : null;
+      const start3m = (() => {
+        if (!lastDate) return null;
+        const d = new Date(lastDate);
+        d.setMonth(d.getMonth() - 3);
+        return d.toISOString().slice(0, 10);
+      })();
+      const defaultX0 = start3m || (x.length ? x[0] : null);
+      const defaultX1 = lastDate || null;
+      const levelValues = levels.map((r) => Number(r.level)).filter(Number.isFinite);
+      const baseDefaultY = computeYRangeForXWindow(x, low, high, defaultX0, defaultX1);
+      const defaultY = extendYRangeWithLevelValues(baseDefaultY, levelValues);
+
+      const shapes = [];
+      const annotations = [];
+
+      levels.forEach(r => {
+        const lvl = Number(r.level);
+        if (Number.isNaN(lvl)) return;
+        const color = r.type === "support" ? "#3f8cff" : "#ff7b5b";
+        const tier = (r.tier || "primary").toLowerCase();
+        const dash = tier === "primary" ? "solid" : (tier === "secondary" ? "dot" : "dash");
+        const width = tier === "primary" ? 2 : (tier === "secondary" ? 1 : 1.5);
+        const tierLabel = tier === "primary" ? "PRIMARY" : (tier === "secondary" ? "SECONDARY" : "FALLBACK");
+        const z0 = Number(r.zone_low);
+        const z1 = Number(r.zone_high);
+        if (!Number.isNaN(z0) && !Number.isNaN(z1)) {
+          shapes.push({
+            type: "rect", xref: "paper", yref: "y",
+            x0: 0, x1: 1, y0: Math.min(z0, z1), y1: Math.max(z0, z1),
+            fillcolor: r.type === "support" ? "rgba(63,140,255,0.10)" : "rgba(255,123,91,0.10)",
+            line: {width: 0}
+          });
+        }
+        shapes.push({
+          type: "line", xref: "paper", yref: "y",
+          x0: 0, x1: 1, y0: lvl, y1: lvl,
+          line: {color, width, dash}
+        });
+        annotations.push({
+          xref: "paper", yref: "y", x: 1.0, y: lvl,
+          text: `${tierLabel} ${String(r.type).toUpperCase()}<br>${fmt(lvl)} (${r.touches ?? "-"})`,
+          showarrow: false, xanchor: "left", yanchor: "middle", align: "left",
+          xshift: 6, borderpad: 2,
+          bgcolor: "rgba(18,25,39,0.9)", bordercolor: color, font: {color, size: 11}
+        });
+      });
+
+      gaps.forEach(g => {
+        const y0 = Number(g.gap_low), y1 = Number(g.gap_high);
+        if (Number.isNaN(y0) || Number.isNaN(y1)) return;
+        shapes.push({
+          type: "rect", xref: "x", yref: "y",
+          x0: g.date, x1: x[x.length - 1], y0, y1,
+          fillcolor: g.type === "bull_gap" ? "rgba(248,194,78,0.22)" : "rgba(106,169,255,0.20)",
+          line: {width: 1, color: "rgba(142,160,189,0.6)"}
+        });
+      });
+
+      if (showTrendlines) trendlines.forEach(t => {
+        const y0 = Number(t.y0);
+        const y1 = Number(t.y1);
+        if (Number.isNaN(y0) || Number.isNaN(y1)) return;
+        const color = String(t.type || "").includes("support") ? "#38d39f" : "#ff6b6b";
+        shapes.push({
+          type: "line",
+          xref: "x",
+          yref: "y",
+          x0: t.x0_date,
+          x1: t.x1_date,
+          y0,
+          y1,
+          line: {color, width: 1.6, dash: "dot"}
+        });
+      });
+
+      if (showPatterns) {
+        const patternColor = (nameRaw) => {
+          const name = String(nameRaw || "").toLowerCase();
+          if (
+            name.includes("bull")
+            || name.includes("falling_wedge")
+            || name.includes("ascending_triangle")
+            || name.includes("double_bottom")
+            || name.includes("inv_head")
+          ) return "#38d39f";
+          if (
+            name.includes("bear")
+            || name.includes("rising_wedge")
+            || name.includes("descending_triangle")
+            || name.includes("double_top")
+            || name.includes("head_and_shoulders")
+          ) return "#ff6b6b";
+          return "#f8c24e";
+        };
+        const sourceDash = (sRaw) => {
+          const s = String(sRaw || "").toLowerCase();
+          if (s === "cv_proxy") return "dashdot";
+          if (s === "hybrid_rule") return "solid";
+          return "dot";
+        };
+
+        let overlays = patternOverlays.filter((p) => {
+          const src = String(p.source || "");
+          if (!showRuleClassLines && (src === "rule" || src === "hybrid_rule")) return false;
+          if (!showCvClassLines && src === "cv_proxy") return false;
+          return true;
+        });
+
+        if (!overlays.length) {
+          overlays = patterns.slice(0, 4).map((p) => ({
+            source: "rule",
+            class_name: p.pattern,
+            status: p.status,
+            confidence: p.confidence,
+            x0_date: p.x0_date,
+            x1_date: p.x1_date,
+            y0: p.y0,
+            y1: p.y1,
+            y0b: p.y0b,
+            y1b: p.y1b,
+            notes: p.notes,
+          }));
+        }
+
+        overlays = overlays
+          .slice()
+          .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
+          .slice(0, 10);
+
+        overlays.forEach((p, idx) => {
+          const y0 = Number(p.y0);
+          const y1 = Number(p.y1);
+          const y0b = Number(p.y0b);
+          const y1b = Number(p.y1b);
+          if ([y0, y1, y0b, y1b].some(Number.isNaN)) return;
+          const className = String(p.class_name || p.pattern || "pattern");
+          const status = String(p.status || "forming");
+          const source = String(p.source || "rule");
+          const conf = Number(p.confidence);
+          const color = patternColor(className);
+          const dash = sourceDash(source);
+          const width = source === "hybrid_rule" ? 2.1 : 1.7;
+          const shortSrc = source === "hybrid_rule" ? "HYB" : (source === "cv_proxy" ? "CV" : "RULE");
+
+          shapes.push({
+            type: "line",
+            xref: "x",
+            yref: "y",
+            x0: p.x0_date,
+            x1: p.x1_date,
+            y0,
+            y1,
+            line: {color, width, dash},
+          });
+          shapes.push({
+            type: "line",
+            xref: "x",
+            yref: "y",
+            x0: p.x0_date,
+            x1: p.x1_date,
+            y0: y0b,
+            y1: y1b,
+            line: {color, width, dash},
+          });
+          annotations.push({
+            xref: "paper",
+            yref: "paper",
+            x: 0.01,
+            y: 0.98 - idx * 0.045,
+            text: `${className.replaceAll("_", " ")} • ${shortSrc} • ${status} • ${fmt(conf, 2)}`,
+            showarrow: false,
+            xanchor: "left",
+            yanchor: "top",
+            bgcolor: "rgba(18,25,39,0.85)",
+            bordercolor: color,
+            font: {color, size: 11},
+          });
+        });
+      }
+
+      const layout = {
+        paper_bgcolor: "#121927",
+        plot_bgcolor: "#121927",
+        font: {color: "#e9eef8"},
+        title: {text: `${ticker} • Chart + Levels`, x: 0.01, y: 0.99, xanchor: "left", yanchor: "top"},
+        margin: {t: 110, l: 60, r: 235, b: 50},
+        dragmode: "zoom",
+        legend: {orientation: "h", y: 1.18, x: 1, xanchor: "right"},
+        xaxis: {
+          domain: [0, 1], anchor: "y", rangeslider: {visible: false},
+          showgrid: true, gridcolor: "#25334f",
+          range: defaultX0 && defaultX1 ? [defaultX0, defaultX1] : undefined,
+          rangebreaks: [{bounds: ["sat", "mon"]}],
+          rangeselector: {
+            bgcolor: "#e9eef8",
+            activecolor: "#6aa9ff",
+            bordercolor: "#0b0f16",
+            borderwidth: 1,
+            font: {color: "#0b0f16", size: 12},
+            buttons: [
+              {count: 3, step: "month", stepmode: "backward", label: "3M"},
+              {count: 6, step: "month", stepmode: "backward", label: "6M"},
+              {count: 1, step: "year", stepmode: "todate", label: "YTD"},
+              {count: 1, step: "year", stepmode: "backward", label: "1Y"},
+              {count: 2, step: "year", stepmode: "backward", label: "2Y"},
+              {step: "all", label: "ALL"}
+            ]
+          }
+        },
+        yaxis: {
+          domain: [0.30, 1],
+          showgrid: true,
+          gridcolor: "#25334f",
+          title: "Price",
+          range: defaultY || undefined,
+          autorange: !defaultY
+        },
+        xaxis2: {domain: [0, 1], anchor: "y2", matches: "x", showgrid: false},
+        yaxis2: {domain: [0, 0.24], showgrid: true, gridcolor: "#25334f", title: "Volume"},
+        shapes,
+        annotations
+      };
+
+      Plotly.newPlot("chart", traces, layout, {responsive: true, scrollZoom: true, displayModeBar: true});
+      const chartEl = $("chart");
+      let ySyncLock = false;
+      chartEl.on("plotly_relayout", (ev) => {
+        if (ySyncLock) return;
+        const r0 = ev["xaxis.range[0]"] ?? (Array.isArray(ev["xaxis.range"]) ? ev["xaxis.range"][0] : null);
+        const r1 = ev["xaxis.range[1]"] ?? (Array.isArray(ev["xaxis.range"]) ? ev["xaxis.range"][1] : null);
+        const allX = ev["xaxis.autorange"] === true;
+        const baseYr = allX
+          ? computeYRangeForXWindow(x, low, high, x[0], x[x.length - 1])
+          : computeYRangeForXWindow(x, low, high, r0 || x[0], r1 || x[x.length - 1]);
+        const yr = extendYRangeWithLevelValues(baseYr, levelValues);
+        if (!yr) return;
+        ySyncLock = true;
+        Plotly.relayout("chart", {"yaxis.range": yr})
+          .catch(() => {})
+          .finally(() => { ySyncLock = false; });
+      });
+    }
+
+    function setOpportunityFilters({view, minDiscount, maxPeg, overvaluedThreshold, limitRows}) {
+      if (view !== undefined) $("opView").value = String(view);
+      if (minDiscount !== undefined) $("minDiscount").value = String(minDiscount);
+      if (maxPeg !== undefined) $("maxPeg").value = String(maxPeg);
+      if (overvaluedThreshold !== undefined) $("overvaluedThreshold").value = String(overvaluedThreshold);
+      if (limitRows !== undefined) $("limitRows").value = String(limitRows);
+    }
+
+    function applyOpportunityPreset(name) {
+      if ($("opSearch")) $("opSearch").value = "";
+      if (name === "all") {
+        setOpportunityFilters({ view: "all", minDiscount: 10, maxPeg: 2.0, overvaluedThreshold: -10, limitRows: 500 });
+      } else if (name === "undervalued") {
+        setOpportunityFilters({ view: "undervalued", minDiscount: 10, maxPeg: 2.0, overvaluedThreshold: -10, limitRows: 500 });
+      } else if (name === "deep_value") {
+        setOpportunityFilters({ view: "undervalued", minDiscount: 20, maxPeg: 1.5, overvaluedThreshold: -10, limitRows: 500 });
+      } else if (name === "overvalued") {
+        setOpportunityFilters({ view: "overvalued", minDiscount: 10, maxPeg: 2.0, overvaluedThreshold: -10, limitRows: 500 });
+      } else {
+        setOpportunityFilters({ view: "all", minDiscount: 10, maxPeg: 2.0, overvaluedThreshold: -10, limitRows: 500 });
+      }
+      loadOpportunities();
+    }
+
+    async function loadOpportunities() {
+      const base = getApiBase();
+      const view = String($("opView").value || "all");
+      const minDiscount = Number($("minDiscount").value || 10);
+      const maxPeg = Number($("maxPeg").value || 2);
+      const overvaluedThreshold = Number($("overvaluedThreshold").value || -10);
+      const limitRows = Number($("limitRows").value || 500);
+      const btn = $("loadOpBtn");
+      btn.disabled = true;
+      $("opStatus").innerHTML = `<span class="status-plain">Loading opportunities...</span>`;
+      setGlobalStatus("Loading opportunities...");
+      try {
+        const q = new URLSearchParams({
+          limit: String(limitRows),
+          min_discount: String(minDiscount),
+          max_peg: String(maxPeg),
+          overvalued_threshold: String(overvaluedThreshold),
+          view,
+        });
+        const resp = await fetch(`${base}/api/opportunities?${q.toString()}`);
+        if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+        const payload = await resp.json();
+        const rows = payload.rows || [];
+        renderOpFilterHelp(payload.filter_help || null);
+        renderSimpleTable(
+          "opTable",
+          ["ticker", "price", "pe", "peg", "target_price", "discount_pct", "valuation_label", "target_source", "eps_growth_5y"],
+          rows,
+          true,
+          (row) => {
+            $("ticker").value = row.ticker;
+            activateTab("chart");
+            loadChart();
+          },
+          { sortable: true, searchInputId: "opSearch" }
+        );
+        renderOpStatus(payload, view, rows.length);
+        setGlobalStatus("Opportunities loaded");
+      } catch (err) {
+        console.error(err);
+        $("opStatus").innerHTML = `<span class="status-plain" style="color:#ff8a8a;">Failed: ${escHtml(err.message)}</span>`;
+        setGlobalStatus("Failed loading opportunities");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function loadChart() {
+      const ticker = ($("ticker").value || "SPY").trim().toUpperCase();
+      const months = Number($("months").value || DEFAULT_MONTHS);
+      const base = getApiBase();
+      const btn = $("loadChartBtn");
+      btn.disabled = true;
+      $("chartStatus").textContent = `Loading ${ticker}...`;
+      setGlobalStatus(`Loading ${ticker} dashboard...`);
+      try {
+        const resp = await fetch(`${base}/api/dashboard/${ticker}?months=${months}`);
+        if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+        const payload = await resp.json();
+        fillCards(payload);
+        renderChart(payload);
+        renderSimpleTable("levelsTable", ["type", "level", "zone_low", "zone_high", "tier", "touches", "last_touch_date"], payload.levels || [], false, null, { sortable: true });
+        renderSimpleTable("gapsTable", ["date", "type", "gap_low", "gap_high"], payload.gaps || [], false, null, { sortable: true });
+        renderSimpleTable("trendlinesTable", ["type", "touch_count", "score", "last_touch_date"], payload.trendlines || [], false, null, { sortable: true });
+        renderSimpleTable("patternsTable", ["pattern", "status", "confidence", "start_date", "end_date"], payload.patterns || [], false, null, { sortable: true });
+        renderSimpleTable(
+          "hybridPatternsTable",
+          ["pattern", "status", "hybrid_confidence", "base_confidence", "candle_score", "volume_score", "breakout_score", "candle_bias", "vol_ratio", "start_date", "end_date"],
+          payload.hybrid_patterns || [],
+          false,
+          null,
+          { sortable: true }
+        );
+        renderSimpleTable(
+          "cvProxyPatternsTable",
+          ["pattern", "status", "cv_confidence", "method", "start_date", "end_date", "notes"],
+          payload.cv_proxy_patterns || [],
+          false,
+          null,
+          { sortable: true }
+        );
+        renderSimpleTable(
+          "hybridCvCompareTable",
+          ["pattern", "hybrid_status", "cv_status", "hybrid_confidence", "cv_confidence", "consensus_confidence", "agreement", "confidence_gap"],
+          payload.hybrid_cv_compare || [],
+          false,
+          null,
+          { sortable: true }
+        );
+        renderSimpleTable(
+          "patternOverlaysTable",
+          ["source", "class_name", "status", "confidence", "start_date", "end_date"],
+          payload.pattern_overlays || [],
+          false,
+          null,
+          { sortable: true }
+        );
+        renderSimpleTable("candlesTable", ["date", "pattern", "bias", "confidence", "explanation"], payload.candlestick_patterns || [], false, null, { sortable: true });
+        $("chartStatus").textContent = `asof ${payload.asof || "-"} • ${ticker}`;
+        setGlobalStatus(`Done (${ticker})`);
+      } catch (err) {
+        console.error(err);
+        $("chartStatus").textContent = `Failed: ${err.message}`;
+        setGlobalStatus(`Failed (${ticker})`);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function loadTickerUniverse() {
+      const base = getApiBase();
+      try {
+        const resp = await fetch(`${base}/api/tickers?limit=2000`);
+        if (!resp.ok) throw new Error(`${resp.status}`);
+        const payload = await resp.json();
+        const list = $("tickerList");
+        if (!list) return;
+        list.innerHTML = "";
+        (payload.tickers || []).forEach((t) => {
+          const opt = document.createElement("option");
+          opt.value = t;
+          list.appendChild(opt);
+        });
+      } catch (err) {
+        console.warn("ticker universe load failed", err);
+      }
+    }
+
+    $("loadOpBtn").addEventListener("click", loadOpportunities);
+    $("presetAllBtn").addEventListener("click", () => applyOpportunityPreset("all"));
+    $("presetUndervaluedBtn").addEventListener("click", () => applyOpportunityPreset("undervalued"));
+    $("presetDeepValueBtn").addEventListener("click", () => applyOpportunityPreset("deep_value"));
+    $("presetOvervaluedBtn").addEventListener("click", () => applyOpportunityPreset("overvalued"));
+    $("presetResetBtn").addEventListener("click", () => applyOpportunityPreset("reset"));
+    $("clearOpSearchBtn").addEventListener("click", () => {
+      if ($("opSearch")) $("opSearch").value = "";
+      loadOpportunities();
+    });
+    $("loadChartBtn").addEventListener("click", loadChart);
+    window.addEventListener("keydown", (e) => { if (e.key === "Enter") loadChart(); });
+    $("showTrendlines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
+    $("showPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
+    $("showRuleClassLines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
+    $("showCvClassLines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
+    $("apiBase").addEventListener("change", async () => {
+      setApiBase($("apiBase").value, true);
+      await refreshServiceStatus();
+    });
+
+    (async () => {
+      activateTab("guide");
+      if ($("months")) $("months").value = String(DEFAULT_MONTHS);
+      await initApiBase();
+      await refreshServiceStatus();
+      await loadTickerUniverse();
+      await loadOpportunities();
+      setInterval(refreshServiceStatus, 60000);
+    })();
+  </script>
+</body>
+</html>

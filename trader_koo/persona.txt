@@ -1,0 +1,208 @@
+1) Trader personas
+
+Persona A: “John” — Levels-first discretionary operator
+
+Core belief: Price is auction. Levels are where decisions happen.
+Primary tools:
+	•	Multi-timeframe support/resistance zones
+	•	Prior day high/low, weekly levels, major swing highs/lows
+	•	Simple confirmation triggers (reclaim, breakdown, hold)
+
+During trading workflow:
+	1.	Pre-market: mark 3–6 levels (major support, major resistance, midpoints).
+	2.	Build scenarios:
+	•	If price holds above X, target next level Y.
+	•	If price loses X, target next liquidity pocket Z.
+	3.	Intraday: wait for reaction at level.
+	4.	Entry: confirmation candle or reclaim, tight invalidation just beyond level.
+	5.	Exit: scale into next level, reduce risk fast.
+
+Style signature:
+	•	Fewer trades, high structure.
+	•	“If-then” narrative.
+	•	Clean invalidation.
+
+Persona B: “Kpak” — Trend and structure technician
+
+Core belief: Trends persist. Structure defines bias.
+Primary tools:
+	•	Trendlines, channels, market structure (HH/HL or LH/LL)
+	•	Moving averages as regime filters (20/50/100 or 21/50/200)
+	•	Pullback entries, continuation setups
+
+During trading workflow:
+	1.	Identify regime: trending vs ranging.
+	2.	Draw trendline/channel from swing points.
+	3.	Wait for pullback into structure (trendline + MA confluence).
+	4.	Trigger: break of minor counter-trend or bullish/bearish continuation candle.
+	5.	Manage: trail along structure, exit on structure break.
+
+Style signature:
+	•	“Bias first” (trend filter) then execution.
+	•	Uses lines and slope, not only horizontals.
+
+Persona C: “Vandy” — Volatility and mean-reversion pragmatist
+
+Core belief: Volatility expands and contracts. Extremes revert.
+Primary tools:
+	•	ATR bands, volatility regime shifts
+	•	Range boundaries and compression-breakout logic
+	•	“Stretch” vs “snapback” context
+
+During trading workflow:
+	1.	Measure volatility: ATR%, range compression, expansion days.
+	2.	If compressed: prepare for breakout levels.
+	3.	If stretched: fade into mean (mid-range or VWAP proxy) with strict stops.
+	4.	Risk: small size, high discipline.
+
+Style signature:
+	•	Very systematic risk framing.
+	•	Prefers defined ranges and volatility signals.
+
+Persona D: “Zan” — Options flow and dealer-impact interpreter
+
+Core belief: Dealer hedging and positioning can shape short-term path.
+Primary tools:
+	•	Net premium flows, OI walls, gamma zones (conceptually)
+	•	“Magnet” strikes and pin risk near expiry
+	•	Volatility events (VIX context) and flow confirmation
+
+During trading workflow:
+	1.	Map strike magnets and key walls for the nearest expiries.
+	2.	Watch whether price is drawn toward a magnet or repelled.
+	3.	Combine with price structure:
+	•	Flow supports price level = higher confidence
+	•	Flow contradicts price level = smaller size or wait
+	4.	Time horizon: short, catalyst-aware.
+
+Style signature:
+	•	Strong “path dependency” thinking.
+	•	Uses flows to rank scenarios.
+
+2) What CV should do to support these personas
+
+CV target outputs (what you want the model to produce)
+
+You should not start by asking CV to “find institutional demand.” Make it output geometry and pattern primitives.
+
+CV outputs that directly map to personas:
+	•	Trendline candidates (support/resistance lines)
+	•	Channel bounds (upper/lower)
+	•	Range box (support/resistance rectangle)
+	•	Swing points (peaks/troughs)
+	•	Breakout / breakdown event markers (close beyond structure)
+
+How each persona uses CV outputs
+	•	John: CV suggests swing-based horizontal zones and “reaction points.”
+	•	Kpak: CV suggests trendlines/channels and slope-based bias.
+	•	Vandy: CV suggests ranges and compression zones.
+	•	Zan: CV does not replace flow. CV provides structure overlay that you combine with flow features later.
+
+3) Clear instructions for Codex to refactor your project
+
+A) Desired architecture
+
+Tell Codex to refactor into four layers:
+	1.	data/
+	•	Fetch, clean, standardize OHLCV (single canonical schema)
+	2.	features/
+	•	ATR, returns, MAs, pivots
+	3.	structure/
+	•	Levels (zones), gaps (filled/unfilled), trendlines/channels, ranges
+	4.	viz/
+	•	Plotly chart with consistent styling, labels, and rangebreaks
+
+Optional later:
+5) cv/
+	•	Dataset builder, labeling, training, inference overlay
+
+B) Canonical dataframe schema (must enforce)
+
+Codex should enforce a single schema everywhere:
+	•	date (datetime64[ns])
+	•	open, high, low, close (float)
+	•	volume (float or int)
+No MultiIndex columns. No symbol-level column tuples.
+
+C) Rule engine specs (what to keep stable)
+
+1) Levels
+	•	Input: pivots + ATR tolerance
+	•	Output table:
+	•	type in {support,resistance}
+	•	level, zone_low, zone_high, touches, last_touch_date, recency_score
+	•	Filter:
+	•	only keep top N each side of last close
+	•	and/or within X% of last close
+	•	and enforce min recency
+
+2) Gaps
+You need one consistent definition.
+	•	Detect gap event on day t:
+	•	bull gap if low[t] > high[t-1] with gap [high[t-1], low[t]]
+	•	bear gap if high[t] < low[t-1] with gap [high[t], low[t-1]]
+	•	Define “filled” clearly:
+	•	bull gap filled if any future low <= gap_low
+	•	bear gap filled if any future high >= gap_high
+	•	Plot only:
+	•	gaps within last gaps_lookback_months
+	•	and closest K gaps to current price
+
+3) Trendlines/channels (new)
+Codex should implement:
+	•	Extract last M pivot lows and pivot highs.
+	•	Fit lines using robust regression or RANSAC:
+	•	support line from pivot lows
+	•	resistance line from pivot highs
+	•	Score lines by:
+	•	number of touches within tolerance
+	•	recency weighting
+	•	slope sanity (avoid near-vertical artifacts)
+	•	Output:
+	•	line endpoints in time coordinates, slope, intercept, touch_count, score
+	•	Plot:
+	•	show top 1–2 lines each side.
+D) Plotly chart requirements
+
+Codex should implement:
+	•	Candlestick with green/red.
+	•	Remove non-trading day spacing:
+	•	either rangebreaks for weekends and optionally US holidays
+	•	or category axis using date_str (your current approach)
+	•	Overlays:
+	•	MA20/50/100
+	•	Levels: strong midline + lightly shaded zone
+	•	Gaps: shaded only across the gap price band, with label including gap date
+	•	VP bands: shaded with stronger opacity and label “VP center”
+	•	Labeling:
+	•	Put labels at the right edge with a fixed pixel offset.
+	•	Do not let labels overlap: implement simple vertical jitter if needed.
+
+E) CV integration plan (phase-based)
+
+Codex should prepare these modules, even if you do not train yet.
+
+Phase 1: dataset builder
+	•	Generate images for rolling windows (e.g., last 120 bars).
+	•	Save:
+	•	image
+	•	metadata JSON: levels, lines, ranges, gap boxes
+These are weak labels.
+
+Phase 2: train simple model
+	•	Start with classification:
+	•	regime: trend vs range
+	•	breakout in next N bars: yes/no
+This is easier than line drawing.
+
+Phase 3: line drawing
+	•	Train detection/segmentation to output trendline masks or endpoints.
+	•	Compare to weak labels first, then human-corrected labels.
+
+4) Why your plots “blew up” into insane lines (root causes)
+
+Based on your screenshots and errors, these are the common triggers:
+	•	You accidentally plotted all historical levels rather than “near current price” levels.
+	•	Your y-axis auto-scaled because levels included ancient SPY prices, so everything became dense.
+	•	MultiIndex columns from yfinance caused type confusion (tuple column names), breaking your normalizer and cascading into wrong filtering.
+	•	You plotted gaps without filtering by recency and proximity, so multiple old gaps stacked into heavy grey bands.

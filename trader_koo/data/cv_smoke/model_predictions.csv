@@ -1,0 +1,9 @@
+sample_id,pattern,confidence,status
+QQQ_20250821_120,rising_wedge,0.95,forming
+QQQ_20250821_120,bull_flag,0.8,forming
+SPY_20250821_120,rising_wedge,0.88,forming
+SPY_20250821_120,bull_flag,0.8,forming
+QQQ_20251003_120,rising_wedge,0.95,forming
+QQQ_20251003_120,bull_flag,0.8,forming
+SPY_20251003_120,rising_wedge,0.88,forming
+SPY_20251003_120,bull_flag,0.8,forming
