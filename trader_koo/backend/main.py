@@ -543,9 +543,9 @@ def status() -> dict[str, Any]:
                 LIMIT 1
                 """
             ).fetchone()
-            if run_row and run_row["status"] == "running" and table_exists(conn, "ticker_status"):
+            if run_row and run_row["status"] == "running" and table_exists(conn, "ingest_ticker_status"):
                 ts_row = conn.execute(
-                    "SELECT COUNT(*) AS c FROM ticker_status WHERE run_id = ?",
+                    "SELECT COUNT(*) AS c FROM ingest_ticker_status WHERE run_id = ?",
                     (run_row["run_id"],),
                 ).fetchone()
                 ticker_status_count = int(ts_row["c"]) if ts_row else 0
