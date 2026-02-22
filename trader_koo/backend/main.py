@@ -532,6 +532,7 @@ def status() -> dict[str, Any]:
         ).fetchone()
 
         run_row = None
+        ticker_status_count = None
         if table_exists(conn, "ingest_runs"):
             run_row = conn.execute(
                 """
@@ -542,6 +543,12 @@ def status() -> dict[str, Any]:
                 LIMIT 1
                 """
             ).fetchone()
+            if run_row and run_row["status"] == "running" and table_exists(conn, "ticker_status"):
+                ts_row = conn.execute(
+                    "SELECT COUNT(*) AS c FROM ticker_status WHERE run_id = ?",
+                    (run_row["run_id"],),
+                ).fetchone()
+                ticker_status_count = int(ts_row["c"]) if ts_row else 0
 
         latest_price_date = counts["latest_price_date"] if counts else None
         latest_fund_snapshot = counts["latest_fund_snapshot"] if counts else None
@@ -560,6 +567,8 @@ def status() -> dict[str, Any]:
         latest_run = dict(run_row) if run_row is not None else None
         if latest_run and latest_run.get("status") in {"failed"}:
             warnings.append("latest ingest run failed")
+        if latest_run and ticker_status_count is not None:
+            latest_run["tickers_processed"] = ticker_status_count
 
         return {
             **base,
