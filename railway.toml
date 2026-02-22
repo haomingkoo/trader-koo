@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -r trader_koo/requirements.txt && pip install -e . && pip install opencv-python-headless --force-reinstall --quiet"
+buildCommand = "pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install -r trader_koo/requirements.txt && pip install -e . && pip install opencv-python-headless --force-reinstall --quiet"
 
 [deploy]
 startCommand = "bash start.sh"
