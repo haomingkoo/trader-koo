@@ -188,8 +188,9 @@
     }
     .mkt-bar button:hover { color: var(--text); border-color: var(--blue); }
     @media (max-width: 768px) {
-      .op-toolbar { grid-template-columns: 1fr 1fr; }
-      .op-toolbar button { width: auto; justify-self: start; }
+      .op-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
+      .op-toolbar .field { flex: 1 1 140px; }
+      .op-toolbar button { flex: 0 0 auto; width: auto; }
       .chart-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
       .chart-toolbar > * { flex: 1 1 130px; min-width: 0; }
       .chart-toolbar button { flex: 0 0 auto; width: auto; }
@@ -199,8 +200,6 @@
       #chart { height: 420px; }
       .table-wrap { grid-template-columns: 1fr; }
       .cards { grid-template-columns: repeat(3, 1fr); }
-      .op-toolbar { grid-template-columns: 1fr 1fr; }
-      .op-toolbar button { width: auto; justify-self: start; }
     }
     .guide {
       line-height: 1.5;
@@ -221,9 +220,7 @@
       </div>
       <input id="apiBase" type="hidden" value="" />
     </div>
-    <div class="status-block" style="margin-bottom: 10px;">
-      <div id="apiResolved" class="status">API: auto-detecting...</div>
-    </div>
+
 
     <div class="tabs">
       <button id="tabGuideBtn" class="tab-btn active">Guide</button>
@@ -555,7 +552,6 @@
     function setApiBase(base, persist = true) {
       const clean = normalizeBase(base);
       $("apiBase").value = clean;
-      $("apiResolved").textContent = `API: ${clean || "not set"}`;
       if (persist && clean) localStorage.setItem(API_BASE_STORAGE_KEY, clean);
     }
 
@@ -607,7 +603,6 @@
       const base = getApiBase();
       if (!base) {
         setServiceStatus("Service status: missing API base", true);
-        $("apiResolved").textContent = "API: missing";
         return;
       }
       try {
@@ -622,10 +617,8 @@
           `price_age=${payload.freshness?.price_age_days ?? "-"}d`
         ].join(" • ");
         setServiceStatus(txt, !payload.ok);
-        $("apiResolved").textContent = `API: ${base}`;
       } catch (err) {
         setServiceStatus(`API DOWN (${err.message})`, true);
-        $("apiResolved").textContent = `API: ${base}`;
       }
     }
 
