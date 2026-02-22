@@ -233,10 +233,10 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
         return []
     rows = conn.execute(
         """
-        SELECT pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date, detected_ts
+        SELECT timeframe, pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date, detected_ts
         FROM yolo_patterns
         WHERE ticker = ?
-        ORDER BY confidence DESC
+        ORDER BY timeframe, confidence DESC
         """,
         (ticker,),
     ).fetchall()

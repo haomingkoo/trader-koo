@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Batch YOLOv8 pattern detection — renders each ticker's chart and stores detections in DB.
 
-Initial seed (all tickers, slow ~15-20 min):
+Runs two passes per ticker:
+  1. daily  — 180 days of daily candles  (~124 bars) — short-term patterns
+  2. weekly — 730 days resampled to weekly (~104 bars) — long-term patterns
+
+Initial seed (all tickers, ~20-30 min for both passes):
     python trader_koo/scripts/run_yolo_patterns.py --db-path /data/trader_koo.db
 
-Daily incremental (only tickers with a new candle, fast ~1-3 min):
+Daily incremental (only tickers with a new candle, fast ~2-5 min):
     python trader_koo/scripts/run_yolo_patterns.py --db-path /data/trader_koo.db --only-new
+
+Single timeframe (e.g. daily only):
+    python trader_koo/scripts/run_yolo_patterns.py --db-path /data/trader_koo.db --timeframe daily
 """
 from __future__ import annotations
 
@@ -39,7 +46,8 @@ YOLO_CLASSES = [
     "Triangle",
     "W_Bottom",
 ]
-DEFAULT_LOOKBACK_DAYS = 180
+DEFAULT_LOOKBACK_DAYS = 180        # daily pass — ~124 trading bars
+DEFAULT_WEEKLY_LOOKBACK_DAYS = 730 # weekly pass — ~104 weekly bars
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -49,6 +57,7 @@ def ensure_yolo_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS yolo_patterns (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker        TEXT    NOT NULL,
+            timeframe     TEXT    NOT NULL DEFAULT 'daily',
             pattern       TEXT    NOT NULL,
             confidence    REAL    NOT NULL,
             x0_date       TEXT    NOT NULL,
@@ -62,35 +71,39 @@ def ensure_yolo_table(conn: sqlite3.Connection) -> None:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_yolo_ticker ON yolo_patterns(ticker)")
     conn.commit()
-    # Add as_of_date column if upgrading from older schema
-    try:
-        conn.execute("ALTER TABLE yolo_patterns ADD COLUMN as_of_date TEXT")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # column already exists
+    # Migrations for older schema versions
+    for col, defn in [
+        ("as_of_date", "TEXT"),
+        ("timeframe",  "TEXT NOT NULL DEFAULT 'daily'"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE yolo_patterns ADD COLUMN {col} {defn}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def get_tickers_to_process(
-    conn: sqlite3.Connection, only_new: bool
+    conn: sqlite3.Connection, only_new: bool, timeframe: str
 ) -> list[tuple[str, str]]:
-    """Return list of (ticker, latest_price_date) to process."""
+    """Return list of (ticker, latest_price_date) to process for the given timeframe."""
     rows = conn.execute(
         "SELECT ticker, MAX(date) as latest FROM price_daily GROUP BY ticker ORDER BY ticker"
     ).fetchall()
     if not only_new:
         return [(r[0], r[1]) for r in rows]
 
-    # --only-new: skip tickers whose yolo as_of_date matches their latest price date
+    # --only-new: skip tickers whose yolo as_of_date (for this timeframe) is up-to-date
     existing = {
         r[0]: r[1]
         for r in conn.execute(
-            "SELECT ticker, MAX(as_of_date) FROM yolo_patterns GROUP BY ticker"
+            "SELECT ticker, MAX(as_of_date) FROM yolo_patterns WHERE timeframe = ? GROUP BY ticker",
+            (timeframe,),
         ).fetchall()
     }
     result = []
     for ticker, latest_date in rows:
-        last_detected = existing.get(ticker)
-        if last_detected != latest_date:
+        if existing.get(ticker) != latest_date:
             result.append((ticker, latest_date))
     return result
 
@@ -103,20 +116,42 @@ def get_price_df(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
     )
 
 
+def resample_to_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    """Resample daily OHLCV to weekly (week-end anchor) for longer-term detection."""
+    df2 = df.copy()
+    df2["date"] = pd.to_datetime(df2["date"])
+    df2 = df2.set_index("date")
+    weekly = df2.resample("W").agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        volume=("volume", "sum"),
+    ).dropna(subset=["open", "close"])
+    weekly = weekly.reset_index()
+    weekly["date"] = weekly["date"].dt.strftime("%Y-%m-%d")
+    return weekly
+
+
 def save_detections(
     conn: sqlite3.Connection,
     ticker: str,
+    timeframe: str,
     detections: list[dict],
     lookback_days: int,
     as_of_date: str,
 ) -> None:
-    conn.execute("DELETE FROM yolo_patterns WHERE ticker = ?", (ticker,))
+    # Only delete rows for this ticker + timeframe — preserve the other timeframe
+    conn.execute(
+        "DELETE FROM yolo_patterns WHERE ticker = ? AND timeframe = ?",
+        (ticker, timeframe),
+    )
     for d in detections:
         conn.execute(
             """INSERT INTO yolo_patterns
-               (ticker, pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ticker, d["pattern"], d["confidence"],
+               (ticker, timeframe, pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ticker, timeframe, d["pattern"], d["confidence"],
              d["x0_date"], d["x1_date"], d["y0"], d["y1"],
              lookback_days, as_of_date),
         )
@@ -236,15 +271,78 @@ def run_inference(model, img_arr, ai: dict, dates: list) -> list[dict]:
     return detections
 
 
+# ── Per-pass processing ───────────────────────────────────────────────────────
+
+def _run_pass(
+    model,
+    conn: sqlite3.Connection,
+    timeframe: str,
+    lookback_days: int,
+    only_new: bool,
+    sleep_s: float,
+) -> tuple[int, int, int]:
+    """Run one full detection pass (daily or weekly). Returns (ok, failed, skipped)."""
+    ticker_dates = get_tickers_to_process(conn, only_new=only_new, timeframe=timeframe)
+    LOG.info(
+        "[%s] Processing %d ticker(s) (lookback=%d days, only_new=%s)",
+        timeframe, len(ticker_dates), lookback_days, only_new,
+    )
+
+    ok = failed = skipped = 0
+    total = len(ticker_dates)
+    for i, (ticker, latest_date) in enumerate(ticker_dates, 1):
+        try:
+            df = get_price_df(conn, ticker)
+            if df.empty or len(df) < 20:
+                skipped += 1
+                continue
+
+            cutoff = pd.Timestamp(df["date"].max()) - pd.DateOffset(days=lookback_days)
+            df = df[pd.to_datetime(df["date"]) >= cutoff].reset_index(drop=True)
+
+            if timeframe == "weekly":
+                df = resample_to_weekly(df)
+
+            if len(df) < 10:
+                skipped += 1
+                continue
+
+            img_arr, ai = render_chart(df)
+            dates = df["date"].tolist()
+            detections = run_inference(model, img_arr, ai, dates)
+            save_detections(conn, ticker, timeframe, detections, lookback_days, latest_date)
+
+            LOG.info("[%s %d/%d] %s → %d pattern(s): %s",
+                     timeframe, i, total, ticker,
+                     len(detections),
+                     ", ".join(d["pattern"] for d in detections) if detections else "none")
+            ok += 1
+        except Exception:
+            LOG.exception("[%s %d/%d] FAILED on %s", timeframe, i, total, ticker)
+            failed += 1
+
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+
+    return ok, failed, skipped
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Batch YOLO pattern detection")
     parser.add_argument("--db-path", default=os.getenv("TRADER_KOO_DB_PATH", "/data/trader_koo.db"))
-    parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
+    parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS,
+                        help="Daily pass: days of daily candles (default 180 ≈ 124 bars)")
+    parser.add_argument("--weekly-lookback-days", type=int, default=DEFAULT_WEEKLY_LOOKBACK_DAYS,
+                        help="Weekly pass: days to fetch before resampling (default 730 ≈ 104 weekly bars)")
     parser.add_argument(
         "--only-new", action="store_true",
-        help="Skip tickers whose YOLO patterns are already up-to-date with the latest price candle",
+        help="Skip tickers already up-to-date with latest price candle",
+    )
+    parser.add_argument(
+        "--timeframe", choices=["daily", "weekly", "both"], default="both",
+        help="Which timeframe pass(es) to run (default: both)",
     )
     parser.add_argument("--sleep", type=float, default=0.05,
                         help="Seconds to sleep between tickers (reduces CPU spikes)")
@@ -281,47 +379,30 @@ def main() -> None:
     conn = sqlite3.connect(str(db_path))
     try:
         ensure_yolo_table(conn)
-        ticker_dates = get_tickers_to_process(conn, only_new=args.only_new)
-        LOG.info(
-            "Processing %d ticker(s) (lookback=%d days, only_new=%s)",
-            len(ticker_dates), args.lookback_days, args.only_new,
-        )
 
-        ok = failed = skipped = 0
-        for i, (ticker, latest_date) in enumerate(ticker_dates, 1):
-            try:
-                df = get_price_df(conn, ticker)
-                if df.empty or len(df) < 20:
-                    skipped += 1
-                    continue
+        passes = []
+        if args.timeframe in ("daily", "both"):
+            passes.append(("daily", args.lookback_days))
+        if args.timeframe in ("weekly", "both"):
+            passes.append(("weekly", args.weekly_lookback_days))
 
-                cutoff = pd.Timestamp(df["date"].max()) - pd.DateOffset(days=args.lookback_days)
-                df = df[pd.to_datetime(df["date"]) >= cutoff].reset_index(drop=True)
-                if len(df) < 20:
-                    skipped += 1
-                    continue
-
-                img_arr, ai = render_chart(df)
-                dates = df["date"].tolist()
-                detections = run_inference(model, img_arr, ai, dates)
-                save_detections(conn, ticker, detections, args.lookback_days, latest_date)
-
-                LOG.info("[%d/%d] %s (as_of=%s) → %d pattern(s): %s",
-                         i, len(ticker_dates), ticker, latest_date,
-                         len(detections),
-                         ", ".join(d["pattern"] for d in detections) if detections else "none")
-                ok += 1
-            except Exception:
-                LOG.exception("[%d/%d] FAILED on %s", i, len(ticker_dates), ticker)
-                failed += 1
-
-            if args.sleep > 0:
-                time.sleep(args.sleep)
+        total_ok = total_failed = total_skipped = 0
+        for timeframe, lookback in passes:
+            ok, failed, skipped = _run_pass(
+                model, conn,
+                timeframe=timeframe,
+                lookback_days=lookback,
+                only_new=args.only_new,
+                sleep_s=args.sleep,
+            )
+            total_ok += ok
+            total_failed += failed
+            total_skipped += skipped
 
     finally:
         conn.close()
 
-    LOG.info("Done — ok=%d failed=%d skipped=%d", ok, failed, skipped)
+    LOG.info("Done — ok=%d failed=%d skipped=%d", total_ok, total_failed, total_skipped)
 
 
 if __name__ == "__main__":

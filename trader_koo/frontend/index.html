@@ -1106,39 +1106,57 @@
           if (n.includes("top") || n.includes("m_head") || n.includes("shoulders top")) return yoloColorMap.bear;
           return yoloColorMap.neutral;
         };
-        yoloPatterns.forEach((p, idx) => {
-          const y0 = Number(p.y0), y1 = Number(p.y1);
-          if (Number.isNaN(y0) || Number.isNaN(y1)) return;
-          const style = yoloStyle(p.pattern);
-          const conf = Number(p.confidence);
-          shapes.push({
-            type: "rect",
-            xref: "x",
-            yref: "y",
-            x0: p.x0_date,
-            x1: p.x1_date,
-            y0: Math.min(y0, y1),
-            y1: Math.max(y0, y1),
-            line: {color: style.stroke, width: 1.5, dash: "dot"},
-            fillcolor: style.fill,
-          });
-          if (!isMobile && idx < 6) {
-            annotations.push({
+        // Separate daily vs weekly so weekly renders with a wider, dashed border
+        const dailyPatterns = yoloPatterns.filter(p => (p.timeframe || "daily") === "daily");
+        const weeklyPatterns = yoloPatterns.filter(p => p.timeframe === "weekly");
+
+        const renderYoloGroup = (group, isWeekly) => {
+          const borderWidth = isWeekly ? 2.2 : 1.5;
+          const borderDash = isWeekly ? "dash" : "dot";
+          const fillOpacity = isWeekly ? "0.05" : "0.07";
+          let labelCount = 0;
+          group.forEach((p, idx) => {
+            const y0 = Number(p.y0), y1 = Number(p.y1);
+            if (Number.isNaN(y0) || Number.isNaN(y1)) return;
+            const baseStyle = yoloStyle(p.pattern);
+            // Weekly uses slightly muted colours to not compete with daily boxes
+            const stroke = isWeekly ? baseStyle.stroke + "cc" : baseStyle.stroke;
+            const fill = baseStyle.fill.replace(/[\d.]+\)$/, `${fillOpacity})`);
+            const conf = Number(p.confidence);
+            const label = isWeekly ? "W" : "D";
+            shapes.push({
+              type: "rect",
               xref: "x",
               yref: "y",
-              x: p.x1_date,
-              y: Math.max(y0, y1),
-              text: `${String(p.pattern).replaceAll("_", " ")} ${(conf * 100).toFixed(0)}%`,
-              showarrow: false,
-              xanchor: "left",
-              yanchor: "bottom",
-              xshift: 4,
-              bgcolor: "rgba(18,25,39,0.85)",
-              bordercolor: style.stroke,
-              font: {color: style.stroke, size: 10},
+              x0: p.x0_date,
+              x1: p.x1_date,
+              y0: Math.min(y0, y1),
+              y1: Math.max(y0, y1),
+              line: {color: stroke, width: borderWidth, dash: borderDash},
+              fillcolor: fill,
             });
-          }
-        });
+            if (!isMobile && labelCount < 5) {
+              annotations.push({
+                xref: "x",
+                yref: "y",
+                x: p.x1_date,
+                y: Math.max(y0, y1),
+                text: `[${label}] ${String(p.pattern).replaceAll("_", " ")} ${(conf * 100).toFixed(0)}%`,
+                showarrow: false,
+                xanchor: "left",
+                yanchor: "bottom",
+                xshift: 4,
+                bgcolor: "rgba(18,25,39,0.85)",
+                bordercolor: baseStyle.stroke,
+                font: {color: baseStyle.stroke, size: isWeekly ? 9 : 10},
+              });
+              labelCount++;
+            }
+          });
+        };
+
+        renderYoloGroup(dailyPatterns, false);
+        renderYoloGroup(weeklyPatterns, true);
       }
 
       const layout = {
@@ -1330,7 +1348,7 @@
           { sortable: true }
         );
         renderSimpleTable("candlesTable", ["date", "pattern", "bias", "confidence", "explanation"], payload.candlestick_patterns || [], false, null, { sortable: true });
-        renderSimpleTable("yoloPatternsTable", ["pattern", "confidence", "x0_date", "x1_date", "y0", "y1", "as_of_date"], payload.yolo_patterns || [], false, null, { sortable: true });
+        renderSimpleTable("yoloPatternsTable", ["timeframe", "pattern", "confidence", "x0_date", "x1_date", "y0", "y1", "as_of_date"], payload.yolo_patterns || [], false, null, { sortable: true });
         $("chartStatus").textContent = `asof ${payload.asof || "-"} • ${ticker}`;
         setGlobalStatus(`Done (${ticker})`);
       } catch (err) {
