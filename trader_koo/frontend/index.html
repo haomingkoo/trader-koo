@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>trader_koo Dashboard</title>
+  <title>trader_koo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     :root {
@@ -25,17 +28,70 @@
       color: var(--text);
     }
     .wrap { max-width: 1360px; margin: 0 auto; padding: 24px; }
-    .title-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
-    .title { font-size: 1.6rem; font-weight: 700; letter-spacing: 0.5px; }
-    .home-link { font-size: 0.78rem; color: var(--muted); text-decoration: none; letter-spacing: 0.04em; transition: color .2s; }
-    .home-link:hover { color: var(--blue); }
-    .global-toolbar {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
-      margin-bottom: 14px;
+
+    /* ── Nav ── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 0 16px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 0;
+      font-family: 'Inter', sans-serif;
     }
-    .status-block { display: flex; flex-direction: column; gap: 4px; }
+    .nav-logo {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .nav-links { display: flex; gap: 28px; }
+    .nav-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13.5px;
+      letter-spacing: .02em;
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+
+    /* ── Hero ── */
+    .hero {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 22px 0 20px;
+      font-family: 'Inter', sans-serif;
+    }
+    .hero-title {
+      font-size: clamp(30px, 6vw, 46px);
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: -.03em;
+      margin: 0 0 6px;
+      background: linear-gradient(135deg, #e9eef8 28%, #6aa9ff 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0;
+      font-weight: 400;
+    }
+    .status-pill {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 8px 14px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      font-family: 'Inter', sans-serif;
+    }
     input, select, button {
       width: 100%;
       border: 1px solid var(--line);
@@ -215,17 +271,22 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="title-row">
-      <div class="title">trader_koo • Swing Dashboard</div>
-      <a class="home-link" href="https://kooexperience.com" target="_blank" rel="noopener">← kooexperience.com</a>
-    </div>
-    <div class="global-toolbar">
-      <div class="status-block">
-        <div id="globalStatus" class="status">Idle</div>
-        <div id="serviceStatus" class="status">Service status unknown</div>
+    <nav>
+      <a class="nav-logo" href="https://kooexperience.com">HK</a>
+      <div class="nav-links">
+        <a href="https://kooexperience.com">Home</a>
+        <a href="https://github.com/haomingkoo" target="_blank" rel="noopener">GitHub</a>
       </div>
-      <input id="apiBase" type="hidden" value="" />
-    </div>
+    </nav>
+    <section class="hero">
+      <div>
+        <h1 class="hero-title">trader_koo</h1>
+        <p class="hero-sub">S&amp;P 500 swing dashboard — AI pattern detection, valuation screening, and after-close signals.</p>
+      </div>
+      <div id="serviceStatus" class="status-pill">Connecting...</div>
+    </section>
+    <div id="globalStatus" class="status" style="margin-bottom: 10px; font-size: 0.82rem;"></div>
+    <input id="apiBase" type="hidden" value="" />
 
 
     <div class="tabs">
@@ -717,7 +778,7 @@
         const payload = await resp.json();
         const run = payload.latest_run || {};
         const txt = [
-          `API ${payload.ok ? "UP" : "DEGRADED"}`,
+          `API ${payload.ok ? "UP" : "STALE"}`,
           `run=${run.status || "n/a"}`,
           `tickers=${payload.counts?.tracked_tickers ?? "-"}`,
           `price_age=${payload.freshness?.price_age_days ?? "-"}d`
