@@ -141,6 +141,7 @@ PUBLIC_API_PATHS = {
     "/api/health",
     "/api/config",
     "/api/status",
+    "/api/market-summary",
 }
 
 app = FastAPI(
@@ -1163,5 +1164,45 @@ def opportunities(
                 "limit": "Maximum rows returned",
             },
         }
+    finally:
+        conn.close()
+
+
+@app.get("/api/market-summary")
+def market_summary(days: int = Query(90, ge=7, le=365)) -> Any:
+    """Public endpoint — SPY & QQQ price history for the portfolio chart. No API key required."""
+    tickers = ["SPY", "QQQ"]
+    conn = get_conn()
+    try:
+        result: dict[str, Any] = {"as_of": None, "tickers": {}}
+        for ticker in tickers:
+            rows = conn.execute(
+                """
+                SELECT date, CAST(close AS REAL) AS close
+                FROM price_daily
+                WHERE ticker = ?
+                ORDER BY date DESC
+                LIMIT ?
+                """,
+                (ticker, days),
+            ).fetchall()
+            if not rows:
+                result["tickers"][ticker] = None
+                continue
+            history = [{"date": r[0], "close": round(float(r[1]), 2)} for r in reversed(rows)]
+            latest_close = history[-1]["close"]
+            prev_close = history[-2]["close"] if len(history) >= 2 else latest_close
+            first_close = history[0]["close"]
+            change_pct_1d = round((latest_close - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+            change_pct_period = round((latest_close - first_close) / first_close * 100, 2) if first_close else 0.0
+            result["tickers"][ticker] = {
+                "price": latest_close,
+                "change_pct_1d": change_pct_1d,
+                "change_pct_period": change_pct_period,
+                "history": history,
+            }
+            if result["as_of"] is None:
+                result["as_of"] = history[-1]["date"]
+        return result
     finally:
         conn.close()
