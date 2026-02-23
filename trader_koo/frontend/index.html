@@ -25,7 +25,10 @@
       color: var(--text);
     }
     .wrap { max-width: 1360px; margin: 0 auto; padding: 24px; }
-    .title { font-size: 1.6rem; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 14px; }
+    .title-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+    .title { font-size: 1.6rem; font-weight: 700; letter-spacing: 0.5px; }
+    .home-link { font-size: 0.78rem; color: var(--muted); text-decoration: none; letter-spacing: 0.04em; transition: color .2s; }
+    .home-link:hover { color: var(--blue); }
     .global-toolbar {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -212,7 +215,10 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="title">trader_koo • Swing Dashboard</div>
+    <div class="title-row">
+      <div class="title">trader_koo • Swing Dashboard</div>
+      <a class="home-link" href="https://kooexperience.com" target="_blank" rel="noopener">← kooexperience.com</a>
+    </div>
     <div class="global-toolbar">
       <div class="status-block">
         <div id="globalStatus" class="status">Idle</div>
@@ -226,6 +232,7 @@
       <button id="tabGuideBtn" class="tab-btn active">Guide</button>
       <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
       <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
+      <button id="tabReportBtn" class="tab-btn">Daily Report</button>
     </div>
 
     <section id="tabOp" class="panel hidden">
@@ -301,6 +308,11 @@
             <input id="showYoloPatterns" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
             <span style="font-size:0.8rem; color:var(--muted);">YOLO Patterns</span>
           </label>
+          <div class="field" style="display:flex; flex-direction:row; align-items:center; gap:4px;">
+            <span style="font-size:0.75rem; color:var(--muted);">Bars:</span>
+            <button id="tfDailyBtn" style="padding:2px 9px; font-size:0.78rem; background:var(--blue); color:#fff; border:none; border-radius:3px; cursor:pointer;">D</button>
+            <button id="tfWeeklyBtn" style="padding:2px 9px; font-size:0.78rem; background:var(--card); color:var(--muted); border:1px solid var(--border); border-radius:3px; cursor:pointer;">W</button>
+          </div>
           <button id="loadChartBtn">Load</button>
           <div id="chartStatus" class="status">Select ticker and load</div>
         </div>
@@ -371,6 +383,50 @@
       </div>
     </section>
 
+    <section id="tabReport" class="panel hidden">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+        <h2 style="margin:0; font-size:1.1rem;">Daily Report</h2>
+        <span id="reportStatus" style="font-size:0.8rem; color:var(--muted);"></span>
+      </div>
+      <div id="reportSummaryCards" class="cards" style="margin-bottom:14px;"></div>
+      <div id="reportYoloCards" class="cards" style="margin-bottom:14px;"></div>
+
+      <!-- 52W Extremes -->
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">52-Week Extremes (within 3% of high/low)</div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:220px;">
+            <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NEAR 52W HIGH</div>
+            <div id="report52wHigh" style="font-size:0.82rem; line-height:1.7;"></div>
+          </div>
+          <div style="flex:1; min-width:220px;">
+            <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NEAR 52W LOW</div>
+            <div id="report52wLow" style="font-size:0.82rem; line-height:1.7;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top YOLO patterns at close -->
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Top AI Patterns at Close (YOLO)</div>
+        <table id="reportYoloTopTable"></table>
+      </div>
+
+      <!-- Candle signals at close -->
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Candle Signals at Close</div>
+        <table id="reportCandleTable"></table>
+      </div>
+
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label">Report History</div>
+        <table id="reportHistoryTable"></table>
+      </div>
+      <div id="reportNoData" style="display:none; color:var(--muted); padding:20px 0;">
+        No reports generated yet. Reports are written after the first daily cron run (22:00 UTC Mon–Fri).
+      </div>
+    </section>
+
     <section id="tabGuide" class="panel">
       <div class="guide">
         <div style="background:rgba(255,107,107,0.12); border:1px solid #ff6b6b; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
@@ -379,8 +435,8 @@
         </div>
 
         <h3>How to Use This Dashboard</h3>
-        <p>This dashboard has three tabs: <b>Guide</b> (this page), <b>Opportunities (PEG)</b> for screening the S&amp;P 500 by valuation, and <b>Chart + Levels</b> for per-ticker technical analysis.</p>
-        <p>Typical workflow: scan the Opportunities tab for interesting tickers → click a row to jump straight to that ticker's chart → study levels, gaps, and patterns to form a thesis.</p>
+        <p>This dashboard has four tabs: <b>Guide</b> (this page), <b>Opportunities (PEG)</b> for screening the S&amp;P 500 by valuation, <b>Chart + Levels</b> for per-ticker technical analysis, and <b>Daily Report</b> for an after-close summary of signals.</p>
+        <p>Typical workflow: check the Daily Report tab each evening after the data refresh → use 52W extremes and pattern signals to build a watchlist → scan the Opportunities tab for valuation context → click a row to jump to that ticker's chart → study levels, gaps, and patterns to form a thesis.</p>
 
         <h3>Opportunities Tab — PEG &amp; Valuation Screening</h3>
         <p>The table shows all S&amp;P 500 tickers ranked by valuation. Key columns:</p>
@@ -417,6 +473,19 @@
         <h3>CV Proxy Pattern Scores</h3>
         <p>An image-style shape scorer using normalised OHLC geometry — not a trained deep model, but useful as a secondary signal. Compare with Hybrid scores for consensus.</p>
 
+        <h3>Daily Report Tab</h3>
+        <p>Generated automatically after each daily data refresh (22:00 UTC Mon–Fri). The weekly YOLO pass runs separately on Saturdays and also triggers a report update. The report does not have a manual refresh button — it reflects the last completed cron run.</p>
+
+        <p><b>52-Week Extremes</b> — lists every S&amp;P 500 ticker whose latest close is within 3% of its 52-week high or low. Click any ticker to jump directly to its chart.</p>
+        <p>Rationale: proximity to a 52W high is a momentum signal — stocks making new highs are often in strong uptrends and may continue. Proximity to a 52W low flags potential capitulation or value traps. In both cases, the price is at a structurally significant level and worth further inspection.</p>
+        <p>A ticker at its 52W high is not automatically bullish — check volume (a breakout on low volume is weak) and whether the high is a genuine new multi-year high or just a recovery within a longer downtrend. Similarly, a 52W low could be genuine distress or a brief oversold condition before recovery.</p>
+
+        <p><b>Top AI Patterns at Close (YOLO)</b> — the 30 highest-confidence chart patterns detected by the YOLOv8 model on the latest trading day's data. Sorted by confidence. The <i>timeframe</i> column shows whether the detection came from the 180-day daily chart or the 730-day weekly chart.</p>
+        <p>Rationale: rather than manually checking all 510 tickers, this surfaces the detections the model is most confident about. Patterns detected on the weekly timeframe represent larger, more structurally significant formations.</p>
+
+        <p><b>Candle Signals at Close</b> — rule-based candlestick patterns detected on each ticker's latest closing candle. Common signals include engulfing candles, hammers, shooting stars, and three-candle reversal sequences (morning star, evening star, three white soldiers, three black crows).</p>
+        <p>Rationale: candlestick signals are context-dependent — a hammer after a prolonged downtrend on high volume is far more meaningful than a hammer in the middle of a range. Use this list as a starting point to check the chart, not a standalone trade signal. Bullish and bearish signals are both shown; filter by <i>bias</i> to focus on one direction.</p>
+
         <h3>Display Window &amp; Chart Navigation</h3>
         <p>The <b>3M / 6M / YTD / 1Y / 2Y / ALL</b> buttons at the top-right of the chart change the view window. All data is always loaded — changing the window just zooms in. You can also drag to zoom, double-click to reset, and scroll to zoom.</p>
         <p>The engine uses a wider history window (up to all available data) for more stable level and pivot calculations, regardless of what is shown on screen.</p>
@@ -440,13 +509,16 @@
     const tabOpBtn = $("tabOpBtn");
     const tabChartBtn = $("tabChartBtn");
     const tabGuideBtn = $("tabGuideBtn");
+    const tabReportBtn = $("tabReportBtn");
     const tabOp = $("tabOp");
     const tabChart = $("tabChart");
     const tabGuide = $("tabGuide");
+    const tabReport = $("tabReport");
     const API_BASE_STORAGE_KEY = "trader_koo_api_base";
     const TABLE_STATE = {};
     const DEFAULT_MONTHS = 3;
     let LAST_CHART_PAYLOAD = null;
+    let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
     let _apiKey = "";
 
     function fmt(v, d = 2) {
@@ -675,33 +747,18 @@
     }
 
     function activateTab(which) {
-      if (which === "op") {
-        tabOpBtn.classList.add("active");
-        tabChartBtn.classList.remove("active");
-        tabGuideBtn.classList.remove("active");
-        tabOp.classList.remove("hidden");
-        tabChart.classList.add("hidden");
-        tabGuide.classList.add("hidden");
-      } else if (which === "chart") {
-        tabChartBtn.classList.add("active");
-        tabOpBtn.classList.remove("active");
-        tabGuideBtn.classList.remove("active");
-        tabChart.classList.remove("hidden");
-        tabOp.classList.add("hidden");
-        tabGuide.classList.add("hidden");
-      } else {
-        tabGuideBtn.classList.add("active");
-        tabOpBtn.classList.remove("active");
-        tabChartBtn.classList.remove("active");
-        tabGuide.classList.remove("hidden");
-        tabOp.classList.add("hidden");
-        tabChart.classList.add("hidden");
+      const all = { op: [tabOpBtn, tabOp], chart: [tabChartBtn, tabChart], guide: [tabGuideBtn, tabGuide], report: [tabReportBtn, tabReport] };
+      for (const [k, [btn, sec]] of Object.entries(all)) {
+        if (k === which) { btn.classList.add("active"); sec.classList.remove("hidden"); }
+        else             { btn.classList.remove("active"); sec.classList.add("hidden"); }
       }
+      if (which === "report") loadReport();
     }
 
     tabOpBtn.addEventListener("click", () => activateTab("op"));
     tabChartBtn.addEventListener("click", () => activateTab("chart"));
     tabGuideBtn.addEventListener("click", () => activateTab("guide"));
+    tabReportBtn.addEventListener("click", () => activateTab("report"));
 
     function fillCards(payload) {
       const f = payload.fundamentals || {};
@@ -832,9 +889,39 @@
       return [lo - pad, hi + pad];
     }
 
+    function resampleToWeekly(chart) {
+      // ISO week key → use last trading day of that week as the bar date
+      const isoWeek = (ds) => {
+        const d = new Date(ds + "T12:00:00Z");
+        const day = d.getUTCDay() || 7;
+        d.setUTCDate(d.getUTCDate() + 4 - day); // Thursday anchor
+        const yr = d.getUTCFullYear();
+        const jan4 = new Date(Date.UTC(yr, 0, 4));
+        const wk = Math.ceil(((d - jan4) / 864e5 + (jan4.getUTCDay() || 7)) / 7);
+        return `${yr}-${String(wk).padStart(2, "0")}`;
+      };
+      const weeks = new Map();
+      for (const row of chart) {
+        const key = isoWeek(row.date);
+        if (!weeks.has(key)) {
+          weeks.set(key, { date: row.date, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: Number(row.volume) || 0 });
+        } else {
+          const w = weeks.get(key);
+          w.high = Math.max(w.high, Number(row.high));
+          w.low  = Math.min(w.low,  Number(row.low));
+          w.close = Number(row.close);
+          w.date  = row.date; // last trading day of the week
+          w.volume += Number(row.volume) || 0;
+        }
+      }
+      return Array.from(weeks.values());
+    }
+
     function renderChart(payload) {
       LAST_CHART_PAYLOAD = payload;
-      const chart = payload.chart || [];
+      const isWeeklyChart = CHART_TIMEFRAME === "weekly";
+      const rawChart = payload.chart || [];
+      const chart = isWeeklyChart ? resampleToWeekly(rawChart) : rawChart;
       const levels = payload.levels || [];
       const gaps = payload.gaps || [];
       const trendlines = payload.trendlines || [];
@@ -1100,6 +1187,29 @@
           bear: {stroke: "#ff6b6b", fill: "rgba(255,107,107,0.07)"},
           neutral: {stroke: "#f8c24e", fill: "rgba(248,194,78,0.07)"},
         };
+        const yoloLabel = (nameRaw, compact = false) => {
+          const raw = String(nameRaw || "").replaceAll("_", " ").trim();
+          const map = {
+            "Head and shoulders bottom": "H&S Bottom",
+            "Head and shoulders top": "H&S Top",
+            "M Head": "M Head",
+            "W Bottom": "W Bottom",
+            "StockLine": "Stock Line",
+          };
+          let label = map[raw] || raw || "Pattern";
+          if (compact) {
+            const compactMap = {
+              "H&S Bottom": "H&S Bot",
+              "H&S Top":    "H&S Top",
+              "W Bottom":   "W Bot",
+              "M Head":     "M Head",
+              "Stock Line": "StkLine",
+              "Triangle":   "Triangle",
+            };
+            label = compactMap[label] ?? (label.length > 10 ? `${label.slice(0, 10)}…` : label);
+          }
+          return label;
+        };
         const yoloStyle = (nameRaw) => {
           const n = String(nameRaw || "").toLowerCase();
           if (n.includes("bottom") || n.includes("w_bottom") || n.includes("shoulders bottom")) return yoloColorMap.bull;
@@ -1114,8 +1224,9 @@
           const borderWidth = isWeekly ? 2.2 : 1.5;
           const borderDash = isWeekly ? "dash" : "dot";
           const fillOpacity = isWeekly ? "0.05" : "0.07";
+          const maxLabels = isMobile ? (isWeekly ? 2 : 3) : 5;
           let labelCount = 0;
-          group.forEach((p, idx) => {
+          group.forEach((p) => {
             const y0 = Number(p.y0), y1 = Number(p.y1);
             if (Number.isNaN(y0) || Number.isNaN(y1)) return;
             const baseStyle = yoloStyle(p.pattern);
@@ -1135,20 +1246,27 @@
               line: {color: stroke, width: borderWidth, dash: borderDash},
               fillcolor: fill,
             });
-            if (!isMobile && labelCount < 5) {
+            if (labelCount < maxLabels) {
+              const confPct = Number.isFinite(conf) ? `${(conf * 100).toFixed(0)}%` : "";
+              const labelName = yoloLabel(p.pattern, isMobile);
+              const text = isMobile
+                ? `${label}:${labelName} ${confPct}`
+                : `[${label}] ${yoloLabel(p.pattern, false)} ${confPct}`;
+              const yTop = Math.max(y0, y1);
               annotations.push({
                 xref: "x",
                 yref: "y",
-                x: p.x1_date,
-                y: Math.max(y0, y1),
-                text: `[${label}] ${String(p.pattern).replaceAll("_", " ")} ${(conf * 100).toFixed(0)}%`,
+                x: isMobile ? p.x0_date : p.x1_date,
+                y: yTop,
+                text,
                 showarrow: false,
                 xanchor: "left",
-                yanchor: "bottom",
-                xshift: 4,
+                yanchor: isMobile ? "top" : "bottom",
+                xshift: isMobile ? 2 : 4,
+                yshift: isMobile ? -2 : 0,
                 bgcolor: "rgba(18,25,39,0.85)",
                 bordercolor: baseStyle.stroke,
-                font: {color: baseStyle.stroke, size: isWeekly ? 9 : 10},
+                font: {color: baseStyle.stroke, size: isMobile ? 8 : (isWeekly ? 9 : 10)},
               });
               labelCount++;
             }
@@ -1385,6 +1503,113 @@
       loadChart();
     }
 
+    async function loadReport() {
+      const base = getApiBase();
+      $("reportStatus").textContent = "Loading...";
+      try {
+        const resp = await apiFetch(`${base}/api/admin/daily-report?limit=20`);
+        if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+        const data = await resp.json();
+        const latest = data.latest || {};
+        const counts = latest.counts || {};
+        const yoloBlock = latest.yolo || {};
+        const yoloSummary = yoloBlock.summary || {};
+        const ingestRun = latest.latest_ingest_run || {};
+        const signals = latest.signals || {};
+        const hasReport = data.ok && Object.keys(latest).length > 0;
+
+        $("reportNoData").style.display = hasReport ? "none" : "block";
+        if (!hasReport) { $("reportStatus").textContent = "No report yet"; return; }
+
+        const makeCard = (label, val) =>
+          `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
+
+        $("reportSummaryCards").innerHTML = [
+          makeCard("Generated (UTC)", (latest.generated_ts || "—").slice(0, 16).replace("T", " ")),
+          makeCard("Tracked Tickers", counts.tracked_tickers ?? "—"),
+          makeCard("Price Rows", (counts.price_rows ?? 0).toLocaleString()),
+          makeCard("Latest Price Date", (latest.latest_data || {}).price_date ?? "—"),
+          makeCard("Last Ingest", ingestRun.status ?? "—"),
+        ].join("");
+
+        const tfDaily  = (yoloBlock.timeframes || []).find(t => t.timeframe === "daily")  || {};
+        const tfWeekly = (yoloBlock.timeframes || []).find(t => t.timeframe === "weekly") || {};
+        $("reportYoloCards").innerHTML = [
+          makeCard("YOLO Total Rows", yoloSummary.rows_total ?? "—"),
+          makeCard("YOLO Tickers", yoloSummary.tickers_with_patterns ?? "—"),
+          makeCard("Daily Tickers", tfDaily.tickers_with_patterns  ?? "—"),
+          makeCard("Weekly Tickers", tfWeekly.tickers_with_patterns ?? "—"),
+        ].join("");
+
+        // 52W extremes
+        const nearHigh = signals.near_52w_high || [];
+        const nearLow  = signals.near_52w_low  || [];
+        const fmt52w = (arr, field, refField, color) =>
+          arr.length
+            ? arr.map(t =>
+                `<span style="display:inline-block; margin-right:10px;">` +
+                `<b style="cursor:pointer; color:var(--blue);" onclick="jumpToTicker('${t.ticker}')">${t.ticker}</b> ` +
+                `<span style="color:var(--fg)">$${t.close}</span> ` +
+                `<span style="color:var(--muted); font-size:0.75rem;">(${t[field].toFixed(2)}% from ${refField} $${t[refField === 'high_52w' ? 'high_52w' : 'low_52w']})</span>` +
+                `</span>`
+              ).join("")
+            : `<span style="color:var(--muted)">None</span>`;
+
+        $("report52wHigh").innerHTML = nearHigh.length
+          ? nearHigh.map(t =>
+              `<span style="display:inline-block; margin-right:12px; margin-bottom:2px;">` +
+              `<b style="cursor:pointer; color:var(--blue);" onclick="jumpToTicker('${t.ticker}')">${t.ticker}</b> ` +
+              `<span>$${t.close}</span> ` +
+              `<span style="color:var(--muted); font-size:0.75rem;">(${t.pct_from_high.toFixed(2)}% below $${t.high_52w})</span>` +
+              `</span>`
+            ).join("")
+          : `<span style="color:var(--muted)">None</span>`;
+
+        $("report52wLow").innerHTML = nearLow.length
+          ? nearLow.map(t =>
+              `<span style="display:inline-block; margin-right:12px; margin-bottom:2px;">` +
+              `<b style="cursor:pointer; color:var(--blue);" onclick="jumpToTicker('${t.ticker}')">${t.ticker}</b> ` +
+              `<span>$${t.close}</span> ` +
+              `<span style="color:var(--muted); font-size:0.75rem;">(${t.pct_from_low.toFixed(2)}% above $${t.low_52w})</span>` +
+              `</span>`
+            ).join("")
+          : `<span style="color:var(--muted)">None</span>`;
+
+        // Top YOLO patterns at close
+        renderSimpleTable("reportYoloTopTable",
+          ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
+          signals.yolo_top_today || [],
+          false, null, { sortable: false });
+
+        // Candle signals at close
+        renderSimpleTable("reportCandleTable",
+          ["ticker", "pattern", "bias", "confidence"],
+          signals.candle_patterns_today || [],
+          false, null, { sortable: false });
+
+        renderSimpleTable("reportHistoryTable",
+          ["file", "size_bytes", "modified_ts"],
+          data.history || [],
+          false, null, { sortable: false });
+
+        $("reportStatus").textContent = `As of ${(latest.generated_ts || "").slice(0, 16).replace("T", " ")} UTC`;
+      } catch (err) {
+        $("reportStatus").textContent = `Error: ${err.message}`;
+        console.error(err);
+      }
+    }
+
+    function setChartTimeframe(tf) {
+      CHART_TIMEFRAME = tf;
+      $("tfDailyBtn").style.background  = tf === "daily"  ? "var(--blue)" : "var(--card)";
+      $("tfDailyBtn").style.color        = tf === "daily"  ? "#fff"        : "var(--muted)";
+      $("tfDailyBtn").style.border       = tf === "daily"  ? "none"        : "1px solid var(--border)";
+      $("tfWeeklyBtn").style.background  = tf === "weekly" ? "var(--blue)" : "var(--card)";
+      $("tfWeeklyBtn").style.color        = tf === "weekly" ? "#fff"        : "var(--muted)";
+      $("tfWeeklyBtn").style.border       = tf === "weekly" ? "none"        : "1px solid var(--border)";
+      if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD);
+    }
+
     $("loadOpBtn").addEventListener("click", loadOpportunities);
     $("presetAllBtn").addEventListener("click", () => applyOpportunityPreset("all"));
     $("presetUndervaluedBtn").addEventListener("click", () => applyOpportunityPreset("undervalued"));
@@ -1396,6 +1621,8 @@
       loadOpportunities();
     });
     $("loadChartBtn").addEventListener("click", loadChart);
+    $("tfDailyBtn").addEventListener("click", () => setChartTimeframe("daily"));
+    $("tfWeeklyBtn").addEventListener("click", () => setChartTimeframe("weekly"));
     window.addEventListener("keydown", (e) => { if (e.key === "Enter") loadChart(); });
     $("showTrendlines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
