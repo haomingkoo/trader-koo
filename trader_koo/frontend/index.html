@@ -85,12 +85,12 @@
     .status-pill {
       border: 1px solid var(--line);
       background: var(--panel);
-      border-radius: 999px;
+      border-radius: 12px;
       padding: 8px 14px;
       color: var(--muted);
       font-size: 12px;
-      white-space: nowrap;
       font-family: 'Inter', sans-serif;
+      word-break: break-word;
     }
     input, select, button {
       width: 100%;
@@ -259,6 +259,8 @@
       #chart { height: 420px; }
       .table-wrap { grid-template-columns: 1fr; }
       .cards { grid-template-columns: repeat(3, 1fr); }
+      .hero { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .status-pill { width: 100%; border-radius: 10px; }
     }
     .guide {
       line-height: 1.5;
