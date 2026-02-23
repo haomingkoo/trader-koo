@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 import secrets
+import smtplib
 import sqlite3
+import ssl
 import subprocess
 import sys
 import threading
 from contextlib import asynccontextmanager
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +62,7 @@ CV_PROXY_CFG = CVProxyConfig()
 HYBRID_CV_CMP_CFG = HybridCVCompareConfig()
 
 SCRIPTS_DIR = PROJECT_DIR / "scripts"
+REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 
 
 def _run_daily_update() -> None:
@@ -70,6 +75,44 @@ def _run_daily_update() -> None:
         LOG.error("Scheduler: daily_update.sh failed (rc=%d): %s", result.returncode, result.stderr[-500:])
 
 
+def _run_weekly_yolo() -> None:
+    """Saturday job: run YOLO weekly pass + regenerate report."""
+    script_yolo = SCRIPTS_DIR / "run_yolo_patterns.py"
+    script_report = SCRIPTS_DIR / "generate_daily_report.py"
+    log_dir = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
+    run_log = log_dir / "cron_daily.log"
+    report_dir = REPORT_DIR
+
+    LOG.info("Scheduler: starting weekly YOLO pass (Saturday)")
+    result = subprocess.run(
+        [
+            sys.executable, str(script_yolo),
+            "--db-path", str(DB_PATH),
+            "--timeframe", "weekly",
+            "--weekly-lookback-days", "730",
+            "--sleep", "0.05",
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        LOG.info("Scheduler: weekly YOLO completed OK")
+    else:
+        LOG.error("Scheduler: weekly YOLO failed (rc=%d): %s", result.returncode, result.stderr[-500:])
+
+    # Regenerate report so weekly patterns appear
+    LOG.info("Scheduler: regenerating report after weekly YOLO")
+    subprocess.run(
+        [
+            sys.executable, str(script_report),
+            "--db-path", str(DB_PATH),
+            "--out-dir", str(report_dir),
+            "--run-log", str(run_log),
+            "--tail-lines", "120",
+        ],
+        capture_output=True, text=True,
+    )
+
+
 _scheduler = BackgroundScheduler(timezone="UTC")
 _scheduler.add_job(
     _run_daily_update,
@@ -77,12 +120,18 @@ _scheduler.add_job(
     id="daily_update",
     replace_existing=True,
 )
+_scheduler.add_job(
+    _run_weekly_yolo,
+    CronTrigger(hour=0, minute=30, day_of_week="sat", timezone="UTC"),
+    id="weekly_yolo",
+    replace_existing=True,
+)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _scheduler.start()
-    LOG.info("Scheduler started — daily_update runs at 22:00 UTC Mon–Fri")
+    LOG.info("Scheduler started — daily_update: 22:00 UTC Mon–Fri | weekly_yolo: 00:30 UTC Sat")
     yield
     _scheduler.shutdown(wait=False)
 
@@ -274,6 +323,111 @@ def _tail_text_file(path: Path, lines: int = 60, max_bytes: int = 64_000) -> lis
         return data.splitlines()[-lines:]
     except Exception:
         return []
+
+
+def _load_json_file(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _latest_daily_report_json(report_dir: Path) -> tuple[Path | None, dict[str, Any] | None]:
+    latest = report_dir / "daily_report_latest.json"
+    payload = _load_json_file(latest)
+    if payload is not None:
+        return latest, payload
+    candidates = sorted(
+        [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for p in candidates:
+        payload = _load_json_file(p)
+        if payload is not None:
+            return p, payload
+    return None, None
+
+
+def _daily_report_history(report_dir: Path, limit: int = 20) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    files = sorted(
+        [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
+        key=lambda p: p.name,
+        reverse=True,
+    )[: max(1, limit)]
+    for p in files:
+        try:
+            st = p.stat()
+            out.append(
+                {
+                    "file": p.name,
+                    "path": str(p),
+                    "size_bytes": st.st_size,
+                    "modified_ts": dt.datetime.fromtimestamp(st.st_mtime, tz=dt.timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                }
+            )
+        except OSError:
+            continue
+    return out
+
+
+def _smtp_settings() -> dict[str, Any]:
+    port_raw = os.getenv("TRADER_KOO_SMTP_PORT", "587").strip()
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 587
+
+    timeout_raw = os.getenv("TRADER_KOO_SMTP_TIMEOUT_SEC", "30").strip()
+    try:
+        timeout_sec = max(5, int(timeout_raw))
+    except ValueError:
+        timeout_sec = 30
+
+    security = os.getenv("TRADER_KOO_SMTP_SECURITY", "starttls").strip().lower()
+    if security not in {"starttls", "ssl", "none"}:
+        security = "starttls"
+
+    return {
+        "host": os.getenv("TRADER_KOO_SMTP_HOST", "").strip(),
+        "port": port,
+        "user": os.getenv("TRADER_KOO_SMTP_USER", "").strip(),
+        "password": os.getenv("TRADER_KOO_SMTP_PASS", ""),
+        "from_email": os.getenv("TRADER_KOO_SMTP_FROM", "").strip(),
+        "default_to": os.getenv("TRADER_KOO_REPORT_EMAIL_TO", "").strip(),
+        "timeout_sec": timeout_sec,
+        "security": security,
+    }
+
+
+def _send_smtp_email(message: EmailMessage, smtp: dict[str, Any]) -> None:
+    host = smtp["host"]
+    port = int(smtp["port"])
+    timeout_sec = int(smtp["timeout_sec"])
+    security = str(smtp["security"])
+    user = str(smtp.get("user") or "")
+    password = str(smtp.get("password") or "")
+
+    if security == "ssl":
+        with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
+            if user:
+                server.login(user, password)
+            server.send_message(message)
+        return
+
+    with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
+        server.ehlo()
+        if security == "starttls":
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+        if user:
+            server.login(user, password)
+        server.send_message(message)
 
 
 def get_yolo_status(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -642,6 +796,125 @@ def yolo_status(log_lines: int = Query(default=40, ge=0, le=400)) -> dict[str, A
         "log_path": str(log_path),
         "log_tail": _tail_text_file(log_path, lines=log_lines),
         "db": db_status,
+    }
+
+
+@app.get("/api/admin/daily-report")
+def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown: bool = Query(default=False)) -> dict[str, Any]:
+    """Return latest generated daily report and recent report files."""
+    report_dir = REPORT_DIR
+    latest_path, latest_payload = _latest_daily_report_json(report_dir)
+    latest_md_path = report_dir / "daily_report_latest.md"
+    md_text = ""
+    if include_markdown and latest_md_path.exists():
+        try:
+            md_text = latest_md_path.read_text(encoding="utf-8")
+        except Exception:
+            md_text = ""
+    return {
+        "ok": latest_payload is not None,
+        "report_dir": str(report_dir),
+        "latest_file": str(latest_path) if latest_path else None,
+        "latest": latest_payload or {},
+        "history": _daily_report_history(report_dir, limit=limit),
+        "latest_markdown": md_text,
+    }
+
+
+@app.post("/api/admin/email-latest-report")
+def email_latest_report(
+    to: str | None = Query(default=None),
+    include_markdown: bool = Query(default=True),
+    attach_json: bool = Query(default=True),
+) -> dict[str, Any]:
+    """Send the latest daily report by email via SMTP."""
+    smtp = _smtp_settings()
+    recipient = (to or smtp["default_to"] or "").strip()
+
+    missing: list[str] = []
+    if not smtp["host"]:
+        missing.append("TRADER_KOO_SMTP_HOST")
+    if not smtp["from_email"]:
+        missing.append("TRADER_KOO_SMTP_FROM")
+    if smtp["user"] and not smtp["password"]:
+        missing.append("TRADER_KOO_SMTP_PASS")
+    if not recipient:
+        missing.append("TRADER_KOO_REPORT_EMAIL_TO (or use ?to=...)")
+    if missing:
+        raise HTTPException(status_code=500, detail=f"Missing email config: {', '.join(missing)}")
+
+    report_dir = REPORT_DIR
+    latest_path, latest_payload = _latest_daily_report_json(report_dir)
+    if latest_payload is None:
+        raise HTTPException(status_code=404, detail=f"No report found in {report_dir}")
+
+    latest_md_path = report_dir / "daily_report_latest.md"
+    md_text = ""
+    if latest_md_path.exists():
+        try:
+            md_text = latest_md_path.read_text(encoding="utf-8")
+        except Exception:
+            md_text = ""
+
+    generated = (
+        str(latest_payload.get("generated_at_utc") or latest_payload.get("snapshot_ts") or "").strip()
+        or dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    )
+
+    status_block = latest_payload.get("status", {}) if isinstance(latest_payload, dict) else {}
+    yolo_block = latest_payload.get("yolo", {}) if isinstance(latest_payload, dict) else {}
+    counts_block = latest_payload.get("counts", {}) if isinstance(latest_payload, dict) else {}
+
+    lines = [
+        f"trader_koo daily report ({generated})",
+        "",
+        "Quick summary:",
+        f"- tracked_tickers: {counts_block.get('tracked_tickers', 'n/a')}",
+        f"- price_rows: {counts_block.get('price_rows', 'n/a')}",
+        f"- fundamentals_rows: {counts_block.get('fundamentals_rows', 'n/a')}",
+        f"- yolo_rows_total: {yolo_block.get('rows_total', 'n/a')}",
+        f"- yolo_tickers_total: {yolo_block.get('tickers_total', 'n/a')}",
+        f"- latest_ingest_status: {status_block.get('latest_run_status', 'n/a')}",
+        "",
+    ]
+    if include_markdown and md_text:
+        lines += ["Full markdown report:", "", md_text]
+    else:
+        lines += ["Use /api/admin/daily-report?include_markdown=true to fetch full markdown."]
+
+    message = EmailMessage()
+    message["Subject"] = f"[trader_koo] Daily report {generated}"
+    message["From"] = smtp["from_email"]
+    message["To"] = recipient
+    message.set_content("\n".join(lines))
+
+    if attach_json:
+        filename = latest_path.name if latest_path is not None else "daily_report_latest.json"
+        json_bytes = json.dumps(latest_payload, indent=2).encode("utf-8")
+        message.add_attachment(json_bytes, maintype="application", subtype="json", filename=filename)
+
+    if include_markdown and md_text:
+        message.add_attachment(
+            md_text.encode("utf-8"),
+            maintype="text",
+            subtype="markdown",
+            filename="daily_report_latest.md",
+        )
+
+    try:
+        _send_smtp_email(message, smtp)
+    except Exception as exc:
+        LOG.exception("Failed to send daily report email")
+        raise HTTPException(status_code=500, detail=f"Email send failed: {exc}") from exc
+
+    return {
+        "ok": True,
+        "to": recipient,
+        "subject": message["Subject"],
+        "report_file": str(latest_path) if latest_path else None,
+        "smtp_host": smtp["host"],
+        "smtp_port": smtp["port"],
+        "smtp_security": smtp["security"],
     }
 
 

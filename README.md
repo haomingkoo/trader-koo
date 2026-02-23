@@ -110,7 +110,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 ## API reference
 
-All `/api/*` routes require an `X-API-Key` header when `TRADER_KOO_API_KEY` is set. Locally, leave it unset — auth is disabled automatically.
+When `TRADER_KOO_API_KEY` is set, protected routes require `X-API-Key`. Public routes are: `/api/health`, `/api/status`, `/api/config`.
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -123,6 +123,9 @@ All `/api/*` routes require an `X-API-Key` header when `TRADER_KOO_API_KEY` is s
 | GET | `/api/yolo/{ticker}` | YOLO pattern detections for one ticker |
 | POST | `/api/admin/trigger-update` | Manually trigger the daily data refresh |
 | POST | `/api/admin/run-yolo-seed` | Trigger full YOLO seed (background thread) |
+| GET | `/api/admin/yolo-status` | YOLO thread state + DB summary + log tail |
+| GET | `/api/admin/daily-report` | Latest daily run report + report history |
+| POST | `/api/admin/email-latest-report` | Email latest report (SMTP; optional `?to=you@example.com`) |
 
 ---
 
@@ -138,7 +141,16 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | `TRADER_KOO_DB_PATH` | SQLite path, e.g. `/data/trader_koo.db` |
 | `TRADER_KOO_LOG_DIR` | Log directory, e.g. `/data/logs` |
 | `TRADER_KOO_LOG_LEVEL` | `INFO` (default) or `DEBUG` |
+| `TRADER_KOO_REPORT_DIR` | Report directory, e.g. `/data/reports` |
 | `TRADER_KOO_ALLOWED_ORIGIN` | Your Railway app URL (CORS) |
+| `TRADER_KOO_SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) |
+| `TRADER_KOO_SMTP_PORT` | SMTP port (e.g. `587` for STARTTLS, `465` for SSL) |
+| `TRADER_KOO_SMTP_SECURITY` | `starttls` (default), `ssl`, or `none` |
+| `TRADER_KOO_SMTP_USER` | SMTP username/login |
+| `TRADER_KOO_SMTP_PASS` | SMTP password/app password |
+| `TRADER_KOO_SMTP_FROM` | Sender address |
+| `TRADER_KOO_REPORT_EMAIL_TO` | Default recipient for report emails |
+| `TRADER_KOO_SMTP_TIMEOUT_SEC` | SMTP timeout in seconds (default `30`) |
 
 ### First deploy
 
@@ -155,6 +167,25 @@ curl -X POST "https://your-app.up.railway.app/api/admin/run-yolo-seed" \
 ### Daily cron
 
 APScheduler runs `daily_update.sh` inside the process at 22:00 UTC Mon–Fri. No external cron or worker needed.
+
+Daily runs now auto-generate reports at `/data/reports`:
+- `daily_report_latest.json`
+- `daily_report_latest.md`
+- timestamped archives (`daily_report_YYYYMMDDTHHMMSSZ.*`)
+
+Fetch latest report:
+
+```bash
+curl -s "https://your-app.up.railway.app/api/admin/daily-report" \
+     -H "X-API-Key: YOUR_KEY"
+```
+
+Email yourself the latest report:
+
+```bash
+curl -X POST "https://your-app.up.railway.app/api/admin/email-latest-report?to=you@example.com" \
+     -H "X-API-Key: YOUR_KEY"
+```
 
 ---
 

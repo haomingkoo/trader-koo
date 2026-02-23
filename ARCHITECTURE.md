@@ -24,6 +24,7 @@ This document explains how trader-koo is built — the data flow, module respons
                           │                                            │
                           │  /data/trader_koo.db  (persistent volume)  │
                           │  /data/logs/                               │
+                          │  /data/reports/       (daily JSON + MD)    │
                           │  /data/.ultralytics/  (YOLO model cache)   │
                           └────────────────────────────────────────────┘
 ```
@@ -322,6 +323,172 @@ yfinance and Finviz are free public APIs with implicit rate limits. The ingestio
 ### Ingestion tracking
 
 Each run writes to `ingest_runs` (overall status) and `ingest_ticker_status` (per-ticker OK/failed). The `/api/status` endpoint queries these tables to surface the last run timestamp and ticker counts in the dashboard.
+
+---
+
+## YOLO pattern detection — dual timeframes
+
+### Why two passes?
+
+The YOLOv8 model (`foduucom/stockmarket-pattern-detection-yolov8`) was trained on chart images with roughly 100–130 candles visible. Detection quality is strongly tied to visual candle density — too many bars and individual candles become too small for the model to recognise geometry.
+
+| Pass | Lookback | Bars | Candle = | Purpose |
+|------|----------|------|----------|---------|
+| `daily` | 180 days | ~124 | 1 trading day | Recent short-term patterns (flags, H&S forming in last few months) |
+| `weekly` | 730 days | ~104 | 1 week | Longer structural patterns (multi-month double tops, large wedges) |
+
+Both passes render the same 1200×600px white-background Yahoo-style chart. The weekly pass achieves 2-year coverage at the same visual density by first resampling daily OHLCV into weekly bars:
+
+```python
+df.resample("W").agg(
+    open=("open", "first"), high=("high", "max"),
+    low=("low", "min"),   close=("close", "last"), volume=("volume", "sum"),
+).dropna(subset=["open", "close"])
+```
+
+If you just used 730 days of daily bars, each candle would be ~3.5× smaller than the training distribution and detection rates drop significantly. The resampling trick preserves the right visual density.
+
+### Incremental updates (`--only-new`)
+
+The daily cron runs with `--only-new`, which skips tickers whose `as_of_date` in `yolo_patterns` already matches the latest candle in `price_daily`. Only tickers that received a new price candle since the last run are re-processed. For each pass (daily/weekly) this check is done independently, so a ticker can be up-to-date for daily but stale for weekly.
+
+### Pre-computation vs on-demand
+
+YOLO inference is **not** run on live requests. At ~1–2 seconds per ticker it's too slow for interactive use. Instead `run_yolo_patterns.py` pre-computes and stores detections in the `yolo_patterns` table. The dashboard endpoint just does a `SELECT` against this table.
+
+### Coordinate mapping
+
+The key engineering challenge is mapping YOLO pixel bounding boxes back to date/price coordinates for rendering on the interactive chart. At render time, matplotlib axis metadata is captured:
+
+```python
+pos  = ax.get_position()   # figure-fraction coordinates of the plot area
+xlim = ax.get_xlim()       # bar-index range (float)
+ylim = ax.get_ylim()       # price range
+
+# Pixel → bar index → date
+x_bar  = xlim[0] + (x_px - ax_x0_px) / (ax_x1_px - ax_x0_px) * (xlim[1] - xlim[0])
+date   = dates[round(x_bar)]
+
+# Pixel → price  (image y=0 is top; matplotlib y=0 is bottom)
+fig_y  = fig_h_px - y_px
+price  = ylim[0] + (fig_y - ax_y0_px) / (ax_y1_px - ax_y0_px) * (ylim[1] - ylim[0])
+```
+
+Boxes that fall in the volume panel (price below `ylim[0] × 0.3`) are filtered out.
+
+### Frontend rendering
+
+Daily and weekly detections are rendered differently so they can be visually distinguished while coexisting on the same chart:
+
+| Timeframe | Border style | Opacity | Label |
+|-----------|-------------|---------|-------|
+| `daily`   | Dotted, 1.5px | 0.07 fill | `[D]` |
+| `weekly`  | Dashed, 2.2px, muted | 0.05 fill | `[W]` |
+
+On mobile (`isMobile` viewport detection), labels are shortened using a compact map (`"Head and shoulders bottom"` → `"H&S Bot"`) and truncated at 11 characters to avoid chart clutter. The number of annotations shown is also capped (3 daily, 2 weekly on mobile vs 5 on desktop).
+
+---
+
+## Admin endpoints
+
+All `/api/admin/*` routes require `X-API-Key`.
+
+### `POST /api/admin/run-yolo-seed`
+
+Triggers `run_yolo_patterns.py` for all tickers in a background `threading.Thread`. Guards against double-starts — if the thread is still alive the endpoint returns `{"ok": false}` immediately. Progress is visible in Railway logs.
+
+### `GET /api/admin/yolo-status`
+
+Returns the current state of the YOLO pipeline without tailing logs locally:
+```json
+{
+  "thread_running": false,
+  "log_tail": ["2026-02-22 | INFO | [daily 510/510] NVDA → 1 pattern(s)"],
+  "db": {
+    "universe_tickers": 510,
+    "summary": {"rows_total": 1840, "tickers_total": 487, ...},
+    "timeframes": [
+      {"timeframe": "daily",  "tickers_total": 245, "avg_confidence": 0.41},
+      {"timeframe": "weekly", "tickers_total": 242, "avg_confidence": 0.38}
+    ]
+  }
+}
+```
+
+### `POST /api/admin/trigger-update`
+
+Modifies the APScheduler job's `next_run_time` to `now()`, firing the daily data refresh immediately without redeploying.
+
+### `GET /api/admin/daily-report`
+
+Returns the most recent generated report JSON and a list of archived report files. Add `?include_markdown=true` to get the full Markdown text.
+
+### `POST /api/admin/email-latest-report`
+
+Sends the latest report by email. Supports `?to=you@example.com` to override the default recipient. Requires SMTP env vars (see below).
+
+---
+
+## SMTP email reports
+
+The email system is entirely optional and disabled if `TRADER_KOO_SMTP_HOST` is not set.
+
+### How it works
+
+`_smtp_settings()` reads configuration from env vars at call time (not at startup), so settings can be changed without redeploying. `_send_smtp_email()` supports three security modes:
+
+| Mode | Behaviour |
+|------|-----------|
+| `ssl` | Opens `SMTP_SSL` connection immediately (port 465) |
+| `starttls` | Plain SMTP connection, then `STARTTLS` upgrade (port 587, default) |
+| `none` | Plain SMTP, no encryption (local/dev only) |
+
+### Gmail setup
+
+1. Enable 2FA on the Google account
+2. Generate an App Password (Google Account → Security → App Passwords)
+3. Set env vars:
+
+```
+TRADER_KOO_SMTP_HOST=smtp.gmail.com
+TRADER_KOO_SMTP_PORT=587
+TRADER_KOO_SMTP_SECURITY=starttls
+TRADER_KOO_SMTP_USER=your@gmail.com
+TRADER_KOO_SMTP_PASS=your-16-char-app-password
+TRADER_KOO_SMTP_FROM=your@gmail.com
+TRADER_KOO_REPORT_EMAIL_TO=your@gmail.com
+```
+
+### Report format
+
+Reports are written to `$TRADER_KOO_REPORT_DIR` (default `/data/reports`) after each daily update run:
+- `daily_report_latest.json` — always the most recent (overwritten each run)
+- `daily_report_latest.md` — Markdown version
+- `daily_report_YYYYMMDDTHHMMSSZ.json` — timestamped archive
+
+---
+
+## Authentication
+
+### Middleware
+
+A Starlette `@app.middleware("http")` intercepts every `/api/*` request. Public paths (no key needed):
+```python
+PUBLIC_API_PATHS = {"/api/health", "/api/config", "/api/status"}
+```
+
+All other `/api/*` paths require `X-API-Key: <value>` matching `TRADER_KOO_API_KEY`. Comparison uses `secrets.compare_digest()` to prevent timing-based key enumeration.
+
+When an unauthorized request is blocked, the middleware logs it with:
+- Client IP (extracted from `X-Forwarded-For` header, Railway-aware)
+- User-Agent
+- Referer
+
+This makes it easy to spot scraper activity in Railway logs.
+
+### Local development
+
+Leave `TRADER_KOO_API_KEY` unset. The middleware checks `if API_KEY:` and skips auth entirely — no need to pass headers when running locally.
 
 ---
 

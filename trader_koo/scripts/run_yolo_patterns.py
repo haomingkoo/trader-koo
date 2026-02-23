@@ -181,7 +181,7 @@ def render_chart(df: pd.DataFrame):
     )
 
     style = mpf.make_mpf_style(base_mpf_style="yahoo")
-    DPI, FIG_W, FIG_H = 100, 12, 6
+    DPI, FIG_W, FIG_H = 80, 10, 5
 
     fig, axes = mpf.plot(
         df_plot, type="candle", style=style, volume=True,
