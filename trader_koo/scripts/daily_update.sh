@@ -17,6 +17,7 @@ fi
 DB_PATH="${TRADER_KOO_DB_PATH:-/data/trader_koo.db}"
 LOG_DIR="${TRADER_KOO_LOG_DIR:-/data/logs}"
 RUN_LOG="$LOG_DIR/cron_daily.log"
+REPORT_DIR="${TRADER_KOO_REPORT_DIR:-/data/reports}"
 
 mkdir -p "$LOG_DIR"
 
@@ -44,16 +45,44 @@ fi
     --log-file "$LOG_DIR/update_market_db.log" \
     >> "$RUN_LOG" 2>&1
 
-# ── 2. YOLO pattern detection — daily (180d) + weekly (730d) ─────────────────
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting pattern detection (both timeframes)..." >> "$RUN_LOG"
+# ── 2. YOLO pattern detection — daily pass only (Mon–Fri) ────────────────────
+#      Weekly pass runs separately on Saturday via the scheduler in main.py.
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting daily pattern detection (180d)..." >> "$RUN_LOG"
 "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
     --db-path "$DB_PATH" \
-    --timeframe both \
+    --timeframe daily \
     --lookback-days 180 \
-    --weekly-lookback-days 730 \
     --only-new \
     --sleep 0.05 \
     >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection failed (non-fatal)" >> "$RUN_LOG"
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection done." >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Daily pattern detection done." >> "$RUN_LOG"
+
+# ── 3. Generate daily report (+ optional email) ───────────────────────────────
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Generating daily report..." >> "$RUN_LOG"
+SEND_EMAIL_FLAG=""
+if [ "${TRADER_KOO_AUTO_EMAIL:-}" = "1" ]; then
+    SEND_EMAIL_FLAG="--send-email"
+fi
+"$PYTHON" "$SCRIPT_DIR/generate_daily_report.py" \
+    --db-path "$DB_PATH" \
+    --out-dir "$REPORT_DIR" \
+    --run-log "$RUN_LOG" \
+    --tail-lines 120 \
+    $SEND_EMAIL_FLAG \
+    >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Failed to generate report (non-fatal)" >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Done." >> "$RUN_LOG"
 
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh" >> "$RUN_LOG"
+
+# ── 4. Housekeeping — keep last 30 report archives, cap log size ──────────────
+# Keep only the 30 most recent timestamped report files (latest.* are always kept)
+ls -t "$REPORT_DIR"/daily_report_2*.json 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
+ls -t "$REPORT_DIR"/daily_report_2*.md   2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
+# Truncate cron log to last 5 MB if it exceeds 10 MB
+for f in "$LOG_DIR"/*.log; do
+    [ -f "$f" ] || continue
+    size=$(wc -c < "$f" 2>/dev/null || echo 0)
+    if [ "$size" -gt 10485760 ]; then
+        tail -c 5242880 "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+done
