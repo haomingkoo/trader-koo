@@ -778,14 +778,14 @@
         const payload = await resp.json();
         const run = payload.latest_run || {};
         const txt = [
-          `API ${payload.ok ? "UP" : "STALE"}`,
+          `Connected`,
           `run=${run.status || "n/a"}`,
           `tickers=${payload.counts?.tracked_tickers ?? "-"}`,
           `price_age=${payload.freshness?.price_age_days ?? "-"}d`
         ].join(" • ");
-        setServiceStatus(txt, !payload.ok);
+        setServiceStatus(txt, false);
       } catch (err) {
-        setServiceStatus(`API DOWN (${err.message})`, true);
+        setServiceStatus(`Offline (${err.message})`, true);
       }
     }
 
