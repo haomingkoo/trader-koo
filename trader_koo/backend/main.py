@@ -592,14 +592,39 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
                 return idx
         return -1
 
+    def _last_idx_any(lines: list[str], tokens: list[str]) -> int:
+        for idx in range(len(lines) - 1, -1, -1):
+            line = lines[idx]
+            for token in tokens:
+                if token in line:
+                    return idx
+        return -1
+
     start_idx = _last_idx(tail, "[START] daily_update.sh")
     done_idx = _last_idx(tail, "[DONE]  daily_update.sh")
+    report_start_idx = _last_idx(tail, "[REPORT] Generating")
+    report_done_idx = _last_idx(tail, "[REPORT] Done.")
+    yolo_start_idx = _last_idx(tail, "[YOLO]  Starting")
+    yolo_done_idx = _last_idx(tail, "[YOLO]  Daily pattern detection done.")
+    yolo_progress_idx = _last_idx_any(
+        tail,
+        [
+            "[daily] Processing",
+            "[weekly] Processing",
+            "[daily ",
+            "[weekly ",
+        ],
+    )
     markers = [
         ln
         for ln in tail
         if (
             "[START] daily_update.sh" in ln
             or "[YOLO]" in ln
+            or "[daily] Processing" in ln
+            or "[weekly] Processing" in ln
+            or "[daily " in ln
+            or "[weekly " in ln
             or "[REPORT]" in ln
             or "[DONE]  daily_update.sh" in ln
             or "run_id=" in ln
@@ -614,6 +639,18 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
         "marker_lines": markers[-40:],
     }
     if start_idx < 0:
+        # Fallback: infer active phase from recent markers even if the explicit
+        # [START] line is outside the retained tail window.
+        if report_start_idx >= 0 and report_start_idx > report_done_idx:
+            out["active"] = True
+            out["stage"] = "report"
+            out["stage_line"] = tail[report_start_idx]
+            return out
+        if yolo_progress_idx >= 0 and yolo_progress_idx > yolo_done_idx:
+            out["active"] = True
+            out["stage"] = "yolo"
+            out["stage_line"] = tail[yolo_progress_idx]
+            return out
         return out
     if done_idx > start_idx:
         return out
@@ -625,13 +662,22 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     report_done = _last_idx(block, "[REPORT] Done.")
     yolo_start = _last_idx(block, "[YOLO]  Starting")
     yolo_done = _last_idx(block, "[YOLO]  Daily pattern detection done.")
+    yolo_progress = _last_idx_any(
+        block,
+        [
+            "[daily] Processing",
+            "[weekly] Processing",
+            "[daily ",
+            "[weekly ",
+        ],
+    )
 
     if report_start >= 0 and report_start > report_done:
         out["stage"] = "report"
         out["stage_line"] = block[report_start]
-    elif yolo_start >= 0 and yolo_start > yolo_done:
+    elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):
         out["stage"] = "yolo"
-        out["stage_line"] = block[yolo_start]
+        out["stage_line"] = block[yolo_progress] if yolo_progress >= 0 else block[yolo_start]
     else:
         out["stage"] = "ingest"
         out["stage_line"] = block[0] if block else None
