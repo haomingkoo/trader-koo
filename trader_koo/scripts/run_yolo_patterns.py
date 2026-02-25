@@ -608,6 +608,14 @@ def main() -> None:
 
     LOG.info("Loading YOLO model: %s", YOLO_MODEL_ID)
     try:
+        # Validate OpenCV import early so failures are explicit in logs.
+        try:
+            import cv2 as _cv2
+            LOG.info("OpenCV backend: cv2=%s from %s", getattr(_cv2, "__version__", "?"), getattr(_cv2, "__file__", "?"))
+        except Exception as cv_exc:
+            LOG.error("OpenCV import failed before YOLO init: %s", cv_exc)
+            raise
+
         # PyTorch ≥2.6 defaults weights_only=True, which rejects legacy YOLO weights.
         # Patch torch.load to keep the old behaviour before importing ultralyticsplus.
         import torch as _torch
