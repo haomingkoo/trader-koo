@@ -35,7 +35,8 @@ if [ -d "$REPO_ROOT/trader_koo" ]; then
     cd "$REPO_ROOT"
 fi
 
-"$PYTHON" "$SCRIPT_DIR/update_market_db.py" \
+INGEST_T0=$(date +%s)
+if "$PYTHON" "$SCRIPT_DIR/update_market_db.py" \
     --use-sp500 \
     --price-lookback-days 5 \
     --fund-min-interval-hours 20 \
@@ -43,7 +44,17 @@ fi
     --sleep-max 1.2 \
     --db-path "$DB_PATH" \
     --log-file "$LOG_DIR/update_market_db.log" \
-    >> "$RUN_LOG" 2>&1
+    >> "$RUN_LOG" 2>&1; then
+    INGEST_RC=0
+else
+    INGEST_RC=$?
+fi
+INGEST_T1=$(date +%s)
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] done rc=${INGEST_RC} sec=$((INGEST_T1-INGEST_T0))" >> "$RUN_LOG"
+if [ "$INGEST_RC" -ne 0 ]; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [ERROR] ingest failed rc=${INGEST_RC}; aborting daily_update" >> "$RUN_LOG"
+    exit "$INGEST_RC"
+fi
 
 # ── 2. YOLO pattern detection — daily pass only (Mon–Fri) ────────────────────
 #      Weekly pass runs separately on Saturday via the scheduler in main.py.
@@ -57,7 +68,8 @@ YOLO_CONF="${TRADER_KOO_YOLO_CONF:-0.25}"
 YOLO_IOU="${TRADER_KOO_YOLO_IOU:-0.45}"
 YOLO_MAX_SECS_PER_TICKER="${TRADER_KOO_YOLO_MAX_SECS_PER_TICKER:-180}"
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting daily pattern detection (${YOLO_LOOKBACK_DAYS}d)..." >> "$RUN_LOG"
-"$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
+YOLO_T0=$(date +%s)
+if "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
     --db-path "$DB_PATH" \
     --timeframe daily \
     --lookback-days "$YOLO_LOOKBACK_DAYS" \
@@ -70,8 +82,34 @@ echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting daily pattern detection ($
     --conf "$YOLO_CONF" \
     --iou "$YOLO_IOU" \
     --max-seconds-per-ticker "$YOLO_MAX_SECS_PER_TICKER" \
-    >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection failed (non-fatal)" >> "$RUN_LOG"
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Daily pattern detection done." >> "$RUN_LOG"
+    >> "$RUN_LOG" 2>&1; then
+    YOLO_RC=0
+else
+    YOLO_RC=$?
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection failed rc=${YOLO_RC} (non-fatal)" >> "$RUN_LOG"
+fi
+YOLO_T1=$(date +%s)
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Daily pattern detection done. rc=${YOLO_RC} sec=$((YOLO_T1-YOLO_T0))" >> "$RUN_LOG"
+"$PYTHON" - <<PY >> "$RUN_LOG" 2>&1 || true
+import sqlite3
+from pathlib import Path
+db = Path("${DB_PATH}")
+if not db.exists():
+    print("[YOLO] events_table_check db_missing")
+else:
+    conn = sqlite3.connect(str(db))
+    try:
+        c = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='yolo_run_events' LIMIT 1"
+        ).fetchone()
+        if c:
+            n = conn.execute("SELECT COUNT(*) FROM yolo_run_events").fetchone()[0]
+            print(f"[YOLO] events_table_exists=1 rows={n}")
+        else:
+            print("[YOLO] events_table_exists=0 rows=0")
+    finally:
+        conn.close()
+PY
 
 # ── 3. Generate daily report (+ optional email) ───────────────────────────────
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Generating daily report..." >> "$RUN_LOG"
@@ -79,14 +117,21 @@ SEND_EMAIL_FLAG=""
 if [ "${TRADER_KOO_AUTO_EMAIL:-}" = "1" ]; then
     SEND_EMAIL_FLAG="--send-email"
 fi
-"$PYTHON" "$SCRIPT_DIR/generate_daily_report.py" \
+REPORT_T0=$(date +%s)
+if "$PYTHON" "$SCRIPT_DIR/generate_daily_report.py" \
     --db-path "$DB_PATH" \
     --out-dir "$REPORT_DIR" \
     --run-log "$RUN_LOG" \
     --tail-lines 120 \
     $SEND_EMAIL_FLAG \
-    >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Failed to generate report (non-fatal)" >> "$RUN_LOG"
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Done." >> "$RUN_LOG"
+    >> "$RUN_LOG" 2>&1; then
+    REPORT_RC=0
+else
+    REPORT_RC=$?
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Failed to generate report rc=${REPORT_RC} (non-fatal)" >> "$RUN_LOG"
+fi
+REPORT_T1=$(date +%s)
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Done. rc=${REPORT_RC} sec=$((REPORT_T1-REPORT_T0))" >> "$RUN_LOG"
 
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh" >> "$RUN_LOG"
 
