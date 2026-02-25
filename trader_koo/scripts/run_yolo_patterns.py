@@ -17,6 +17,7 @@ Single timeframe (e.g. daily only):
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import io
 import logging
 import os
@@ -48,6 +49,12 @@ YOLO_CLASSES = [
 ]
 DEFAULT_LOOKBACK_DAYS = 180        # daily pass — ~124 trading bars
 DEFAULT_WEEKLY_LOOKBACK_DAYS = 730 # weekly pass — ~104 weekly bars
+DEFAULT_DPI = int(os.getenv("TRADER_KOO_YOLO_DPI", "80"))
+DEFAULT_FIG_W = float(os.getenv("TRADER_KOO_YOLO_FIG_W", "10"))
+DEFAULT_FIG_H = float(os.getenv("TRADER_KOO_YOLO_FIG_H", "5"))
+DEFAULT_CONF = float(os.getenv("TRADER_KOO_YOLO_CONF", "0.25"))
+DEFAULT_IOU = float(os.getenv("TRADER_KOO_YOLO_IOU", "0.45"))
+DEFAULT_IMGSZ = int(os.getenv("TRADER_KOO_YOLO_IMGSZ", "640"))
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -108,12 +115,24 @@ def get_tickers_to_process(
     return result
 
 
-def get_price_df(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
-    return pd.read_sql_query(
-        "SELECT date, open, high, low, close, volume FROM price_daily WHERE ticker = ? ORDER BY date",
-        conn,
-        params=(ticker,),
-    )
+def get_price_df(conn: sqlite3.Connection, ticker: str, start_date: str | None = None) -> pd.DataFrame:
+    if start_date:
+        sql = """
+            SELECT date, open, high, low, close, volume
+            FROM price_daily
+            WHERE ticker = ? AND date >= ?
+            ORDER BY date
+        """
+        params = (ticker, start_date)
+    else:
+        sql = """
+            SELECT date, open, high, low, close, volume
+            FROM price_daily
+            WHERE ticker = ?
+            ORDER BY date
+        """
+        params = (ticker,)
+    return pd.read_sql_query(sql, conn, params=params)
 
 
 def resample_to_weekly(df: pd.DataFrame) -> pd.DataFrame:
@@ -160,7 +179,13 @@ def save_detections(
 
 # ── Chart rendering ──────────────────────────────────────────────────────────
 
-def render_chart(df: pd.DataFrame):
+def render_chart(
+    df: pd.DataFrame,
+    *,
+    dpi: int = DEFAULT_DPI,
+    fig_w: float = DEFAULT_FIG_W,
+    fig_h: float = DEFAULT_FIG_H,
+):
     """Render OHLCV data as a standard candlestick chart (yahoo style, white bg).
 
     Returns (rgb_ndarray, axes_info_dict). axes_info has coordinate mapping
@@ -181,19 +206,17 @@ def render_chart(df: pd.DataFrame):
     )
 
     style = mpf.make_mpf_style(base_mpf_style="yahoo")
-    DPI, FIG_W, FIG_H = 80, 10, 5
-
     fig, axes = mpf.plot(
         df_plot, type="candle", style=style, volume=True,
-        returnfig=True, figsize=(FIG_W, FIG_H),
+        returnfig=True, figsize=(fig_w, fig_h),
     )
     ax = axes[0]  # main price axis
 
     pos = ax.get_position()   # figure-fraction bounds
     xlim = ax.get_xlim()      # bar-index limits
     ylim = ax.get_ylim()      # price limits
-    fig_w_px = FIG_W * DPI
-    fig_h_px = FIG_H * DPI
+    fig_w_px = fig_w * dpi
+    fig_h_px = fig_h * dpi
 
     axes_info = {
         "ax_x0": pos.x0 * fig_w_px,
@@ -206,7 +229,7 @@ def render_chart(df: pd.DataFrame):
     }
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=DPI)
+    fig.savefig(buf, format="png", dpi=dpi)
     plt.close(fig)
     buf.seek(0)
     img = Image.open(buf).convert("RGB")
@@ -280,24 +303,42 @@ def _run_pass(
     lookback_days: int,
     only_new: bool,
     sleep_s: float,
+    dpi: int,
+    fig_w: float,
+    fig_h: float,
 ) -> tuple[int, int, int]:
     """Run one full detection pass (daily or weekly). Returns (ok, failed, skipped)."""
     ticker_dates = get_tickers_to_process(conn, only_new=only_new, timeframe=timeframe)
     LOG.info(
-        "[%s] Processing %d ticker(s) (lookback=%d days, only_new=%s)",
-        timeframe, len(ticker_dates), lookback_days, only_new,
+        "[%s] Processing %d ticker(s) (lookback=%d days, only_new=%s, dpi=%s, fig=%.1fx%.1f)",
+        timeframe, len(ticker_dates), lookback_days, only_new, dpi, fig_w, fig_h,
     )
 
     ok = failed = skipped = 0
     total = len(ticker_dates)
+    total_elapsed_s = 0.0
+    total_render_s = 0.0
+    total_infer_s = 0.0
+    total_bars = 0
     for i, (ticker, latest_date) in enumerate(ticker_dates, 1):
+        t_start = time.perf_counter()
+        render_s = 0.0
+        infer_s = 0.0
         try:
-            df = get_price_df(conn, ticker)
+            query_start_date = None
+            try:
+                latest_dt = dt.date.fromisoformat(str(latest_date))
+                query_pad = 35 if timeframe == "weekly" else 7
+                query_start_date = (latest_dt - dt.timedelta(days=lookback_days + query_pad)).isoformat()
+            except Exception:
+                query_start_date = None
+
+            df = get_price_df(conn, ticker, start_date=query_start_date)
             if df.empty or len(df) < 20:
                 skipped += 1
                 continue
 
-            cutoff = pd.Timestamp(df["date"].max()) - pd.DateOffset(days=lookback_days)
+            cutoff = pd.Timestamp(df["date"].max()) - pd.Timedelta(days=lookback_days)
             df = df[pd.to_datetime(df["date"]) >= cutoff].reset_index(drop=True)
 
             if timeframe == "weekly":
@@ -307,15 +348,29 @@ def _run_pass(
                 skipped += 1
                 continue
 
-            img_arr, ai = render_chart(df)
+            t_render0 = time.perf_counter()
+            img_arr, ai = render_chart(df, dpi=dpi, fig_w=fig_w, fig_h=fig_h)
+            render_s = time.perf_counter() - t_render0
             dates = df["date"].tolist()
+            t_infer0 = time.perf_counter()
             detections = run_inference(model, img_arr, ai, dates)
+            infer_s = time.perf_counter() - t_infer0
             save_detections(conn, ticker, timeframe, detections, lookback_days, latest_date)
+
+            elapsed_s = time.perf_counter() - t_start
+            total_elapsed_s += elapsed_s
+            total_render_s += render_s
+            total_infer_s += infer_s
+            total_bars += len(df)
 
             LOG.info("[%s %d/%d] %s → %d pattern(s): %s",
                      timeframe, i, total, ticker,
                      len(detections),
                      ", ".join(d["pattern"] for d in detections) if detections else "none")
+            LOG.info(
+                "[%s %d/%d] %s timings sec=%.2f render=%.2f infer=%.2f bars=%d",
+                timeframe, i, total, ticker, elapsed_s, render_s, infer_s, len(df),
+            )
             ok += 1
         except Exception:
             LOG.exception("[%s %d/%d] FAILED on %s", timeframe, i, total, ticker)
@@ -323,6 +378,19 @@ def _run_pass(
 
         if sleep_s > 0:
             time.sleep(sleep_s)
+
+    processed = max(1, ok)
+    LOG.info(
+        "[%s] Done ok=%d failed=%d skipped=%d avg_sec=%.2f avg_render=%.2f avg_infer=%.2f avg_bars=%.1f",
+        timeframe,
+        ok,
+        failed,
+        skipped,
+        total_elapsed_s / processed,
+        total_render_s / processed,
+        total_infer_s / processed,
+        total_bars / processed,
+    )
 
     return ok, failed, skipped
 
@@ -346,6 +414,12 @@ def main() -> None:
     )
     parser.add_argument("--sleep", type=float, default=0.05,
                         help="Seconds to sleep between tickers (reduces CPU spikes)")
+    parser.add_argument("--dpi", type=int, default=DEFAULT_DPI, help="Rendered chart DPI")
+    parser.add_argument("--fig-w", type=float, default=DEFAULT_FIG_W, help="Rendered chart width (inches)")
+    parser.add_argument("--fig-h", type=float, default=DEFAULT_FIG_H, help="Rendered chart height (inches)")
+    parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ, help="YOLO inference image size")
+    parser.add_argument("--conf", type=float, default=DEFAULT_CONF, help="YOLO confidence threshold")
+    parser.add_argument("--iou", type=float, default=DEFAULT_IOU, help="YOLO IoU threshold")
     args = parser.parse_args()
 
     db_path = Path(args.db_path)
@@ -368,7 +442,9 @@ def main() -> None:
         from ultralyticsplus import YOLO
         model = YOLO(YOLO_MODEL_ID)
         model.overrides.update({
-            "conf": 0.25, "iou": 0.45,
+            "imgsz": args.imgsz,
+            "conf": args.conf,
+            "iou": args.iou,
             "agnostic_nms": False, "max_det": 1000,
         })
     except Exception as e:
@@ -394,6 +470,9 @@ def main() -> None:
                 lookback_days=lookback,
                 only_new=args.only_new,
                 sleep_s=args.sleep,
+                dpi=args.dpi,
+                fig_w=args.fig_w,
+                fig_h=args.fig_h,
             )
             total_ok += ok
             total_failed += failed

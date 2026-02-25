@@ -47,13 +47,27 @@ fi
 
 # ── 2. YOLO pattern detection — daily pass only (Mon–Fri) ────────────────────
 #      Weekly pass runs separately on Saturday via the scheduler in main.py.
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting daily pattern detection (180d)..." >> "$RUN_LOG"
+YOLO_LOOKBACK_DAYS="${TRADER_KOO_YOLO_LOOKBACK_DAYS:-180}"
+YOLO_SLEEP="${TRADER_KOO_YOLO_SLEEP:-0.05}"
+YOLO_DPI="${TRADER_KOO_YOLO_DPI:-80}"
+YOLO_FIG_W="${TRADER_KOO_YOLO_FIG_W:-10}"
+YOLO_FIG_H="${TRADER_KOO_YOLO_FIG_H:-5}"
+YOLO_IMGSZ="${TRADER_KOO_YOLO_IMGSZ:-640}"
+YOLO_CONF="${TRADER_KOO_YOLO_CONF:-0.25}"
+YOLO_IOU="${TRADER_KOO_YOLO_IOU:-0.45}"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting daily pattern detection (${YOLO_LOOKBACK_DAYS}d)..." >> "$RUN_LOG"
 "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
     --db-path "$DB_PATH" \
     --timeframe daily \
-    --lookback-days 180 \
+    --lookback-days "$YOLO_LOOKBACK_DAYS" \
     --only-new \
-    --sleep 0.05 \
+    --sleep "$YOLO_SLEEP" \
+    --dpi "$YOLO_DPI" \
+    --fig-w "$YOLO_FIG_W" \
+    --fig-h "$YOLO_FIG_H" \
+    --imgsz "$YOLO_IMGSZ" \
+    --conf "$YOLO_CONF" \
+    --iou "$YOLO_IOU" \
     >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection failed (non-fatal)" >> "$RUN_LOG"
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Daily pattern detection done." >> "$RUN_LOG"
 

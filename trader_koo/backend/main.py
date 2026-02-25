@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import logging
 import os
+import resource
 import secrets
 import smtplib
 import sqlite3
@@ -13,8 +14,10 @@ import sys
 import threading
 from contextlib import asynccontextmanager
 from email.message import EmailMessage
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -44,12 +47,58 @@ DEFAULT_DB_PRIMARY = (PROJECT_DIR / "data" / "trader_koo.db").resolve()
 DB_PATH = Path(os.getenv("TRADER_KOO_DB_PATH", str(DEFAULT_DB_PRIMARY)))
 FRONTEND_INDEX = (PROJECT_DIR / "frontend" / "index.html").resolve()
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")  # empty = auth disabled (local dev)
+PROCESS_START_UTC = dt.datetime.now(dt.timezone.utc)
+
+
+def _resolve_log_dir() -> Path:
+    requested = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
+    try:
+        requested.mkdir(parents=True, exist_ok=True)
+        return requested
+    except OSError:
+        fallback = (PROJECT_DIR / "data" / "logs").resolve()
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+LOG_DIR = _resolve_log_dir()
+RUN_LOG_PATH = LOG_DIR / "cron_daily.log"
+API_LOG_PATH = LOG_DIR / "api.log"
+LOG_PATHS: dict[str, Path] = {
+    "cron": RUN_LOG_PATH,
+    "update_market_db": LOG_DIR / "update_market_db.log",
+    "yolo": LOG_DIR / "yolo_patterns.log",
+    "api": API_LOG_PATH,
+}
+STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
+_STATUS_CACHE_LOCK = threading.Lock()
+_STATUS_CACHE_AT: dt.datetime | None = None
+_STATUS_CACHE_PAYLOAD: dict[str, Any] | None = None
+_MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
+try:
+    MARKET_TZ = ZoneInfo(_MARKET_TZ_NAME)
+except Exception:
+    MARKET_TZ = dt.timezone.utc
+MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
 LOG = logging.getLogger("trader_koo.api")
-if not LOG.handlers:
-    logging.basicConfig(
-        level=os.getenv("TRADER_KOO_LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
+ROOT_LOGGER = logging.getLogger()
+log_level = os.getenv("TRADER_KOO_LOG_LEVEL", "INFO").upper()
+log_format = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+if not ROOT_LOGGER.handlers:
+    logging.basicConfig(level=log_level, format=log_format)
+if not any(
+    isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")) == API_LOG_PATH
+    for h in ROOT_LOGGER.handlers
+):
+    try:
+        file_handler = RotatingFileHandler(API_LOG_PATH, maxBytes=10_000_000, backupCount=3)
+        file_handler.setFormatter(logging.Formatter(log_format))
+        file_handler.setLevel(getattr(logging, log_level, logging.INFO))
+        ROOT_LOGGER.addHandler(file_handler)
+    except Exception as exc:
+        logging.getLogger("trader_koo.api").warning(
+            "Failed to attach rotating file logger at %s: %s", API_LOG_PATH, exc
+        )
 
 FEATURE_CFG = FeatureConfig()
 LEVEL_CFG = LevelConfig()
@@ -65,55 +114,176 @@ SCRIPTS_DIR = PROJECT_DIR / "scripts"
 REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 
 
+def _current_rss_mb() -> float | None:
+    # Linux /proc gives current RSS; fallback to ru_maxrss when /proc is unavailable.
+    status_path = Path("/proc/self/status")
+    if status_path.exists():
+        try:
+            for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("VmRSS:"):
+                    kb = int(line.split()[1])
+                    return kb / 1024.0
+        except Exception:
+            pass
+    try:
+        rss_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if sys.platform == "darwin":
+            rss_kb = rss_kb / 1024.0
+        return rss_kb / 1024.0
+    except Exception:
+        return None
+
+
+def _max_rss_mb() -> float | None:
+    try:
+        rss_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if sys.platform == "darwin":
+            rss_kb = rss_kb / 1024.0
+        return rss_kb / 1024.0
+    except Exception:
+        return None
+
+
+def _fmt_mb(value: float | None) -> str:
+    return f"{value:.1f}" if value is not None else "n/a"
+
+
+def _append_run_log(tag: str, message: str) -> None:
+    stamp = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    line = f"{stamp} [{tag}] {message}\n"
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with RUN_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as exc:
+        LOG.warning("Failed to append run log %s: %s", RUN_LOG_PATH, exc)
+
+
 def _run_daily_update() -> None:
     script = SCRIPTS_DIR / "daily_update.sh"
-    LOG.info("Scheduler: starting daily_update.sh")
-    result = subprocess.run(["bash", str(script)], capture_output=True, text=True)
+    started = dt.datetime.now(dt.timezone.utc)
+    rss_before = _current_rss_mb()
+    _append_run_log("SCHED", f"daily_update invoked rss_before_mb={_fmt_mb(rss_before)}")
+    LOG.info(
+        "Scheduler: starting daily_update.sh (rss_before_mb=%s, run_log=%s)",
+        _fmt_mb(rss_before),
+        RUN_LOG_PATH,
+    )
+    result = subprocess.run(["bash", str(script)], capture_output=False)
+    elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+    rss_after = _current_rss_mb()
+    delta = (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None
     if result.returncode == 0:
-        LOG.info("Scheduler: daily_update.sh completed OK")
+        _append_run_log(
+            "SCHED",
+            f"daily_update completed rc={result.returncode} sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}",
+        )
+        LOG.info(
+            "Scheduler: daily_update.sh completed OK (rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s)",
+            result.returncode,
+            elapsed,
+            _fmt_mb(rss_after),
+            _fmt_mb(delta),
+        )
     else:
-        LOG.error("Scheduler: daily_update.sh failed (rc=%d): %s", result.returncode, result.stderr[-500:])
+        _append_run_log(
+            "SCHED",
+            f"daily_update failed rc={result.returncode} sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}",
+        )
+        LOG.error(
+            "Scheduler: daily_update.sh failed (rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s, run_log=%s)",
+            result.returncode,
+            elapsed,
+            _fmt_mb(rss_after),
+            _fmt_mb(delta),
+            RUN_LOG_PATH,
+        )
+        tail = _tail_text_file(RUN_LOG_PATH, lines=25, max_bytes=100_000)
+        if tail:
+            LOG.error("Scheduler: recent cron tail:\n%s", "\n".join(tail))
 
 
 def _run_weekly_yolo() -> None:
     """Saturday job: run YOLO weekly pass + regenerate report."""
     script_yolo = SCRIPTS_DIR / "run_yolo_patterns.py"
     script_report = SCRIPTS_DIR / "generate_daily_report.py"
-    log_dir = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
-    run_log = log_dir / "cron_daily.log"
+    run_log = RUN_LOG_PATH
     report_dir = REPORT_DIR
 
-    LOG.info("Scheduler: starting weekly YOLO pass (Saturday)")
-    result = subprocess.run(
-        [
-            sys.executable, str(script_yolo),
-            "--db-path", str(DB_PATH),
-            "--timeframe", "weekly",
-            "--weekly-lookback-days", "730",
-            "--sleep", "0.05",
-        ],
-        capture_output=True, text=True,
+    started = dt.datetime.now(dt.timezone.utc)
+    rss_before = _current_rss_mb()
+    LOG.info(
+        "Scheduler: starting weekly YOLO pass (rss_before_mb=%s, run_log=%s)",
+        _fmt_mb(rss_before),
+        run_log,
     )
+    _append_run_log("WEEKLY", "Starting weekly YOLO pass")
+    with run_log.open("a", encoding="utf-8") as log_file:
+        result = subprocess.run(
+            [
+                sys.executable, str(script_yolo),
+                "--db-path", str(DB_PATH),
+                "--timeframe", "weekly",
+                "--weekly-lookback-days", "730",
+                "--sleep", "0.05",
+            ],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+    rss_after = _current_rss_mb()
+    delta = (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None
     if result.returncode == 0:
-        LOG.info("Scheduler: weekly YOLO completed OK")
+        LOG.info(
+            "Scheduler: weekly YOLO completed OK (rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s)",
+            result.returncode,
+            elapsed,
+            _fmt_mb(rss_after),
+            _fmt_mb(delta),
+        )
+        _append_run_log("WEEKLY", "Weekly YOLO completed OK")
     else:
-        LOG.error("Scheduler: weekly YOLO failed (rc=%d): %s", result.returncode, result.stderr[-500:])
+        LOG.error(
+            "Scheduler: weekly YOLO failed (rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s, run_log=%s)",
+            result.returncode,
+            elapsed,
+            _fmt_mb(rss_after),
+            _fmt_mb(delta),
+            run_log,
+        )
+        _append_run_log("WEEKLY", f"Weekly YOLO failed rc={result.returncode}")
 
     # Regenerate report so weekly patterns appear
     LOG.info("Scheduler: regenerating report after weekly YOLO")
-    subprocess.run(
-        [
-            sys.executable, str(script_report),
-            "--db-path", str(DB_PATH),
-            "--out-dir", str(report_dir),
-            "--run-log", str(run_log),
-            "--tail-lines", "120",
-        ],
-        capture_output=True, text=True,
-    )
+    with run_log.open("a", encoding="utf-8") as log_file:
+        report_result = subprocess.run(
+            [
+                sys.executable, str(script_report),
+                "--db-path", str(DB_PATH),
+                "--out-dir", str(report_dir),
+                "--run-log", str(run_log),
+                "--tail-lines", "120",
+            ],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    if report_result.returncode == 0:
+        _append_run_log("WEEKLY", "Report regeneration completed")
+    else:
+        LOG.error("Scheduler: report regeneration after weekly YOLO failed (rc=%d)", report_result.returncode)
+        _append_run_log("WEEKLY", f"Report regeneration failed rc={report_result.returncode}")
 
 
-_scheduler = BackgroundScheduler(timezone="UTC")
+_scheduler = BackgroundScheduler(
+    timezone="UTC",
+    job_defaults={
+        "coalesce": True,
+        "max_instances": 1,
+        "misfire_grace_time": 3600,
+    },
+)
 _scheduler.add_job(
     _run_daily_update,
     CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="UTC"),
@@ -137,12 +307,7 @@ async def lifespan(_app: FastAPI):
 
 
 _ALLOWED_ORIGIN = os.getenv("TRADER_KOO_ALLOWED_ORIGIN", "*")
-PUBLIC_API_PATHS = {
-    "/api/health",
-    "/api/config",
-    "/api/status",
-    "/api/market-summary",
-}
+ADMIN_API_PREFIX = "/api/admin/"
 
 app = FastAPI(
     title="trader_koo API",
@@ -167,10 +332,10 @@ app.add_middleware(
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
-    """Require X-API-Key on protected /api/* routes."""
+    """Require X-API-Key on /api/admin/* routes only."""
     if API_KEY:
         path = request.url.path
-        if path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+        if path.startswith(ADMIN_API_PREFIX):
             provided = request.headers.get("X-API-Key", "")
             if not secrets.compare_digest(provided, API_KEY):
                 xff = request.headers.get("x-forwarded-for", "")
@@ -224,10 +389,13 @@ def days_since(date_str: str | None, now: dt.datetime) -> float | None:
     if not date_str:
         return None
     try:
-        parsed = dt.datetime.fromisoformat(str(date_str)).replace(tzinfo=dt.timezone.utc)
+        market_date = dt.date.fromisoformat(str(date_str).strip()[:10])
     except ValueError:
         return None
-    return (now - parsed).total_seconds() / 86400.0
+    market_close = dt.datetime.combine(market_date, dt.time(hour=MARKET_CLOSE_HOUR), tzinfo=MARKET_TZ)
+    now_market = now.astimezone(MARKET_TZ)
+    age_days = (now_market - market_close).total_seconds() / 86400.0
+    return max(0.0, age_days)
 
 
 def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -375,6 +543,119 @@ def _daily_report_history(report_dir: Path, limit: int = 20) -> list[dict[str, A
         except OSError:
             continue
     return out
+
+
+def _read_latest_ingest_run() -> dict[str, Any] | None:
+    if not DB_PATH.exists():
+        return None
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not table_exists(conn, "ingest_runs"):
+            return None
+        row = conn.execute(
+            """
+            SELECT
+                run_id, started_ts, finished_ts, status, tickers_total, tickers_ok, tickers_failed, error_message
+            FROM ingest_runs
+            ORDER BY started_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        ticker_status_count: int | None = None
+        if table_exists(conn, "ingest_ticker_status"):
+            ts_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM ingest_ticker_status WHERE run_id = ?",
+                (out["run_id"],),
+            ).fetchone()
+            ticker_status_count = int(ts_row["c"] or 0) if ts_row else 0
+
+        if ticker_status_count is not None:
+            out["tickers_processed"] = ticker_status_count
+        elif out.get("status") in {"ok", "failed"}:
+            completed = int(out.get("tickers_ok") or 0) + int(out.get("tickers_failed") or 0)
+            out["tickers_processed"] = completed or int(out.get("tickers_total") or 0)
+        return out
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
+    def _last_idx(lines: list[str], token: str) -> int:
+        for idx in range(len(lines) - 1, -1, -1):
+            if token in lines[idx]:
+                return idx
+        return -1
+
+    start_idx = _last_idx(tail, "[START] daily_update.sh")
+    done_idx = _last_idx(tail, "[DONE]  daily_update.sh")
+    markers = [
+        ln
+        for ln in tail
+        if (
+            "[START] daily_update.sh" in ln
+            or "[YOLO]" in ln
+            or "[REPORT]" in ln
+            or "[DONE]  daily_update.sh" in ln
+            or "run_id=" in ln
+        )
+    ]
+    out: dict[str, Any] = {
+        "active": False,
+        "stage": "unknown" if start_idx < 0 else "idle",
+        "stage_line": None,
+        "start_line": tail[start_idx] if start_idx >= 0 else None,
+        "done_line": tail[done_idx] if done_idx >= 0 else None,
+        "marker_lines": markers[-40:],
+    }
+    if start_idx < 0:
+        return out
+    if done_idx > start_idx:
+        return out
+
+    block = tail[start_idx:]
+    out["active"] = True
+
+    report_start = _last_idx(block, "[REPORT] Generating")
+    report_done = _last_idx(block, "[REPORT] Done.")
+    yolo_start = _last_idx(block, "[YOLO]  Starting")
+    yolo_done = _last_idx(block, "[YOLO]  Daily pattern detection done.")
+
+    if report_start >= 0 and report_start > report_done:
+        out["stage"] = "report"
+        out["stage_line"] = block[report_start]
+    elif yolo_start >= 0 and yolo_start > yolo_done:
+        out["stage"] = "yolo"
+        out["stage_line"] = block[yolo_start]
+    else:
+        out["stage"] = "ingest"
+        out["stage_line"] = block[0] if block else None
+    return out
+
+
+def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
+    tail = _tail_text_file(RUN_LOG_PATH, lines=log_lines, max_bytes=256_000)
+    inferred = _infer_pipeline_from_log_tail(tail)
+    latest_run = _read_latest_ingest_run()
+    stage = inferred.get("stage", "unknown")
+    active = bool(inferred.get("active"))
+    if latest_run and latest_run.get("status") == "running":
+        active = True
+        stage = "ingest"
+    return {
+        "run_log_path": str(RUN_LOG_PATH),
+        "active": active,
+        "stage": stage,
+        "latest_run": latest_run,
+        "markers": inferred.get("marker_lines", []),
+        "stage_line": inferred.get("stage_line"),
+        "tail": tail[-60:],
+    }
 
 
 def _smtp_settings() -> dict[str, Any]:
@@ -731,8 +1012,13 @@ def select_fund_snapshot(conn: sqlite3.Connection, min_complete_tickers: int = 4
 
 @app.get("/api/config", include_in_schema=False)
 def config() -> dict[str, Any]:
-    """Public client config — returns API key so the JS frontend can authenticate."""
-    return {"api_key": API_KEY}
+    """Public client config — never expose secrets."""
+    return {
+        "auth": {
+            "admin_api_key_required": bool(API_KEY),
+            "admin_api_key_header": "X-API-Key",
+        },
+    }
 
 
 @app.get("/api/health")
@@ -744,11 +1030,26 @@ def health() -> dict[str, Any]:
 @app.post("/api/admin/trigger-update")
 def trigger_update() -> dict[str, Any]:
     """Trigger daily_update.sh immediately (runs in background via scheduler)."""
+    pipeline = _pipeline_status_snapshot(log_lines=120)
+    if pipeline["active"]:
+        stage = pipeline.get("stage", "unknown")
+        return {
+            "ok": False,
+            "message": f"daily_update already running (stage={stage})",
+            "stage": stage,
+            "latest_run": pipeline.get("latest_run"),
+            "run_log_path": pipeline.get("run_log_path"),
+        }
     job = _scheduler.get_job("daily_update")
     if job is None:
         raise HTTPException(status_code=500, detail="Scheduler job not found")
     job.modify(next_run_time=dt.datetime.now(dt.timezone.utc))
-    return {"ok": True, "message": "daily_update triggered — check /data/logs/cron_daily.log"}
+    return {
+        "ok": True,
+        "message": "daily_update triggered — check /data/logs/cron_daily.log",
+        "stage": "queued",
+        "run_log_path": str(RUN_LOG_PATH),
+    }
 
 
 _yolo_seed_thread: threading.Thread | None = None
@@ -800,11 +1101,49 @@ def yolo_status(log_lines: int = Query(default=40, ge=0, le=400)) -> dict[str, A
     }
 
 
+@app.get("/api/admin/pipeline-status")
+def pipeline_status(log_lines: int = Query(default=120, ge=20, le=1000)) -> dict[str, Any]:
+    """Return current pipeline phase inferred from run logs + latest ingest run."""
+    snap = _pipeline_status_snapshot(log_lines=log_lines)
+    return {
+        "ok": True,
+        **snap,
+    }
+
+
 @app.get("/api/admin/daily-report")
 def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown: bool = Query(default=False)) -> dict[str, Any]:
     """Return latest generated daily report and recent report files."""
     report_dir = REPORT_DIR
     latest_path, latest_payload = _latest_daily_report_json(report_dir)
+    pipeline = _pipeline_status_snapshot(log_lines=120)
+    detail: str | None = None
+    if latest_payload is None:
+        detail = "No report file found yet."
+    elif pipeline.get("active"):
+        detail = (
+            "daily_update is still running"
+            f" (stage={pipeline.get('stage', 'unknown')}); "
+            "generated_ts will advance after report stage completes."
+        )
+    else:
+        latest_run = pipeline.get("latest_run") or {}
+        run_finished_ts = parse_iso_utc(latest_run.get("finished_ts")) if latest_run else None
+        generated_ts = parse_iso_utc((latest_payload or {}).get("generated_ts"))
+        if run_finished_ts is not None:
+            if generated_ts is None:
+                detail = (
+                    "Latest ingest run finished, but latest report JSON has no generated_ts. "
+                    "Check /api/admin/logs?name=cron for [REPORT] errors."
+                )
+            elif generated_ts < (run_finished_ts - dt.timedelta(seconds=60)):
+                detail = (
+                    "Latest ingest run finished at "
+                    f"{run_finished_ts.replace(microsecond=0).isoformat()}, "
+                    "but report generated_ts is still "
+                    f"{generated_ts.replace(microsecond=0).isoformat()}. "
+                    "Report output is stale; check /api/admin/logs?name=cron for [REPORT] errors."
+                )
     latest_md_path = report_dir / "daily_report_latest.md"
     md_text = ""
     if include_markdown and latest_md_path.exists():
@@ -818,7 +1157,29 @@ def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown:
         "latest_file": str(latest_path) if latest_path else None,
         "latest": latest_payload or {},
         "history": _daily_report_history(report_dir, limit=limit),
+        "detail": detail,
+        "pipeline": {
+            "active": pipeline.get("active"),
+            "stage": pipeline.get("stage"),
+            "latest_run": pipeline.get("latest_run"),
+            "run_log_path": pipeline.get("run_log_path"),
+        },
         "latest_markdown": md_text,
+    }
+
+
+@app.get("/api/admin/logs")
+def admin_logs(
+    name: str = Query(default="cron", pattern="^(cron|update_market_db|yolo|api)$"),
+    lines: int = Query(default=80, ge=1, le=800),
+) -> dict[str, Any]:
+    """Return log tail for one known service log file."""
+    path = LOG_PATHS[name]
+    return {
+        "ok": path.exists(),
+        "name": name,
+        "path": str(path),
+        "tail": _tail_text_file(path, lines=lines, max_bytes=256_000),
     }
 
 
@@ -921,12 +1282,32 @@ def email_latest_report(
 
 @app.get("/api/status")
 def status() -> dict[str, Any]:
+    global _STATUS_CACHE_AT, _STATUS_CACHE_PAYLOAD
     now = dt.datetime.now(dt.timezone.utc)
+    if STATUS_CACHE_TTL_SEC > 0:
+        with _STATUS_CACHE_LOCK:
+            cached_at = _STATUS_CACHE_AT
+            cached_payload = _STATUS_CACHE_PAYLOAD
+        if (
+            cached_at is not None
+            and cached_payload is not None
+            and (now - cached_at).total_seconds() < STATUS_CACHE_TTL_SEC
+        ):
+            return dict(cached_payload)
+
+    rss_now = _current_rss_mb()
+    rss_max = _max_rss_mb()
     base = {
         "service": "trader_koo-api",
         "now_utc": now.replace(microsecond=0).isoformat(),
         "db_path": str(DB_PATH),
         "db_exists": DB_PATH.exists(),
+        "process": {
+            "pid": os.getpid(),
+            "rss_mb": None if rss_now is None else round(rss_now, 2),
+            "rss_max_mb": None if rss_max is None else round(rss_max, 2),
+            "uptime_sec": int((now - PROCESS_START_UTC).total_seconds()),
+        },
     }
     if not DB_PATH.exists():
         return {**base, "ok": False, "error": "Database file not found"}
@@ -958,7 +1339,7 @@ def status() -> dict[str, Any]:
                 LIMIT 1
                 """
             ).fetchone()
-            if run_row and run_row["status"] == "running" and table_exists(conn, "ingest_ticker_status"):
+            if run_row and table_exists(conn, "ingest_ticker_status"):
                 ts_row = conn.execute(
                     "SELECT COUNT(*) AS c FROM ingest_ticker_status WHERE run_id = ?",
                     (run_row["run_id"],),
@@ -982,14 +1363,35 @@ def status() -> dict[str, Any]:
         latest_run = dict(run_row) if run_row is not None else None
         if latest_run and latest_run.get("status") in {"failed"}:
             warnings.append("latest ingest run failed")
-        if latest_run and ticker_status_count is not None:
-            latest_run["tickers_processed"] = ticker_status_count
+        if latest_run:
+            if ticker_status_count is not None:
+                latest_run["tickers_processed"] = ticker_status_count
+            elif latest_run.get("status") in {"ok", "failed"}:
+                completed = int(latest_run.get("tickers_ok") or 0) + int(latest_run.get("tickers_failed") or 0)
+                latest_run["tickers_processed"] = completed or int(latest_run.get("tickers_total") or 0)
 
-        return {
+        pipeline_snap = _pipeline_status_snapshot(log_lines=60)
+        pipeline_active = bool(pipeline_snap.get("active"))
+        pipeline_stage = pipeline_snap.get("stage") or "unknown"
+        pipeline_stage_line = pipeline_snap.get("stage_line")
+        if latest_run and latest_run.get("status") == "running":
+            pipeline_active = True
+            if pipeline_stage in {"unknown", "idle"}:
+                pipeline_stage = "ingest"
+
+        payload = {
             **base,
             "ok": len(warnings) == 0,
             "warnings": warnings,
             "latest_run": latest_run,
+            "pipeline_active": pipeline_active,
+            "pipeline_stage": pipeline_stage,
+            "pipeline": {
+                "active": pipeline_active,
+                "stage": pipeline_stage,
+                "stage_line": pipeline_stage_line,
+                "run_log_path": str(RUN_LOG_PATH),
+            },
             "freshness": {
                 "price_age_days": None if price_age_days is None else round(price_age_days, 2),
                 "fund_age_hours": None if fund_age_hours is None else round(fund_age_hours, 2),
@@ -1007,6 +1409,11 @@ def status() -> dict[str, Any]:
                 "options_snapshot": latest_opt_snapshot,
             },
         }
+        if STATUS_CACHE_TTL_SEC > 0:
+            with _STATUS_CACHE_LOCK:
+                _STATUS_CACHE_AT = now
+                _STATUS_CACHE_PAYLOAD = payload
+        return payload
     finally:
         conn.close()
 

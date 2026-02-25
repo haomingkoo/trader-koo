@@ -12,6 +12,15 @@ from collections import defaultdict
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+
+MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
+try:
+    MARKET_TZ = ZoneInfo(MARKET_TZ_NAME)
+except Exception:
+    MARKET_TZ = dt.timezone.utc
+MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
 
 
 def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -50,10 +59,13 @@ def days_since_date(value: str | None, now: dt.datetime) -> float | None:
     if not value:
         return None
     try:
-        ts = dt.datetime.fromisoformat(str(value)).replace(tzinfo=dt.timezone.utc)
+        market_date = dt.date.fromisoformat(str(value).strip()[:10])
     except ValueError:
         return None
-    return (now - ts).total_seconds() / 86400.0
+    market_close = dt.datetime.combine(market_date, dt.time(hour=MARKET_CLOSE_HOUR), tzinfo=MARKET_TZ)
+    now_market = now.astimezone(MARKET_TZ)
+    age_days = (now_market - market_close).total_seconds() / 86400.0
+    return max(0.0, age_days)
 
 
 def tail_text(path: Path, lines: int = 80, max_bytes: int = 96_000) -> list[str]:
@@ -425,19 +437,15 @@ def fetch_report_payload(db_path: Path, run_log: Path, tail_lines: int) -> dict[
             "options_snapshot": counts["latest_opt_snapshot"] if counts else None,
             "yolo_detected_ts": counts["latest_yolo_ts"] if counts else None,
         }
+        price_age = days_since_date(counts["latest_price_date"], now) if counts else None
+        fund_age = hours_since(counts["latest_fund_snapshot"], now) if counts else None
+        opt_age = hours_since(counts["latest_opt_snapshot"], now) if counts else None
+        yolo_age = hours_since(counts["latest_yolo_ts"], now) if counts else None
         payload["freshness"] = {
-            "price_age_days": None
-            if not counts
-            else round(days_since_date(counts["latest_price_date"], now) or 0.0, 2),
-            "fund_age_hours": None
-            if not counts
-            else round(hours_since(counts["latest_fund_snapshot"], now) or 0.0, 2),
-            "opt_age_hours": None
-            if not counts
-            else round(hours_since(counts["latest_opt_snapshot"], now) or 0.0, 2),
-            "yolo_age_hours": None
-            if not counts
-            else round(hours_since(counts["latest_yolo_ts"], now) or 0.0, 2),
+            "price_age_days": None if price_age is None else round(price_age, 2),
+            "fund_age_hours": None if fund_age is None else round(fund_age, 2),
+            "opt_age_hours": None if opt_age is None else round(opt_age, 2),
+            "yolo_age_hours": None if yolo_age is None else round(yolo_age, 2),
         }
 
         if table_exists(conn, "ingest_runs"):
@@ -496,11 +504,17 @@ def fetch_report_payload(db_path: Path, run_log: Path, tail_lines: int) -> dict[
         price_age = payload["freshness"]["price_age_days"]
         fund_age  = payload["freshness"]["fund_age_hours"]
         yolo_age  = payload["freshness"]["yolo_age_hours"]
-        if isinstance(price_age, (int, float)) and price_age > 3:
+        if price_age is None:
+            payload["warnings"].append("price_data_missing")
+        elif isinstance(price_age, (int, float)) and price_age > 3:
             payload["warnings"].append("price_data_stale")
-        if isinstance(fund_age, (int, float)) and fund_age > 48:
+        if fund_age is None:
+            payload["warnings"].append("fundamentals_missing")
+        elif isinstance(fund_age, (int, float)) and fund_age > 48:
             payload["warnings"].append("fundamentals_stale")
-        if isinstance(yolo_age, (int, float)) and yolo_age > 30:
+        if yolo_age is None:
+            payload["warnings"].append("yolo_data_missing")
+        elif isinstance(yolo_age, (int, float)) and yolo_age > 30:
             payload["warnings"].append("yolo_data_stale")
 
         payload["ok"] = len(payload["warnings"]) == 0

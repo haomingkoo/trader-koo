@@ -578,6 +578,7 @@
     const tabGuide = $("tabGuide");
     const tabReport = $("tabReport");
     const API_BASE_STORAGE_KEY = "trader_koo_api_base";
+    const ADMIN_KEY_STORAGE_KEY = "trader_koo_admin_api_key";
     const TABLE_STATE = {};
     const DEFAULT_MONTHS = 3;
     let LAST_CHART_PAYLOAD = null;
@@ -710,12 +711,30 @@
       return fetch(url, { ...opts, headers });
     }
 
+    function setAdminApiKey(key) {
+      _apiKey = String(key || "").trim();
+      if (_apiKey) localStorage.setItem(ADMIN_KEY_STORAGE_KEY, _apiKey);
+      else localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
+    }
+
+    async function adminFetch(url, opts = {}) {
+      let resp = await apiFetch(url, opts);
+      if (resp.status !== 401) return resp;
+      const entered = window.prompt("Admin API key required. Paste key:");
+      if (entered === null) return resp;
+      setAdminApiKey(entered);
+      resp = await apiFetch(url, opts);
+      return resp;
+    }
+
     async function initApiKey() {
-      const base = getApiBase();
-      try {
-        const resp = await fetch(`${base}/api/config`);
-        if (resp.ok) { const cfg = await resp.json(); _apiKey = cfg.api_key || ""; }
-      } catch { /* no-op */ }
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = String(params.get("admin_key") || "").trim();
+      if (fromQuery) {
+        setAdminApiKey(fromQuery);
+        return;
+      }
+      setAdminApiKey(localStorage.getItem(ADMIN_KEY_STORAGE_KEY) || "");
     }
 
     function setApiBase(base, persist = true) {
@@ -769,6 +788,7 @@
     }
 
     async function refreshServiceStatus() {
+      if (document.visibilityState === "hidden") return;
       const base = getApiBase();
       if (!base) {
         setServiceStatus("Service status: missing API base", true);
@@ -779,12 +799,18 @@
         if (!resp.ok) throw new Error(`${resp.status}`);
         const payload = await resp.json();
         const run = payload.latest_run || {};
+        const pipe = payload.pipeline || {};
+        const processed = run.tickers_processed ?? null;
+        const total = run.tickers_total ?? null;
+        const progress = (processed !== null && total !== null) ? `${processed}/${total}` : null;
         const txt = [
           `Connected`,
           `run=${run.status || "n/a"}`,
+          `stage=${pipe.stage || payload.pipeline_stage || "n/a"}`,
+          progress ? `progress=${progress}` : null,
           `tickers=${payload.counts?.tracked_tickers ?? "-"}`,
           `price_age=${payload.freshness?.price_age_days ?? "-"}d`
-        ].join(" • ");
+        ].filter(Boolean).join(" • ");
         setServiceStatus(txt, false);
       } catch (err) {
         setServiceStatus(`Offline (${err.message})`, true);
@@ -798,7 +824,7 @@
       btn.disabled = true;
       btn.textContent = "Triggering...";
       try {
-        const resp = await apiFetch(`${base}/api/admin/trigger-update`, { method: "POST" });
+        const resp = await adminFetch(`${base}/api/admin/trigger-update`, { method: "POST" });
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         btn.textContent = "Triggered ✓";
         setTimeout(() => { btn.textContent = "Run Update"; btn.disabled = false; }, 5000);
@@ -1570,7 +1596,7 @@
       const base = getApiBase();
       $("reportStatus").textContent = "Loading...";
       try {
-        const resp = await apiFetch(`${base}/api/admin/daily-report?limit=20`);
+        const resp = await adminFetch(`${base}/api/admin/daily-report?limit=20`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const data = await resp.json();
         const latest = data.latest || {};
@@ -1655,7 +1681,8 @@
           data.history || [],
           false, null, { sortable: false });
 
-        $("reportStatus").textContent = `As of ${(latest.generated_ts || "").slice(0, 16).replace("T", " ")} UTC`;
+        const asOf = `As of ${(latest.generated_ts || "").slice(0, 16).replace("T", " ")} UTC`;
+        $("reportStatus").textContent = data.detail ? `${asOf} • ${data.detail}` : asOf;
       } catch (err) {
         $("reportStatus").textContent = `Error: ${err.message}`;
         console.error(err);
@@ -1700,7 +1727,10 @@
       await refreshServiceStatus();
       await loadTickerUniverse();
       await loadOpportunities();
-      setInterval(refreshServiceStatus, 60000);
+      setInterval(refreshServiceStatus, 120000);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") refreshServiceStatus();
+      });
     })();
   </script>
 </body>
