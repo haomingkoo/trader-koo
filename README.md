@@ -124,6 +124,7 @@ When `TRADER_KOO_API_KEY` is set, admin routes under `/api/admin/*` require `X-A
 | POST | `/api/admin/trigger-update` | Manually trigger the daily data refresh |
 | POST | `/api/admin/run-yolo-seed` | Trigger full YOLO seed (background thread) |
 | GET | `/api/admin/yolo-status` | YOLO thread state + DB summary + log tail |
+| GET | `/api/admin/yolo-events` | Persisted per-ticker YOLO outcomes (ok/skipped/timeout/failed + reason) |
 | GET | `/api/admin/daily-report` | Latest daily run report + report history |
 | POST | `/api/admin/email-latest-report` | Email latest report (SMTP; optional `?to=you@example.com`) |
 
@@ -143,6 +144,7 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | `TRADER_KOO_LOG_LEVEL` | `INFO` (default) or `DEBUG` |
 | `TRADER_KOO_REPORT_DIR` | Report directory, e.g. `/data/reports` |
 | `TRADER_KOO_ALLOWED_ORIGIN` | Your Railway app URL (CORS) |
+| `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout for YOLO (default `180`) |
 | `TRADER_KOO_SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) |
 | `TRADER_KOO_SMTP_PORT` | SMTP port (e.g. `587` for STARTTLS, `465` for SSL) |
 | `TRADER_KOO_SMTP_SECURITY` | `starttls` (default), `ssl`, or `none` |
