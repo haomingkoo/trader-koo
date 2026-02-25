@@ -761,9 +761,12 @@ def _send_smtp_email(message: EmailMessage, smtp: dict[str, Any]) -> None:
 def get_yolo_status(conn: sqlite3.Connection) -> dict[str, Any]:
     out: dict[str, Any] = {
         "table_exists": table_exists(conn, "yolo_patterns"),
+        "events_table_exists": table_exists(conn, "yolo_run_events"),
         "universe_tickers": 0,
         "summary": {},
         "timeframes": [],
+        "latest_run": None,
+        "latest_non_ok_events": [],
     }
     if not out["table_exists"]:
         return out
@@ -798,6 +801,50 @@ def get_yolo_status(conn: sqlite3.Connection) -> dict[str, Any]:
         """
     ).fetchall()
     out["timeframes"] = [dict(r) for r in tf_rows]
+
+    if out["events_table_exists"]:
+        latest_run = conn.execute(
+            """
+            SELECT run_id, MAX(created_ts) AS latest_ts
+            FROM yolo_run_events
+            GROUP BY run_id
+            ORDER BY latest_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if latest_run is not None:
+            run_id = latest_run["run_id"]
+            run_stats = conn.execute(
+                """
+                SELECT
+                    run_id,
+                    MIN(created_ts) AS started_ts,
+                    MAX(created_ts) AS latest_ts,
+                    COUNT(*) AS events_total,
+                    SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) AS ok_count,
+                    SUM(CASE WHEN status='skipped' THEN 1 ELSE 0 END) AS skipped_count,
+                    SUM(CASE WHEN status='timeout' THEN 1 ELSE 0 END) AS timeout_count,
+                    SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_count
+                FROM yolo_run_events
+                WHERE run_id = ?
+                GROUP BY run_id
+                """,
+                (run_id,),
+            ).fetchone()
+            if run_stats is not None:
+                out["latest_run"] = dict(run_stats)
+
+            events = conn.execute(
+                """
+                SELECT run_id, timeframe, ticker, status, reason, elapsed_sec, bars, detections, as_of_date, created_ts
+                FROM yolo_run_events
+                WHERE run_id = ? AND status != 'ok'
+                ORDER BY created_ts DESC
+                LIMIT 100
+                """,
+                (run_id,),
+            ).fetchall()
+            out["latest_non_ok_events"] = [dict(r) for r in events]
     return out
 
 
@@ -1145,6 +1192,58 @@ def yolo_status(log_lines: int = Query(default=40, ge=0, le=400)) -> dict[str, A
         "log_tail": _tail_text_file(log_path, lines=log_lines),
         "db": db_status,
     }
+
+
+@app.get("/api/admin/yolo-events")
+def yolo_events(
+    limit: int = Query(default=200, ge=1, le=1000),
+    run_id: str = Query(default=""),
+    status: str = Query(default="", pattern="^(|ok|skipped|timeout|failed)$"),
+) -> dict[str, Any]:
+    """Return persisted per-ticker YOLO run events for diagnostics."""
+    conn = get_conn()
+    try:
+        if not table_exists(conn, "yolo_run_events"):
+            return {"ok": False, "events_table_exists": False, "rows": []}
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        if run_id.strip():
+            clauses.append("run_id = ?")
+            params.append(run_id.strip())
+        if status.strip():
+            clauses.append("status = ?")
+            params.append(status.strip())
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT run_id, timeframe, ticker, status, reason, elapsed_sec, bars, detections, as_of_date, created_ts
+            FROM yolo_run_events
+            {where_sql}
+            ORDER BY created_ts DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+        latest_run_row = conn.execute(
+            """
+            SELECT run_id
+            FROM yolo_run_events
+            GROUP BY run_id
+            ORDER BY MAX(created_ts) DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return {
+            "ok": True,
+            "events_table_exists": True,
+            "latest_run_id": latest_run_row["run_id"] if latest_run_row else None,
+            "count": len(rows),
+            "rows": [dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/api/admin/pipeline-status")

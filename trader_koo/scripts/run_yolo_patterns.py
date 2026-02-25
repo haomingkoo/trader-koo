@@ -21,9 +21,11 @@ import datetime as dt
 import io
 import logging
 import os
+import signal
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 # Set headless backend BEFORE any matplotlib import
@@ -55,6 +57,7 @@ DEFAULT_FIG_H = float(os.getenv("TRADER_KOO_YOLO_FIG_H", "5"))
 DEFAULT_CONF = float(os.getenv("TRADER_KOO_YOLO_CONF", "0.25"))
 DEFAULT_IOU = float(os.getenv("TRADER_KOO_YOLO_IOU", "0.45"))
 DEFAULT_IMGSZ = int(os.getenv("TRADER_KOO_YOLO_IMGSZ", "640"))
+DEFAULT_MAX_SECS_PER_TICKER = float(os.getenv("TRADER_KOO_YOLO_MAX_SECS_PER_TICKER", "180"))
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -88,6 +91,67 @@ def ensure_yolo_table(conn: sqlite3.Connection) -> None:
             conn.commit()
         except sqlite3.OperationalError:
             pass  # column already exists
+
+
+def ensure_yolo_run_events_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS yolo_run_events (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id        TEXT    NOT NULL,
+            timeframe     TEXT    NOT NULL,
+            ticker        TEXT    NOT NULL,
+            status        TEXT    NOT NULL,
+            reason        TEXT,
+            elapsed_sec   REAL,
+            bars          INTEGER,
+            detections    INTEGER,
+            as_of_date    TEXT,
+            created_ts    TEXT    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_yolo_events_run_id ON yolo_run_events(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_yolo_events_status ON yolo_run_events(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_yolo_events_ticker ON yolo_run_events(ticker)")
+    conn.commit()
+
+
+def record_yolo_run_event(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    timeframe: str,
+    ticker: str,
+    status: str,
+    reason: str | None,
+    elapsed_sec: float | None,
+    bars: int | None,
+    detections: int | None,
+    as_of_date: str | None,
+) -> None:
+    try:
+        conn.execute(
+            """
+            INSERT INTO yolo_run_events
+            (run_id, timeframe, ticker, status, reason, elapsed_sec, bars, detections, as_of_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                timeframe,
+                ticker,
+                status,
+                reason,
+                None if elapsed_sec is None else float(elapsed_sec),
+                None if bars is None else int(bars),
+                None if detections is None else int(detections),
+                as_of_date,
+            ),
+        )
+        conn.commit()
+    except Exception as exc:
+        LOG.warning("Failed to persist yolo_run_event run_id=%s ticker=%s status=%s: %s", run_id, ticker, status, exc)
 
 
 def get_tickers_to_process(
@@ -294,11 +358,32 @@ def run_inference(model, img_arr, ai: dict, dates: list) -> list[dict]:
     return detections
 
 
+@contextmanager
+def _ticker_timeout(seconds: float):
+    """Raise TimeoutError if a ticker takes too long on Unix platforms."""
+    if seconds <= 0 or not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        yield
+        return
+
+    def _raise_timeout(_signum, _frame):
+        raise TimeoutError(f"ticker exceeded timeout ({seconds:.1f}s)")
+
+    prev_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, prev_handler)
+
+
 # ── Per-pass processing ───────────────────────────────────────────────────────
 
 def _run_pass(
     model,
     conn: sqlite3.Connection,
+    run_id: str,
     timeframe: str,
     lookback_days: int,
     only_new: bool,
@@ -306,12 +391,13 @@ def _run_pass(
     dpi: int,
     fig_w: float,
     fig_h: float,
+    max_secs_per_ticker: float,
 ) -> tuple[int, int, int]:
     """Run one full detection pass (daily or weekly). Returns (ok, failed, skipped)."""
     ticker_dates = get_tickers_to_process(conn, only_new=only_new, timeframe=timeframe)
     LOG.info(
-        "[%s] Processing %d ticker(s) (lookback=%d days, only_new=%s, dpi=%s, fig=%.1fx%.1f)",
-        timeframe, len(ticker_dates), lookback_days, only_new, dpi, fig_w, fig_h,
+        "[%s] run_id=%s Processing %d ticker(s) (lookback=%d days, only_new=%s, dpi=%s, fig=%.1fx%.1f, max_sec_per_ticker=%.1f)",
+        timeframe, run_id, len(ticker_dates), lookback_days, only_new, dpi, fig_w, fig_h, max_secs_per_ticker,
     )
 
     ok = failed = skipped = 0
@@ -325,55 +411,132 @@ def _run_pass(
         render_s = 0.0
         infer_s = 0.0
         try:
-            query_start_date = None
-            try:
-                latest_dt = dt.date.fromisoformat(str(latest_date))
-                query_pad = 35 if timeframe == "weekly" else 7
-                query_start_date = (latest_dt - dt.timedelta(days=lookback_days + query_pad)).isoformat()
-            except Exception:
+            with _ticker_timeout(max_secs_per_ticker):
                 query_start_date = None
+                try:
+                    latest_dt = dt.date.fromisoformat(str(latest_date))
+                    query_pad = 35 if timeframe == "weekly" else 7
+                    query_start_date = (latest_dt - dt.timedelta(days=lookback_days + query_pad)).isoformat()
+                except Exception:
+                    query_start_date = None
 
-            df = get_price_df(conn, ticker, start_date=query_start_date)
-            if df.empty or len(df) < 20:
-                skipped += 1
-                continue
+                df = get_price_df(conn, ticker, start_date=query_start_date)
+                if df.empty or len(df) < 20:
+                    skipped += 1
+                    elapsed_s = time.perf_counter() - t_start
+                    reason = f"insufficient_rows_before_filter={len(df)}"
+                    LOG.info("[%s %d/%d] SKIP %s — %s", timeframe, i, total, ticker, reason)
+                    record_yolo_run_event(
+                        conn,
+                        run_id=run_id,
+                        timeframe=timeframe,
+                        ticker=ticker,
+                        status="skipped",
+                        reason=reason,
+                        elapsed_sec=elapsed_s,
+                        bars=len(df),
+                        detections=0,
+                        as_of_date=str(latest_date),
+                    )
+                    continue
 
-            cutoff = pd.Timestamp(df["date"].max()) - pd.Timedelta(days=lookback_days)
-            df = df[pd.to_datetime(df["date"]) >= cutoff].reset_index(drop=True)
+                cutoff = pd.Timestamp(df["date"].max()) - pd.Timedelta(days=lookback_days)
+                df = df[pd.to_datetime(df["date"]) >= cutoff].reset_index(drop=True)
 
-            if timeframe == "weekly":
-                df = resample_to_weekly(df)
+                if timeframe == "weekly":
+                    df = resample_to_weekly(df)
 
-            if len(df) < 10:
-                skipped += 1
-                continue
+                if len(df) < 10:
+                    skipped += 1
+                    elapsed_s = time.perf_counter() - t_start
+                    reason = f"insufficient_rows_after_filter={len(df)}"
+                    LOG.info("[%s %d/%d] SKIP %s — %s", timeframe, i, total, ticker, reason)
+                    record_yolo_run_event(
+                        conn,
+                        run_id=run_id,
+                        timeframe=timeframe,
+                        ticker=ticker,
+                        status="skipped",
+                        reason=reason,
+                        elapsed_sec=elapsed_s,
+                        bars=len(df),
+                        detections=0,
+                        as_of_date=str(latest_date),
+                    )
+                    continue
 
-            t_render0 = time.perf_counter()
-            img_arr, ai = render_chart(df, dpi=dpi, fig_w=fig_w, fig_h=fig_h)
-            render_s = time.perf_counter() - t_render0
-            dates = df["date"].tolist()
-            t_infer0 = time.perf_counter()
-            detections = run_inference(model, img_arr, ai, dates)
-            infer_s = time.perf_counter() - t_infer0
-            save_detections(conn, ticker, timeframe, detections, lookback_days, latest_date)
+                t_render0 = time.perf_counter()
+                img_arr, ai = render_chart(df, dpi=dpi, fig_w=fig_w, fig_h=fig_h)
+                render_s = time.perf_counter() - t_render0
+                dates = df["date"].tolist()
+                t_infer0 = time.perf_counter()
+                detections = run_inference(model, img_arr, ai, dates)
+                infer_s = time.perf_counter() - t_infer0
+                save_detections(conn, ticker, timeframe, detections, lookback_days, latest_date)
 
+                elapsed_s = time.perf_counter() - t_start
+                total_elapsed_s += elapsed_s
+                total_render_s += render_s
+                total_infer_s += infer_s
+                total_bars += len(df)
+
+                LOG.info("[%s %d/%d] %s → %d pattern(s): %s",
+                         timeframe, i, total, ticker,
+                         len(detections),
+                         ", ".join(d["pattern"] for d in detections) if detections else "none")
+                LOG.info(
+                    "[%s %d/%d] %s timings sec=%.2f render=%.2f infer=%.2f bars=%d",
+                    timeframe, i, total, ticker, elapsed_s, render_s, infer_s, len(df),
+                )
+                record_yolo_run_event(
+                    conn,
+                    run_id=run_id,
+                    timeframe=timeframe,
+                    ticker=ticker,
+                    status="ok",
+                    reason="ok",
+                    elapsed_sec=elapsed_s,
+                    bars=len(df),
+                    detections=len(detections),
+                    as_of_date=str(latest_date),
+                )
+                ok += 1
+        except TimeoutError:
+            failed += 1
             elapsed_s = time.perf_counter() - t_start
-            total_elapsed_s += elapsed_s
-            total_render_s += render_s
-            total_infer_s += infer_s
-            total_bars += len(df)
-
-            LOG.info("[%s %d/%d] %s → %d pattern(s): %s",
-                     timeframe, i, total, ticker,
-                     len(detections),
-                     ", ".join(d["pattern"] for d in detections) if detections else "none")
-            LOG.info(
-                "[%s %d/%d] %s timings sec=%.2f render=%.2f infer=%.2f bars=%d",
-                timeframe, i, total, ticker, elapsed_s, render_s, infer_s, len(df),
+            reason = f"timeout>{max_secs_per_ticker:.1f}s"
+            LOG.error(
+                "[%s %d/%d] TIMEOUT on %s after %.2fs (limit=%.2fs) — skipping ticker",
+                timeframe, i, total, ticker, elapsed_s, max_secs_per_ticker,
             )
-            ok += 1
+            record_yolo_run_event(
+                conn,
+                run_id=run_id,
+                timeframe=timeframe,
+                ticker=ticker,
+                status="timeout",
+                reason=reason,
+                elapsed_sec=elapsed_s,
+                bars=None,
+                detections=None,
+                as_of_date=str(latest_date),
+            )
         except Exception:
+            elapsed_s = time.perf_counter() - t_start
+            reason = str(sys.exc_info()[1])[:500]
             LOG.exception("[%s %d/%d] FAILED on %s", timeframe, i, total, ticker)
+            record_yolo_run_event(
+                conn,
+                run_id=run_id,
+                timeframe=timeframe,
+                ticker=ticker,
+                status="failed",
+                reason=reason,
+                elapsed_sec=elapsed_s,
+                bars=None,
+                detections=None,
+                as_of_date=str(latest_date),
+            )
             failed += 1
 
         if sleep_s > 0:
@@ -381,8 +544,9 @@ def _run_pass(
 
     processed = max(1, ok)
     LOG.info(
-        "[%s] Done ok=%d failed=%d skipped=%d avg_sec=%.2f avg_render=%.2f avg_infer=%.2f avg_bars=%.1f",
+        "[%s] run_id=%s Done ok=%d failed=%d skipped=%d avg_sec=%.2f avg_render=%.2f avg_infer=%.2f avg_bars=%.1f",
         timeframe,
+        run_id,
         ok,
         failed,
         skipped,
@@ -420,6 +584,17 @@ def main() -> None:
     parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ, help="YOLO inference image size")
     parser.add_argument("--conf", type=float, default=DEFAULT_CONF, help="YOLO confidence threshold")
     parser.add_argument("--iou", type=float, default=DEFAULT_IOU, help="YOLO IoU threshold")
+    parser.add_argument(
+        "--max-seconds-per-ticker",
+        type=float,
+        default=DEFAULT_MAX_SECS_PER_TICKER,
+        help="Fail-safe timeout per ticker; timeout skips ticker and continues (0 disables)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default="",
+        help="Optional run id for tracing and event logging (auto-generated if empty)",
+    )
     args = parser.parse_args()
 
     db_path = Path(args.db_path)
@@ -454,7 +629,13 @@ def main() -> None:
 
     conn = sqlite3.connect(str(db_path))
     try:
+        run_id = (args.run_id or "").strip() or (
+            dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            + f"-yolo-{os.getpid()}"
+        )
+        LOG.info("Starting YOLO run_id=%s", run_id)
         ensure_yolo_table(conn)
+        ensure_yolo_run_events_table(conn)
 
         passes = []
         if args.timeframe in ("daily", "both"):
@@ -466,6 +647,7 @@ def main() -> None:
         for timeframe, lookback in passes:
             ok, failed, skipped = _run_pass(
                 model, conn,
+                run_id=run_id,
                 timeframe=timeframe,
                 lookback_days=lookback,
                 only_new=args.only_new,
@@ -473,6 +655,7 @@ def main() -> None:
                 dpi=args.dpi,
                 fig_w=args.fig_w,
                 fig_h=args.fig_h,
+                max_secs_per_ticker=args.max_seconds_per_ticker,
             )
             total_ok += ok
             total_failed += failed
@@ -481,7 +664,7 @@ def main() -> None:
     finally:
         conn.close()
 
-    LOG.info("Done — ok=%d failed=%d skipped=%d", total_ok, total_failed, total_skipped)
+    LOG.info("Done run_id=%s — ok=%d failed=%d skipped=%d", run_id, total_ok, total_failed, total_skipped)
 
 
 if __name__ == "__main__":
