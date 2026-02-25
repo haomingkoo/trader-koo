@@ -110,13 +110,13 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 ## API reference
 
-When `TRADER_KOO_API_KEY` is set, protected routes require `X-API-Key`. Public routes are: `/api/health`, `/api/status`, `/api/config`.
+When `TRADER_KOO_API_KEY` is set, admin routes under `/api/admin/*` require `X-API-Key`.
 
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/api/health` | DB liveness check |
 | GET | `/api/status` | Data freshness, last ingestion run |
-| GET | `/api/config` | Returns API key for the frontend client |
+| GET | `/api/config` | Public, non-sensitive client config |
 | GET | `/api/tickers` | All tickers in DB |
 | GET | `/api/dashboard/{ticker}` | Full chart payload (OHLCV + all layers) |
 | GET | `/api/opportunities` | Valuation screening across all tickers |
@@ -137,7 +137,7 @@ The app is designed for a single Railway service with a persistent `/data` volum
 
 | Variable | Description |
 |---|---|
-| `TRADER_KOO_API_KEY` | Random secret — enforces `X-API-Key` auth on all `/api/*` routes |
+| `TRADER_KOO_API_KEY` | Random secret — enforces `X-API-Key` auth on `/api/admin/*` routes |
 | `TRADER_KOO_DB_PATH` | SQLite path, e.g. `/data/trader_koo.db` |
 | `TRADER_KOO_LOG_DIR` | Log directory, e.g. `/data/logs` |
 | `TRADER_KOO_LOG_LEVEL` | `INFO` (default) or `DEBUG` |

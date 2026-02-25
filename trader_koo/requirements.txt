@@ -8,4 +8,4 @@ uvicorn>=0.30
 apscheduler>=3.10,<4
 mplfinance>=0.12.0a0
 ultralyticsplus>=0.0.28
-opencv-python-headless>=4.8
+opencv-python-headless==4.10.0.84

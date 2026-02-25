@@ -145,7 +145,7 @@ This is the most compute-heavy endpoint. Everything runs synchronously in the re
 
 ### Authentication middleware
 
-A single Starlette middleware intercepts every `/api/*` request (except `/api/health` and `/api/config`). It extracts `X-API-Key` from headers and compares against `TRADER_KOO_API_KEY` using `secrets.compare_digest()` to prevent timing attacks. When `TRADER_KOO_API_KEY` is unset (local dev), auth is bypassed entirely.
+A Starlette middleware intercepts `/api/admin/*` requests. It extracts `X-API-Key` from headers and compares against `TRADER_KOO_API_KEY` using `secrets.compare_digest()` to prevent timing attacks. When `TRADER_KOO_API_KEY` is unset (local dev), admin auth is bypassed.
 
 ### Scheduler
 
@@ -472,12 +472,9 @@ Reports are written to `$TRADER_KOO_REPORT_DIR` (default `/data/reports`) after 
 
 ### Middleware
 
-A Starlette `@app.middleware("http")` intercepts every `/api/*` request. Public paths (no key needed):
-```python
-PUBLIC_API_PATHS = {"/api/health", "/api/config", "/api/status"}
-```
+A Starlette `@app.middleware("http")` intercepts `/api/admin/*` requests.
 
-All other `/api/*` paths require `X-API-Key: <value>` matching `TRADER_KOO_API_KEY`. Comparison uses `secrets.compare_digest()` to prevent timing-based key enumeration.
+Only `/api/admin/*` paths require `X-API-Key: <value>` matching `TRADER_KOO_API_KEY`. Comparison uses `secrets.compare_digest()` to prevent timing-based key enumeration.
 
 When an unauthorized request is blocked, the middleware logs it with:
 - Client IP (extracted from `X-Forwarded-For` header, Railway-aware)
