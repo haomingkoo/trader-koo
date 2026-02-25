@@ -145,6 +145,7 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | `TRADER_KOO_REPORT_DIR` | Report directory, e.g. `/data/reports` |
 | `TRADER_KOO_ALLOWED_ORIGIN` | Your Railway app URL (CORS) |
 | `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout for YOLO (default `180`) |
+| `TRADER_KOO_PIPELINE_STALE_SEC` | Max age for pipeline stage log line before status auto-resets to idle (default `1200`) |
 | `TRADER_KOO_SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) |
 | `TRADER_KOO_SMTP_PORT` | SMTP port (e.g. `587` for STARTTLS, `465` for SSL) |
 | `TRADER_KOO_SMTP_SECURITY` | `starttls` (default), `ssl`, or `none` |

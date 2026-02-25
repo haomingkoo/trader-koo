@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import resource
 import secrets
 import smtplib
@@ -71,6 +72,7 @@ LOG_PATHS: dict[str, Path] = {
     "api": API_LOG_PATH,
 }
 STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
+PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
 _STATUS_CACHE_LOCK = threading.Lock()
 _STATUS_CACHE_AT: dt.datetime | None = None
 _STATUS_CACHE_PAYLOAD: dict[str, Any] | None = None
@@ -376,6 +378,42 @@ def parse_iso_utc(value: str | None) -> dt.datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.timezone.utc)
     return parsed.astimezone(dt.timezone.utc)
+
+
+def parse_log_line_ts_utc(line: str | None) -> dt.datetime | None:
+    """Parse a UTC timestamp from a cron log line prefix."""
+    if not line:
+        return None
+    text = str(line).strip()
+    if not text:
+        return None
+
+    # ISO-style prefixes, e.g.:
+    # 2026-02-25T20:19:18+0000 [YOLO] ...
+    # 2026-02-25T20:19:18Z [YOLO] ...
+    m_iso = re.match(r"^(\d{4}-\d{2}-\d{2}T[0-9:.+-]+(?:Z|[+-]\d{2}:?\d{2}))\b", text)
+    if m_iso:
+        ts = m_iso.group(1)
+        if re.match(r".*[+-]\d{4}$", ts):
+            ts = f"{ts[:-5]}{ts[-5:-2]}:{ts[-2:]}"
+        return parse_iso_utc(ts)
+
+    # Python logging prefixes, e.g.:
+    # 2026-02-25 21:05:19,307 | INFO | ...
+    m_py = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:,(\d{1,6}))?\b", text)
+    if m_py:
+        base = m_py.group(1)
+        frac = (m_py.group(2) or "0")[:6]
+        micro = int(frac.ljust(6, "0"))
+        try:
+            parsed = dt.datetime.strptime(base, "%Y-%m-%d %H:%M:%S").replace(
+                microsecond=micro,
+                tzinfo=dt.timezone.utc,
+            )
+            return parsed
+        except ValueError:
+            return None
+    return None
 
 
 def hours_since(ts: str | None, now: dt.datetime) -> float | None:
@@ -690,16 +728,32 @@ def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
     latest_run = _read_latest_ingest_run()
     stage = inferred.get("stage", "unknown")
     active = bool(inferred.get("active"))
+    stage_line = inferred.get("stage_line")
+    stage_line_ts = parse_log_line_ts_utc(stage_line)
+    stage_age_sec: float | None = None
+    stale_inference = False
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    if stage_line_ts is not None:
+        stage_age_sec = max(0.0, (now_utc - stage_line_ts).total_seconds())
     if latest_run and latest_run.get("status") == "running":
         active = True
         stage = "ingest"
+    elif active and stage != "ingest" and stage_age_sec is not None and stage_age_sec > PIPELINE_STALE_SEC:
+        # Prevent stale log tails from pinning pipeline_active=True forever.
+        stale_inference = True
+        active = False
+        stage = "idle"
     return {
         "run_log_path": str(RUN_LOG_PATH),
         "active": active,
         "stage": stage,
         "latest_run": latest_run,
         "markers": inferred.get("marker_lines", []),
-        "stage_line": inferred.get("stage_line"),
+        "stage_line": stage_line,
+        "stage_line_ts": stage_line_ts.replace(microsecond=0).isoformat() if stage_line_ts else None,
+        "stage_age_sec": round(stage_age_sec, 1) if stage_age_sec is not None else None,
+        "stale_timeout_sec": PIPELINE_STALE_SEC,
+        "stale_inference": stale_inference,
         "tail": tail[-60:],
     }
 
@@ -1535,6 +1589,10 @@ def status() -> dict[str, Any]:
                 "active": pipeline_active,
                 "stage": pipeline_stage,
                 "stage_line": pipeline_stage_line,
+                "stage_line_ts": pipeline_snap.get("stage_line_ts"),
+                "stage_age_sec": pipeline_snap.get("stage_age_sec"),
+                "stale_timeout_sec": pipeline_snap.get("stale_timeout_sec"),
+                "stale_inference": pipeline_snap.get("stale_inference"),
                 "run_log_path": str(RUN_LOG_PATH),
             },
             "freshness": {
