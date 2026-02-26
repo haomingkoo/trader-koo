@@ -180,6 +180,7 @@ def get_sp500_tickers() -> list[str]:
 def connect_db(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
@@ -656,37 +657,47 @@ def is_retryable_ingest_error(exc: Exception) -> bool:
 
 
 def load_run_outcome_counts(conn: sqlite3.Connection, run_id: str) -> tuple[int, int]:
-    if not table_exists(conn, "ingest_ticker_status"):
-        return 0, 0
-    row = conn.execute(
-        """
-        SELECT
-            SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_count,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count
-        FROM ingest_ticker_status
-        WHERE run_id = ?
-        """,
-        (run_id,),
-    ).fetchone()
-    if row is None:
-        return 0, 0
-    return int(row["ok_count"] or 0), int(row["failed_count"] or 0)
-
-
-def infer_market_data_state(conn: sqlite3.Connection, run_id: str) -> dict[str, object]:
-    latest_row = conn.execute("SELECT MAX(date) AS latest_price_date FROM price_daily").fetchone()
-    latest_price_date = latest_row["latest_price_date"] if latest_row else None
-    zero_price_rows_ok = 0
-    if table_exists(conn, "ingest_ticker_status"):
-        zero_row = conn.execute(
+    try:
+        if not table_exists(conn, "ingest_ticker_status"):
+            return 0, 0
+        row = conn.execute(
             """
-            SELECT COUNT(*) AS c
+            SELECT
+                SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_count,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count
             FROM ingest_ticker_status
-            WHERE run_id = ? AND status = 'ok' AND price_rows = 0
+            WHERE run_id = ?
             """,
             (run_id,),
         ).fetchone()
-        zero_price_rows_ok = int(zero_row["c"] or 0) if zero_row else 0
+        if row is None:
+            return 0, 0
+        return int(row["ok_count"] or 0), int(row["failed_count"] or 0)
+    except Exception:
+        LOG.exception("run_id=%s failed to read outcome counts", run_id)
+        return 0, 0
+
+
+def infer_market_data_state(conn: sqlite3.Connection, run_id: str) -> dict[str, object]:
+    latest_price_date = None
+    zero_price_rows_ok = 0
+    try:
+        latest_row = conn.execute("SELECT MAX(date) AS latest_price_date FROM price_daily").fetchone()
+        latest_price_date = latest_row["latest_price_date"] if latest_row else None
+        if table_exists(conn, "ingest_ticker_status"):
+            zero_row = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM ingest_ticker_status
+                WHERE run_id = ? AND status = 'ok' AND price_rows = 0
+                """,
+                (run_id,),
+            ).fetchone()
+            zero_price_rows_ok = int(zero_row["c"] or 0) if zero_row else 0
+    except Exception:
+        LOG.exception("run_id=%s failed to infer market data state", run_id)
+        latest_price_date = None
+        zero_price_rows_ok = 0
 
     tz_name = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
     try:
