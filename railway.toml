@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install -r trader_koo/requirements.txt && pip install -e . && pip uninstall -y opencv-python || true && pip install --force-reinstall opencv-python-headless==4.10.0.84"
+buildCommand = "pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install -r trader_koo/requirements.txt && pip install -e . && pip uninstall -y opencv-python || true && pip install --force-reinstall opencv-python-headless==4.10.0.84 && python -c \"import cv2, torch, ultralyticsplus; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)\""
 
 [deploy]
 startCommand = "bash start.sh"
