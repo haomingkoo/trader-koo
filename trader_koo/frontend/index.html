@@ -294,6 +294,26 @@
     tr.clickable:hover { background: rgba(106,169,255,0.12); cursor: pointer; }
     .table-wrap { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(420px, 1fr)); gap: 12px; }
     .table-wrap > .panel { min-width: 0; overflow-x: auto; }
+    #tabReport .panel { min-width: 0; }
+    #reportStatus,
+    #reportBreadthSummary,
+    #reportYoloDeltaSummary,
+    #reportSetupSummary,
+    #reportWatchHint {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .guide,
+    .guide p,
+    .guide li,
+    .guide-v,
+    .guide summary,
+    .guide-callout,
+    .site-footnote {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .mkt-bar {
       display: flex;
       flex-wrap: wrap;
@@ -324,9 +344,32 @@
       .wrap { padding: 12px; }
       #chart { height: 420px; }
       .table-wrap { grid-template-columns: 1fr; }
-      .cards { grid-template-columns: repeat(3, 1fr); }
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card { min-height: 64px; padding: 8px 10px; }
+      .label { font-size: 0.68rem; }
+      .value { font-size: 0.95rem; }
       .hero { flex-direction: column; align-items: flex-start; gap: 12px; }
       .status-pill { width: 100%; border-radius: 10px; }
+      nav { flex-wrap: wrap; gap: 10px; }
+      .nav-links { gap: 14px; flex-wrap: wrap; }
+      .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .tab-btn { padding: 8px 10px; font-size: 0.82rem; }
+      #tabReport .panel { padding: 8px; overflow-x: auto; }
+      #tabReport table { min-width: 560px; font-size: 0.78rem; }
+      #report52wHigh span, #report52wLow span {
+        display: block !important;
+        margin-right: 0 !important;
+      }
+      .report-watch-wrap { flex-direction: column; align-items: stretch; }
+      .report-watch-wrap input, .report-watch-wrap button { width: 100%; }
+      .mini-actions button { flex: 1 1 calc(50% - 6px); }
+      .heat-row { grid-template-columns: 86px 1fr 58px; gap: 6px; font-size: 0.74rem; }
+    }
+    @media (max-width: 420px) {
+      .tabs { grid-template-columns: 1fr; }
+      .cards { grid-template-columns: 1fr; }
+      .mini-actions button { flex: 1 1 100%; }
+      #tabReport table { min-width: 500px; }
     }
     .guide {
       line-height: 1.55;
@@ -414,6 +457,13 @@
     .site-footnote strong {
       color: #ff8a8a;
       font-weight: 700;
+    }
+    @media (max-width: 640px) {
+      .guide { font-size: 0.88rem; }
+      .guide-list { margin-left: 14px; }
+      .guide details { padding: 8px; }
+      .guide summary { font-size: 0.82rem; }
+      .site-footnote { padding: 10px 12px; font-size: 0.76rem; }
     }
   </style>
 </head>
