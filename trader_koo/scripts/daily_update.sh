@@ -73,9 +73,20 @@ YOLO_IMGSZ="${TRADER_KOO_YOLO_IMGSZ:-640}"
 YOLO_CONF="${TRADER_KOO_YOLO_CONF:-0.25}"
 YOLO_IOU="${TRADER_KOO_YOLO_IOU:-0.45}"
 YOLO_MAX_SECS_PER_TICKER="${TRADER_KOO_YOLO_MAX_SECS_PER_TICKER:-180}"
+YOLO_PREFLIGHT_RC=0
+if "$PYTHON" - <<'PY' >> "$RUN_LOG" 2>&1; then
+import cv2, torch, ultralyticsplus
+print(f"[YOLO] preflight ok cv2={cv2.__version__} torch={torch.__version__}")
+PY
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Preflight dependencies OK" >> "$RUN_LOG"
+else
+    YOLO_PREFLIGHT_RC=$?
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Preflight failed rc=${YOLO_PREFLIGHT_RC} (non-fatal)" >> "$RUN_LOG"
+fi
+
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Starting daily pattern detection (${YOLO_LOOKBACK_DAYS}d)..." >> "$RUN_LOG"
 YOLO_T0=$(date +%s)
-if "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
+if [ "$YOLO_PREFLIGHT_RC" -eq 0 ] && "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
     --db-path "$DB_PATH" \
     --timeframe daily \
     --lookback-days "$YOLO_LOOKBACK_DAYS" \
@@ -90,9 +101,12 @@ if "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py" \
     --max-seconds-per-ticker "$YOLO_MAX_SECS_PER_TICKER" \
     >> "$RUN_LOG" 2>&1; then
     YOLO_RC=0
-else
+elif [ "$YOLO_PREFLIGHT_RC" -eq 0 ]; then
     YOLO_RC=$?
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection failed rc=${YOLO_RC} (non-fatal)" >> "$RUN_LOG"
+else
+    YOLO_RC="$YOLO_PREFLIGHT_RC"
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Skipped due to preflight failure rc=${YOLO_RC} (non-fatal)" >> "$RUN_LOG"
 fi
 YOLO_T1=$(date +%s)
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Daily pattern detection done. rc=${YOLO_RC} sec=$((YOLO_T1-YOLO_T0))" >> "$RUN_LOG"

@@ -174,6 +174,10 @@ curl -X POST "https://your-app.up.railway.app/api/admin/run-yolo-seed" \
 
 APScheduler runs `daily_update.sh` inside the process at 22:00 UTC Mon–Fri. No external cron or worker needed.
 
+Each daily run now emits a YOLO dependency preflight line before pattern detection:
+- `[YOLO] preflight ok cv2=... torch=...` (expected)
+- or `[YOLO] Preflight failed ...` (dependency/runtime issue)
+
 Daily runs now auto-generate reports at `/data/reports`:
 - `daily_report_latest.json`
 - `daily_report_latest.md`
