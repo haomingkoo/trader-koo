@@ -335,6 +335,20 @@
     }
     .guide details p,
     .guide details ul { margin-top: 8px; }
+    .site-footnote {
+      margin: 14px auto 24px;
+      max-width: 1360px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.8rem;
+      line-height: 1.5;
+      text-align: center;
+    }
+    .site-footnote strong {
+      color: #ff8a8a;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
@@ -690,6 +704,9 @@
       </div>
     </section>
   </div>
+  <footer class="site-footnote">
+    <strong>Not Financial Advice.</strong> trader_koo is a research dashboard only. Market data and model outputs may be delayed, incomplete, or incorrect. Any investment decision and risk taken is solely your responsibility.
+  </footer>
 
   <script>
     const $ = (id) => document.getElementById(id);
