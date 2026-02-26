@@ -255,6 +255,10 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     signals: dict[str, Any] = {
         "near_52w_high": [],
         "near_52w_low": [],
+        "movers_up_today": [],
+        "movers_down_today": [],
+        "large_moves_today": [],
+        "market_breadth": {},
         "yolo_top_today": [],
         "candle_patterns_today": [],
     }
@@ -304,11 +308,161 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     except Exception:
         pass
 
+    # ── Large moves vs prior close + breadth snapshot ───────────────────────
+    try:
+        threshold_raw = os.getenv("TRADER_KOO_REPORT_LARGE_MOVE_PCT", "2.5").strip()
+        try:
+            large_move_threshold = float(threshold_raw)
+        except ValueError:
+            large_move_threshold = 2.5
+        large_move_threshold = max(0.5, min(50.0, large_move_threshold))
+
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    ticker,
+                    date,
+                    CAST(close AS REAL) AS close,
+                    CAST(volume AS REAL) AS volume,
+                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+                FROM price_daily
+            ),
+            latest AS (
+                SELECT ticker, date, close, volume
+                FROM ranked
+                WHERE rn = 1
+            ),
+            prev AS (
+                SELECT ticker, date AS prev_date, close AS prev_close
+                FROM ranked
+                WHERE rn = 2
+            ),
+            range_52w AS (
+                SELECT
+                    p.ticker,
+                    MAX(CAST(p.high AS REAL)) AS high_52w,
+                    MIN(CAST(p.low  AS REAL)) AS low_52w
+                FROM price_daily p
+                JOIN latest l ON l.ticker = p.ticker
+                WHERE p.date >= date(l.date, '-365 days')
+                GROUP BY p.ticker
+            )
+            SELECT
+                l.ticker,
+                l.date AS latest_date,
+                l.close,
+                p.prev_date,
+                p.prev_close,
+                l.volume,
+                r.high_52w,
+                r.low_52w
+            FROM latest l
+            JOIN prev p ON p.ticker = l.ticker
+            LEFT JOIN range_52w r ON r.ticker = l.ticker
+            WHERE l.close > 0 AND p.prev_close > 0
+            """
+        ).fetchall()
+
+        movers: list[dict[str, Any]] = []
+        advancers = 0
+        decliners = 0
+        unchanged = 0
+        pct_changes: list[float] = []
+        up_threshold = 0.05
+        down_threshold = -0.05
+
+        for row in rows:
+            ticker = str(row[0])
+            latest_date = row[1]
+            close = float(row[2])
+            prev_close = float(row[4])
+            volume = int(float(row[5] or 0))
+            high_52w = float(row[6]) if row[6] is not None else None
+            low_52w = float(row[7]) if row[7] is not None else None
+
+            pct_change = ((close - prev_close) / prev_close) * 100.0
+            pct_changes.append(pct_change)
+            if pct_change > up_threshold:
+                advancers += 1
+            elif pct_change < down_threshold:
+                decliners += 1
+            else:
+                unchanged += 1
+
+            pct_from_high: float | None = None
+            pct_from_low: float | None = None
+            if high_52w and high_52w > 0:
+                pct_from_high = ((high_52w - close) / high_52w) * 100.0
+            if low_52w and low_52w > 0:
+                pct_from_low = ((close - low_52w) / low_52w) * 100.0
+
+            movers.append(
+                {
+                    "ticker": ticker,
+                    "date": latest_date,
+                    "close": round(close, 2),
+                    "prev_close": round(prev_close, 2),
+                    "pct_change": round(pct_change, 2),
+                    "volume": volume,
+                    "high_52w": round(high_52w, 2) if high_52w is not None else None,
+                    "low_52w": round(low_52w, 2) if low_52w is not None else None,
+                    "pct_from_high": round(pct_from_high, 2) if pct_from_high is not None else None,
+                    "pct_from_low": round(pct_from_low, 2) if pct_from_low is not None else None,
+                    "near_52w_high": bool(pct_from_high is not None and pct_from_high <= 3.0),
+                    "near_52w_low": bool(pct_from_low is not None and pct_from_low <= 3.0),
+                }
+            )
+
+        signals["movers_up_today"] = sorted(
+            [m for m in movers if float(m["pct_change"]) > 0.0],
+            key=lambda x: float(x["pct_change"]),
+            reverse=True,
+        )[:20]
+        signals["movers_down_today"] = sorted(
+            [m for m in movers if float(m["pct_change"]) < 0.0],
+            key=lambda x: float(x["pct_change"]),
+        )[:20]
+        signals["large_moves_today"] = sorted(
+            [m for m in movers if abs(float(m["pct_change"])) >= large_move_threshold],
+            key=lambda x: abs(float(x["pct_change"])),
+            reverse=True,
+        )[:40]
+
+        total = advancers + decliners + unchanged
+        avg_pct = (sum(pct_changes) / len(pct_changes)) if pct_changes else None
+        median_pct: float | None = None
+        if pct_changes:
+            sorted_changes = sorted(pct_changes)
+            n = len(sorted_changes)
+            if n % 2 == 1:
+                median_pct = sorted_changes[n // 2]
+            else:
+                median_pct = (sorted_changes[(n // 2) - 1] + sorted_changes[n // 2]) / 2.0
+        signals["market_breadth"] = {
+            "total_tickers": total,
+            "advancers": advancers,
+            "decliners": decliners,
+            "unchanged": unchanged,
+            "pct_advancing": round((advancers / total) * 100.0, 2) if total > 0 else None,
+            "avg_pct_change": round(avg_pct, 2) if avg_pct is not None else None,
+            "median_pct_change": round(median_pct, 2) if median_pct is not None else None,
+            "large_move_threshold_pct": round(large_move_threshold, 2),
+            "large_move_count": len(signals["large_moves_today"]),
+        }
+    except Exception:
+        pass
+
     # ── Top YOLO patterns from today's run ───────────────────────────────────
     try:
         row = conn.execute("SELECT MAX(as_of_date) FROM yolo_patterns").fetchone()
         latest_asof = row[0] if row else None
         if latest_asof:
+            asof_date: dt.date | None = None
+            try:
+                asof_date = dt.date.fromisoformat(str(latest_asof))
+            except Exception:
+                asof_date = None
             yolo_rows = conn.execute("""
                 SELECT ticker, timeframe, pattern,
                        CAST(confidence AS REAL) AS confidence,
@@ -318,14 +472,29 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 ORDER BY confidence DESC
                 LIMIT 30
             """, (latest_asof,)).fetchall()
-            signals["yolo_top_today"] = [
-                {
-                    "ticker": r[0], "timeframe": r[1], "pattern": r[2],
-                    "confidence": round(float(r[3]), 3),
-                    "x0_date": r[4], "x1_date": r[5],
-                }
-                for r in yolo_rows
-            ]
+            yolo_top_today: list[dict[str, Any]] = []
+            for r in yolo_rows:
+                x1_date = r[5]
+                age_days: int | None = None
+                if asof_date is not None and x1_date and len(str(x1_date)) >= 10:
+                    try:
+                        x1_dt = dt.date.fromisoformat(str(x1_date)[:10])
+                        age_days = max(0, (asof_date - x1_dt).days)
+                    except Exception:
+                        age_days = None
+                yolo_top_today.append(
+                    {
+                        "ticker": r[0],
+                        "timeframe": r[1],
+                        "pattern": r[2],
+                        "confidence": round(float(r[3]), 3),
+                        "x0_date": r[4],
+                        "x1_date": x1_date,
+                        "as_of_date": latest_asof,
+                        "age_days": age_days,
+                    }
+                )
+            signals["yolo_top_today"] = yolo_top_today
     except Exception:
         pass
 
@@ -610,6 +779,46 @@ def to_markdown(report: dict[str, Any]) -> str:
                     f"| {p['ticker']} | {p['timeframe']} | {p['pattern']} | {p['confidence']} | {p.get('x0_date', '-')} | {p.get('x1_date', '-')} |"
                 )
 
+    signals = report.get("signals", {})
+    breadth = signals.get("market_breadth", {})
+    if breadth:
+        lines.append("")
+        lines.append("## Market Breadth")
+        for k in [
+            "total_tickers",
+            "advancers",
+            "decliners",
+            "unchanged",
+            "pct_advancing",
+            "avg_pct_change",
+            "median_pct_change",
+            "large_move_threshold_pct",
+            "large_move_count",
+        ]:
+            lines.append(_md_line(k, breadth.get(k)))
+
+    movers_up = signals.get("movers_up_today", [])[:10]
+    if movers_up:
+        lines.append("")
+        lines.append("## Top Gainers Today")
+        lines.append("| ticker | pct_change | close | prev_close | near_52w_high |")
+        lines.append("|---|---:|---:|---:|---|")
+        for m in movers_up:
+            lines.append(
+                f"| {m.get('ticker')} | {m.get('pct_change')}% | {m.get('close')} | {m.get('prev_close')} | {m.get('near_52w_high')} |"
+            )
+
+    movers_down = signals.get("movers_down_today", [])[:10]
+    if movers_down:
+        lines.append("")
+        lines.append("## Top Losers Today")
+        lines.append("| ticker | pct_change | close | prev_close | near_52w_low |")
+        lines.append("|---|---:|---:|---:|---|")
+        for m in movers_down:
+            lines.append(
+                f"| {m.get('ticker')} | {m.get('pct_change')}% | {m.get('close')} | {m.get('prev_close')} | {m.get('near_52w_low')} |"
+            )
+
     lines.append("")
     lines.append("## Warnings")
     if warn:
@@ -679,12 +888,22 @@ def main() -> None:
     email_status: dict[str, Any] = {}
     if args.send_email:
         try:
+            smtp_cfg = _smtp_cfg()
+            print(
+                "[EMAIL] attempt "
+                f"host={smtp_cfg.get('host') or '-'} "
+                f"port={smtp_cfg.get('port')} "
+                f"security={smtp_cfg.get('security')} "
+                f"to={smtp_cfg.get('to_email') or '-'}"
+            )
             md_path = Path(out_paths["latest_md"])
             md_text = md_path.read_text(encoding="utf-8") if md_path.exists() else to_markdown(report)
             send_report_email(report, md_text)
             email_status = {"email_sent": True}
+            print("[EMAIL] sent ok")
         except Exception as exc:
             email_status = {"email_sent": False, "email_error": str(exc)}
+            print(f"[EMAIL] failed {exc}")
 
     print(
         json.dumps(

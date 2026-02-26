@@ -1456,13 +1456,19 @@ def pipeline_status(log_lines: int = Query(default=120, ge=20, le=1000)) -> dict
     }
 
 
-@app.get("/api/admin/daily-report")
-def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown: bool = Query(default=False)) -> dict[str, Any]:
-    """Return latest generated daily report and recent report files."""
+def _daily_report_response(
+    *,
+    limit: int,
+    include_markdown: bool,
+    include_internal_paths: bool,
+    include_admin_log_hints: bool,
+) -> dict[str, Any]:
+    """Build daily report payload for admin/public APIs."""
     report_dir = REPORT_DIR
     latest_path, latest_payload = _latest_daily_report_json(report_dir)
     pipeline = _pipeline_status_snapshot(log_lines=120)
     detail: str | None = None
+    log_hint = "/api/admin/logs?name=cron" if include_admin_log_hints else "server logs"
     if latest_payload is None:
         detail = "No report file found yet."
     elif pipeline.get("active"):
@@ -1479,7 +1485,7 @@ def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown:
             if generated_ts is None:
                 detail = (
                     "Latest ingest run finished, but latest report JSON has no generated_ts. "
-                    "Check /api/admin/logs?name=cron for [REPORT] errors."
+                    f"Check {log_hint} for [REPORT] errors."
                 )
             elif generated_ts < (run_finished_ts - dt.timedelta(seconds=60)):
                 detail = (
@@ -1487,7 +1493,7 @@ def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown:
                     f"{run_finished_ts.replace(microsecond=0).isoformat()}, "
                     "but report generated_ts is still "
                     f"{generated_ts.replace(microsecond=0).isoformat()}. "
-                    "Report output is stale; check /api/admin/logs?name=cron for [REPORT] errors."
+                    f"Report output is stale; check {log_hint} for [REPORT] errors."
                 )
     latest_md_path = report_dir / "daily_report_latest.md"
     md_text = ""
@@ -1496,12 +1502,16 @@ def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown:
             md_text = latest_md_path.read_text(encoding="utf-8")
         except Exception:
             md_text = ""
-    return {
+
+    history = _daily_report_history(report_dir, limit=limit)
+    if not include_internal_paths:
+        for row in history:
+            row.pop("path", None)
+
+    payload = {
         "ok": latest_payload is not None,
-        "report_dir": str(report_dir),
-        "latest_file": str(latest_path) if latest_path else None,
         "latest": latest_payload or {},
-        "history": _daily_report_history(report_dir, limit=limit),
+        "history": history,
         "detail": detail,
         "pipeline": {
             "active": pipeline.get("active"),
@@ -1511,6 +1521,37 @@ def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown:
         },
         "latest_markdown": md_text,
     }
+    if include_internal_paths:
+        payload["report_dir"] = str(report_dir)
+        payload["latest_file"] = str(latest_path) if latest_path else None
+    else:
+        payload["pipeline"] = {
+            "active": pipeline.get("active"),
+            "stage": pipeline.get("stage"),
+        }
+    return payload
+
+
+@app.get("/api/daily-report")
+def public_daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown: bool = Query(default=False)) -> dict[str, Any]:
+    """Return latest generated daily report for UI without admin auth."""
+    return _daily_report_response(
+        limit=limit,
+        include_markdown=include_markdown,
+        include_internal_paths=False,
+        include_admin_log_hints=False,
+    )
+
+
+@app.get("/api/admin/daily-report")
+def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown: bool = Query(default=False)) -> dict[str, Any]:
+    """Return latest generated daily report and recent report files."""
+    return _daily_report_response(
+        limit=limit,
+        include_markdown=include_markdown,
+        include_internal_paths=True,
+        include_admin_log_hints=True,
+    )
 
 
 @app.get("/api/admin/logs")
@@ -1525,6 +1566,37 @@ def admin_logs(
         "name": name,
         "path": str(path),
         "tail": _tail_text_file(path, lines=lines, max_bytes=256_000),
+    }
+
+
+@app.get("/api/admin/smtp-health")
+def smtp_health() -> dict[str, Any]:
+    """Return SMTP/report-email config health (without secrets)."""
+    smtp = _smtp_settings()
+    auto_email = str(os.getenv("TRADER_KOO_AUTO_EMAIL", "")).strip().lower() in {"1", "true", "yes"}
+    missing: list[str] = []
+    if not smtp["host"]:
+        missing.append("TRADER_KOO_SMTP_HOST")
+    if not smtp["from_email"]:
+        missing.append("TRADER_KOO_SMTP_FROM")
+    if auto_email and not smtp["default_to"]:
+        missing.append("TRADER_KOO_REPORT_EMAIL_TO")
+    if smtp["user"] and not smtp["password"]:
+        missing.append("TRADER_KOO_SMTP_PASS")
+    return {
+        "ok": len(missing) == 0,
+        "auto_email_enabled": auto_email,
+        "missing": missing,
+        "smtp": {
+            "host": smtp["host"],
+            "port": smtp["port"],
+            "security": smtp["security"],
+            "timeout_sec": smtp["timeout_sec"],
+            "from_email": smtp["from_email"],
+            "default_to": smtp["default_to"],
+            "has_user": bool(smtp["user"]),
+            "has_password": bool(smtp["password"]),
+        },
     }
 
 
