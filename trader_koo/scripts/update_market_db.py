@@ -48,6 +48,10 @@ DEFAULT_REQUIRE_FULL_DATASET = os.getenv("TRADER_KOO_REQUIRE_FULL_DATASET", "0")
 LOG = logging.getLogger("trader_koo.ingest")
 
 
+class GracefulStopError(RuntimeError):
+    """Raised when the process receives a termination signal."""
+
+
 def setup_logging(level: str, log_file: str | None) -> None:
     LOG.handlers.clear()
     LOG.setLevel(getattr(logging, level.upper(), logging.INFO))
@@ -95,6 +99,31 @@ def _ticker_timeout(seconds: float):
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0.0)
         signal.signal(signal.SIGALRM, prev_handler)
+
+
+def _install_termination_handlers() -> tuple[dict[int, object], list[int]]:
+    """Install SIGTERM/SIGINT handlers that raise, so outer try/finally can persist run status."""
+    previous: dict[int, object] = {}
+    installed: list[int] = []
+
+    def _raise_graceful_stop(signum: int, _frame) -> None:
+        raise GracefulStopError(f"received termination signal={signum}")
+
+    for name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        previous[sig] = signal.getsignal(sig)
+        signal.signal(sig, _raise_graceful_stop)
+        installed.append(sig)
+    return previous, installed
+
+
+def _restore_termination_handlers(previous: dict[int, object], installed: list[int]) -> None:
+    for sig in installed:
+        prev = previous.get(sig)
+        if prev is not None:
+            signal.signal(sig, prev)
 
 
 def parse_iso_utc(value: str | None) -> Optional[dt.datetime]:
@@ -747,6 +776,14 @@ def run(args: argparse.Namespace) -> None:
     final_errors: dict[str, str] = {}
     pending_tickers = list(tickers)
     pass_no = 1
+    term_prev_handlers: dict[int, object] = {}
+    term_installed: list[int] = []
+    try:
+        term_prev_handlers, term_installed = _install_termination_handlers()
+    except Exception:
+        term_prev_handlers = {}
+        term_installed = []
+        LOG.warning("run_id=%s failed to install termination handlers; proceeding", run_id)
 
     try:
         while pending_tickers and pass_no <= max_passes:
@@ -1019,9 +1056,12 @@ def run(args: argparse.Namespace) -> None:
             tickers_failed=max(fail, len(tickers) - ok),
             error_message=str(exc),
         )
+        if isinstance(exc, GracefulStopError):
+            LOG.error("run_id=%s terminated early: %s", run_id, exc)
         LOG.exception("run_id=%s fatal failure: %s", run_id, exc)
         raise
     finally:
+        _restore_termination_handlers(term_prev_handlers, term_installed)
         conn.close()
 
 
