@@ -454,6 +454,38 @@
       <div id="reportSummaryCards" class="cards" style="margin-bottom:14px;"></div>
       <div id="reportYoloCards" class="cards" style="margin-bottom:14px;"></div>
 
+      <!-- YOLO delta -->
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">YOLO Changes vs Previous Run</div>
+        <div id="reportYoloDeltaSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;"></div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:280px;">
+            <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NEW PATTERNS</div>
+            <table id="reportYoloNewTable"></table>
+          </div>
+          <div style="flex:1; min-width:280px;">
+            <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NO LONGER DETECTED</div>
+            <table id="reportYoloLostTable"></table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Large moves + breadth -->
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Large Moves Today (vs Prior Close)</div>
+        <div id="reportBreadthSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;"></div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:280px;">
+            <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">TOP GAINERS</div>
+            <table id="reportMoversUpTable"></table>
+          </div>
+          <div style="flex:1; min-width:280px;">
+            <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">TOP LOSERS</div>
+            <table id="reportMoversDownTable"></table>
+          </div>
+        </div>
+      </div>
+
       <!-- 52W Extremes -->
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">52-Week Extremes (within 3% of high/low)</div>
@@ -1596,7 +1628,7 @@
       const base = getApiBase();
       $("reportStatus").textContent = "Loading...";
       try {
-        const resp = await adminFetch(`${base}/api/admin/daily-report?limit=20`);
+        const resp = await apiFetch(`${base}/api/daily-report?limit=20`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const data = await resp.json();
         const latest = data.latest || {};
@@ -1629,6 +1661,63 @@
           makeCard("Daily Tickers", tfDaily.tickers_with_patterns  ?? "—"),
           makeCard("Weekly Tickers", tfWeekly.tickers_with_patterns ?? "—"),
         ].join("");
+
+        const yoloDelta = yoloBlock.delta || {};
+        const yoloNew = yoloDelta.new_patterns || [];
+        const yoloLost = yoloDelta.lost_patterns || [];
+        $("reportYoloDeltaSummary").textContent =
+          `Comparing ${yoloDelta.prev_asof || "?"} -> ${yoloDelta.today_asof || "?"}` +
+          ` • New: ${yoloDelta.new_count ?? yoloNew.length}` +
+          ` • No longer detected: ${yoloDelta.lost_count ?? yoloLost.length}`;
+        renderSimpleTable(
+          "reportYoloNewTable",
+          ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
+          yoloNew.slice(0, 20),
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: false },
+        );
+        renderSimpleTable(
+          "reportYoloLostTable",
+          ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
+          yoloLost.slice(0, 20),
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: false },
+        );
+
+        const breadth = signals.market_breadth || {};
+        const pctAdv = breadth.pct_advancing ?? "—";
+        const adv = breadth.advancers ?? 0;
+        const dec = breadth.decliners ?? 0;
+        const unch = breadth.unchanged ?? 0;
+        const avgMove = breadth.avg_pct_change ?? "—";
+        const medianMove = breadth.median_pct_change ?? "—";
+        const moveThresh = breadth.large_move_threshold_pct ?? "—";
+        const moveCount = breadth.large_move_count ?? 0;
+        $("reportBreadthSummary").innerHTML =
+          `Breadth: <b>${adv}</b> up / <b>${dec}</b> down / <b>${unch}</b> flat` +
+          ` • Advancing: <b>${pctAdv}%</b>` +
+          ` • Avg move: <b>${avgMove}%</b>` +
+          ` • Median move: <b>${medianMove}%</b>` +
+          ` • |move| >= ${moveThresh}%: <b>${moveCount}</b>`;
+
+        renderSimpleTable(
+          "reportMoversUpTable",
+          ["ticker", "pct_change", "close", "prev_close", "pct_from_high"],
+          (signals.movers_up_today || []).slice(0, 12),
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: false },
+        );
+        renderSimpleTable(
+          "reportMoversDownTable",
+          ["ticker", "pct_change", "close", "prev_close", "pct_from_low"],
+          (signals.movers_down_today || []).slice(0, 12),
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: false },
+        );
 
         // 52W extremes
         const nearHigh = signals.near_52w_high || [];
@@ -1666,9 +1755,11 @@
 
         // Top YOLO patterns at close
         renderSimpleTable("reportYoloTopTable",
-          ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
+          ["ticker", "timeframe", "pattern", "confidence", "age_days", "x0_date", "x1_date", "as_of_date"],
           signals.yolo_top_today || [],
-          false, null, { sortable: false });
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: false });
 
         // Candle signals at close
         renderSimpleTable("reportCandleTable",
