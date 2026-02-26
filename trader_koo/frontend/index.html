@@ -263,12 +263,78 @@
       .status-pill { width: 100%; border-radius: 10px; }
     }
     .guide {
-      line-height: 1.5;
+      line-height: 1.55;
       color: var(--text);
       font-size: 0.92rem;
     }
-    .guide h3 { margin: 8px 0 6px; font-size: 1rem; }
-    .guide p { margin: 0 0 8px; color: var(--muted); }
+    .guide h3 {
+      margin: 12px 0 8px;
+      font-size: 1rem;
+      color: var(--text);
+    }
+    .guide p {
+      margin: 0 0 8px;
+      color: var(--muted);
+    }
+    .guide-list {
+      margin: 0 0 10px 18px;
+      padding: 0;
+      color: var(--muted);
+    }
+    .guide-list li { margin: 0 0 6px; }
+    .guide-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .guide-card {
+      background: #0f1624;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .guide-k {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .guide-v {
+      color: var(--text);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+    .guide-callout {
+      background: rgba(255,107,107,0.12);
+      border: 1px solid #ff6b6b;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .guide-callout-title {
+      color: #ff8a8a;
+      font-weight: 700;
+      font-size: 0.92rem;
+      margin-bottom: 4px;
+    }
+    .guide details {
+      background: #0f1624;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+    }
+    .guide summary {
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.86rem;
+      outline: none;
+    }
+    .guide details p,
+    .guide details ul { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -524,76 +590,102 @@
 
     <section id="tabGuide" class="panel">
       <div class="guide">
-        <div style="background:rgba(255,107,107,0.12); border:1px solid #ff6b6b; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
-          <div style="color:#ff8a8a; font-weight:700; font-size:0.95rem; margin-bottom:6px;">⚠ NOT FINANCIAL ADVICE</div>
-          <p style="margin:0; color:var(--muted);">This tool is for research and education only. Nothing shown here constitutes financial advice, a recommendation to buy or sell, or a guarantee of any outcome. Signals can be wrong, delayed, or incomplete. You are solely responsible for your trades, risk management, and any financial losses. Always do your own research and consult a licensed financial adviser before making investment decisions.</p>
+        <div class="guide-callout">
+          <div class="guide-callout-title">Not Financial Advice</div>
+          <p style="margin:0;">This dashboard is for research only. Signals can be wrong, delayed, or incomplete. You are responsible for risk management and execution decisions.</p>
         </div>
 
-        <h3>How to Use This Dashboard</h3>
-        <p>This dashboard has four tabs: <b>Guide</b> (this page), <b>Opportunities (PEG)</b> for screening the S&amp;P 500 by valuation, <b>Chart + Levels</b> for per-ticker technical analysis, and <b>Daily Report</b> for an after-close summary of signals.</p>
-        <p>Typical workflow: check the Daily Report tab each evening after the data refresh → use 52W extremes and pattern signals to build a watchlist → scan the Opportunities tab for valuation context → click a row to jump to that ticker's chart → study levels, gaps, and patterns to form a thesis.</p>
+        <h3>Quick Start (2 Minutes)</h3>
+        <ol class="guide-list">
+          <li>Open <b>Daily Report</b> after the nightly run completes.</li>
+          <li>Review <b>YOLO Changes</b> first: new patterns and patterns no longer detected.</li>
+          <li>Check <b>Large Moves Today</b> and <b>52-week extremes</b> to build a short watchlist.</li>
+          <li>Click any ticker to jump into <b>Chart + Levels</b>.</li>
+          <li>Use <b>Opportunities (PEG)</b> for valuation context before deciding your setup quality.</li>
+        </ol>
 
-        <h3>Opportunities Tab — PEG &amp; Valuation Screening</h3>
-        <p>The table shows all S&amp;P 500 tickers ranked by valuation. Key columns:</p>
-        <p>• <b>Discount %</b>: how far the current price is below the analyst target (positive = upside, negative = already above target). E.g. <i>AAPL at 15% discount</i> means the average analyst target is 15% above the current price.</p>
-        <p>• <b>PEG</b>: Price/Earnings-to-Growth ratio. A PEG below 1.0 is often considered "growth at a reasonable price". E.g. <i>PEG = 0.8 on a fast grower</i> is more attractive than <i>PEG = 3.0 on a slow grower</i>.</p>
-        <p>• <b>Undervalued</b>: discount ≥ 10% AND PEG ≤ 2. <b>Deep Value</b>: stricter — discount ≥ 20% AND PEG ≤ 1.5. <b>Overvalued</b>: price is already above target by more than 10%.</p>
-        <p>Click any row to open that ticker's chart automatically.</p>
+        <h3>What Each Tab Does</h3>
+        <div class="guide-grid">
+          <div class="guide-card">
+            <div class="guide-k">Guide</div>
+            <div class="guide-v">How to use the app, read signals, and avoid common mistakes.</div>
+          </div>
+          <div class="guide-card">
+            <div class="guide-k">Opportunities (PEG)</div>
+            <div class="guide-v">Valuation screener for S&amp;P 500. Filter by discount, PEG, and view presets.</div>
+          </div>
+          <div class="guide-card">
+            <div class="guide-k">Chart + Levels</div>
+            <div class="guide-v">Per-ticker chart with support/resistance, gaps, trendlines, candlestick signals, and YOLO boxes.</div>
+          </div>
+          <div class="guide-card">
+            <div class="guide-k">Daily Report</div>
+            <div class="guide-v">Nightly summary of what changed, strongest patterns, movers, and regime context.</div>
+          </div>
+        </div>
 
-        <h3>Support vs Resistance Levels</h3>
-        <p><b>Support</b> is a price zone where buyers have previously stepped in, causing price to bounce up. <b>Resistance</b> is a zone where sellers have pushed price back down.</p>
-        <p>Example: if SPY bounced off $450 three times in the past, $450 is strong support. If it has been rejected at $470 twice, $470 is resistance.</p>
-        <p><b>Primary</b>: highest-confidence level (most recent touches, multiple hits). <b>Secondary</b>: next best level. <b>Fallback</b>: auto-generated anchor when no strong detected level exists on one side.</p>
+        <h3>Daily Report Read Order</h3>
+        <ol class="guide-list">
+          <li><b>YOLO Changes vs Previous Run</b>: actionable delta, not raw count noise.</li>
+          <li><b>Large Moves Today</b>: strongest gainers/losers and breadth (advancers vs decliners).</li>
+          <li><b>52-week Extremes</b>: momentum continuation or exhaustion candidates.</li>
+          <li><b>Top AI Patterns at Close</b>: highest-confidence detections, with <b>age_days</b>.</li>
+          <li><b>Candle Signals</b>: confirmation layer, never standalone.</li>
+        </ol>
 
-        <h3>Open Gaps</h3>
-        <p>A <b>bull gap</b> occurs when today's open is above yesterday's high — leaving an unfilled region below. A <b>bear gap</b> is the reverse. Markets often "fill" gaps later.</p>
-        <p>Example: NVDA gaps up 5% on earnings — the gap low and high are marked. If price dips back to that range, it is testing the gap fill zone.</p>
+        <h3>Chart + Levels Workflow</h3>
+        <ol class="guide-list">
+          <li>Load ticker from report or search box.</li>
+          <li>Mark location versus <b>primary/secondary support/resistance</b>.</li>
+          <li>Check <b>open gaps</b> and <b>trendlines</b> for context.</li>
+          <li>Enable <b>YOLO patterns</b> and compare with rule/hybrid and CV proxy overlays.</li>
+          <li>Decide only when multiple signals agree (structure + momentum + valuation).</li>
+        </ol>
 
-        <h3>Trendlines</h3>
-        <p>Heuristic best-fit lines drawn through recent swing pivots. A rising support trendline connecting higher lows suggests an uptrend. Toggle with the <i>Show Trendlines</i> checkbox.</p>
-        <p>These are candidate lines only — not guaranteed to hold. Use them as context alongside levels.</p>
+        <h3>Signal Glossary (Short)</h3>
+        <details open>
+          <summary>YOLO Patterns</summary>
+          <ul class="guide-list">
+            <li>Computer-vision detections on candlestick images (daily/weekly timeframe).</li>
+            <li><b>x0_date/x1_date</b> define the detected pattern window.</li>
+            <li><b>age_days</b> shows how old the pattern end-date is relative to run date.</li>
+            <li>Use <b>YOLO Changes</b> to identify truly new or invalidated patterns.</li>
+          </ul>
+        </details>
+        <details>
+          <summary>Valuation Fields</summary>
+          <ul class="guide-list">
+            <li><b>Discount %</b>: upside/downside versus analyst target.</li>
+            <li><b>PEG</b>: P/E adjusted for growth; lower can indicate better value for growth.</li>
+            <li><b>Deep Value</b> preset is stricter than Undervalued.</li>
+          </ul>
+        </details>
+        <details>
+          <summary>Technical Structure</summary>
+          <ul class="guide-list">
+            <li><b>Support</b>: area where buyers previously stepped in.</li>
+            <li><b>Resistance</b>: area where sellers previously stepped in.</li>
+            <li><b>Gaps</b>: unfilled zones often retested later.</li>
+          </ul>
+        </details>
 
-        <h3>Pattern Candidates (Rule-Based)</h3>
-        <p>Geometric pattern detection (flags, wedges, triangles, double tops/bottoms) from recent price bars. Toggle with <i>Show Patterns</i>.</p>
-        <p>Example: a <i>bull flag</i> is a sharp up-move followed by a tight, slightly downward channel — often resolves to the upside. A <i>head and shoulders</i> is a reversal pattern with three peaks, the middle being highest.</p>
+        <h3>Run Schedule</h3>
+        <ul class="guide-list">
+          <li>Daily pipeline: weekdays at <b>22:00 UTC</b> (ingest → YOLO → report).</li>
+          <li>Weekly YOLO pass: Saturday (regenerates report after run).</li>
+          <li>Report tab always shows the latest completed run; no manual refresh button is required.</li>
+        </ul>
 
-        <h3>YOLO AI Patterns</h3>
-        <p>A YOLOv8 computer-vision model (<a href="https://huggingface.co/foduucom/stockmarket-pattern-detection-yolov8" style="color:var(--blue);" target="_blank" rel="noopener">foduucom/stockmarket-pattern-detection-yolov8</a>) is run nightly on each ticker's candlestick chart image. Detected patterns are stored and shown as dotted bounding boxes on the chart.</p>
-        <p>Pattern types: Head &amp; Shoulders Top/Bottom, M-Head, W-Bottom, Triangle, StockLine. Confidence is shown as a percentage — higher is more certain.</p>
-        <p>Toggle with <i>YOLO Patterns</i> checkbox. These are updated each trading day and do not require any waiting on your end.</p>
+        <h3>Common Mistakes</h3>
+        <ul class="guide-list">
+          <li>Trading one signal in isolation.</li>
+          <li>Ignoring timeframe mismatch (weekly pattern vs short-term trade horizon).</li>
+          <li>Treating old patterns as fresh without checking <b>age_days</b>.</li>
+          <li>Ignoring liquidity/volume when evaluating breakouts.</li>
+        </ul>
 
-        <h3>Hybrid Pattern Scores</h3>
-        <p>Combines rule-based geometry confidence with candlestick alignment, volume regime, and breakout state into a single score. Higher hybrid confidence means more corroborating evidence.</p>
-
-        <h3>CV Proxy Pattern Scores</h3>
-        <p>An image-style shape scorer using normalised OHLC geometry — not a trained deep model, but useful as a secondary signal. Compare with Hybrid scores for consensus.</p>
-
-        <h3>Daily Report Tab</h3>
-        <p>Generated automatically after each daily data refresh (22:00 UTC Mon–Fri). The weekly YOLO pass runs separately on Saturdays and also triggers a report update. The report does not have a manual refresh button — it reflects the last completed cron run.</p>
-
-        <p><b>52-Week Extremes</b> — lists every S&amp;P 500 ticker whose latest close is within 3% of its 52-week high or low. Click any ticker to jump directly to its chart.</p>
-        <p>Rationale: proximity to a 52W high is a momentum signal — stocks making new highs are often in strong uptrends and may continue. Proximity to a 52W low flags potential capitulation or value traps. In both cases, the price is at a structurally significant level and worth further inspection.</p>
-        <p>A ticker at its 52W high is not automatically bullish — check volume (a breakout on low volume is weak) and whether the high is a genuine new multi-year high or just a recovery within a longer downtrend. Similarly, a 52W low could be genuine distress or a brief oversold condition before recovery.</p>
-
-        <p><b>Top AI Patterns at Close (YOLO)</b> — the 30 highest-confidence chart patterns detected by the YOLOv8 model on the latest trading day's data. Sorted by confidence. The <i>timeframe</i> column shows whether the detection came from the 180-day daily chart or the 730-day weekly chart.</p>
-        <p>Rationale: rather than manually checking all 510 tickers, this surfaces the detections the model is most confident about. Patterns detected on the weekly timeframe represent larger, more structurally significant formations.</p>
-
-        <p><b>Candle Signals at Close</b> — rule-based candlestick patterns detected on each ticker's latest closing candle. Common signals include engulfing candles, hammers, shooting stars, and three-candle reversal sequences (morning star, evening star, three white soldiers, three black crows).</p>
-        <p>Rationale: candlestick signals are context-dependent — a hammer after a prolonged downtrend on high volume is far more meaningful than a hammer in the middle of a range. Use this list as a starting point to check the chart, not a standalone trade signal. Bullish and bearish signals are both shown; filter by <i>bias</i> to focus on one direction.</p>
-
-        <h3>Display Window &amp; Chart Navigation</h3>
-        <p>The <b>3M / 6M / YTD / 1Y / 2Y / ALL</b> buttons at the top-right of the chart change the view window. All data is always loaded — changing the window just zooms in. You can also drag to zoom, double-click to reset, and scroll to zoom.</p>
-        <p>The engine uses a wider history window (up to all available data) for more stable level and pivot calculations, regardless of what is shown on screen.</p>
-
-        <h3>Common Pitfalls</h3>
-        <p>• <b>Pattern overfitting</b>: a pattern that worked in backtests may not work going forward.</p>
-        <p>• <b>Survivorship bias</b>: S&amp;P 500 constituents are already winners — they have survived long enough to be listed here.</p>
-        <p>• <b>Regime shifts</b>: patterns and levels from a bull market may not behave the same in a bear market or high-volatility regime.</p>
-        <p>• <b>Low-liquidity distortions</b>: thin stocks can have false breakouts. Always check volume.</p>
-        <p>Use strict position sizing and stop-losses. Never risk more than you can afford to lose.</p>
-
-        <div style="margin-top:16px; padding:10px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:0.82rem;">
-          trader_koo is a personal research tool. All data is sourced from public market feeds and may be delayed or inaccurate. <b>Past performance is not indicative of future results.</b> This is NOT financial advice. Use at your own risk.
+        <div style="margin-top:14px; padding:10px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:0.82rem;">
+          trader_koo uses public market data and may contain delays or gaps. Past performance is not indicative of future results.
         </div>
       </div>
     </section>
