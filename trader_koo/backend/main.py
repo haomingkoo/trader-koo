@@ -303,6 +303,13 @@ _scheduler.add_job(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    reconcile = _reconcile_stale_running_runs()
+    if reconcile.get("reconciled"):
+        LOG.warning(
+            "Startup recovered %s stale ingest run(s): %s",
+            reconcile.get("reconciled"),
+            ",".join(reconcile.get("run_ids", [])),
+        )
     _scheduler.start()
     LOG.info("Scheduler started — daily_update: 22:00 UTC Mon–Fri | weekly_yolo: 00:30 UTC Sat")
     yield
@@ -624,6 +631,125 @@ def _read_latest_ingest_run() -> dict[str, Any] | None:
         conn.close()
 
 
+def _reconcile_stale_running_runs() -> dict[str, Any]:
+    """Mark orphaned ingest_runs(status=running) as failed after stale threshold."""
+    out: dict[str, Any] = {
+        "checked": 0,
+        "reconciled": 0,
+        "run_ids": [],
+    }
+    if not DB_PATH.exists():
+        return out
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    stale_after_sec = INGEST_RUNNING_STALE_MIN * 60
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not table_exists(conn, "ingest_runs"):
+            return out
+
+        rows = conn.execute(
+            """
+            SELECT run_id, started_ts, tickers_total, tickers_ok, tickers_failed
+            FROM ingest_runs
+            WHERE status = 'running'
+            ORDER BY started_ts ASC
+            """
+        ).fetchall()
+        out["checked"] = len(rows)
+        has_ticker_status = table_exists(conn, "ingest_ticker_status")
+
+        for row in rows:
+            run_id = str(row["run_id"])
+            started_ts = parse_iso_utc(row["started_ts"])
+            if started_ts is None:
+                # If started_ts is malformed, treat it as stale/orphaned.
+                run_age_sec = float(stale_after_sec + 1)
+            else:
+                run_age_sec = max(0.0, (now_utc - started_ts).total_seconds())
+            if run_age_sec <= stale_after_sec:
+                continue
+
+            tickers_total = int(row["tickers_total"] or 0)
+            tickers_ok = int(row["tickers_ok"] or 0)
+            tickers_failed = int(row["tickers_failed"] or 0)
+            processed = tickers_ok + tickers_failed
+            if has_ticker_status:
+                agg = conn.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_count,
+                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                        COUNT(*) AS processed_count
+                    FROM ingest_ticker_status
+                    WHERE run_id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if agg is not None:
+                    tickers_ok = int(agg["ok_count"] or 0)
+                    tickers_failed = int(agg["failed_count"] or 0)
+                    processed = int(agg["processed_count"] or 0)
+
+            # Keep totals consistent even when some symbols were never reached.
+            unresolved = max(0, tickers_total - processed)
+            tickers_failed += unresolved
+            if tickers_ok + tickers_failed > tickers_total and tickers_total > 0:
+                tickers_failed = max(0, tickers_total - tickers_ok)
+
+            age_min = run_age_sec / 60.0
+            finished_ts = now_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            reconcile_reason = (
+                f"run_orphaned_after_restart: auto-failed after stale running "
+                f"({age_min:.1f}m > {INGEST_RUNNING_STALE_MIN}m)"
+            )
+            updated = conn.execute(
+                """
+                UPDATE ingest_runs
+                SET
+                    finished_ts = ?,
+                    status = 'failed',
+                    tickers_ok = ?,
+                    tickers_failed = ?,
+                    error_message = COALESCE(NULLIF(error_message, ''), ?)
+                WHERE run_id = ? AND status = 'running'
+                """,
+                (finished_ts, tickers_ok, tickers_failed, reconcile_reason, run_id),
+            ).rowcount
+            if not updated:
+                continue
+
+            out["reconciled"] += 1
+            out["run_ids"].append(run_id)
+            LOG.warning(
+                "Reconciled stale running ingest run_id=%s age_min=%.1f total=%s processed=%s",
+                run_id,
+                age_min,
+                tickers_total,
+                processed,
+            )
+            _append_run_log(
+                "RECOVER",
+                (
+                    f"run_id={run_id} stale-running auto-failed "
+                    f"age_min={age_min:.1f} total={tickers_total} processed={processed}"
+                ),
+            )
+
+        if out["reconciled"] > 0:
+            conn.commit()
+            with _STATUS_CACHE_LOCK:
+                global _STATUS_CACHE_AT, _STATUS_CACHE_PAYLOAD
+                _STATUS_CACHE_AT = None
+                _STATUS_CACHE_PAYLOAD = None
+    except Exception:
+        LOG.exception("Failed to reconcile stale running ingest runs")
+    finally:
+        conn.close()
+    return out
+
+
 def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     def _last_idx(lines: list[str], token: str) -> int:
         for idx in range(len(lines) - 1, -1, -1):
@@ -750,11 +876,13 @@ def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
         stale_inference = True
         active = False
         stage = "stale_running"
-    elif active and stage != "ingest" and stage_age_sec is not None and stage_age_sec > PIPELINE_STALE_SEC:
+    elif active and stage_age_sec is not None and stage_age_sec > PIPELINE_STALE_SEC:
         # Prevent stale log tails from pinning pipeline_active=True forever.
-        stale_inference = True
-        active = False
-        stage = "idle"
+        # Keep active only when DB still says a run is truly running.
+        if not (latest_run and latest_run.get("status") == "running"):
+            stale_inference = True
+            active = False
+            stage = "idle"
     return {
         "run_log_path": str(RUN_LOG_PATH),
         "active": active,
@@ -1192,6 +1320,7 @@ def health() -> dict[str, Any]:
 @app.post("/api/admin/trigger-update")
 def trigger_update() -> dict[str, Any]:
     """Trigger daily_update.sh immediately (runs in background via scheduler)."""
+    reconcile = _reconcile_stale_running_runs()
     pipeline = _pipeline_status_snapshot(log_lines=120)
     if pipeline["active"]:
         stage = pipeline.get("stage", "unknown")
@@ -1201,6 +1330,7 @@ def trigger_update() -> dict[str, Any]:
             "stage": stage,
             "latest_run": pipeline.get("latest_run"),
             "run_log_path": pipeline.get("run_log_path"),
+            "reconciled_stale_runs": reconcile.get("reconciled", 0),
         }
     job = _scheduler.get_job("daily_update")
     if job is None:
@@ -1211,6 +1341,7 @@ def trigger_update() -> dict[str, Any]:
         "message": "daily_update triggered — check /data/logs/cron_daily.log",
         "stage": "queued",
         "run_log_path": str(RUN_LOG_PATH),
+        "reconciled_stale_runs": reconcile.get("reconciled", 0),
     }
 
 
