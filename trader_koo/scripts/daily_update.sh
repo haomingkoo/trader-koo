@@ -21,11 +21,19 @@ REPORT_DIR="${TRADER_KOO_REPORT_DIR:-/data/reports}"
 INGEST_MAX_SECS_PER_TICKER="${TRADER_KOO_INGEST_MAX_SECS_PER_TICKER:-120}"
 PRICE_TIMEOUT_SEC="${TRADER_KOO_PRICE_TIMEOUT_SEC:-25}"
 PRICE_RETRY_ATTEMPTS="${TRADER_KOO_PRICE_RETRY_ATTEMPTS:-3}"
+INGEST_RETRY_FAILED_PASSES="${TRADER_KOO_INGEST_RETRY_FAILED_PASSES:-1}"
+INGEST_RETRY_FAILED_BACKOFF_SEC="${TRADER_KOO_INGEST_RETRY_FAILED_BACKOFF_SEC:-10}"
+REQUIRE_FULL_DATASET="${TRADER_KOO_REQUIRE_FULL_DATASET:-1}"
+case "${REQUIRE_FULL_DATASET}" in
+    1|true|TRUE|yes|YES|on|ON) REQUIRE_FULL_DATASET_FLAG="--require-full-dataset" ;;
+    *) REQUIRE_FULL_DATASET_FLAG="--allow-partial-dataset" ;;
+esac
 
 mkdir -p "$LOG_DIR"
 
 echo "========================================" >> "$RUN_LOG"
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [START] daily_update.sh" >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] config max_secs_per_ticker=${INGEST_MAX_SECS_PER_TICKER} price_timeout_sec=${PRICE_TIMEOUT_SEC} price_retry_attempts=${PRICE_RETRY_ATTEMPTS} retry_failed_passes=${INGEST_RETRY_FAILED_PASSES} retry_failed_backoff_sec=${INGEST_RETRY_FAILED_BACKOFF_SEC} require_full_dataset=${REQUIRE_FULL_DATASET}" >> "$RUN_LOG"
 
 # ── 1. Fetch prices + fundamentals for all S&P 500 tickers ──────────────────
 #      Market context tickers (VIX, SPY, QQQ, ^DJI, ^TNX, SVIX) are always
@@ -46,6 +54,9 @@ if "$PYTHON" "$SCRIPT_DIR/update_market_db.py" \
     --max-seconds-per-ticker "$INGEST_MAX_SECS_PER_TICKER" \
     --price-timeout-sec "$PRICE_TIMEOUT_SEC" \
     --price-retry-attempts "$PRICE_RETRY_ATTEMPTS" \
+    --retry-failed-passes "$INGEST_RETRY_FAILED_PASSES" \
+    --retry-failed-backoff-sec "$INGEST_RETRY_FAILED_BACKOFF_SEC" \
+    $REQUIRE_FULL_DATASET_FLAG \
     --sleep-min 0.5 \
     --sleep-max 1.2 \
     --db-path "$DB_PATH" \

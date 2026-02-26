@@ -16,6 +16,7 @@ from io import StringIO
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Iterable, Optional
+from zoneinfo import ZoneInfo
 
 import finviz
 import pandas as pd
@@ -36,6 +37,14 @@ DEFAULT_LOG_PATH = str((PROJECT_DIR / "data" / "logs" / "update_market_db.log").
 DEFAULT_TARGET_PE = 21.0
 DEFAULT_MAX_SECS_PER_TICKER = float(os.getenv("TRADER_KOO_INGEST_MAX_SECS_PER_TICKER", "120"))
 DEFAULT_PRICE_TIMEOUT_SEC = float(os.getenv("TRADER_KOO_PRICE_TIMEOUT_SEC", "25"))
+DEFAULT_RETRY_FAILED_PASSES = max(0, int(os.getenv("TRADER_KOO_INGEST_RETRY_FAILED_PASSES", "1")))
+DEFAULT_RETRY_FAILED_BACKOFF_SEC = max(0.0, float(os.getenv("TRADER_KOO_INGEST_RETRY_FAILED_BACKOFF_SEC", "10")))
+DEFAULT_REQUIRE_FULL_DATASET = os.getenv("TRADER_KOO_REQUIRE_FULL_DATASET", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 LOG = logging.getLogger("trader_koo.ingest")
 
 
@@ -600,6 +609,93 @@ def write_options_rows(conn: sqlite3.Connection, snapshot_ts: str, rows: Iterabl
     return len(data)
 
 
+def classify_ingest_error(exc: Exception) -> str:
+    text = str(exc).lower()
+    if isinstance(exc, TimeoutError) or "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "429" in text or "too many requests" in text or "rate limit" in text:
+        return "rate_limit"
+    if any(token in text for token in ("connection", "temporar", "name or service", "dns", "network", "reset by peer")):
+        return "network"
+    if "empty" in text or "no data" in text:
+        return "empty_data"
+    return "unknown"
+
+
+def is_retryable_ingest_error(exc: Exception) -> bool:
+    return classify_ingest_error(exc) in {"timeout", "rate_limit", "network"}
+
+
+def load_run_outcome_counts(conn: sqlite3.Connection, run_id: str) -> tuple[int, int]:
+    if not table_exists(conn, "ingest_ticker_status"):
+        return 0, 0
+    row = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_count,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count
+        FROM ingest_ticker_status
+        WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return 0, 0
+    return int(row["ok_count"] or 0), int(row["failed_count"] or 0)
+
+
+def infer_market_data_state(conn: sqlite3.Connection, run_id: str) -> dict[str, object]:
+    latest_row = conn.execute("SELECT MAX(date) AS latest_price_date FROM price_daily").fetchone()
+    latest_price_date = latest_row["latest_price_date"] if latest_row else None
+    zero_price_rows_ok = 0
+    if table_exists(conn, "ingest_ticker_status"):
+        zero_row = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM ingest_ticker_status
+            WHERE run_id = ? AND status = 'ok' AND price_rows = 0
+            """,
+            (run_id,),
+        ).fetchone()
+        zero_price_rows_ok = int(zero_row["c"] or 0) if zero_row else 0
+
+    tz_name = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
+    try:
+        market_tz = ZoneInfo(tz_name)
+    except Exception:
+        market_tz = dt.timezone.utc
+        tz_name = "UTC"
+    now_market = dt.datetime.now(market_tz)
+    market_date = now_market.date()
+    lag_days: int | None = None
+    state = "unknown"
+    if latest_price_date:
+        try:
+            latest_date = dt.date.fromisoformat(str(latest_price_date))
+            lag_days = (market_date - latest_date).days
+            if lag_days <= 0:
+                state = "up_to_date"
+            elif market_date.weekday() >= 5:
+                state = "weekend_or_market_closed"
+            elif lag_days == 1:
+                state = "possible_holiday_or_closed_session"
+            else:
+                state = "stale_or_source_delay"
+        except ValueError:
+            state = "invalid_latest_price_date"
+    else:
+        state = "no_price_data"
+    return {
+        "market_tz": tz_name,
+        "market_now": now_market.replace(microsecond=0).isoformat(),
+        "market_date": market_date.isoformat(),
+        "latest_price_date": latest_price_date,
+        "price_lag_days": lag_days,
+        "zero_price_rows_ok": zero_price_rows_ok,
+        "market_data_state": state,
+    }
+
+
 def run(args: argparse.Namespace) -> None:
     if not LOG.handlers:
         setup_logging(level="INFO", log_file=None)
@@ -627,131 +723,268 @@ def run(args: argparse.Namespace) -> None:
     run_id = f"{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     ok = 0
     fail = 0
+    max_passes = 1 + max(0, int(args.retry_failed_passes))
+    backoff_sec = max(0.0, float(args.retry_failed_backoff_sec))
     begin_run(conn, run_id=run_id, started_ts=snapshot_ts, tickers_total=len(tickers), args=args)
     LOG.info(
-        "run_id=%s started db=%s tickers=%s snapshot=%s",
+        (
+            "run_id=%s started db=%s tickers=%s snapshot=%s "
+            "max_passes=%s require_full_dataset=%s price_timeout_sec=%.1f "
+            "price_retry_attempts=%s max_seconds_per_ticker=%.1f"
+        ),
         run_id,
         db_path,
         len(tickers),
         snapshot_ts,
+        max_passes,
+        int(bool(args.require_full_dataset)),
+        float(args.price_timeout_sec),
+        int(args.price_retry_attempts),
+        float(args.max_seconds_per_ticker),
     )
+    ticker_position = {ticker: idx for idx, ticker in enumerate(tickers, start=1)}
+    attempt_by_ticker: dict[str, int] = {}
+    final_errors: dict[str, str] = {}
+    pending_tickers = list(tickers)
+    pass_no = 1
 
     try:
-        for i, tkr in enumerate(tickers, start=1):
-            ticker_started_ts = utc_now_iso()
-            price_rows = 0
-            options_rows = 0
-            fundamentals_refreshed = 0
-            options_refreshed = 0
-            message_parts: list[str] = []
-            price_fetch_start: str | None = args.price_start
+        while pending_tickers and pass_no <= max_passes:
+            LOG.info(
+                "run_id=%s pass=%s/%s pending_tickers=%s",
+                run_id,
+                pass_no,
+                max_passes,
+                len(pending_tickers),
+            )
+            retry_next_pass: list[str] = []
+            for tkr in pending_tickers:
+                i = ticker_position.get(tkr, 0)
+                ticker_started_ts = utc_now_iso()
+                price_rows = 0
+                options_rows = 0
+                fundamentals_refreshed = 0
+                options_refreshed = 0
+                message_parts: list[str] = []
+                price_fetch_start: str | None = args.price_start
+                attempt_no = attempt_by_ticker.get(tkr, 0) + 1
+                attempt_by_ticker[tkr] = attempt_no
 
-            try:
-                LOG.info("run_id=%s [%s/%s] ticker=%s start", run_id, i, len(tickers), tkr)
-                with _ticker_timeout(args.max_seconds_per_ticker):
-                    # Skip Finviz fundamentals for index/non-stock tickers (^VIX etc.)
-                    is_index = tkr.startswith("^")
-                    last_fund = get_latest_snapshot_ts(conn, "finviz_fundamentals", tkr)
-                    if not is_index and should_refresh(last_fund, args.fund_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
-                        row = fetch_finviz_row(tkr, retry_attempts=args.retry_attempts)
-                        write_fundamentals(conn, snapshot_ts, row)
-                        fundamentals_refreshed = 1
-                        message_parts.append("fund:refreshed")
-                    else:
-                        message_parts.append("fund:skipped_index" if is_index else "fund:skipped_recent")
-
-                    if args.skip_price:
-                        price_fetch_start = None
-                        price_rows = 0
-                        message_parts.append("price:skipped")
-                    else:
-                        price_fetch_start = resolve_price_fetch_start(
-                            conn=conn,
-                            ticker=tkr,
-                            default_start=args.price_start,
-                            lookback_days=args.price_lookback_days,
-                            full_refresh=args.full_price_refresh,
-                        )
-                        price_df = fetch_price_daily(
-                            ticker=tkr,
-                            start=price_fetch_start,
-                            end=args.price_end,
-                            auto_adjust=args.auto_adjust,
-                            timeout_sec=args.price_timeout_sec,
-                            retry_attempts=args.price_retry_attempts,
-                        )
-                        price_rows = len(price_df)
-                        write_price_daily(conn, tkr, price_df)
-                        message_parts.append(f"price:start={price_fetch_start}")
-
-                    if args.include_options:
-                        last_opt = get_latest_snapshot_ts(conn, "options_iv", tkr)
-                        if should_refresh(last_opt, args.options_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
-                            option_rows = fetch_options_rows(
-                                ticker=tkr,
-                                max_expiries=args.max_expiries,
-                                min_moneyness=args.min_moneyness,
-                                max_moneyness=args.max_moneyness,
-                            )
-                            options_rows = write_options_rows(conn, snapshot_ts, option_rows)
-                            options_refreshed = 1 if options_rows > 0 else 0
-                            message_parts.append("opt:refreshed")
-                        else:
-                            message_parts.append("opt:skipped_recent")
-
-                upsert_ticker_status(
-                    conn,
-                    run_id=run_id,
-                    ticker=tkr,
-                    started_ts=ticker_started_ts,
-                    finished_ts=utc_now_iso(),
-                    status="ok",
-                    fundamentals_refreshed=fundamentals_refreshed,
-                    price_fetch_start=price_fetch_start,
-                    price_rows=price_rows,
-                    options_refreshed=options_refreshed,
-                    options_rows=options_rows,
-                    message=" | ".join(message_parts),
-                    error_message=None,
-                )
-                conn.commit()
-                ok += 1
-                LOG.info(
-                    "run_id=%s [%s/%s] ticker=%s ok price_rows=%s options_rows=%s flags=%s",
-                    run_id,
-                    i,
-                    len(tickers),
-                    tkr,
-                    price_rows,
-                    options_rows,
-                    ",".join(message_parts),
-                )
-            except Exception as exc:
-                conn.rollback()
-                fail += 1
-                err = str(exc)
                 try:
+                    LOG.info(
+                        "run_id=%s [%s/%s] ticker=%s start pass=%s/%s attempt=%s",
+                        run_id,
+                        i,
+                        len(tickers),
+                        tkr,
+                        pass_no,
+                        max_passes,
+                        attempt_no,
+                    )
+                    with _ticker_timeout(args.max_seconds_per_ticker):
+                        # Skip Finviz fundamentals for index/non-stock tickers (^VIX etc.)
+                        is_index = tkr.startswith("^")
+                        last_fund = get_latest_snapshot_ts(conn, "finviz_fundamentals", tkr)
+                        if not is_index and should_refresh(last_fund, args.fund_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
+                            row = fetch_finviz_row(tkr, retry_attempts=args.retry_attempts)
+                            write_fundamentals(conn, snapshot_ts, row)
+                            fundamentals_refreshed = 1
+                            message_parts.append("fund:refreshed")
+                        else:
+                            message_parts.append("fund:skipped_index" if is_index else "fund:skipped_recent")
+
+                        if args.skip_price:
+                            price_fetch_start = None
+                            price_rows = 0
+                            message_parts.append("price:skipped")
+                        else:
+                            price_fetch_start = resolve_price_fetch_start(
+                                conn=conn,
+                                ticker=tkr,
+                                default_start=args.price_start,
+                                lookback_days=args.price_lookback_days,
+                                full_refresh=args.full_price_refresh,
+                            )
+                            price_df = fetch_price_daily(
+                                ticker=tkr,
+                                start=price_fetch_start,
+                                end=args.price_end,
+                                auto_adjust=args.auto_adjust,
+                                timeout_sec=args.price_timeout_sec,
+                                retry_attempts=args.price_retry_attempts,
+                            )
+                            price_rows = len(price_df)
+                            write_price_daily(conn, tkr, price_df)
+                            message_parts.append(f"price:start={price_fetch_start}")
+                            message_parts.append(f"price:rows={price_rows}")
+
+                        if args.include_options:
+                            last_opt = get_latest_snapshot_ts(conn, "options_iv", tkr)
+                            if should_refresh(last_opt, args.options_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
+                                option_rows = fetch_options_rows(
+                                    ticker=tkr,
+                                    max_expiries=args.max_expiries,
+                                    min_moneyness=args.min_moneyness,
+                                    max_moneyness=args.max_moneyness,
+                                )
+                                options_rows = write_options_rows(conn, snapshot_ts, option_rows)
+                                options_refreshed = 1 if options_rows > 0 else 0
+                                message_parts.append("opt:refreshed")
+                            else:
+                                message_parts.append("opt:skipped_recent")
+
+                    if attempt_no > 1:
+                        message_parts.append(f"retry:attempt={attempt_no}")
                     upsert_ticker_status(
                         conn,
                         run_id=run_id,
                         ticker=tkr,
                         started_ts=ticker_started_ts,
                         finished_ts=utc_now_iso(),
-                        status="failed",
+                        status="ok",
                         fundamentals_refreshed=fundamentals_refreshed,
                         price_fetch_start=price_fetch_start,
                         price_rows=price_rows,
                         options_refreshed=options_refreshed,
                         options_rows=options_rows,
-                        message=" | ".join(message_parts) if message_parts else None,
-                        error_message=err,
+                        message=" | ".join(message_parts),
+                        error_message=None,
                     )
                     conn.commit()
-                except Exception:
+                    final_errors.pop(tkr, None)
+                    LOG.info(
+                        (
+                            "run_id=%s [%s/%s] ticker=%s ok pass=%s/%s attempt=%s "
+                            "price_rows=%s options_rows=%s flags=%s"
+                        ),
+                        run_id,
+                        i,
+                        len(tickers),
+                        tkr,
+                        pass_no,
+                        max_passes,
+                        attempt_no,
+                        price_rows,
+                        options_rows,
+                        ",".join(message_parts),
+                    )
+                except Exception as exc:
                     conn.rollback()
-                LOG.exception("run_id=%s [%s/%s] ticker=%s failed: %s", run_id, i, len(tickers), tkr, err)
-            finally:
-                time.sleep(random.uniform(args.sleep_min, args.sleep_max))
+                    err = str(exc)
+                    err_class = classify_ingest_error(exc)
+                    retryable = pass_no < max_passes and is_retryable_ingest_error(exc)
+                    final_errors[tkr] = err
+                    try:
+                        failure_msg = list(message_parts)
+                        failure_msg.append(f"error_class:{err_class}")
+                        failure_msg.append(f"pass:{pass_no}/{max_passes}")
+                        failure_msg.append(f"attempt:{attempt_no}")
+                        failure_msg.append(f"retryable:{int(retryable)}")
+                        upsert_ticker_status(
+                            conn,
+                            run_id=run_id,
+                            ticker=tkr,
+                            started_ts=ticker_started_ts,
+                            finished_ts=utc_now_iso(),
+                            status="failed",
+                            fundamentals_refreshed=fundamentals_refreshed,
+                            price_fetch_start=price_fetch_start,
+                            price_rows=price_rows,
+                            options_refreshed=options_refreshed,
+                            options_rows=options_rows,
+                            message=" | ".join(failure_msg),
+                            error_message=err,
+                        )
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                    LOG.exception(
+                        (
+                            "run_id=%s [%s/%s] ticker=%s failed class=%s retryable=%s "
+                            "pass=%s/%s attempt=%s: %s"
+                        ),
+                        run_id,
+                        i,
+                        len(tickers),
+                        tkr,
+                        err_class,
+                        retryable,
+                        pass_no,
+                        max_passes,
+                        attempt_no,
+                        err,
+                    )
+                    if retryable:
+                        retry_next_pass.append(tkr)
+                    else:
+                        LOG.error(
+                            "run_id=%s ticker=%s giving_up class=%s attempts=%s",
+                            run_id,
+                            tkr,
+                            err_class,
+                            attempt_no,
+                        )
+                finally:
+                    time.sleep(random.uniform(args.sleep_min, args.sleep_max))
+
+            pending_tickers = retry_next_pass
+            if pending_tickers and pass_no < max_passes:
+                preview = ",".join(pending_tickers[:25])
+                if len(pending_tickers) > 25:
+                    preview += ",..."
+                sleep_s = backoff_sec * pass_no
+                LOG.warning(
+                    (
+                        "run_id=%s retry_pass_scheduled next_pass=%s/%s pending=%s "
+                        "tickers=%s backoff_sec=%.1f"
+                    ),
+                    run_id,
+                    pass_no + 1,
+                    max_passes,
+                    len(pending_tickers),
+                    preview,
+                    sleep_s,
+                )
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+            pass_no += 1
+
+        counted_ok, counted_fail = load_run_outcome_counts(conn, run_id)
+        if counted_ok or counted_fail:
+            ok = counted_ok
+            fail = counted_fail
+        else:
+            fail = len(final_errors)
+            ok = max(0, len(tickers) - fail)
+
+        market_state = infer_market_data_state(conn, run_id)
+        LOG.info(
+            (
+                "run_id=%s market_data_state=%s market_date=%s latest_price_date=%s "
+                "price_lag_days=%s zero_price_rows_ok=%s market_tz=%s"
+            ),
+            run_id,
+            market_state.get("market_data_state"),
+            market_state.get("market_date"),
+            market_state.get("latest_price_date"),
+            market_state.get("price_lag_days"),
+            market_state.get("zero_price_rows_ok"),
+            market_state.get("market_tz"),
+        )
+        if market_state.get("market_data_state") in {"stale_or_source_delay", "no_price_data", "invalid_latest_price_date"}:
+            LOG.warning("run_id=%s market_data_attention state=%s", run_id, market_state.get("market_data_state"))
+
+        if fail > 0 and args.require_full_dataset:
+            failed_preview = ",".join(sorted(final_errors.keys())[:25])
+            if len(final_errors) > 25:
+                failed_preview += ",..."
+            raise RuntimeError(
+                (
+                    "require_full_dataset enabled: "
+                    f"{fail}/{len(tickers)} ticker(s) failed after {max_passes} pass(es). "
+                    f"failed_tickers={failed_preview}"
+                )
+            )
 
         final_status = "ok" if fail == 0 else ("failed" if ok == 0 else "partial_failed")
         finish_run(
@@ -762,9 +995,21 @@ def run(args: argparse.Namespace) -> None:
             tickers_ok=ok,
             tickers_failed=fail,
         )
-        LOG.info("run_id=%s finished status=%s ok=%s failed=%s", run_id, final_status, ok, fail)
+        LOG.info(
+            "run_id=%s finished status=%s ok=%s failed=%s passes_used=%s/%s",
+            run_id,
+            final_status,
+            ok,
+            fail,
+            min(pass_no - 1, max_passes),
+            max_passes,
+        )
     except Exception as exc:
         conn.rollback()
+        counted_ok, counted_fail = load_run_outcome_counts(conn, run_id)
+        if counted_ok or counted_fail:
+            ok = max(ok, counted_ok)
+            fail = max(fail, counted_fail)
         finish_run(
             conn,
             run_id=run_id,
@@ -815,6 +1060,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Retry attempts for yfinance price fetch (per ticker).",
+    )
+    p.add_argument(
+        "--retry-failed-passes",
+        type=int,
+        default=DEFAULT_RETRY_FAILED_PASSES,
+        help="Additional passes for retryable failed tickers (1 = up to 2 total passes).",
+    )
+    p.add_argument(
+        "--retry-failed-backoff-sec",
+        type=float,
+        default=DEFAULT_RETRY_FAILED_BACKOFF_SEC,
+        help="Backoff seconds between failed-ticker retry passes.",
+    )
+    p.add_argument(
+        "--require-full-dataset",
+        dest="require_full_dataset",
+        action="store_true",
+        default=DEFAULT_REQUIRE_FULL_DATASET,
+        help="Fail the run if any ticker still fails after retry passes.",
+    )
+    p.add_argument(
+        "--allow-partial-dataset",
+        dest="require_full_dataset",
+        action="store_false",
+        help="Allow partial success even if some tickers fail.",
     )
     p.add_argument("--sleep-min", type=float, default=0.4)
     p.add_argument("--sleep-max", type=float, default=1.0)
