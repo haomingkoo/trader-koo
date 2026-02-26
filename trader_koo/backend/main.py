@@ -73,6 +73,7 @@ LOG_PATHS: dict[str, Path] = {
 }
 STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
 PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
+INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STALE_MIN", "75")))
 _STATUS_CACHE_LOCK = threading.Lock()
 _STATUS_CACHE_AT: dt.datetime | None = None
 _STATUS_CACHE_PAYLOAD: dict[str, Any] | None = None
@@ -735,9 +736,20 @@ def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
     now_utc = dt.datetime.now(dt.timezone.utc)
     if stage_line_ts is not None:
         stage_age_sec = max(0.0, (now_utc - stage_line_ts).total_seconds())
+    running_age_sec: float | None = None
+    running_stale = False
     if latest_run and latest_run.get("status") == "running":
+        started = parse_iso_utc(latest_run.get("started_ts"))
+        if started is not None:
+            running_age_sec = max(0.0, (now_utc - started).total_seconds())
+            running_stale = running_age_sec > (INGEST_RUNNING_STALE_MIN * 60)
+    if latest_run and latest_run.get("status") == "running" and not running_stale:
         active = True
         stage = "ingest"
+    elif latest_run and latest_run.get("status") == "running" and running_stale:
+        stale_inference = True
+        active = False
+        stage = "stale_running"
     elif active and stage != "ingest" and stage_age_sec is not None and stage_age_sec > PIPELINE_STALE_SEC:
         # Prevent stale log tails from pinning pipeline_active=True forever.
         stale_inference = True
@@ -754,6 +766,9 @@ def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
         "stage_age_sec": round(stage_age_sec, 1) if stage_age_sec is not None else None,
         "stale_timeout_sec": PIPELINE_STALE_SEC,
         "stale_inference": stale_inference,
+        "running_age_sec": round(running_age_sec, 1) if running_age_sec is not None else None,
+        "running_stale_min": INGEST_RUNNING_STALE_MIN,
+        "running_stale": running_stale,
         "tail": tail[-60:],
     }
 
@@ -1573,10 +1588,12 @@ def status() -> dict[str, Any]:
         pipeline_active = bool(pipeline_snap.get("active"))
         pipeline_stage = pipeline_snap.get("stage") or "unknown"
         pipeline_stage_line = pipeline_snap.get("stage_line")
-        if latest_run and latest_run.get("status") == "running":
+        if latest_run and latest_run.get("status") == "running" and not pipeline_snap.get("running_stale"):
             pipeline_active = True
             if pipeline_stage in {"unknown", "idle"}:
                 pipeline_stage = "ingest"
+        if latest_run and latest_run.get("status") == "running" and pipeline_snap.get("running_stale"):
+            warnings.append("latest ingest run appears stale-running")
 
         payload = {
             **base,
@@ -1593,6 +1610,9 @@ def status() -> dict[str, Any]:
                 "stage_age_sec": pipeline_snap.get("stage_age_sec"),
                 "stale_timeout_sec": pipeline_snap.get("stale_timeout_sec"),
                 "stale_inference": pipeline_snap.get("stale_inference"),
+                "running_age_sec": pipeline_snap.get("running_age_sec"),
+                "running_stale_min": pipeline_snap.get("running_stale_min"),
+                "running_stale": pipeline_snap.get("running_stale"),
                 "run_log_path": str(RUN_LOG_PATH),
             },
             "freshness": {
