@@ -18,6 +18,9 @@ DB_PATH="${TRADER_KOO_DB_PATH:-/data/trader_koo.db}"
 LOG_DIR="${TRADER_KOO_LOG_DIR:-/data/logs}"
 RUN_LOG="$LOG_DIR/cron_daily.log"
 REPORT_DIR="${TRADER_KOO_REPORT_DIR:-/data/reports}"
+INGEST_MAX_SECS_PER_TICKER="${TRADER_KOO_INGEST_MAX_SECS_PER_TICKER:-120}"
+PRICE_TIMEOUT_SEC="${TRADER_KOO_PRICE_TIMEOUT_SEC:-25}"
+PRICE_RETRY_ATTEMPTS="${TRADER_KOO_PRICE_RETRY_ATTEMPTS:-3}"
 
 mkdir -p "$LOG_DIR"
 
@@ -40,6 +43,9 @@ if "$PYTHON" "$SCRIPT_DIR/update_market_db.py" \
     --use-sp500 \
     --price-lookback-days 5 \
     --fund-min-interval-hours 20 \
+    --max-seconds-per-ticker "$INGEST_MAX_SECS_PER_TICKER" \
+    --price-timeout-sec "$PRICE_TIMEOUT_SEC" \
+    --price-retry-attempts "$PRICE_RETRY_ATTEMPTS" \
     --sleep-min 0.5 \
     --sleep-max 1.2 \
     --db-path "$DB_PATH" \

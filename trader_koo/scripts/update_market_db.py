@@ -4,11 +4,14 @@ import argparse
 import datetime as dt
 import json
 import logging
+import os
 import random
+import signal
 import sqlite3
 import sys
 import time
 import uuid
+from contextlib import contextmanager
 from io import StringIO
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -31,6 +34,8 @@ DEFAULT_LOG_PATH = str((PROJECT_DIR / "data" / "logs" / "update_market_db.log").
 
 
 DEFAULT_TARGET_PE = 21.0
+DEFAULT_MAX_SECS_PER_TICKER = float(os.getenv("TRADER_KOO_INGEST_MAX_SECS_PER_TICKER", "120"))
+DEFAULT_PRICE_TIMEOUT_SEC = float(os.getenv("TRADER_KOO_PRICE_TIMEOUT_SEC", "25"))
 LOG = logging.getLogger("trader_koo.ingest")
 
 
@@ -61,6 +66,26 @@ def setup_logging(level: str, log_file: str | None) -> None:
 
 def utc_now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+@contextmanager
+def _ticker_timeout(seconds: float):
+    """Raise TimeoutError if one ticker takes too long on Unix platforms."""
+    if seconds <= 0 or not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        yield
+        return
+
+    def _raise_timeout(_signum, _frame):
+        raise TimeoutError(f"ticker exceeded timeout ({seconds:.1f}s)")
+
+    prev_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, prev_handler)
 
 
 def parse_iso_utc(value: str | None) -> Optional[dt.datetime]:
@@ -424,17 +449,45 @@ def write_fundamentals(conn: sqlite3.Connection, snapshot_ts: str, row: dict) ->
     )
 
 
-def fetch_price_daily(ticker: str, start: str, end: Optional[str], auto_adjust: bool = False) -> pd.DataFrame:
-    raw = yf.download(
-        tickers=ticker,
-        start=start,
-        end=end,
-        auto_adjust=auto_adjust,
-        progress=False,
-        actions=False,
-        group_by="column",
-        threads=True,
-    )
+def fetch_price_daily(
+    ticker: str,
+    start: str,
+    end: Optional[str],
+    auto_adjust: bool = False,
+    timeout_sec: float = DEFAULT_PRICE_TIMEOUT_SEC,
+    retry_attempts: int = 3,
+) -> pd.DataFrame:
+    last_err: Optional[Exception] = None
+    for attempt in range(1, max(1, retry_attempts) + 1):
+        try:
+            raw = yf.download(
+                tickers=ticker,
+                start=start,
+                end=end,
+                auto_adjust=auto_adjust,
+                progress=False,
+                actions=False,
+                group_by="column",
+                threads=False,
+                timeout=timeout_sec,
+            )
+            break
+        except Exception as exc:
+            last_err = exc
+            if attempt >= max(1, retry_attempts):
+                raise RuntimeError(f"price fetch failed for {ticker}: {last_err}") from last_err
+            sleep_s = (1.8 ** (attempt - 1)) + random.uniform(0.0, 0.4)
+            LOG.warning(
+                "price_fetch_retry ticker=%s attempt=%s/%s timeout=%.1fs err=%s sleep=%.2fs",
+                ticker,
+                attempt,
+                max(1, retry_attempts),
+                timeout_sec,
+                exc,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+
     if raw is None or raw.empty:
         return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
     raw_reset = raw.reset_index()
@@ -594,53 +647,57 @@ def run(args: argparse.Namespace) -> None:
             price_fetch_start: str | None = args.price_start
 
             try:
-                # Skip Finviz fundamentals for index/non-stock tickers (^VIX etc.)
-                is_index = tkr.startswith("^")
-                last_fund = get_latest_snapshot_ts(conn, "finviz_fundamentals", tkr)
-                if not is_index and should_refresh(last_fund, args.fund_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
-                    row = fetch_finviz_row(tkr, retry_attempts=args.retry_attempts)
-                    write_fundamentals(conn, snapshot_ts, row)
-                    fundamentals_refreshed = 1
-                    message_parts.append("fund:refreshed")
-                else:
-                    message_parts.append("fund:skipped_index" if is_index else "fund:skipped_recent")
-
-                if args.skip_price:
-                    price_fetch_start = None
-                    price_rows = 0
-                    message_parts.append("price:skipped")
-                else:
-                    price_fetch_start = resolve_price_fetch_start(
-                        conn=conn,
-                        ticker=tkr,
-                        default_start=args.price_start,
-                        lookback_days=args.price_lookback_days,
-                        full_refresh=args.full_price_refresh,
-                    )
-                    price_df = fetch_price_daily(
-                        ticker=tkr,
-                        start=price_fetch_start,
-                        end=args.price_end,
-                        auto_adjust=args.auto_adjust,
-                    )
-                    price_rows = len(price_df)
-                    write_price_daily(conn, tkr, price_df)
-                    message_parts.append(f"price:start={price_fetch_start}")
-
-                if args.include_options:
-                    last_opt = get_latest_snapshot_ts(conn, "options_iv", tkr)
-                    if should_refresh(last_opt, args.options_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
-                        option_rows = fetch_options_rows(
-                            ticker=tkr,
-                            max_expiries=args.max_expiries,
-                            min_moneyness=args.min_moneyness,
-                            max_moneyness=args.max_moneyness,
-                        )
-                        options_rows = write_options_rows(conn, snapshot_ts, option_rows)
-                        options_refreshed = 1 if options_rows > 0 else 0
-                        message_parts.append("opt:refreshed")
+                LOG.info("run_id=%s [%s/%s] ticker=%s start", run_id, i, len(tickers), tkr)
+                with _ticker_timeout(args.max_seconds_per_ticker):
+                    # Skip Finviz fundamentals for index/non-stock tickers (^VIX etc.)
+                    is_index = tkr.startswith("^")
+                    last_fund = get_latest_snapshot_ts(conn, "finviz_fundamentals", tkr)
+                    if not is_index and should_refresh(last_fund, args.fund_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
+                        row = fetch_finviz_row(tkr, retry_attempts=args.retry_attempts)
+                        write_fundamentals(conn, snapshot_ts, row)
+                        fundamentals_refreshed = 1
+                        message_parts.append("fund:refreshed")
                     else:
-                        message_parts.append("opt:skipped_recent")
+                        message_parts.append("fund:skipped_index" if is_index else "fund:skipped_recent")
+
+                    if args.skip_price:
+                        price_fetch_start = None
+                        price_rows = 0
+                        message_parts.append("price:skipped")
+                    else:
+                        price_fetch_start = resolve_price_fetch_start(
+                            conn=conn,
+                            ticker=tkr,
+                            default_start=args.price_start,
+                            lookback_days=args.price_lookback_days,
+                            full_refresh=args.full_price_refresh,
+                        )
+                        price_df = fetch_price_daily(
+                            ticker=tkr,
+                            start=price_fetch_start,
+                            end=args.price_end,
+                            auto_adjust=args.auto_adjust,
+                            timeout_sec=args.price_timeout_sec,
+                            retry_attempts=args.price_retry_attempts,
+                        )
+                        price_rows = len(price_df)
+                        write_price_daily(conn, tkr, price_df)
+                        message_parts.append(f"price:start={price_fetch_start}")
+
+                    if args.include_options:
+                        last_opt = get_latest_snapshot_ts(conn, "options_iv", tkr)
+                        if should_refresh(last_opt, args.options_min_interval_hours, now=dt.datetime.now(dt.timezone.utc)):
+                            option_rows = fetch_options_rows(
+                                ticker=tkr,
+                                max_expiries=args.max_expiries,
+                                min_moneyness=args.min_moneyness,
+                                max_moneyness=args.max_moneyness,
+                            )
+                            options_rows = write_options_rows(conn, snapshot_ts, option_rows)
+                            options_refreshed = 1 if options_rows > 0 else 0
+                            message_parts.append("opt:refreshed")
+                        else:
+                            message_parts.append("opt:skipped_recent")
 
                 upsert_ticker_status(
                     conn,
@@ -741,6 +798,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--fund-min-interval-hours", type=float, default=12.0)
     p.add_argument("--options-min-interval-hours", type=float, default=4.0)
     p.add_argument("--retry-attempts", type=int, default=3)
+    p.add_argument(
+        "--max-seconds-per-ticker",
+        type=float,
+        default=DEFAULT_MAX_SECS_PER_TICKER,
+        help="Fail-safe timeout per ticker; timeout marks ticker failed and continues (0 disables).",
+    )
+    p.add_argument(
+        "--price-timeout-sec",
+        type=float,
+        default=DEFAULT_PRICE_TIMEOUT_SEC,
+        help="HTTP timeout for yfinance download requests.",
+    )
+    p.add_argument(
+        "--price-retry-attempts",
+        type=int,
+        default=3,
+        help="Retry attempts for yfinance price fetch (per ticker).",
+    )
     p.add_argument("--sleep-min", type=float, default=0.4)
     p.add_argument("--sleep-max", type=float, default=1.0)
     p.add_argument("--log-file", default=DEFAULT_LOG_PATH)

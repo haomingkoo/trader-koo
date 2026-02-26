@@ -144,6 +144,9 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | `TRADER_KOO_LOG_LEVEL` | `INFO` (default) or `DEBUG` |
 | `TRADER_KOO_REPORT_DIR` | Report directory, e.g. `/data/reports` |
 | `TRADER_KOO_ALLOWED_ORIGIN` | Your Railway app URL (CORS) |
+| `TRADER_KOO_INGEST_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout in ingest (default `120`) |
+| `TRADER_KOO_PRICE_TIMEOUT_SEC` | yfinance HTTP timeout in seconds (default `25`) |
+| `TRADER_KOO_PRICE_RETRY_ATTEMPTS` | yfinance retry attempts per ticker (default `3`) |
 | `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout for YOLO (default `180`) |
 | `TRADER_KOO_PIPELINE_STALE_SEC` | Max age for pipeline stage log line before status auto-resets to idle (default `1200`) |
 | `TRADER_KOO_SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) |
