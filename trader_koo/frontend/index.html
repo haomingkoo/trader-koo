@@ -219,6 +219,72 @@
       padding: 10px 12px;
       min-height: 72px;
     }
+    .report-list {
+      margin: 0;
+      padding-left: 20px;
+      line-height: 1.6;
+      color: var(--text);
+      font-size: 0.84rem;
+    }
+    .report-list li { margin-bottom: 6px; }
+    .mini-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .mini-actions button {
+      width: auto;
+      padding: 5px 9px;
+      border-radius: 8px;
+      font-size: 0.74rem;
+      border: 1px solid var(--line);
+      background: #0f1624;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .mini-actions button:hover { border-color: var(--blue); }
+    .report-watch-wrap {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .report-watch-wrap input {
+      flex: 1 1 180px;
+      min-width: 160px;
+      width: auto;
+    }
+    .report-watch-wrap button {
+      width: auto;
+      padding: 8px 10px;
+      font-size: 0.76rem;
+    }
+    .heatmap-grid {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .heat-row {
+      display: grid;
+      grid-template-columns: 120px 1fr 70px;
+      gap: 8px;
+      align-items: center;
+      font-size: 0.78rem;
+    }
+    .heat-track {
+      height: 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #0f1624;
+      overflow: hidden;
+      position: relative;
+    }
+    .heat-fill {
+      height: 100%;
+      border-radius: 999px;
+    }
     .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; }
     .value { font-size: 1.05rem; font-weight: 700; margin-top: 8px; }
     #chart { width: 100%; height: 760px; }
@@ -534,6 +600,36 @@
       <div id="reportSummaryCards" class="cards" style="margin-bottom:14px;"></div>
       <div id="reportYoloCards" class="cards" style="margin-bottom:14px;"></div>
 
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Tonight's 5 Key Changes</div>
+        <ol id="reportKeyChangesList" class="report-list"></ol>
+      </div>
+
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Watchlist</div>
+        <div class="report-watch-wrap">
+          <input id="reportWatchTickerInput" type="text" placeholder="Add ticker (e.g. NVDA)" />
+          <button id="reportWatchAddBtn" type="button">Add</button>
+          <button id="reportWatchImportBtn" type="button">Import Top 5 Setups</button>
+          <button id="reportWatchClearBtn" type="button">Clear</button>
+        </div>
+        <div id="reportWatchHint" style="font-size:0.78rem; color:var(--muted); margin-bottom:8px;"></div>
+        <table id="reportWatchTable"></table>
+      </div>
+
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Setup Quality Score</div>
+        <div id="reportSetupSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:8px;"></div>
+        <div id="reportSetupQuickAdds" class="mini-actions"></div>
+        <table id="reportSetupQualityTable"></table>
+      </div>
+
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Sector Heatmap</div>
+        <div id="reportSectorHeatmap" class="heatmap-grid"></div>
+        <table id="reportSectorHeatTable"></table>
+      </div>
+
       <!-- YOLO delta -->
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">YOLO Changes vs Previous Run</div>
@@ -612,10 +708,11 @@
         <h3>Quick Start (2 Minutes)</h3>
         <ol class="guide-list">
           <li>Open <b>Daily Report</b> after the nightly run completes.</li>
-          <li>Review <b>YOLO Changes</b> first: new patterns and patterns no longer detected.</li>
-          <li>Check <b>Large Moves Today</b> and <b>52-week extremes</b> to build a short watchlist.</li>
+          <li>Review <b>Tonight's 5 Key Changes</b> first for the fast market summary.</li>
+          <li>Check <b>YOLO Changes</b> for new patterns and patterns no longer detected.</li>
+          <li>Use <b>Setup Quality Score</b> and <b>Sector Heatmap</b> to prioritize candidates.</li>
           <li>Click any ticker to jump into <b>Chart + Levels</b>.</li>
-          <li>Use <b>Opportunities (PEG)</b> for valuation context before deciding your setup quality.</li>
+          <li>Add names to <b>Watchlist</b> so you can revisit the same basket quickly.</li>
         </ol>
 
         <h3>What Each Tab Does</h3>
@@ -640,11 +737,11 @@
 
         <h3>Daily Report Read Order</h3>
         <ol class="guide-list">
+          <li><b>Tonight's 5 Key Changes</b>: one-screen summary of what materially changed.</li>
+          <li><b>Setup Quality Score</b>: ranked candidates combining valuation, momentum, and YOLO freshness.</li>
+          <li><b>Sector Heatmap</b>: identify leadership/laggards and rotation.</li>
           <li><b>YOLO Changes vs Previous Run</b>: actionable delta, not raw count noise.</li>
-          <li><b>Large Moves Today</b>: strongest gainers/losers and breadth (advancers vs decliners).</li>
-          <li><b>52-week Extremes</b>: momentum continuation or exhaustion candidates.</li>
-          <li><b>Top AI Patterns at Close</b>: highest-confidence detections, with <b>age_days</b>.</li>
-          <li><b>Candle Signals</b>: confirmation layer, never standalone.</li>
+          <li><b>Large Moves + 52-week Extremes</b>: momentum continuation or exhaustion candidates.</li>
         </ol>
 
         <h3>Chart + Levels Workflow</h3>
@@ -720,9 +817,11 @@
     const tabReport = $("tabReport");
     const API_BASE_STORAGE_KEY = "trader_koo_api_base";
     const ADMIN_KEY_STORAGE_KEY = "trader_koo_admin_api_key";
+    const WATCHLIST_STORAGE_KEY = "trader_koo_watchlist";
     const TABLE_STATE = {};
     const DEFAULT_MONTHS = 3;
     let LAST_CHART_PAYLOAD = null;
+    let LAST_REPORT_SETUP_ROWS = [];
     let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
     let _apiKey = "";
 
@@ -1733,6 +1832,103 @@
       loadChart();
     }
 
+    function jumpToTicker(ticker) {
+      loadTickerQuick(ticker);
+    }
+    window.jumpToTicker = jumpToTicker;
+
+    function normalizeTickerSymbol(v) {
+      return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
+    }
+
+    function getStoredWatchlist() {
+      try {
+        const raw = localStorage.getItem(WATCHLIST_STORAGE_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        return [...new Set(arr.map(normalizeTickerSymbol).filter(Boolean))];
+      } catch {
+        return [];
+      }
+    }
+
+    function saveStoredWatchlist(list) {
+      localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify([...new Set((list || []).map(normalizeTickerSymbol).filter(Boolean))]));
+    }
+
+    function addTickerToWatchlist(ticker) {
+      const symbol = normalizeTickerSymbol(ticker);
+      if (!symbol) return false;
+      const list = getStoredWatchlist();
+      if (!list.includes(symbol)) list.push(symbol);
+      saveStoredWatchlist(list);
+      renderWatchlistTable();
+      return true;
+    }
+    window.addTickerToWatchlist = addTickerToWatchlist;
+
+    function removeTickerFromWatchlist(ticker) {
+      const symbol = normalizeTickerSymbol(ticker);
+      const list = getStoredWatchlist().filter((t) => t !== symbol);
+      saveStoredWatchlist(list);
+      renderWatchlistTable();
+    }
+    window.removeTickerFromWatchlist = removeTickerFromWatchlist;
+
+    function renderWatchlistTable() {
+      const el = $("reportWatchTable");
+      if (!el) return;
+      const hint = $("reportWatchHint");
+      const list = getStoredWatchlist();
+      const setupMap = new Map((LAST_REPORT_SETUP_ROWS || []).map((r) => [String(r.ticker || "").toUpperCase(), r]));
+
+      const head = "<tr><th>ticker</th><th>score</th><th>pct_change</th><th>setup_tier</th><th>yolo_pattern</th><th>actions</th></tr>";
+      if (!list.length) {
+        el.innerHTML = `${head}<tr><td colspan=\"6\">No watchlist tickers yet</td></tr>`;
+        if (hint) hint.textContent = "Tip: Add symbols manually or import top setup candidates.";
+        return;
+      }
+
+      const rowsHtml = list
+        .map((ticker) => {
+          const row = setupMap.get(ticker) || {};
+          const score = row.score ?? "-";
+          const pct = row.pct_change ?? "-";
+          const tier = row.setup_tier ?? "-";
+          const yolo = row.yolo_pattern || "-";
+          return (
+            `<tr>` +
+            `<td>${escHtml(ticker)}</td>` +
+            `<td>${escHtml(score)}</td>` +
+            `<td>${escHtml(pct)}</td>` +
+            `<td>${escHtml(tier)}</td>` +
+            `<td>${escHtml(yolo)}</td>` +
+            `<td>` +
+            `<button type="button" data-watch-load="${escHtml(ticker)}" style="width:auto; padding:5px 8px; margin-right:6px;">Load</button>` +
+            `<button type="button" data-watch-remove="${escHtml(ticker)}" style="width:auto; padding:5px 8px;">Remove</button>` +
+            `</td>` +
+            `</tr>`
+          );
+        })
+        .join("");
+      el.innerHTML = head + rowsHtml;
+      if (hint) hint.textContent = `${list.length} ticker(s) saved locally in this browser.`;
+
+      el.querySelectorAll("button[data-watch-load]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const t = btn.getAttribute("data-watch-load");
+          if (t) loadTickerQuick(t);
+        });
+      });
+      el.querySelectorAll("button[data-watch-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const t = btn.getAttribute("data-watch-remove");
+          if (t) removeTickerFromWatchlist(t);
+        });
+      });
+    }
+
     async function loadReport() {
       const base = getApiBase();
       $("reportStatus").textContent = "Loading...";
@@ -1770,6 +1966,66 @@
           makeCard("Daily Tickers", tfDaily.tickers_with_patterns  ?? "—"),
           makeCard("Weekly Tickers", tfWeekly.tickers_with_patterns ?? "—"),
         ].join("");
+
+        const keyChanges = signals.tonight_key_changes || [];
+        $("reportKeyChangesList").innerHTML = keyChanges.length
+          ? keyChanges
+              .slice(0, 5)
+              .map((row) => `<li><b>${escHtml(row.title || "Change")}:</b> ${escHtml(row.detail || "-")}</li>`)
+              .join("")
+          : "<li>No material changes captured.</li>";
+
+        const setupRows = (signals.setup_quality_top || []).slice(0, 40);
+        LAST_REPORT_SETUP_ROWS = setupRows;
+        $("reportSetupSummary").textContent = setupRows.length
+          ? `Score combines valuation (discount/PEG), one-day momentum, 52W proximity, and latest YOLO confidence/age. Top ${Math.min(25, setupRows.length)} shown below.`
+          : "No setup-quality rows available yet.";
+        renderSimpleTable(
+          "reportSetupQualityTable",
+          ["ticker", "score", "setup_tier", "sector", "pct_change", "discount_pct", "peg", "yolo_pattern", "yolo_confidence", "yolo_age_days"],
+          setupRows.slice(0, 25),
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: true },
+        );
+        $("reportSetupQuickAdds").innerHTML = setupRows
+          .slice(0, 10)
+          .map((row) => `<button type="button" data-watch-add="${escHtml(row.ticker)}">+ ${escHtml(row.ticker)}</button>`)
+          .join("");
+        $("reportSetupQuickAdds").querySelectorAll("button[data-watch-add]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const t = btn.getAttribute("data-watch-add");
+            if (!t) return;
+            addTickerToWatchlist(t);
+          });
+        });
+
+        const sectorRows = signals.sector_heatmap || [];
+        const maxAbs = Math.max(1, ...sectorRows.map((r) => Math.abs(Number(r.avg_pct_change || 0))));
+        $("reportSectorHeatmap").innerHTML = sectorRows
+          .slice(0, 12)
+          .map((r) => {
+            const avg = Number(r.avg_pct_change || 0);
+            const width = Math.max(2, Math.round((Math.abs(avg) / maxAbs) * 100));
+            const color = avg >= 0 ? "linear-gradient(90deg,#1f8f66,#38d39f)" : "linear-gradient(90deg,#cc5a5a,#ff6b6b)";
+            return (
+              `<div class="heat-row">` +
+              `<div>${escHtml(r.sector || "Unknown")}</div>` +
+              `<div class="heat-track"><div class="heat-fill" style="width:${width}%; background:${color};"></div></div>` +
+              `<div style="text-align:right;">${escHtml((avg >= 0 ? "+" : "") + avg.toFixed(2) + "%")}</div>` +
+              `</div>`
+            );
+          })
+          .join("");
+        renderSimpleTable(
+          "reportSectorHeatTable",
+          ["sector", "avg_pct_change", "pct_advancing", "tickers", "near_high_count", "near_low_count"],
+          sectorRows.slice(0, 20),
+          false,
+          null,
+          { sortable: true },
+        );
+        renderWatchlistTable();
 
         const yoloDelta = yoloBlock.delta || {};
         const yoloNew = yoloDelta.new_patterns || [];
@@ -1911,6 +2167,30 @@
       loadOpportunities();
     });
     $("loadChartBtn").addEventListener("click", loadChart);
+    $("reportWatchAddBtn").addEventListener("click", () => {
+      const input = $("reportWatchTickerInput");
+      if (!input) return;
+      const symbol = normalizeTickerSymbol(input.value);
+      if (!symbol) return;
+      addTickerToWatchlist(symbol);
+      input.value = "";
+    });
+    $("reportWatchImportBtn").addEventListener("click", () => {
+      const picks = (LAST_REPORT_SETUP_ROWS || []).slice(0, 5).map((r) => r.ticker).filter(Boolean);
+      if (!picks.length) return;
+      const merged = [...new Set([...getStoredWatchlist(), ...picks])];
+      saveStoredWatchlist(merged);
+      renderWatchlistTable();
+    });
+    $("reportWatchClearBtn").addEventListener("click", () => {
+      saveStoredWatchlist([]);
+      renderWatchlistTable();
+    });
+    $("reportWatchTickerInput").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      $("reportWatchAddBtn").click();
+    });
     $("tfDailyBtn").addEventListener("click", () => setChartTimeframe("daily"));
     $("tfWeeklyBtn").addEventListener("click", () => setChartTimeframe("weekly"));
     window.addEventListener("keydown", (e) => { if (e.key === "Enter") loadChart(); });

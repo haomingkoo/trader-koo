@@ -250,6 +250,133 @@ def fetch_yolo_delta(conn: sqlite3.Connection, x0_tolerance_days: int = 14) -> d
     return delta
 
 
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _setup_tier(score: float) -> str:
+    if score >= 80.0:
+        return "A"
+    if score >= 65.0:
+        return "B"
+    if score >= 50.0:
+        return "C"
+    return "D"
+
+
+def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any]) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+
+    breadth = signals.get("market_breadth") or {}
+    if breadth:
+        adv = breadth.get("advancers", 0)
+        dec = breadth.get("decliners", 0)
+        pct = breadth.get("pct_advancing")
+        avg_move = breadth.get("avg_pct_change")
+        regime = "risk-on" if isinstance(pct, (int, float)) and pct >= 55 else "mixed"
+        if isinstance(pct, (int, float)) and pct <= 45:
+            regime = "risk-off"
+        changes.append(
+            {
+                "slug": "breadth",
+                "title": "Breadth Regime",
+                "detail": f"{adv} advancing vs {dec} declining ({pct}% advancers, avg move {avg_move}%).",
+                "tone": "positive" if regime == "risk-on" else ("negative" if regime == "risk-off" else "neutral"),
+            }
+        )
+
+    movers_up = signals.get("movers_up_today") or []
+    movers_down = signals.get("movers_down_today") or []
+    if movers_up or movers_down:
+        top_up = movers_up[0] if movers_up else None
+        top_down = movers_down[0] if movers_down else None
+        if top_up and top_down:
+            detail = (
+                f"Leader: {top_up.get('ticker')} {top_up.get('pct_change')}% | "
+                f"Laggard: {top_down.get('ticker')} {top_down.get('pct_change')}%."
+            )
+        elif top_up:
+            detail = f"Strongest upside move: {top_up.get('ticker')} {top_up.get('pct_change')}%."
+        else:
+            detail = f"Weakest move: {top_down.get('ticker')} {top_down.get('pct_change')}%."
+        changes.append(
+            {
+                "slug": "movers",
+                "title": "Largest Price Moves",
+                "detail": detail,
+                "tone": "neutral",
+            }
+        )
+
+    new_count = int(yolo_delta.get("new_count") or 0)
+    lost_count = int(yolo_delta.get("lost_count") or 0)
+    if new_count or lost_count:
+        new_patterns = yolo_delta.get("new_patterns") or []
+        lost_patterns = yolo_delta.get("lost_patterns") or []
+        top_new = new_patterns[0] if new_patterns else None
+        top_lost = lost_patterns[0] if lost_patterns else None
+        yolo_parts = [f"+{new_count} new", f"-{lost_count} lost"]
+        if top_new:
+            yolo_parts.append(
+                f"new highlight: {top_new.get('ticker')} {top_new.get('pattern')} ({top_new.get('confidence')})"
+            )
+        if top_lost:
+            yolo_parts.append(
+                f"invalidated/completed: {top_lost.get('ticker')} {top_lost.get('pattern')} ({top_lost.get('confidence')})"
+            )
+        changes.append(
+            {
+                "slug": "yolo_delta",
+                "title": "YOLO Pattern Churn",
+                "detail": " • ".join(yolo_parts),
+                "tone": "positive" if new_count > lost_count else ("negative" if lost_count > new_count else "neutral"),
+            }
+        )
+
+    sector_rows = signals.get("sector_heatmap") or []
+    if sector_rows:
+        top_sector = sector_rows[0]
+        bottom_sector = sector_rows[-1]
+        changes.append(
+            {
+                "slug": "sectors",
+                "title": "Sector Rotation",
+                "detail": (
+                    f"Leader: {top_sector.get('sector')} ({top_sector.get('avg_pct_change')}%) | "
+                    f"Laggard: {bottom_sector.get('sector')} ({bottom_sector.get('avg_pct_change')}%)."
+                ),
+                "tone": "neutral",
+            }
+        )
+
+    setup_rows = signals.get("setup_quality_top") or []
+    if setup_rows:
+        best = setup_rows[0]
+        changes.append(
+            {
+                "slug": "setup",
+                "title": "Top Setup Candidate",
+                "detail": (
+                    f"{best.get('ticker')} scored {best.get('score')} ({best.get('setup_tier')}) "
+                    f"with move {best.get('pct_change')}%, discount {best.get('discount_pct')}%, "
+                    f"PEG {best.get('peg')}."
+                ),
+                "tone": "positive",
+            }
+        )
+
+    while len(changes) < 5:
+        changes.append(
+            {
+                "slug": f"placeholder_{len(changes) + 1}",
+                "title": "Signal",
+                "detail": "No material change detected for this slot.",
+                "tone": "neutral",
+            }
+        )
+    return changes[:5]
+
+
 def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     """Market signals for the daily report: 52W extremes, top YOLO patterns, candle signals."""
     signals: dict[str, Any] = {
@@ -261,7 +388,14 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "market_breadth": {},
         "yolo_top_today": [],
         "candle_patterns_today": [],
+        "sector_heatmap": [],
+        "setup_quality_top": [],
+        "watchlist_candidates": [],
+        "tonight_key_changes": [],
     }
+    movers_all: list[dict[str, Any]] = []
+    fundamentals_map: dict[str, dict[str, Any]] = {}
+    yolo_by_ticker: dict[str, dict[str, Any]] = {}
 
     # ── 52W high / low proximity ─────────────────────────────────────────────
     try:
@@ -450,6 +584,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             "large_move_threshold_pct": round(large_move_threshold, 2),
             "large_move_count": len(signals["large_moves_today"]),
         }
+        movers_all = movers
     except Exception:
         pass
 
@@ -495,6 +630,261 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     }
                 )
             signals["yolo_top_today"] = yolo_top_today
+
+            # Best YOLO signal per ticker for setup scoring.
+            full_rows = conn.execute(
+                """
+                SELECT ticker, timeframe, pattern,
+                       CAST(confidence AS REAL) AS confidence,
+                       x0_date, x1_date
+                FROM yolo_patterns
+                WHERE as_of_date = ?
+                ORDER BY confidence DESC
+                """,
+                (latest_asof,),
+            ).fetchall()
+            for r in full_rows:
+                ticker = str(r[0])
+                conf = float(r[3] or 0.0)
+                x1_date = r[5]
+                age_days: int | None = None
+                if asof_date is not None and x1_date and len(str(x1_date)) >= 10:
+                    try:
+                        x1_dt = dt.date.fromisoformat(str(x1_date)[:10])
+                        age_days = max(0, (asof_date - x1_dt).days)
+                    except Exception:
+                        age_days = None
+                candidate = {
+                    "ticker": ticker,
+                    "timeframe": r[1],
+                    "pattern": r[2],
+                    "confidence": round(conf, 3),
+                    "x0_date": r[4],
+                    "x1_date": x1_date,
+                    "as_of_date": latest_asof,
+                    "age_days": age_days,
+                }
+                prev = yolo_by_ticker.get(ticker)
+                if prev is None:
+                    yolo_by_ticker[ticker] = candidate
+                    continue
+                prev_daily = str(prev.get("timeframe") or "") == "daily"
+                cand_daily = str(candidate.get("timeframe") or "") == "daily"
+                if cand_daily and not prev_daily:
+                    yolo_by_ticker[ticker] = candidate
+                    continue
+                if cand_daily == prev_daily and conf > float(prev.get("confidence") or 0.0):
+                    yolo_by_ticker[ticker] = candidate
+    except Exception:
+        pass
+
+    # ── Fundamentals snapshot map (discount/PEG + sector/industry metadata) ─
+    try:
+        snap_row = conn.execute("SELECT MAX(snapshot_ts) FROM finviz_fundamentals").fetchone()
+        latest_snap = snap_row[0] if snap_row else None
+        if latest_snap:
+            fund_rows = conn.execute(
+                """
+                SELECT ticker, discount_pct, peg, raw_json
+                FROM finviz_fundamentals
+                WHERE snapshot_ts = ?
+                """,
+                (latest_snap,),
+            ).fetchall()
+            for r in fund_rows:
+                ticker = str(r[0])
+                discount = float(r[1]) if r[1] is not None else None
+                peg = float(r[2]) if r[2] is not None else None
+                sector = None
+                industry = None
+                raw = r[3]
+                if raw:
+                    try:
+                        raw_obj = json.loads(str(raw))
+                        if isinstance(raw_obj, dict):
+                            sector = raw_obj.get("Sector") or raw_obj.get("sector")
+                            industry = raw_obj.get("Industry") or raw_obj.get("industry")
+                    except Exception:
+                        pass
+                fundamentals_map[ticker] = {
+                    "discount_pct": round(discount, 2) if discount is not None else None,
+                    "peg": round(peg, 2) if peg is not None else None,
+                    "sector": str(sector).strip() if sector else "Unknown",
+                    "industry": str(industry).strip() if industry else None,
+                }
+    except Exception:
+        pass
+
+    # ── Sector heatmap + setup quality scoring ───────────────────────────────
+    try:
+        sector_buckets: dict[str, dict[str, Any]] = {}
+        setup_rows: list[dict[str, Any]] = []
+        for m in movers_all:
+            ticker = str(m.get("ticker") or "").upper()
+            if not ticker:
+                continue
+            pct_change = float(m.get("pct_change") or 0.0)
+            near_high = bool(m.get("near_52w_high"))
+            near_low = bool(m.get("near_52w_low"))
+            fund = fundamentals_map.get(ticker, {})
+            sector = str(fund.get("sector") or "Unknown").strip() or "Unknown"
+
+            bucket = sector_buckets.setdefault(
+                sector,
+                {
+                    "sector": sector,
+                    "tickers": 0,
+                    "advancers": 0,
+                    "decliners": 0,
+                    "unchanged": 0,
+                    "near_high_count": 0,
+                    "near_low_count": 0,
+                    "_changes": [],
+                },
+            )
+            bucket["tickers"] += 1
+            bucket["_changes"].append(pct_change)
+            if pct_change > 0.05:
+                bucket["advancers"] += 1
+            elif pct_change < -0.05:
+                bucket["decliners"] += 1
+            else:
+                bucket["unchanged"] += 1
+            if near_high:
+                bucket["near_high_count"] += 1
+            if near_low:
+                bucket["near_low_count"] += 1
+
+            # Setup quality score: valuation + momentum + AI signal freshness.
+            score = 50.0
+            discount = fund.get("discount_pct")
+            discount_component = 0.0
+            if isinstance(discount, (int, float)):
+                discount_component = _clamp(float(discount) * 0.8, -20.0, 20.0)
+                score += discount_component
+
+            peg = fund.get("peg")
+            peg_component = 0.0
+            if isinstance(peg, (int, float)) and float(peg) > 0:
+                peg_v = float(peg)
+                if peg_v <= 0.8:
+                    peg_component = 15.0
+                elif peg_v <= 1.5:
+                    peg_component = 10.0
+                elif peg_v <= 2.5:
+                    peg_component = 4.0
+                elif peg_v <= 4.0:
+                    peg_component = -4.0
+                else:
+                    peg_component = -8.0
+                score += peg_component
+
+            momentum_component = _clamp(pct_change * 1.5, -12.0, 12.0)
+            score += momentum_component
+
+            proximity_component = 0.0
+            if near_high and pct_change > 0:
+                proximity_component += 5.0
+            if near_low and pct_change < 0:
+                proximity_component -= 5.0
+            score += proximity_component
+
+            yolo = yolo_by_ticker.get(ticker)
+            yolo_component = 0.0
+            yolo_pattern = None
+            yolo_confidence = None
+            yolo_age_days = None
+            yolo_timeframe = None
+            if yolo:
+                yolo_pattern = yolo.get("pattern")
+                yolo_confidence = yolo.get("confidence")
+                yolo_age_days = yolo.get("age_days")
+                yolo_timeframe = yolo.get("timeframe")
+                conf = float(yolo_confidence or 0.0)
+                yolo_component += _clamp(conf * 20.0, 0.0, 18.0)
+                if str(yolo_timeframe) == "daily":
+                    yolo_component += 2.0
+                if isinstance(yolo_age_days, int):
+                    if yolo_age_days <= 10:
+                        yolo_component += 3.0
+                    elif yolo_age_days <= 30:
+                        yolo_component += 1.0
+                score += yolo_component
+
+            final_score = round(_clamp(score, 0.0, 100.0), 1)
+            setup_rows.append(
+                {
+                    "ticker": ticker,
+                    "score": final_score,
+                    "setup_tier": _setup_tier(final_score),
+                    "sector": sector,
+                    "pct_change": round(pct_change, 2),
+                    "discount_pct": discount,
+                    "peg": peg,
+                    "near_52w_high": near_high,
+                    "near_52w_low": near_low,
+                    "yolo_pattern": yolo_pattern,
+                    "yolo_confidence": yolo_confidence,
+                    "yolo_age_days": yolo_age_days,
+                    "yolo_timeframe": yolo_timeframe,
+                    "components": {
+                        "discount": round(discount_component, 2),
+                        "peg": round(peg_component, 2),
+                        "momentum": round(momentum_component, 2),
+                        "proximity": round(proximity_component, 2),
+                        "yolo": round(yolo_component, 2),
+                    },
+                }
+            )
+
+        sector_rows: list[dict[str, Any]] = []
+        for _, bucket in sector_buckets.items():
+            changes = [float(x) for x in bucket.pop("_changes", [])]
+            if not changes:
+                continue
+            changes_sorted = sorted(changes)
+            n = len(changes_sorted)
+            if n % 2 == 1:
+                median_change = changes_sorted[n // 2]
+            else:
+                median_change = (changes_sorted[(n // 2) - 1] + changes_sorted[n // 2]) / 2.0
+            tickers = int(bucket.get("tickers") or 0)
+            advancers = int(bucket.get("advancers") or 0)
+            bucket["avg_pct_change"] = round(sum(changes) / len(changes), 2)
+            bucket["median_pct_change"] = round(median_change, 2)
+            bucket["pct_advancing"] = round((advancers / tickers) * 100.0, 2) if tickers > 0 else None
+            sector_rows.append(bucket)
+
+        sector_rows.sort(
+            key=lambda r: (
+                float(r.get("avg_pct_change") or 0.0),
+                float(r.get("pct_advancing") or 0.0),
+                int(r.get("tickers") or 0),
+            ),
+            reverse=True,
+        )
+        signals["sector_heatmap"] = sector_rows
+
+        setup_rows.sort(
+            key=lambda r: (
+                float(r.get("score") or 0.0),
+                float(r.get("pct_change") or 0.0),
+                float(r.get("discount_pct") or -999.0),
+            ),
+            reverse=True,
+        )
+        signals["setup_quality_top"] = setup_rows[:40]
+        signals["watchlist_candidates"] = [
+            {
+                "ticker": r.get("ticker"),
+                "score": r.get("score"),
+                "setup_tier": r.get("setup_tier"),
+                "pct_change": r.get("pct_change"),
+                "yolo_pattern": r.get("yolo_pattern"),
+                "yolo_confidence": r.get("yolo_confidence"),
+            }
+            for r in setup_rows[:20]
+        ]
     except Exception:
         pass
 
@@ -663,11 +1053,16 @@ def fetch_report_payload(db_path: Path, run_log: Path, tail_lines: int) -> dict[
         else:
             payload["warnings"].append("yolo_patterns_missing")
 
-        # Market signals (52W extremes, YOLO top patterns, candle patterns at close)
+        # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
 
-        # YOLO day-to-day delta: new formations and invalidated/completed patterns
-        payload["yolo"]["delta"] = fetch_yolo_delta(conn)
+        # YOLO day-to-day delta: new formations and invalidated/completed patterns.
+        delta = fetch_yolo_delta(conn)
+        payload["yolo"]["delta"] = delta
+        try:
+            payload["signals"]["tonight_key_changes"] = build_tonight_key_changes(payload["signals"], delta)
+        except Exception:
+            payload["signals"]["tonight_key_changes"] = []
 
         # Basic health guardrails.
         price_age = payload["freshness"]["price_age_days"]
@@ -817,6 +1212,40 @@ def to_markdown(report: dict[str, Any]) -> str:
         for m in movers_down:
             lines.append(
                 f"| {m.get('ticker')} | {m.get('pct_change')}% | {m.get('close')} | {m.get('prev_close')} | {m.get('near_52w_low')} |"
+            )
+
+    key_changes = signals.get("tonight_key_changes", [])[:5]
+    if key_changes:
+        lines.append("")
+        lines.append("## Tonight's 5 Key Changes")
+        for idx, change in enumerate(key_changes, start=1):
+            lines.append(
+                f"{idx}. **{change.get('title', 'Change')}** - {change.get('detail', '-')}"
+            )
+
+    setup_rows = signals.get("setup_quality_top", [])[:12]
+    if setup_rows:
+        lines.append("")
+        lines.append("## Setup Quality Score (Top Candidates)")
+        lines.append("| ticker | score | tier | pct_change | discount_pct | peg | yolo_pattern | yolo_confidence |")
+        lines.append("|---|---:|---|---:|---:|---:|---|---:|")
+        for r in setup_rows:
+            lines.append(
+                f"| {r.get('ticker')} | {r.get('score')} | {r.get('setup_tier')} | "
+                f"{r.get('pct_change')} | {r.get('discount_pct')} | {r.get('peg')} | "
+                f"{r.get('yolo_pattern') or '-'} | {r.get('yolo_confidence') or '-'} |"
+            )
+
+    sector_rows = signals.get("sector_heatmap", [])[:12]
+    if sector_rows:
+        lines.append("")
+        lines.append("## Sector Heatmap")
+        lines.append("| sector | avg_pct_change | pct_advancing | tickers | near_high | near_low |")
+        lines.append("|---|---:|---:|---:|---:|---:|")
+        for r in sector_rows:
+            lines.append(
+                f"| {r.get('sector')} | {r.get('avg_pct_change')} | {r.get('pct_advancing')} | "
+                f"{r.get('tickers')} | {r.get('near_high_count')} | {r.get('near_low_count')} |"
             )
 
     lines.append("")
