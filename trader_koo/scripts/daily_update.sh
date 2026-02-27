@@ -184,10 +184,13 @@ fi
 # ── 3. Generate daily report (+ optional email) ───────────────────────────────
 if [ "$RUN_REPORT" -eq 1 ]; then
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Generating daily report..." >> "$RUN_LOG"
+AUTO_EMAIL_RAW="${TRADER_KOO_AUTO_EMAIL:-}"
+AUTO_EMAIL_NORM="$(printf '%s' "$AUTO_EMAIL_RAW" | tr '[:upper:]' '[:lower:]')"
 SEND_EMAIL_FLAG=""
-if [ "${TRADER_KOO_AUTO_EMAIL:-}" = "1" ]; then
+if [ "$AUTO_EMAIL_NORM" = "1" ] || [ "$AUTO_EMAIL_NORM" = "true" ] || [ "$AUTO_EMAIL_NORM" = "yes" ] || [ "$AUTO_EMAIL_NORM" = "on" ]; then
     SEND_EMAIL_FLAG="--send-email"
 fi
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [EMAIL] auto_email_raw='${AUTO_EMAIL_RAW}' enabled=$([ -n "$SEND_EMAIL_FLAG" ] && echo 1 || echo 0)" >> "$RUN_LOG"
 REPORT_T0=$(date +%s)
 if "$PYTHON" "$SCRIPT_DIR/generate_daily_report.py" \
     --db-path "$DB_PATH" \
