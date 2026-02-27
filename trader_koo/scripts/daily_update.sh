@@ -118,6 +118,7 @@ YOLO_IMGSZ="${TRADER_KOO_YOLO_IMGSZ:-640}"
 YOLO_CONF="${TRADER_KOO_YOLO_CONF:-0.25}"
 YOLO_IOU="${TRADER_KOO_YOLO_IOU:-0.45}"
 YOLO_MAX_SECS_PER_TICKER="${TRADER_KOO_YOLO_MAX_SECS_PER_TICKER:-180}"
+YOLO_MODEL_INIT_TIMEOUT_SEC="${TRADER_KOO_YOLO_MODEL_INIT_TIMEOUT_SEC:-600}"
 if [ "$RUN_YOLO" -eq 1 ]; then
 YOLO_PREFLIGHT_RC=0
 if "$PYTHON" - <<'PY' >> "$RUN_LOG" 2>&1; then
@@ -145,6 +146,7 @@ if [ "$YOLO_PREFLIGHT_RC" -eq 0 ] && "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py
     --conf "$YOLO_CONF" \
     --iou "$YOLO_IOU" \
     --max-seconds-per-ticker "$YOLO_MAX_SECS_PER_TICKER" \
+    --model-init-timeout-sec "$YOLO_MODEL_INIT_TIMEOUT_SEC" \
     >> "$RUN_LOG" 2>&1; then
     YOLO_RC=0
 elif [ "$YOLO_PREFLIGHT_RC" -eq 0 ]; then
