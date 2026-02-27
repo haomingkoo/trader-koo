@@ -23,6 +23,18 @@ try:
 except Exception:
     MARKET_TZ = dt.timezone.utc
 MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
+TRUTHY_VALUES = {"1", "true", "yes", "on"}
+
+
+def _as_bool(value: Any) -> bool:
+    return str(value or "").strip().lower() in TRUTHY_VALUES
+
+
+def _normalize_report_kind(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "weekly":
+        return "weekly"
+    return "daily"
 
 
 def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -195,25 +207,43 @@ def send_report_email(report: dict[str, Any], md_text: str) -> None:
         raise RuntimeError(f"Missing email env vars for {transport}: {', '.join(missing)}")
 
     generated = report.get("generated_ts", "unknown")
+    report_kind = _normalize_report_kind((report.get("meta") or {}).get("report_kind"))
+    cadence_label = "WEEKLY" if report_kind == "weekly" else "DAILY"
     ok = report.get("ok", False)
     status = "OK" if ok else "WARN"
     warnings = report.get("warnings", [])
-    delta = report.get("yolo", {}).get("delta", {})
-    new_count = delta.get("new_count", 0)
-    lost_count = delta.get("lost_count", 0)
+    yolo = report.get("yolo", {}) if isinstance(report.get("yolo"), dict) else {}
+    delta_daily = yolo.get("delta_daily") or yolo.get("delta") or {}
+    delta_weekly = yolo.get("delta_weekly") or {}
+    primary_delta = delta_weekly if report_kind == "weekly" else delta_daily
+    primary_tf = "weekly" if report_kind == "weekly" else "daily"
+    new_count = primary_delta.get("new_count", 0)
+    lost_count = primary_delta.get("lost_count", 0)
 
-    subject = f"[trader_koo] {status} | {generated[:10]} | +{new_count} new -{lost_count} lost patterns"
+    subject = f"[trader_koo] {cadence_label} {status} | {generated[:10]} | +{new_count} new -{lost_count} lost {primary_tf} patterns"
 
     body_lines = [
-        f"trader_koo daily report — {generated}",
+        f"trader_koo {report_kind} report — {generated}",
         f"Status: {status}",
     ]
     if warnings:
         body_lines.append(f"Warnings: {', '.join(warnings)}")
     body_lines += [
         "",
-        f"YOLO delta: +{new_count} new patterns, -{lost_count} lost patterns",
-        f"  comparing: {delta.get('prev_asof', '?')} → {delta.get('today_asof', '?')}",
+        f"YOLO {primary_tf} delta: +{new_count} new patterns, -{lost_count} lost patterns",
+        f"  comparing: {primary_delta.get('prev_asof', '?')} → {primary_delta.get('today_asof', '?')}",
+    ]
+    if delta_daily:
+        body_lines += [
+            f"YOLO daily delta: +{delta_daily.get('new_count', 0)} / -{delta_daily.get('lost_count', 0)} "
+            f"({delta_daily.get('prev_asof', '?')} → {delta_daily.get('today_asof', '?')})",
+        ]
+    if delta_weekly:
+        body_lines += [
+            f"YOLO weekly delta: +{delta_weekly.get('new_count', 0)} / -{delta_weekly.get('lost_count', 0)} "
+            f"({delta_weekly.get('prev_asof', '?')} → {delta_weekly.get('today_asof', '?')})",
+        ]
+    body_lines += [
         "",
         "Full report markdown below.",
         "",
@@ -253,9 +283,17 @@ def send_report_email(report: dict[str, Any], md_text: str) -> None:
         server.send_message(msg)
 
 
-def fetch_yolo_delta(conn: sqlite3.Connection, x0_tolerance_days: int = 14) -> dict[str, Any]:
-    """Compare today's YOLO detections against the previous run to find new/lost patterns."""
+def fetch_yolo_delta(
+    conn: sqlite3.Connection,
+    timeframe: str | None = None,
+    x0_tolerance_days: int = 14,
+) -> dict[str, Any]:
+    """Compare YOLO detections between latest two as_of dates (optionally per timeframe)."""
+    tf = str(timeframe or "").strip().lower()
+    if tf not in {"daily", "weekly"}:
+        tf = ""
     delta: dict[str, Any] = {
+        "timeframe": tf or "all",
         "today_asof": None,
         "prev_asof": None,
         "new_patterns": [],
@@ -264,9 +302,28 @@ def fetch_yolo_delta(conn: sqlite3.Connection, x0_tolerance_days: int = 14) -> d
         "lost_count": 0,
     }
     try:
-        dates = conn.execute(
-            "SELECT DISTINCT as_of_date FROM yolo_patterns WHERE as_of_date IS NOT NULL ORDER BY as_of_date DESC LIMIT 2"
-        ).fetchall()
+        if tf:
+            dates = conn.execute(
+                """
+                SELECT DISTINCT as_of_date
+                FROM yolo_patterns
+                WHERE as_of_date IS NOT NULL
+                  AND timeframe = ?
+                ORDER BY as_of_date DESC
+                LIMIT 2
+                """,
+                (tf,),
+            ).fetchall()
+        else:
+            dates = conn.execute(
+                """
+                SELECT DISTINCT as_of_date
+                FROM yolo_patterns
+                WHERE as_of_date IS NOT NULL
+                ORDER BY as_of_date DESC
+                LIMIT 2
+                """
+            ).fetchall()
         if len(dates) < 2:
             return delta
         today_asof = dates[0][0]
@@ -275,10 +332,27 @@ def fetch_yolo_delta(conn: sqlite3.Connection, x0_tolerance_days: int = 14) -> d
         delta["prev_asof"] = prev_asof
 
         def load_patterns(asof: str) -> list[dict]:
-            rows = conn.execute(
-                "SELECT ticker, timeframe, pattern, confidence, x0_date, x1_date FROM yolo_patterns WHERE as_of_date = ? ORDER BY confidence DESC",
-                (asof,),
-            ).fetchall()
+            if tf:
+                rows = conn.execute(
+                    """
+                    SELECT ticker, timeframe, pattern, confidence, x0_date, x1_date
+                    FROM yolo_patterns
+                    WHERE as_of_date = ?
+                      AND timeframe = ?
+                    ORDER BY confidence DESC
+                    """,
+                    (asof, tf),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT ticker, timeframe, pattern, confidence, x0_date, x1_date
+                    FROM yolo_patterns
+                    WHERE as_of_date = ?
+                    ORDER BY confidence DESC
+                    """,
+                    (asof,),
+                ).fetchall()
             return [
                 {"ticker": r[0], "timeframe": r[1], "pattern": r[2],
                  "confidence": round(float(r[3]), 3), "x0_date": r[4], "x1_date": r[5]}
@@ -1382,8 +1456,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-log", default=os.getenv("TRADER_KOO_RUN_LOG_PATH", "/data/logs/cron_daily.log"))
     p.add_argument("--tail-lines", type=int, default=80)
     p.add_argument(
+        "--report-kind",
+        choices=["daily", "weekly"],
+        default=_normalize_report_kind(os.getenv("TRADER_KOO_REPORT_KIND", "daily")),
+        help="Report cadence label used for email subject/body and YOLO delta focus.",
+    )
+    p.add_argument(
         "--send-email", action="store_true",
-        default=os.getenv("TRADER_KOO_AUTO_EMAIL", "").strip().lower() in {"1", "true", "yes"},
+        default=_as_bool(os.getenv("TRADER_KOO_AUTO_EMAIL", "")),
         help="Send report email after generating (requires TRADER_KOO_SMTP_* env vars)",
     )
     return p
