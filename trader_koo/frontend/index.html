@@ -656,6 +656,12 @@
       </div>
 
       <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">No-Trade Conditions</div>
+        <div id="reportRiskSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:8px;"></div>
+        <ul id="reportRiskList" class="report-list"></ul>
+      </div>
+
+      <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">Watchlist</div>
         <div class="report-watch-wrap">
           <input id="reportWatchTickerInput" type="text" placeholder="Add ticker (e.g. NVDA)" />
@@ -692,6 +698,21 @@
           <div style="flex:1; min-width:280px;">
             <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NO LONGER DETECTED</div>
             <table id="reportYoloLostTable"></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">YOLO Pattern Persistence</div>
+        <div id="reportYoloPersistenceSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;"></div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:280px;">
+            <div style="font-size:0.72rem; color:var(--blue); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">DAILY</div>
+            <table id="reportYoloPersistenceDailyTable"></table>
+          </div>
+          <div style="flex:1; min-width:280px;">
+            <div style="font-size:0.72rem; color:var(--blue); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">WEEKLY</div>
+            <table id="reportYoloPersistenceWeeklyTable"></table>
           </div>
         </div>
       </div>
@@ -2027,6 +2048,22 @@
               .join("")
           : "<li>No material changes captured.</li>";
 
+        const risk = latest.risk_filters || {};
+        const riskMode = String(risk.trade_mode || "normal");
+        const hardBlocks = Number(risk.hard_blocks || 0);
+        const softFlags = Number(risk.soft_flags || 0);
+        $("reportRiskSummary").innerHTML =
+          `Mode: <b>${escHtml(riskMode.toUpperCase())}</b>` +
+          ` • Hard blocks: <b>${hardBlocks}</b>` +
+          ` • Soft flags: <b>${softFlags}</b>`;
+        const riskRows = Array.isArray(risk.conditions) ? risk.conditions : [];
+        $("reportRiskList").innerHTML = riskRows.length
+          ? riskRows
+              .slice(0, 10)
+              .map((row) => `<li>[${escHtml(String(row.severity || "soft").toUpperCase())}] ${escHtml(row.reason || row.code || "-")}</li>`)
+              .join("")
+          : "<li>No active no-trade conditions.</li>";
+
         const setupRows = (signals.setup_quality_top || []).slice(0, 40);
         LAST_REPORT_SETUP_ROWS = setupRows;
         $("reportSetupSummary").textContent = setupRows.length
@@ -2079,13 +2116,20 @@
         );
         renderWatchlistTable();
 
-        const yoloDelta = yoloBlock.delta || {};
+        const yoloDeltaDaily = yoloBlock.delta_daily || yoloBlock.delta || {};
+        const yoloDeltaWeekly = yoloBlock.delta_weekly || {};
+        const yoloDelta = yoloDeltaDaily;
         const yoloNew = yoloDelta.new_patterns || [];
         const yoloLost = yoloDelta.lost_patterns || [];
+        const wkNew = Number(yoloDeltaWeekly.new_count || 0);
+        const wkLost = Number(yoloDeltaWeekly.lost_count || 0);
         $("reportYoloDeltaSummary").textContent =
           `Comparing ${yoloDelta.prev_asof || "?"} -> ${yoloDelta.today_asof || "?"}` +
           ` • New: ${yoloDelta.new_count ?? yoloNew.length}` +
-          ` • No longer detected: ${yoloDelta.lost_count ?? yoloLost.length}`;
+          ` • No longer detected: ${yoloDelta.lost_count ?? yoloLost.length}` +
+          (yoloDeltaWeekly && Object.keys(yoloDeltaWeekly).length
+            ? ` • Weekly: +${wkNew} / -${wkLost}`
+            : "");
         renderSimpleTable(
           "reportYoloNewTable",
           ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
@@ -2093,6 +2137,31 @@
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
           { sortable: false },
+        );
+
+        const yoloPersistence = yoloBlock.persistence || {};
+        const persistDaily = ((yoloPersistence.daily || {}).rows || []).slice(0, 15);
+        const persistWeekly = ((yoloPersistence.weekly || {}).rows || []).slice(0, 15);
+        const pDailyMeta = yoloPersistence.daily || {};
+        const pWeeklyMeta = yoloPersistence.weekly || {};
+        $("reportYoloPersistenceSummary").textContent =
+          `Daily window: ${pDailyMeta.lookback_asof ?? "?"} as-ofs (latest ${pDailyMeta.latest_asof || "?"})` +
+          ` • Weekly window: ${pWeeklyMeta.lookback_asof ?? "?"} as-ofs (latest ${pWeeklyMeta.latest_asof || "?"})`;
+        renderSimpleTable(
+          "reportYoloPersistenceDailyTable",
+          ["ticker", "pattern", "streak", "seen_in_lookback", "coverage_pct", "latest_confidence"],
+          persistDaily,
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: true },
+        );
+        renderSimpleTable(
+          "reportYoloPersistenceWeeklyTable",
+          ["ticker", "pattern", "streak", "seen_in_lookback", "coverage_pct", "latest_confidence"],
+          persistWeekly,
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: true },
         );
         renderSimpleTable(
           "reportYoloLostTable",

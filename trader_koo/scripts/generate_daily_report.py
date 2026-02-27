@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import datetime as dt
 import json
 import os
@@ -80,6 +81,119 @@ def days_since_date(value: str | None, now: dt.datetime) -> float | None:
     now_market = now.astimezone(MARKET_TZ)
     age_days = (now_market - market_close).total_seconds() / 86400.0
     return max(0.0, age_days)
+
+
+def _observed_holiday(day: dt.date) -> dt.date:
+    # NYSE-style weekend observation for fixed-date holidays.
+    if day.weekday() == 5:  # Saturday -> Friday
+        return day - dt.timedelta(days=1)
+    if day.weekday() == 6:  # Sunday -> Monday
+        return day + dt.timedelta(days=1)
+    return day
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> dt.date:
+    first = dt.date(year, month, 1)
+    delta = (weekday - first.weekday()) % 7
+    return first + dt.timedelta(days=delta + (n - 1) * 7)
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> dt.date:
+    last_day = calendar.monthrange(year, month)[1]
+    d = dt.date(year, month, last_day)
+    delta = (d.weekday() - weekday) % 7
+    return d - dt.timedelta(days=delta)
+
+
+def _easter_sunday(year: int) -> dt.date:
+    # Anonymous Gregorian algorithm.
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return dt.date(year, month, day)
+
+
+def nyse_holidays_for_year(year: int) -> dict[dt.date, str]:
+    out: dict[dt.date, str] = {}
+    out[_observed_holiday(dt.date(year, 1, 1))] = "New Year's Day"
+    # Include observed New Year of next year if it lands in this year (e.g. Dec 31).
+    next_new_year_obs = _observed_holiday(dt.date(year + 1, 1, 1))
+    if next_new_year_obs.year == year:
+        out[next_new_year_obs] = "New Year's Day (Observed)"
+    out[_nth_weekday(year, 1, 0, 3)] = "Martin Luther King Jr. Day"  # 3rd Monday Jan
+    out[_nth_weekday(year, 2, 0, 3)] = "Washington's Birthday"  # 3rd Monday Feb
+    out[_easter_sunday(year) - dt.timedelta(days=2)] = "Good Friday"
+    out[_last_weekday(year, 5, 0)] = "Memorial Day"  # last Monday May
+    out[_observed_holiday(dt.date(year, 6, 19))] = "Juneteenth National Independence Day"
+    out[_observed_holiday(dt.date(year, 7, 4))] = "Independence Day"
+    out[_nth_weekday(year, 9, 0, 1)] = "Labor Day"
+    out[_nth_weekday(year, 11, 3, 4)] = "Thanksgiving Day"  # 4th Thursday Nov
+    out[_observed_holiday(dt.date(year, 12, 25))] = "Christmas Day"
+    return out
+
+
+def nyse_early_closes_for_year(year: int) -> dict[dt.date, str]:
+    out: dict[dt.date, str] = {}
+    thanksgiving = _nth_weekday(year, 11, 3, 4)
+    friday_after_thanksgiving = thanksgiving + dt.timedelta(days=1)
+    if friday_after_thanksgiving.weekday() < 5:
+        out[friday_after_thanksgiving] = "Day after Thanksgiving (1:00 PM ET close)"
+
+    christmas_eve = dt.date(year, 12, 24)
+    if christmas_eve.weekday() < 5 and christmas_eve not in nyse_holidays_for_year(year):
+        out[christmas_eve] = "Christmas Eve (1:00 PM ET close)"
+
+    july3 = dt.date(year, 7, 3)
+    if july3.weekday() < 5 and july3 not in nyse_holidays_for_year(year):
+        out[july3] = "Pre-Independence Day (1:00 PM ET close)"
+    return out
+
+
+def market_calendar_context(now_utc: dt.datetime) -> dict[str, Any]:
+    now_et = now_utc.astimezone(MARKET_TZ)
+    today = now_et.date()
+    years = [today.year - 1, today.year, today.year + 1]
+    holidays: dict[dt.date, str] = {}
+    early_closes: dict[dt.date, str] = {}
+    for year in years:
+        holidays.update(nyse_holidays_for_year(year))
+        early_closes.update(nyse_early_closes_for_year(year))
+
+    today_holiday = holidays.get(today)
+    today_early_close = early_closes.get(today)
+    next_holiday = None
+    next_early_close = None
+    for day in sorted(holidays):
+        if day >= today:
+            next_holiday = {"date": day.isoformat(), "name": holidays[day]}
+            break
+    for day in sorted(early_closes):
+        if day >= today:
+            next_early_close = {"date": day.isoformat(), "name": early_closes[day]}
+            break
+
+    return {
+        "market_tz": MARKET_TZ_NAME,
+        "as_of_market_ts": now_et.replace(microsecond=0).isoformat(),
+        "market_date": today.isoformat(),
+        "is_holiday": bool(today_holiday),
+        "holiday_name": today_holiday,
+        "is_early_close": bool(today_early_close),
+        "early_close_name": today_early_close,
+        "next_holiday": next_holiday,
+        "next_early_close": next_early_close,
+    }
 
 
 def tail_text(path: Path, lines: int = 80, max_bytes: int = 96_000) -> list[str]:
@@ -397,6 +511,121 @@ def fetch_yolo_delta(
     return delta
 
 
+def fetch_yolo_pattern_persistence(
+    conn: sqlite3.Connection,
+    timeframe: str,
+    lookback_asof: int = 20,
+    top_n: int = 30,
+) -> dict[str, Any]:
+    tf = str(timeframe or "").strip().lower()
+    if tf not in {"daily", "weekly"}:
+        return {"timeframe": tf, "latest_asof": None, "lookback_asof": 0, "rows": []}
+
+    dates_rows = conn.execute(
+        """
+        SELECT DISTINCT as_of_date
+        FROM yolo_patterns
+        WHERE timeframe = ? AND as_of_date IS NOT NULL
+        ORDER BY as_of_date DESC
+        LIMIT ?
+        """,
+        (tf, int(max(2, lookback_asof))),
+    ).fetchall()
+    asof_dates = [str(r[0]) for r in dates_rows if r and r[0]]
+    if not asof_dates:
+        return {"timeframe": tf, "latest_asof": None, "lookback_asof": 0, "rows": []}
+
+    latest_asof = asof_dates[0]
+    placeholders = ",".join(["?"] * len(asof_dates))
+    rows = conn.execute(
+        f"""
+        SELECT
+            as_of_date,
+            ticker,
+            pattern,
+            AVG(CAST(confidence AS REAL)) AS confidence
+        FROM yolo_patterns
+        WHERE timeframe = ?
+          AND as_of_date IN ({placeholders})
+        GROUP BY as_of_date, ticker, pattern
+        ORDER BY as_of_date DESC
+        """,
+        [tf, *asof_dates],
+    ).fetchall()
+
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        asof = str(row[0])
+        ticker = str(row[1])
+        pattern = str(row[2])
+        conf = float(row[3] or 0.0)
+        key = (ticker, pattern)
+        state = by_key.get(key)
+        if state is None:
+            state = {
+                "ticker": ticker,
+                "timeframe": tf,
+                "pattern": pattern,
+                "asof_dates": set(),
+                "latest_confidence": None,
+                "avg_confidence_window": 0.0,
+                "seen_count": 0,
+            }
+            by_key[key] = state
+        state["asof_dates"].add(asof)
+        state["avg_confidence_window"] += conf
+        state["seen_count"] += 1
+        if asof == latest_asof and state["latest_confidence"] is None:
+            state["latest_confidence"] = round(conf, 3)
+
+    out_rows: list[dict[str, Any]] = []
+    for state in by_key.values():
+        if latest_asof not in state["asof_dates"]:
+            continue
+        streak = 0
+        for asof in asof_dates:
+            if asof in state["asof_dates"]:
+                streak += 1
+            else:
+                break
+        seen = int(state["seen_count"])
+        avg_conf = (
+            round(float(state["avg_confidence_window"]) / float(seen), 3)
+            if seen > 0
+            else None
+        )
+        coverage_pct = round((100.0 * seen) / len(asof_dates), 2) if asof_dates else 0.0
+        out_rows.append(
+            {
+                "ticker": state["ticker"],
+                "timeframe": state["timeframe"],
+                "pattern": state["pattern"],
+                "latest_confidence": state["latest_confidence"],
+                "avg_confidence_window": avg_conf,
+                "streak": streak,
+                "seen_in_lookback": seen,
+                "lookback_asof": len(asof_dates),
+                "coverage_pct": coverage_pct,
+                "latest_asof": latest_asof,
+            }
+        )
+
+    out_rows.sort(
+        key=lambda x: (
+            int(x.get("streak") or 0),
+            int(x.get("seen_in_lookback") or 0),
+            float(x.get("latest_confidence") or 0.0),
+        ),
+        reverse=True,
+    )
+    return {
+        "timeframe": tf,
+        "latest_asof": latest_asof,
+        "lookback_asof": len(asof_dates),
+        "rows": out_rows[: max(1, int(top_n))],
+    }
+
+
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
@@ -522,6 +751,80 @@ def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any
             }
         )
     return changes[:5]
+
+
+def build_no_trade_conditions(report: dict[str, Any]) -> dict[str, Any]:
+    warnings = {str(w) for w in (report.get("warnings") or [])}
+    signals = report.get("signals") or {}
+    breadth = signals.get("market_breadth") or {}
+    yolo = report.get("yolo") or {}
+    delta_daily = yolo.get("delta_daily") or yolo.get("delta") or {}
+    session = report.get("market_session") or {}
+
+    conditions: list[dict[str, Any]] = []
+
+    def add_condition(code: str, severity: str, reason: str) -> None:
+        conditions.append({"code": code, "severity": severity, "reason": reason})
+
+    if "price_data_stale" in warnings or "price_data_missing" in warnings:
+        add_condition("stale_price_data", "hard", "Price data is stale/missing.")
+    if "latest_ingest_run_failed" in warnings:
+        add_condition("ingest_failed", "hard", "Latest ingest run failed.")
+    if "yolo_data_missing" in warnings:
+        add_condition("yolo_missing", "hard", "YOLO detections are missing.")
+    if "yolo_data_stale" in warnings:
+        add_condition("yolo_stale", "soft", "YOLO detections are stale.")
+    if bool(session.get("is_holiday")):
+        add_condition(
+            "market_holiday",
+            "hard",
+            f"US market holiday: {session.get('holiday_name') or 'closed'}.",
+        )
+    if bool(session.get("is_early_close")):
+        add_condition(
+            "early_close_session",
+            "soft",
+            f"Early close session: {session.get('early_close_name') or 'shortened day'}.",
+        )
+
+    pct_adv = breadth.get("pct_advancing")
+    avg_move = breadth.get("avg_pct_change")
+    large_moves = breadth.get("large_move_count")
+    if (
+        isinstance(pct_adv, (int, float))
+        and isinstance(avg_move, (int, float))
+        and isinstance(large_moves, int)
+        and 45.0 <= float(pct_adv) <= 55.0
+        and abs(float(avg_move)) <= 0.35
+        and int(large_moves) <= 15
+    ):
+        add_condition(
+            "chop_regime",
+            "soft",
+            (
+                "Breadth is mixed and average move is muted "
+                f"(adv={pct_adv}%, avg={avg_move}%, large_moves={large_moves})."
+            ),
+        )
+
+    new_daily = int(delta_daily.get("new_count") or 0)
+    lost_daily = int(delta_daily.get("lost_count") or 0)
+    if lost_daily >= max(150, new_daily * 8):
+        add_condition(
+            "high_pattern_churn",
+            "soft",
+            f"Daily YOLO churn is high (+{new_daily} new / -{lost_daily} lost).",
+        )
+
+    hard_count = sum(1 for c in conditions if c.get("severity") == "hard")
+    soft_count = sum(1 for c in conditions if c.get("severity") == "soft")
+    trade_mode = "blocked" if hard_count > 0 else ("caution" if soft_count > 0 else "normal")
+    return {
+        "trade_mode": trade_mode,
+        "hard_blocks": hard_count,
+        "soft_flags": soft_count,
+        "conditions": conditions,
+    }
 
 
 def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -1089,22 +1392,37 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     return signals
 
 
-def fetch_report_payload(db_path: Path, run_log: Path, tail_lines: int) -> dict[str, Any]:
+def fetch_report_payload(
+    db_path: Path,
+    run_log: Path,
+    tail_lines: int,
+    report_kind: str = "daily",
+) -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
+    report_kind_norm = _normalize_report_kind(report_kind)
     payload: dict[str, Any] = {
         "generated_ts": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "meta": {
+            "report_kind": report_kind_norm,
+        },
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
         "ok": False,
         "warnings": [],
         "counts": {},
         "freshness": {},
+        "market_session": market_calendar_context(now),
+        "risk_filters": {},
         "latest_data": {},
         "latest_ingest_run": {},
         "yolo": {
             "table_exists": False,
             "summary": {},
             "timeframes": [],
+            "delta": {},
+            "delta_daily": {},
+            "delta_weekly": {},
+            "persistence": {},
         },
         "cron_log_path": str(run_log),
         "cron_log_tail": tail_text(run_log, lines=tail_lines),
@@ -1203,11 +1521,20 @@ def fetch_report_payload(db_path: Path, run_log: Path, tail_lines: int) -> dict[
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
 
-        # YOLO day-to-day delta: new formations and invalidated/completed patterns.
-        delta = fetch_yolo_delta(conn)
-        payload["yolo"]["delta"] = delta
+        # YOLO deltas and persistence by timeframe.
+        delta_daily = fetch_yolo_delta(conn, timeframe="daily")
+        delta_weekly = fetch_yolo_delta(conn, timeframe="weekly")
+        payload["yolo"]["delta_daily"] = delta_daily
+        payload["yolo"]["delta_weekly"] = delta_weekly
+        payload["yolo"]["delta"] = delta_weekly if report_kind_norm == "weekly" else delta_daily
+        payload["yolo"]["persistence"] = {
+            "daily": fetch_yolo_pattern_persistence(conn, timeframe="daily", lookback_asof=20, top_n=25),
+            "weekly": fetch_yolo_pattern_persistence(conn, timeframe="weekly", lookback_asof=20, top_n=25),
+        }
         try:
-            payload["signals"]["tonight_key_changes"] = build_tonight_key_changes(payload["signals"], delta)
+            payload["signals"]["tonight_key_changes"] = build_tonight_key_changes(
+                payload["signals"], payload["yolo"]["delta"]
+            )
         except Exception:
             payload["signals"]["tonight_key_changes"] = []
 
@@ -1228,6 +1555,7 @@ def fetch_report_payload(db_path: Path, run_log: Path, tail_lines: int) -> dict[
         elif isinstance(yolo_age, (int, float)) and yolo_age > 30:
             payload["warnings"].append("yolo_data_stale")
 
+        payload["risk_filters"] = build_no_trade_conditions(payload)
         payload["ok"] = len(payload["warnings"]) == 0
         return payload
     finally:
@@ -1268,6 +1596,26 @@ def to_markdown(report: dict[str, Any]) -> str:
     lines.append("## Latest Data")
     for k in ["price_date", "fund_snapshot", "options_snapshot", "yolo_detected_ts"]:
         lines.append(_md_line(k, latest.get(k)))
+    session = report.get("market_session", {})
+    if session:
+        lines.append("")
+        lines.append("## Market Session Context")
+        for k in [
+            "market_tz",
+            "as_of_market_ts",
+            "market_date",
+            "is_holiday",
+            "holiday_name",
+            "is_early_close",
+            "early_close_name",
+        ]:
+            lines.append(_md_line(k, session.get(k)))
+        if isinstance(session.get("next_holiday"), dict):
+            nh = session["next_holiday"]
+            lines.append(_md_line("next_holiday", f"{nh.get('date')} {nh.get('name')}"))
+        if isinstance(session.get("next_early_close"), dict):
+            ne = session["next_early_close"]
+            lines.append(_md_line("next_early_close", f"{ne.get('date')} {ne.get('name')}"))
     lines.append("")
     lines.append("## Latest Ingest Run")
     if run:
@@ -1301,11 +1649,33 @@ def to_markdown(report: dict[str, Any]) -> str:
             lines.append(
                 f"| {r.get('timeframe', '-')} | {r.get('rows_total', '-')} | {r.get('tickers_with_patterns', '-')} | {avg_conf} | {r.get('latest_detected_ts', '-')} | {r.get('latest_asof_date', '-')} |"
             )
-    # ── YOLO delta (new / lost patterns) ─────────────────────────────────────
-    delta = yolo.get("delta", {})
-    if delta:
+    persistence = yolo.get("persistence", {})
+    if isinstance(persistence, dict):
+        for tf_key in ("daily", "weekly"):
+            block = persistence.get(tf_key, {})
+            rows = block.get("rows", []) if isinstance(block, dict) else []
+            if rows:
+                lines.append("")
+                lines.append(f"## YOLO Pattern Persistence ({tf_key.title()}, active on latest as-of)")
+                lines.append(
+                    _md_line(
+                        "window",
+                        f"{block.get('lookback_asof', '-')} as-of snapshots ending {block.get('latest_asof', '-')}",
+                    )
+                )
+                lines.append(
+                    "| ticker | pattern | streak | seen_in_lookback | coverage_pct | latest_confidence | avg_confidence_window |"
+                )
+                lines.append("|---|---|---:|---:|---:|---:|---:|")
+                for p in rows[:15]:
+                    lines.append(
+                        f"| {p.get('ticker')} | {p.get('pattern')} | {p.get('streak')} | {p.get('seen_in_lookback')} | "
+                        f"{p.get('coverage_pct')} | {p.get('latest_confidence')} | {p.get('avg_confidence_window')} |"
+                    )
+
+    def _render_delta_section(title: str, delta: dict[str, Any]) -> None:
         lines.append("")
-        lines.append("## YOLO Pattern Delta")
+        lines.append(title)
         lines.append(_md_line("comparing", f"{delta.get('prev_asof', '?')} → {delta.get('today_asof', '?')}"))
         lines.append(_md_line("new_patterns", delta.get("new_count", 0)))
         lines.append(_md_line("lost_patterns", delta.get("lost_count", 0)))
@@ -1316,7 +1686,7 @@ def to_markdown(report: dict[str, Any]) -> str:
             lines.append("### New Patterns (appeared today)")
             lines.append("| ticker | timeframe | pattern | confidence | x0_date | x1_date |")
             lines.append("|---|---|---|---:|---|---|")
-            for p in new_pats:
+            for p in new_pats[:80]:
                 lines.append(
                     f"| {p['ticker']} | {p['timeframe']} | {p['pattern']} | {p['confidence']} | {p.get('x0_date', '-')} | {p.get('x1_date', '-')} |"
                 )
@@ -1327,10 +1697,21 @@ def to_markdown(report: dict[str, Any]) -> str:
             lines.append("### Lost Patterns (gone today — invalidated or completed)")
             lines.append("| ticker | timeframe | pattern | confidence | x0_date | x1_date |")
             lines.append("|---|---|---|---:|---|---|")
-            for p in lost_pats:
+            for p in lost_pats[:80]:
                 lines.append(
                     f"| {p['ticker']} | {p['timeframe']} | {p['pattern']} | {p['confidence']} | {p.get('x0_date', '-')} | {p.get('x1_date', '-')} |"
                 )
+
+    # ── YOLO delta (new / lost patterns) ─────────────────────────────────────
+    delta_daily = yolo.get("delta_daily", {}) if isinstance(yolo.get("delta_daily"), dict) else {}
+    delta_weekly = yolo.get("delta_weekly", {}) if isinstance(yolo.get("delta_weekly"), dict) else {}
+    delta = yolo.get("delta", {}) if isinstance(yolo.get("delta"), dict) else {}
+    if delta_daily:
+        _render_delta_section("## YOLO Pattern Delta (Daily)", delta_daily)
+    if delta_weekly:
+        _render_delta_section("## YOLO Pattern Delta (Weekly)", delta_weekly)
+    if delta and not delta_daily and not delta_weekly:
+        _render_delta_section("## YOLO Pattern Delta", delta)
 
     signals = report.get("signals", {})
     breadth = signals.get("market_breadth", {})
@@ -1406,6 +1787,24 @@ def to_markdown(report: dict[str, Any]) -> str:
                 f"{r.get('tickers')} | {r.get('near_high_count')} | {r.get('near_low_count')} |"
             )
 
+    risk_filters = report.get("risk_filters", {}) if isinstance(report.get("risk_filters"), dict) else {}
+    lines.append("")
+    lines.append("## No-Trade Conditions")
+    if risk_filters:
+        lines.append(_md_line("trade_mode", risk_filters.get("trade_mode")))
+        lines.append(_md_line("hard_blocks", risk_filters.get("hard_blocks")))
+        lines.append(_md_line("soft_flags", risk_filters.get("soft_flags")))
+        conditions = risk_filters.get("conditions", [])
+        if conditions:
+            for cond in conditions:
+                lines.append(
+                    f"- [{cond.get('severity', 'soft')}] {cond.get('code', 'condition')}: {cond.get('reason', '-')}"
+                )
+        else:
+            lines.append("- none")
+    else:
+        lines.append("- none")
+
     lines.append("")
     lines.append("## Warnings")
     if warn:
@@ -1475,6 +1874,7 @@ def main() -> None:
         db_path=Path(args.db_path).resolve(),
         run_log=Path(args.run_log).resolve(),
         tail_lines=max(0, int(args.tail_lines)),
+        report_kind=args.report_kind,
     )
 
     email_meta: dict[str, Any] = {
