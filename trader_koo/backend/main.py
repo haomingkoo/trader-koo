@@ -745,6 +745,40 @@ def _daily_report_history(report_dir: Path, limit: int = 20) -> list[dict[str, A
     return out
 
 
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _avg(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def _find_timeframe_summary(rows: Any, timeframe: str) -> dict[str, Any]:
+    target = str(timeframe or "").strip().lower()
+    if not isinstance(rows, list):
+        return {}
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("timeframe", "")).strip().lower() == target:
+            return row
+    return {}
+
+
 def _read_latest_ingest_run() -> dict[str, Any] | None:
     if not DB_PATH.exists():
         return None
@@ -1691,6 +1725,195 @@ def yolo_events(
         }
     finally:
         conn.close()
+
+
+@app.get("/api/admin/report-stability")
+def report_stability(limit: int = Query(default=60, ge=1, le=365)) -> dict[str, Any]:
+    """Summarize recent report JSON files to diagnose YOLO/report stability over time."""
+    report_dir = REPORT_DIR
+    files = sorted(
+        [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    scan_files = files[: max(1, limit)]
+    rows: list[dict[str, Any]] = []
+
+    for p in scan_files:
+        modified_ts: str | None = None
+        try:
+            st = p.stat()
+            modified_ts = (
+                dt.datetime.fromtimestamp(st.st_mtime, tz=dt.timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+            )
+        except OSError:
+            pass
+
+        payload = _load_json_file(p)
+        if not isinstance(payload, dict):
+            rows.append(
+                {
+                    "file": p.name,
+                    "generated_ts": None,
+                    "modified_ts": modified_ts,
+                    "ok": False,
+                    "parse_error": True,
+                    "yolo_present": False,
+                    "yolo_rows_total": 0,
+                    "yolo_tickers_total": 0,
+                }
+            )
+            continue
+
+        yolo = payload.get("yolo") if isinstance(payload.get("yolo"), dict) else {}
+        summary = yolo.get("summary") if isinstance(yolo.get("summary"), dict) else {}
+        timeframes = yolo.get("timeframes") if isinstance(yolo.get("timeframes"), list) else []
+        tf_daily = _find_timeframe_summary(timeframes, "daily")
+        tf_weekly = _find_timeframe_summary(timeframes, "weekly")
+        delta_legacy = yolo.get("delta") if isinstance(yolo.get("delta"), dict) else {}
+        delta_daily = yolo.get("delta_daily") if isinstance(yolo.get("delta_daily"), dict) else delta_legacy
+        delta_weekly = yolo.get("delta_weekly") if isinstance(yolo.get("delta_weekly"), dict) else {}
+        counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+        freshness = payload.get("freshness") if isinstance(payload.get("freshness"), dict) else {}
+        warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+
+        yolo_rows_total = _to_int(summary.get("rows_total"), _to_int(counts.get("yolo_rows"), 0))
+        yolo_tickers_total = _to_int(summary.get("tickers_with_patterns"), 0)
+        yolo_daily_tickers = _to_int(tf_daily.get("tickers_with_patterns"), 0)
+        yolo_weekly_tickers = _to_int(tf_weekly.get("tickers_with_patterns"), 0)
+        yolo_present = yolo_rows_total > 0
+        yolo_age_hours = _to_float(freshness.get("yolo_age_hours"))
+        report_kind = str(meta.get("report_kind") or "daily").strip().lower()
+        if report_kind not in {"daily", "weekly"}:
+            report_kind = "daily"
+
+        rows.append(
+            {
+                "file": p.name,
+                "generated_ts": payload.get("generated_ts") or modified_ts,
+                "modified_ts": modified_ts,
+                "ok": bool(payload.get("ok", False)),
+                "parse_error": False,
+                "report_kind": report_kind,
+                "warnings_count": len(warnings),
+                "has_yolo_data_stale_warning": "yolo_data_stale" in {str(w) for w in warnings},
+                "yolo_present": yolo_present,
+                "yolo_rows_total": yolo_rows_total,
+                "yolo_tickers_total": yolo_tickers_total,
+                "yolo_daily_tickers": yolo_daily_tickers,
+                "yolo_weekly_tickers": yolo_weekly_tickers,
+                "yolo_latest_detected_ts": summary.get("latest_detected_ts"),
+                "yolo_latest_asof_date": summary.get("latest_asof_date"),
+                "yolo_age_hours": yolo_age_hours,
+                "delta_daily_new": _to_int(delta_daily.get("new_count"), 0),
+                "delta_daily_lost": _to_int(delta_daily.get("lost_count"), 0),
+                "delta_weekly_new": _to_int(delta_weekly.get("new_count"), 0),
+                "delta_weekly_lost": _to_int(delta_weekly.get("lost_count"), 0),
+            }
+        )
+
+    parsed_rows = [r for r in rows if not r.get("parse_error")]
+    yolo_present_reports = sum(1 for r in parsed_rows if r.get("yolo_present"))
+    yolo_missing_reports = sum(1 for r in parsed_rows if not r.get("yolo_present"))
+    yolo_presence_rate_pct = (
+        round((100.0 * yolo_present_reports) / len(parsed_rows), 2) if parsed_rows else None
+    )
+
+    # newest-missing streak over newest->older ordering
+    newest_missing_streak = 0
+    for r in parsed_rows:
+        if r.get("yolo_present"):
+            break
+        newest_missing_streak += 1
+
+    # longest missing streak over chronological (older->newer) ordering
+    longest_missing_streak = 0
+    current_streak = 0
+    for r in reversed(parsed_rows):
+        if r.get("yolo_present"):
+            current_streak = 0
+            continue
+        current_streak += 1
+        if current_streak > longest_missing_streak:
+            longest_missing_streak = current_streak
+
+    yolo_rows_vals = [_to_float(r.get("yolo_rows_total")) for r in parsed_rows]
+    yolo_tickers_vals = [_to_float(r.get("yolo_tickers_total")) for r in parsed_rows]
+    yolo_daily_vals = [_to_float(r.get("yolo_daily_tickers")) for r in parsed_rows]
+    yolo_weekly_vals = [_to_float(r.get("yolo_weekly_tickers")) for r in parsed_rows]
+    yolo_age_vals = [
+        _to_float(r.get("yolo_age_hours"))
+        for r in parsed_rows
+        if _to_float(r.get("yolo_age_hours")) is not None
+    ]
+    delta_daily_new_vals = [_to_float(r.get("delta_daily_new")) for r in parsed_rows]
+    delta_daily_lost_vals = [_to_float(r.get("delta_daily_lost")) for r in parsed_rows]
+    delta_weekly_new_vals = [_to_float(r.get("delta_weekly_new")) for r in parsed_rows]
+    delta_weekly_lost_vals = [_to_float(r.get("delta_weekly_lost")) for r in parsed_rows]
+
+    def _compact(values: list[float | None]) -> list[float]:
+        return [float(v) for v in values if isinstance(v, (int, float))]
+
+    newest_generated_ts = next((r.get("generated_ts") for r in parsed_rows if r.get("generated_ts")), None)
+    oldest_generated_ts = next(
+        (r.get("generated_ts") for r in reversed(parsed_rows) if r.get("generated_ts")), None
+    )
+
+    missing_examples: list[dict[str, Any]] = []
+    for r in rows:
+        if r.get("parse_error"):
+            missing_examples.append(
+                {
+                    "file": r.get("file"),
+                    "generated_ts": r.get("generated_ts"),
+                    "reason": "parse_error",
+                }
+            )
+        elif not r.get("yolo_present"):
+            missing_examples.append(
+                {
+                    "file": r.get("file"),
+                    "generated_ts": r.get("generated_ts"),
+                    "reason": "no_yolo_rows",
+                }
+            )
+        if len(missing_examples) >= 10:
+            break
+
+    summary = {
+        "files_total": len(files),
+        "reports_scanned": len(rows),
+        "parsed_reports": len(parsed_rows),
+        "parse_error_reports": len(rows) - len(parsed_rows),
+        "yolo_present_reports": yolo_present_reports,
+        "yolo_missing_reports": yolo_missing_reports,
+        "yolo_presence_rate_pct": yolo_presence_rate_pct,
+        "newest_missing_streak": newest_missing_streak,
+        "longest_missing_streak": longest_missing_streak,
+        "newest_generated_ts": newest_generated_ts,
+        "oldest_generated_ts": oldest_generated_ts,
+        "avg_yolo_rows_total": _avg(_compact(yolo_rows_vals)),
+        "avg_yolo_tickers_total": _avg(_compact(yolo_tickers_vals)),
+        "avg_yolo_daily_tickers": _avg(_compact(yolo_daily_vals)),
+        "avg_yolo_weekly_tickers": _avg(_compact(yolo_weekly_vals)),
+        "avg_yolo_age_hours": _avg(_compact(yolo_age_vals)),
+        "avg_delta_daily_new": _avg(_compact(delta_daily_new_vals)),
+        "avg_delta_daily_lost": _avg(_compact(delta_daily_lost_vals)),
+        "avg_delta_weekly_new": _avg(_compact(delta_weekly_new_vals)),
+        "avg_delta_weekly_lost": _avg(_compact(delta_weekly_lost_vals)),
+    }
+
+    return {
+        "ok": True,
+        "report_dir": str(report_dir),
+        "sample_limit": int(limit),
+        "summary": summary,
+        "missing_examples": missing_examples,
+        "rows": rows,
+    }
 
 
 @app.get("/api/admin/pipeline-status")
