@@ -58,6 +58,7 @@ DEFAULT_CONF = float(os.getenv("TRADER_KOO_YOLO_CONF", "0.25"))
 DEFAULT_IOU = float(os.getenv("TRADER_KOO_YOLO_IOU", "0.45"))
 DEFAULT_IMGSZ = int(os.getenv("TRADER_KOO_YOLO_IMGSZ", "640"))
 DEFAULT_MAX_SECS_PER_TICKER = float(os.getenv("TRADER_KOO_YOLO_MAX_SECS_PER_TICKER", "180"))
+DEFAULT_MODEL_INIT_TIMEOUT_SEC = float(os.getenv("TRADER_KOO_YOLO_MODEL_INIT_TIMEOUT_SEC", "600"))
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -591,6 +592,12 @@ def main() -> None:
         help="Fail-safe timeout per ticker; timeout skips ticker and continues (0 disables)",
     )
     parser.add_argument(
+        "--model-init-timeout-sec",
+        type=float,
+        default=DEFAULT_MODEL_INIT_TIMEOUT_SEC,
+        help="Fail-safe timeout for YOLO model init/download (0 disables)",
+    )
+    parser.add_argument(
         "--run-id",
         default="",
         help="Optional run id for tracing and event logging (auto-generated if empty)",
@@ -606,30 +613,43 @@ def main() -> None:
     if Path("/data").exists():
         os.environ.setdefault("ULTRALYTICS_CONFIG_DIR", "/data/.ultralytics")
 
-    LOG.info("Loading YOLO model: %s", YOLO_MODEL_ID)
+    if args.model_init_timeout_sec > 0:
+        os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", str(int(args.model_init_timeout_sec)))
+    LOG.info("Loading YOLO model: %s (init_timeout_sec=%.1f)", YOLO_MODEL_ID, args.model_init_timeout_sec)
     try:
-        # Validate OpenCV import early so failures are explicit in logs.
-        try:
-            import cv2 as _cv2
-            LOG.info("OpenCV backend: cv2=%s from %s", getattr(_cv2, "__version__", "?"), getattr(_cv2, "__file__", "?"))
-        except Exception as cv_exc:
-            LOG.error("OpenCV import failed before YOLO init: %s", cv_exc)
-            raise
+        with _ticker_timeout(args.model_init_timeout_sec):
+            # Validate OpenCV import early so failures are explicit in logs.
+            LOG.info("YOLO init step: importing OpenCV")
+            try:
+                import cv2 as _cv2
+                LOG.info("OpenCV backend: cv2=%s from %s", getattr(_cv2, "__version__", "?"), getattr(_cv2, "__file__", "?"))
+            except Exception as cv_exc:
+                LOG.error("OpenCV import failed before YOLO init: %s", cv_exc)
+                raise
 
-        # PyTorch ≥2.6 defaults weights_only=True, which rejects legacy YOLO weights.
-        # Patch torch.load to keep the old behaviour before importing ultralyticsplus.
-        import torch as _torch
-        _orig_load = _torch.load
-        _torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": kw.get("weights_only", False)})
+            # PyTorch >= 2.6 defaults weights_only=True, which rejects legacy YOLO weights.
+            # Patch torch.load to keep the old behaviour before importing ultralyticsplus.
+            LOG.info("YOLO init step: importing torch")
+            import torch as _torch
+            _orig_load = _torch.load
+            _torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": kw.get("weights_only", False)})
 
-        from ultralyticsplus import YOLO
-        model = YOLO(YOLO_MODEL_ID)
-        model.overrides.update({
-            "imgsz": args.imgsz,
-            "conf": args.conf,
-            "iou": args.iou,
-            "agnostic_nms": False, "max_det": 1000,
-        })
+            LOG.info("YOLO init step: importing ultralyticsplus.YOLO")
+            from ultralyticsplus import YOLO
+            LOG.info("YOLO init step: constructing model")
+            model = YOLO(YOLO_MODEL_ID)
+            model.overrides.update({
+                "imgsz": args.imgsz,
+                "conf": args.conf,
+                "iou": args.iou,
+                "agnostic_nms": False, "max_det": 1000,
+            })
+    except TimeoutError:
+        LOG.error(
+            "Failed to load YOLO model within %.1fs; init/download timed out",
+            args.model_init_timeout_sec,
+        )
+        sys.exit(1)
     except Exception as e:
         LOG.error("Failed to load YOLO model: %s", e)
         sys.exit(1)

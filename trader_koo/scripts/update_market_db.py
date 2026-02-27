@@ -186,6 +186,14 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
