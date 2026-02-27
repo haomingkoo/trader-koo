@@ -996,6 +996,7 @@ def _email_transport() -> str:
 
 
 def _send_resend_email(subject: str, text: str, recipient: str, resend: dict[str, Any]) -> None:
+    user_agent = os.getenv("TRADER_KOO_EMAIL_USER_AGENT", "trader-koo/1.0")
     payload = {
         "from": resend["from_email"],
         "to": [recipient],
@@ -1008,6 +1009,7 @@ def _send_resend_email(subject: str, text: str, recipient: str, resend: dict[str
         headers={
             "Authorization": f"Bearer {resend['api_key']}",
             "Content-Type": "application/json",
+            "User-Agent": user_agent,
         },
         method="POST",
     )
