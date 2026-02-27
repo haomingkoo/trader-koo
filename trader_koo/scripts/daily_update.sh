@@ -28,12 +28,41 @@ case "${REQUIRE_FULL_DATASET}" in
     1|true|TRUE|yes|YES|on|ON) REQUIRE_FULL_DATASET_FLAG="--require-full-dataset" ;;
     *) REQUIRE_FULL_DATASET_FLAG="--allow-partial-dataset" ;;
 esac
+UPDATE_MODE_RAW="${TRADER_KOO_UPDATE_MODE:-full}"
+UPDATE_MODE="$(printf '%s' "$UPDATE_MODE_RAW" | tr '[:upper:]' '[:lower:]')"
+RUN_INGEST=0
+RUN_YOLO=0
+RUN_REPORT=0
+case "$UPDATE_MODE" in
+    full|all)
+        UPDATE_MODE="full"
+        RUN_INGEST=1
+        RUN_YOLO=1
+        RUN_REPORT=1
+        ;;
+    yolo|yolo_report|yolo+report)
+        UPDATE_MODE="yolo"
+        RUN_INGEST=0
+        RUN_YOLO=1
+        RUN_REPORT=1
+        ;;
+    report|report_only|email)
+        UPDATE_MODE="report"
+        RUN_INGEST=0
+        RUN_YOLO=0
+        RUN_REPORT=1
+        ;;
+    *)
+        echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [ERROR] invalid TRADER_KOO_UPDATE_MODE='${UPDATE_MODE_RAW}'" >&2
+        exit 64
+        ;;
+esac
 
 mkdir -p "$LOG_DIR"
 
 echo "========================================" >> "$RUN_LOG"
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [START] daily_update.sh" >> "$RUN_LOG"
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] config max_secs_per_ticker=${INGEST_MAX_SECS_PER_TICKER} price_timeout_sec=${PRICE_TIMEOUT_SEC} price_retry_attempts=${PRICE_RETRY_ATTEMPTS} retry_failed_passes=${INGEST_RETRY_FAILED_PASSES} retry_failed_backoff_sec=${INGEST_RETRY_FAILED_BACKOFF_SEC} require_full_dataset=${REQUIRE_FULL_DATASET}" >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [START] daily_update.sh mode=${UPDATE_MODE}" >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] config max_secs_per_ticker=${INGEST_MAX_SECS_PER_TICKER} price_timeout_sec=${PRICE_TIMEOUT_SEC} price_retry_attempts=${PRICE_RETRY_ATTEMPTS} retry_failed_passes=${INGEST_RETRY_FAILED_PASSES} retry_failed_backoff_sec=${INGEST_RETRY_FAILED_BACKOFF_SEC} require_full_dataset=${REQUIRE_FULL_DATASET} enabled=${RUN_INGEST}" >> "$RUN_LOG"
 
 # ── 1. Fetch prices + fundamentals for all S&P 500 tickers ──────────────────
 #      Market context tickers (VIX, SPY, QQQ, ^DJI, ^TNX, SVIX) are always
@@ -46,28 +75,33 @@ if [ -d "$REPO_ROOT/trader_koo" ]; then
     cd "$REPO_ROOT"
 fi
 
-INGEST_T0=$(date +%s)
-if "$PYTHON" "$SCRIPT_DIR/update_market_db.py" \
-    --use-sp500 \
-    --price-lookback-days 5 \
-    --fund-min-interval-hours 20 \
-    --max-seconds-per-ticker "$INGEST_MAX_SECS_PER_TICKER" \
-    --price-timeout-sec "$PRICE_TIMEOUT_SEC" \
-    --price-retry-attempts "$PRICE_RETRY_ATTEMPTS" \
-    --retry-failed-passes "$INGEST_RETRY_FAILED_PASSES" \
-    --retry-failed-backoff-sec "$INGEST_RETRY_FAILED_BACKOFF_SEC" \
-    $REQUIRE_FULL_DATASET_FLAG \
-    --sleep-min 0.5 \
-    --sleep-max 1.2 \
-    --db-path "$DB_PATH" \
-    --log-file "$LOG_DIR/update_market_db.log" \
-    >> "$RUN_LOG" 2>&1; then
-    INGEST_RC=0
+if [ "$RUN_INGEST" -eq 1 ]; then
+    INGEST_T0=$(date +%s)
+    if "$PYTHON" "$SCRIPT_DIR/update_market_db.py" \
+        --use-sp500 \
+        --price-lookback-days 5 \
+        --fund-min-interval-hours 20 \
+        --max-seconds-per-ticker "$INGEST_MAX_SECS_PER_TICKER" \
+        --price-timeout-sec "$PRICE_TIMEOUT_SEC" \
+        --price-retry-attempts "$PRICE_RETRY_ATTEMPTS" \
+        --retry-failed-passes "$INGEST_RETRY_FAILED_PASSES" \
+        --retry-failed-backoff-sec "$INGEST_RETRY_FAILED_BACKOFF_SEC" \
+        $REQUIRE_FULL_DATASET_FLAG \
+        --sleep-min 0.5 \
+        --sleep-max 1.2 \
+        --db-path "$DB_PATH" \
+        --log-file "$LOG_DIR/update_market_db.log" \
+        >> "$RUN_LOG" 2>&1; then
+        INGEST_RC=0
+    else
+        INGEST_RC=$?
+    fi
+    INGEST_T1=$(date +%s)
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] done rc=${INGEST_RC} sec=$((INGEST_T1-INGEST_T0))" >> "$RUN_LOG"
 else
-    INGEST_RC=$?
+    INGEST_RC=0
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] skipped mode=${UPDATE_MODE}" >> "$RUN_LOG"
 fi
-INGEST_T1=$(date +%s)
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] done rc=${INGEST_RC} sec=$((INGEST_T1-INGEST_T0))" >> "$RUN_LOG"
 if [ "$INGEST_RC" -ne 0 ]; then
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [ERROR] ingest failed rc=${INGEST_RC}; aborting daily_update" >> "$RUN_LOG"
     exit "$INGEST_RC"
@@ -84,6 +118,7 @@ YOLO_IMGSZ="${TRADER_KOO_YOLO_IMGSZ:-640}"
 YOLO_CONF="${TRADER_KOO_YOLO_CONF:-0.25}"
 YOLO_IOU="${TRADER_KOO_YOLO_IOU:-0.45}"
 YOLO_MAX_SECS_PER_TICKER="${TRADER_KOO_YOLO_MAX_SECS_PER_TICKER:-180}"
+if [ "$RUN_YOLO" -eq 1 ]; then
 YOLO_PREFLIGHT_RC=0
 if "$PYTHON" - <<'PY' >> "$RUN_LOG" 2>&1; then
 import cv2, torch, ultralyticsplus
@@ -141,8 +176,13 @@ else:
     finally:
         conn.close()
 PY
+else
+YOLO_RC=0
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  skipped mode=${UPDATE_MODE}" >> "$RUN_LOG"
+fi
 
 # ── 3. Generate daily report (+ optional email) ───────────────────────────────
+if [ "$RUN_REPORT" -eq 1 ]; then
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Generating daily report..." >> "$RUN_LOG"
 SEND_EMAIL_FLAG=""
 if [ "${TRADER_KOO_AUTO_EMAIL:-}" = "1" ]; then
@@ -163,8 +203,12 @@ else
 fi
 REPORT_T1=$(date +%s)
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Done. rc=${REPORT_RC} sec=$((REPORT_T1-REPORT_T0))" >> "$RUN_LOG"
+else
+    REPORT_RC=0
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] skipped mode=${UPDATE_MODE}" >> "$RUN_LOG"
+fi
 
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh" >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh mode=${UPDATE_MODE}" >> "$RUN_LOG"
 
 # ── 4. Housekeeping — keep last 30 report archives, cap log size ──────────────
 # Keep only the 30 most recent timestamped report files (latest.* are always kept)
