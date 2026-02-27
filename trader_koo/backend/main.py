@@ -162,27 +162,58 @@ def _append_run_log(tag: str, message: str) -> None:
         LOG.warning("Failed to append run log %s: %s", RUN_LOG_PATH, exc)
 
 
-def _run_daily_update() -> None:
+def _normalize_update_mode(mode: str | None) -> str | None:
+    value = str(mode or "full").strip().lower()
+    aliases = {
+        "full": "full",
+        "all": "full",
+        "yolo": "yolo",
+        "yolo_report": "yolo",
+        "yolo+report": "yolo",
+        "report": "report",
+        "report_only": "report",
+        "email": "report",
+    }
+    return aliases.get(value)
+
+
+def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
+    mode_norm = _normalize_update_mode(mode) or "full"
     script = SCRIPTS_DIR / "daily_update.sh"
     started = dt.datetime.now(dt.timezone.utc)
     rss_before = _current_rss_mb()
-    _append_run_log("SCHED", f"daily_update invoked rss_before_mb={_fmt_mb(rss_before)}")
+    _append_run_log(
+        "SCHED",
+        f"daily_update invoked source={source} mode={mode_norm} rss_before_mb={_fmt_mb(rss_before)}",
+    )
     LOG.info(
-        "Scheduler: starting daily_update.sh (rss_before_mb=%s, run_log=%s)",
+        "Scheduler: starting daily_update.sh (source=%s, mode=%s, rss_before_mb=%s, run_log=%s)",
+        source,
+        mode_norm,
         _fmt_mb(rss_before),
         RUN_LOG_PATH,
     )
-    result = subprocess.run(["bash", str(script)], capture_output=False)
+    env = os.environ.copy()
+    env["TRADER_KOO_UPDATE_MODE"] = mode_norm
+    result = subprocess.run(["bash", str(script)], capture_output=False, env=env)
     elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     rss_after = _current_rss_mb()
     delta = (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None
     if result.returncode == 0:
         _append_run_log(
             "SCHED",
-            f"daily_update completed rc={result.returncode} sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}",
+            (
+                f"daily_update completed source={source} mode={mode_norm} rc={result.returncode} "
+                f"sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}"
+            ),
         )
         LOG.info(
-            "Scheduler: daily_update.sh completed OK (rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s)",
+            (
+                "Scheduler: daily_update.sh completed OK "
+                "(source=%s, mode=%s, rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s)"
+            ),
+            source,
+            mode_norm,
             result.returncode,
             elapsed,
             _fmt_mb(rss_after),
@@ -191,10 +222,18 @@ def _run_daily_update() -> None:
     else:
         _append_run_log(
             "SCHED",
-            f"daily_update failed rc={result.returncode} sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}",
+            (
+                f"daily_update failed source={source} mode={mode_norm} rc={result.returncode} "
+                f"sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}"
+            ),
         )
         LOG.error(
-            "Scheduler: daily_update.sh failed (rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s, run_log=%s)",
+            (
+                "Scheduler: daily_update.sh failed "
+                "(source=%s, mode=%s, rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s, run_log=%s)"
+            ),
+            source,
+            mode_norm,
             result.returncode,
             elapsed,
             _fmt_mb(rss_after),
@@ -1318,28 +1357,63 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/api/admin/trigger-update")
-def trigger_update() -> dict[str, Any]:
-    """Trigger daily_update.sh immediately (runs in background via scheduler)."""
+def trigger_update(mode: str = Query(default="full")) -> dict[str, Any]:
+    """
+    Trigger daily_update.sh immediately.
+
+    Modes:
+    - full: ingest + yolo + report
+    - yolo: skip ingest, run yolo + report
+    - report: skip ingest/yolo, run report (+ optional email)
+    """
+    mode_norm = _normalize_update_mode(mode)
+    if mode_norm is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid mode. Use one of: full, yolo, report "
+                "(aliases: yolo_report, yolo+report, report_only)."
+            ),
+        )
+
     reconcile = _reconcile_stale_running_runs()
     pipeline = _pipeline_status_snapshot(log_lines=120)
     if pipeline["active"]:
         stage = pipeline.get("stage", "unknown")
         return {
             "ok": False,
-            "message": f"daily_update already running (stage={stage})",
+            "message": f"daily_update already running (stage={stage}, requested_mode={mode_norm})",
             "stage": stage,
+            "requested_mode": mode_norm,
             "latest_run": pipeline.get("latest_run"),
             "run_log_path": pipeline.get("run_log_path"),
             "reconciled_stale_runs": reconcile.get("reconciled", 0),
         }
-    job = _scheduler.get_job("daily_update")
-    if job is None:
-        raise HTTPException(status_code=500, detail="Scheduler job not found")
-    job.modify(next_run_time=dt.datetime.now(dt.timezone.utc))
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    manual_job_id = f"manual_daily_update_{now_utc.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
+    _scheduler.add_job(
+        _run_daily_update,
+        trigger="date",
+        run_date=now_utc,
+        id=manual_job_id,
+        kwargs={"mode": mode_norm, "source": "admin"},
+    )
+
+    mode_message = {
+        "full": "full pipeline (ingest + yolo + report)",
+        "yolo": "yolo + report (ingest skipped)",
+        "report": "report only (ingest + yolo skipped)",
+    }
     return {
         "ok": True,
-        "message": "daily_update triggered — check /data/logs/cron_daily.log",
+        "message": (
+            f"daily_update triggered ({mode_message.get(mode_norm, mode_norm)}) "
+            "— check /data/logs/cron_daily.log"
+        ),
         "stage": "queued",
+        "mode": mode_norm,
+        "job_id": manual_job_id,
         "run_log_path": str(RUN_LOG_PATH),
         "reconciled_stale_runs": reconcile.get("reconciled", 0),
     }
