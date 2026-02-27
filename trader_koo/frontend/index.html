@@ -1003,8 +1003,8 @@
 
     function setAdminApiKey(key) {
       _apiKey = String(key || "").trim();
-      if (_apiKey) localStorage.setItem(ADMIN_KEY_STORAGE_KEY, _apiKey);
-      else localStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
+      if (_apiKey) sessionStorage.setItem(ADMIN_KEY_STORAGE_KEY, _apiKey);
+      else sessionStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
     }
 
     async function adminFetch(url, opts = {}) {
@@ -1019,12 +1019,14 @@
 
     async function initApiKey() {
       const params = new URLSearchParams(window.location.search);
-      const fromQuery = String(params.get("admin_key") || "").trim();
-      if (fromQuery) {
-        setAdminApiKey(fromQuery);
-        return;
+      if (params.has("admin_key")) {
+        // Never load admin keys from URL; strip if user pasted one.
+        params.delete("admin_key");
+        const qs = params.toString();
+        const next = qs ? `${window.location.pathname}?${qs}${window.location.hash}` : `${window.location.pathname}${window.location.hash}`;
+        window.history.replaceState({}, document.title, next);
       }
-      setAdminApiKey(localStorage.getItem(ADMIN_KEY_STORAGE_KEY) || "");
+      setAdminApiKey(sessionStorage.getItem(ADMIN_KEY_STORAGE_KEY) || "");
     }
 
     function setApiBase(base, persist = true) {
