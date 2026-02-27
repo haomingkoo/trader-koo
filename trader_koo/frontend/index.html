@@ -375,6 +375,7 @@
       line-height: 1.55;
       color: var(--text);
       font-size: 0.92rem;
+      overflow-x: hidden;
     }
     .guide h3 {
       margin: 12px 0 8px;
@@ -396,6 +397,14 @@
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 10px;
       margin-bottom: 10px;
+    }
+    .guide-grid,
+    .guide-card,
+    .guide details,
+    .guide summary,
+    .guide-callout {
+      min-width: 0;
+      max-width: 100%;
     }
     .guide-card {
       background: #0f1624;
@@ -436,6 +445,7 @@
       margin-bottom: 8px;
     }
     .guide summary {
+      display: block;
       cursor: pointer;
       color: var(--text);
       font-weight: 600;
@@ -460,6 +470,7 @@
     }
     @media (max-width: 640px) {
       .guide { font-size: 0.88rem; }
+      .guide-grid { grid-template-columns: 1fr; }
       .guide-list { margin-left: 14px; }
       .guide details { padding: 8px; }
       .guide summary { font-size: 0.82rem; }
@@ -560,8 +571,8 @@
             <span style="font-size:0.8rem; color:var(--muted);">Rule/Hybrid Lines</span>
           </label>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
-            <input id="showCvClassLines" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
-            <span style="font-size:0.8rem; color:var(--muted);">CV Proxy Lines</span>
+            <input id="showBollinger" type="checkbox" style="width:auto; padding:0; margin:0;" />
+            <span style="font-size:0.8rem; color:var(--muted);">Bollinger Bands</span>
           </label>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
             <input id="showYoloPatterns" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
@@ -620,14 +631,6 @@
           <table id="hybridPatternsTable"></table>
         </div>
         <div class="panel">
-          <div class="label">CV Proxy Pattern Scores</div>
-          <table id="cvProxyPatternsTable"></table>
-        </div>
-        <div class="panel">
-          <div class="label">Hybrid vs CV Compare</div>
-          <table id="hybridCvCompareTable"></table>
-        </div>
-        <div class="panel">
           <div class="label">Pattern Overlays (Drawn)</div>
           <table id="patternOverlaysTable"></table>
         </div>
@@ -674,7 +677,7 @@
       </div>
 
       <div class="panel" style="margin-bottom:12px;">
-        <div class="label" style="margin-bottom:8px;">Setup Quality Score</div>
+        <div class="label" style="margin-bottom:8px;">Confluence Score</div>
         <div id="reportSetupSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:8px;"></div>
         <div id="reportSetupQuickAdds" class="mini-actions"></div>
         <table id="reportSetupQualityTable"></table>
@@ -781,8 +784,9 @@
           <li>Open <b>Daily Report</b> after the nightly run completes.</li>
           <li>Review <b>Tonight's 5 Key Changes</b> first for the fast market summary.</li>
           <li>Check <b>YOLO Changes</b> for new patterns and patterns no longer detected.</li>
-          <li>Use <b>Setup Quality Score</b> and <b>Sector Heatmap</b> to prioritize candidates.</li>
-          <li>Click any ticker to jump into <b>Chart + Levels</b>.</li>
+          <li>Use <b>Confluence Score</b> and <b>Sector Heatmap</b> to prioritize candidates.</li>
+          <li>Click any ticker to jump into <b>Chart + Levels</b> and inspect structure.</li>
+          <li>Use <b>Bollinger Bands</b> toggle when you want volatility context.</li>
           <li>Add names to <b>Watchlist</b> so you can revisit the same basket quickly.</li>
         </ol>
 
@@ -798,7 +802,7 @@
           </div>
           <div class="guide-card">
             <div class="guide-k">Chart + Levels</div>
-            <div class="guide-v">Per-ticker chart with support/resistance, gaps, trendlines, candlestick signals, and YOLO boxes.</div>
+            <div class="guide-v">Per-ticker chart with support/resistance, gaps, trendlines, rule/hybrid overlays, candlestick signals, optional Bollinger Bands, and YOLO boxes.</div>
           </div>
           <div class="guide-card">
             <div class="guide-k">Daily Report</div>
@@ -809,7 +813,7 @@
         <h3>Daily Report Read Order</h3>
         <ol class="guide-list">
           <li><b>Tonight's 5 Key Changes</b>: one-screen summary of what materially changed.</li>
-          <li><b>Setup Quality Score</b>: ranked candidates combining valuation, momentum, and YOLO freshness.</li>
+          <li><b>Confluence Score</b>: ranked candidates combining valuation, momentum, volatility, and YOLO freshness.</li>
           <li><b>Sector Heatmap</b>: identify leadership/laggards and rotation.</li>
           <li><b>YOLO Changes vs Previous Run</b>: actionable delta, not raw count noise.</li>
           <li><b>Large Moves + 52-week Extremes</b>: momentum continuation or exhaustion candidates.</li>
@@ -820,9 +824,20 @@
           <li>Load ticker from report or search box.</li>
           <li>Mark location versus <b>primary/secondary support/resistance</b>.</li>
           <li>Check <b>open gaps</b> and <b>trendlines</b> for context.</li>
-          <li>Enable <b>YOLO patterns</b> and compare with rule/hybrid and CV proxy overlays.</li>
+          <li>Enable <b>Rule/Hybrid Lines</b> and <b>YOLO Patterns</b> to compare machine + rule signals.</li>
+          <li>Turn on <b>Bollinger Bands</b> if you want to gauge stretch/squeeze conditions.</li>
           <li>Decide only when multiple signals agree (structure + momentum + valuation).</li>
         </ol>
+
+        <h3>Chart Toggles (How to Use)</h3>
+        <ul class="guide-list">
+          <li><b>Show Trendlines</b>: reveal support/resistance line geometry from recent pivots.</li>
+          <li><b>Show Patterns</b>: display top pattern overlays detected by rule/hybrid logic.</li>
+          <li><b>Rule/Hybrid Lines</b>: keep this on for primary pattern structure.</li>
+          <li><b>Bollinger Bands</b>: optional volatility envelope (20, 2) around price.</li>
+          <li><b>YOLO Patterns</b>: AI-detected pattern windows (daily + weekly labels).</li>
+          <li><b>Bars D/W</b>: switch between daily and weekly candles for timeframe alignment.</li>
+        </ul>
 
         <h3>Signal Glossary (Short)</h3>
         <details open>
@@ -1316,7 +1331,31 @@
           w.volume += Number(row.volume) || 0;
         }
       }
-      return Array.from(weeks.values());
+      return Array.from(weeks.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    }
+
+    function buildMissingWeekdayRangebreakValues(dateList) {
+      const unique = Array.from(new Set((dateList || []).map((d) => String(d || "").slice(0, 10)).filter(Boolean))).sort();
+      if (!unique.length) return [];
+
+      const seen = new Set(unique);
+      const missing = [];
+      const cur = new Date(`${unique[0]}T12:00:00Z`);
+      const end = new Date(`${unique[unique.length - 1]}T12:00:00Z`);
+      if (Number.isNaN(cur.getTime()) || Number.isNaN(end.getTime())) return [];
+
+      while (cur <= end) {
+        const dow = cur.getUTCDay();
+        if (dow !== 0 && dow !== 6) {
+          const y = cur.getUTCFullYear();
+          const m = String(cur.getUTCMonth() + 1).padStart(2, "0");
+          const d = String(cur.getUTCDate()).padStart(2, "0");
+          const key = `${y}-${m}-${d}`;
+          if (!seen.has(key)) missing.push(key);
+        }
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      return missing;
     }
 
     function renderChart(payload) {
@@ -1334,7 +1373,7 @@
       const showTrendlines = $("showTrendlines") ? Boolean($("showTrendlines").checked) : false;
       const showPatterns = $("showPatterns") ? Boolean($("showPatterns").checked) : true;
       const showRuleClassLines = $("showRuleClassLines") ? Boolean($("showRuleClassLines").checked) : true;
-      const showCvClassLines = $("showCvClassLines") ? Boolean($("showCvClassLines").checked) : true;
+      const showBollinger = $("showBollinger") ? Boolean($("showBollinger").checked) : false;
       const showYoloPatterns = $("showYoloPatterns") ? Boolean($("showYoloPatterns").checked) : true;
 
       const x = chart.map(r => r.date);
@@ -1344,6 +1383,7 @@
       const close = chart.map(r => Number(r.close));
       const vol = chart.map(r => Number(r.volume || 0));
       const volColor = chart.map(r => Number(r.close) >= Number(r.open) ? "rgba(56,211,159,0.7)" : "rgba(255,107,107,0.7)");
+      const missingWeekdayBreaks = buildMissingWeekdayRangebreakValues(x);
 
       const ma = (arr, n) => arr.map((_, i) => {
         if (i < n - 1) return null;
@@ -1351,6 +1391,24 @@
         for (let j = i - n + 1; j <= i; j++) s += arr[j];
         return s / n;
       });
+      const bollinger = (arr, n = 20, k = 2) => {
+        const upper = new Array(arr.length).fill(null);
+        const lower = new Array(arr.length).fill(null);
+        for (let i = n - 1; i < arr.length; i++) {
+          let sum = 0;
+          for (let j = i - n + 1; j <= i; j++) sum += arr[j];
+          const mean = sum / n;
+          let varSum = 0;
+          for (let j = i - n + 1; j <= i; j++) {
+            const d = arr[j] - mean;
+            varSum += d * d;
+          }
+          const std = Math.sqrt(varSum / n);
+          upper[i] = mean + k * std;
+          lower[i] = mean - k * std;
+        }
+        return { upper, lower };
+      };
 
       const traces = [
         {
@@ -1366,6 +1424,31 @@
         { type: "scatter", mode: "lines", x, y: ma(close, 200), name: "MA200", line: {color:"#c07bff", width:1.2}, xaxis:"x", yaxis:"y" },
         { type: "bar", x, y: vol, name: "Volume", marker: {color: volColor}, xaxis:"x2", yaxis:"y2" }
       ];
+      if (showBollinger) {
+        const bb = bollinger(close, 20, 2);
+        traces.push({
+          type: "scatter",
+          mode: "lines",
+          x,
+          y: bb.upper,
+          name: "BB Upper (20,2)",
+          line: { color: "rgba(106,169,255,0.75)", width: 1.1, dash: "dot" },
+          xaxis: "x",
+          yaxis: "y",
+        });
+        traces.push({
+          type: "scatter",
+          mode: "lines",
+          x,
+          y: bb.lower,
+          name: "BB Lower (20,2)",
+          line: { color: "rgba(106,169,255,0.75)", width: 1.1, dash: "dot" },
+          fill: "tonexty",
+          fillcolor: "rgba(106,169,255,0.08)",
+          xaxis: "x",
+          yaxis: "y",
+        });
+      }
 
       const candlePatterns = payload.candlestick_patterns || [];
       if (candlePatterns.length > 0) {
@@ -1497,15 +1580,14 @@
         };
         const sourceDash = (sRaw) => {
           const s = String(sRaw || "").toLowerCase();
-          if (s === "cv_proxy") return "dashdot";
           if (s === "hybrid_rule") return "solid";
           return "dot";
         };
 
         let overlays = patternOverlays.filter((p) => {
           const src = String(p.source || "");
+          if (src === "cv_proxy") return false;
           if (!showRuleClassLines && (src === "rule" || src === "hybrid_rule")) return false;
-          if (!showCvClassLines && src === "cv_proxy") return false;
           return true;
         });
 
@@ -1543,7 +1625,7 @@
           const color = patternColor(className);
           const dash = sourceDash(source);
           const width = source === "hybrid_rule" ? 2.1 : 1.7;
-          const shortSrc = source === "hybrid_rule" ? "HYB" : (source === "cv_proxy" ? "CV" : "RULE");
+          const shortSrc = source === "hybrid_rule" ? "HYB" : "RULE";
 
           shapes.push({
             type: "line",
@@ -1692,7 +1774,10 @@
           domain: [0, 1], anchor: "y", rangeslider: {visible: false},
           showgrid: true, gridcolor: "#25334f",
           range: defaultX0 && defaultX1 ? [defaultX0, defaultX1] : undefined,
-          rangebreaks: [{bounds: ["sat", "mon"]}],
+          rangebreaks: [
+            {bounds: ["sat", "mon"]},
+            ...(missingWeekdayBreaks.length ? [{values: missingWeekdayBreaks}] : []),
+          ],
           rangeselector: {
             bgcolor: "#e9eef8",
             activecolor: "#6aa9ff",
@@ -1839,22 +1924,6 @@
           "hybridPatternsTable",
           ["pattern", "status", "hybrid_confidence", "base_confidence", "candle_score", "volume_score", "breakout_score", "candle_bias", "vol_ratio", "start_date", "end_date"],
           payload.hybrid_patterns || [],
-          false,
-          null,
-          { sortable: true }
-        );
-        renderSimpleTable(
-          "cvProxyPatternsTable",
-          ["pattern", "status", "cv_confidence", "method", "start_date", "end_date", "notes"],
-          payload.cv_proxy_patterns || [],
-          false,
-          null,
-          { sortable: true }
-        );
-        renderSimpleTable(
-          "hybridCvCompareTable",
-          ["pattern", "hybrid_status", "cv_status", "hybrid_confidence", "cv_confidence", "consensus_confidence", "agreement", "confidence_gap"],
-          payload.hybrid_cv_compare || [],
           false,
           null,
           { sortable: true }
@@ -2067,11 +2136,11 @@
         const setupRows = (signals.setup_quality_top || []).slice(0, 40);
         LAST_REPORT_SETUP_ROWS = setupRows;
         $("reportSetupSummary").textContent = setupRows.length
-          ? `Score combines valuation (discount/PEG), one-day momentum, 52W proximity, and latest YOLO confidence/age. Top ${Math.min(25, setupRows.length)} shown below.`
-          : "No setup-quality rows available yet.";
+          ? `Confluence score combines valuation (discount/PEG), one-day momentum, volatility regime (ATR/RV/VIX + BB width), 52W proximity, and YOLO confidence/age. Top ${Math.min(25, setupRows.length)} shown below.`
+          : "No confluence rows available yet.";
         renderSimpleTable(
           "reportSetupQualityTable",
-          ["ticker", "score", "setup_tier", "sector", "pct_change", "discount_pct", "peg", "yolo_pattern", "yolo_confidence", "yolo_age_days"],
+          ["ticker", "score", "setup_tier", "sector", "pct_change", "discount_pct", "peg", "atr_pct_14", "realized_vol_20", "bb_width_20", "yolo_pattern", "yolo_confidence", "yolo_age_days"],
           setupRows.slice(0, 25),
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
@@ -2318,7 +2387,7 @@
     $("showTrendlines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showRuleClassLines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
-    $("showCvClassLines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
+    $("showBollinger").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showYoloPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
 
     (async () => {
