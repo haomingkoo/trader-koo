@@ -53,6 +53,10 @@ API_KEY = os.getenv("TRADER_KOO_API_KEY", "")  # empty = auth disabled (local de
 PROCESS_START_UTC = dt.datetime.now(dt.timezone.utc)
 
 
+def _as_bool(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _resolve_log_dir() -> Path:
     requested = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
     try:
@@ -76,9 +80,16 @@ LOG_PATHS: dict[str, Path] = {
 STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
 PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
 INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STALE_MIN", "75")))
+ADMIN_STRICT_API_KEY = _as_bool(os.getenv("TRADER_KOO_ADMIN_STRICT_KEY", "1"))
+ADMIN_AUTH_WINDOW_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_WINDOW_SEC", "300")))
+ADMIN_AUTH_MAX_FAILS = max(3, int(os.getenv("TRADER_KOO_ADMIN_AUTH_MAX_FAILS", "20")))
+ADMIN_AUTH_BLOCK_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_BLOCK_SEC", "600")))
+EXPOSE_STATUS_INTERNAL = _as_bool(os.getenv("TRADER_KOO_EXPOSE_STATUS_INTERNAL", "0"))
 _STATUS_CACHE_LOCK = threading.Lock()
 _STATUS_CACHE_AT: dt.datetime | None = None
 _STATUS_CACHE_PAYLOAD: dict[str, Any] | None = None
+_ADMIN_AUTH_LOCK = threading.Lock()
+_ADMIN_AUTH_STATE: dict[str, dict[str, float]] = {}
 _MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
 try:
     MARKET_TZ = ZoneInfo(_MARKET_TZ_NAME)
@@ -162,6 +173,72 @@ def _append_run_log(tag: str, message: str) -> None:
             f.write(line)
     except Exception as exc:
         LOG.warning("Failed to append run log %s: %s", RUN_LOG_PATH, exc)
+
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    if request.client and request.client.host:
+        return request.client.host
+    return "-"
+
+
+def _prune_admin_auth_state(now_ts: float) -> None:
+    # Bound in-memory state for failed auth tracking.
+    max_age = max(ADMIN_AUTH_WINDOW_SEC, ADMIN_AUTH_BLOCK_SEC) * 3
+    stale_keys = [
+        ip
+        for ip, entry in _ADMIN_AUTH_STATE.items()
+        if now_ts - float(entry.get("updated_ts", 0.0)) > max_age
+    ]
+    for ip in stale_keys:
+        _ADMIN_AUTH_STATE.pop(ip, None)
+
+
+def _admin_auth_blocked(client_ip: str, now_ts: float) -> tuple[bool, int]:
+    with _ADMIN_AUTH_LOCK:
+        _prune_admin_auth_state(now_ts)
+        entry = _ADMIN_AUTH_STATE.get(client_ip)
+        if not entry:
+            return False, 0
+        blocked_until = float(entry.get("blocked_until", 0.0))
+        if blocked_until > now_ts:
+            return True, max(1, int(blocked_until - now_ts))
+        return False, 0
+
+
+def _admin_auth_record_failure(client_ip: str, now_ts: float) -> tuple[bool, int, int]:
+    with _ADMIN_AUTH_LOCK:
+        _prune_admin_auth_state(now_ts)
+        entry = _ADMIN_AUTH_STATE.get(client_ip) or {}
+        window_start = float(entry.get("window_start", now_ts))
+        if now_ts - window_start > ADMIN_AUTH_WINDOW_SEC:
+            window_start = now_ts
+            count = 0
+        else:
+            count = int(entry.get("count", 0))
+        count += 1
+        blocked_until = float(entry.get("blocked_until", 0.0))
+        blocked = False
+        if count >= ADMIN_AUTH_MAX_FAILS:
+            blocked = True
+            blocked_until = now_ts + ADMIN_AUTH_BLOCK_SEC
+        _ADMIN_AUTH_STATE[client_ip] = {
+            "window_start": window_start,
+            "count": float(count),
+            "blocked_until": blocked_until,
+            "updated_ts": now_ts,
+        }
+        retry_after = max(1, int(blocked_until - now_ts)) if blocked else 0
+        return blocked, retry_after, count
+
+
+def _admin_auth_clear(client_ip: str) -> None:
+    with _ADMIN_AUTH_LOCK:
+        _ADMIN_AUTH_STATE.pop(client_ip, None)
 
 
 def _normalize_update_mode(mode: str | None) -> str | None:
@@ -384,24 +461,60 @@ app.add_middleware(
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     """Require X-API-Key on /api/admin/* routes only."""
-    if API_KEY:
-        path = request.url.path
-        if path.startswith(ADMIN_API_PREFIX):
-            provided = request.headers.get("X-API-Key", "")
-            if not secrets.compare_digest(provided, API_KEY):
-                xff = request.headers.get("x-forwarded-for", "")
-                client_ip = (xff.split(",")[0].strip() if xff else "") or (request.client.host if request.client else "-")
-                ua = request.headers.get("user-agent", "-")
-                referer = request.headers.get("referer", "-")
-                LOG.warning(
-                    "Unauthorized request blocked method=%s path=%s client_ip=%s user_agent=%s referer=%s",
-                    request.method,
+    path = request.url.path
+    if path.startswith(ADMIN_API_PREFIX):
+        client_ip = _client_ip(request)
+        blocked, retry_after = _admin_auth_blocked(client_ip, dt.datetime.now(dt.timezone.utc).timestamp())
+        if blocked:
+            LOG.warning(
+                "Admin auth throttled method=%s path=%s client_ip=%s retry_after_sec=%s",
+                request.method,
+                path,
+                client_ip,
+                retry_after,
+            )
+            return JSONResponse(
+                {"detail": "Too many unauthorized attempts. Try again later."},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+        if not API_KEY:
+            if ADMIN_STRICT_API_KEY:
+                LOG.error(
+                    "Admin endpoint denied because TRADER_KOO_API_KEY is not configured (path=%s, client_ip=%s)",
                     path,
                     client_ip,
-                    ua,
-                    referer,
                 )
-                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                return JSONResponse(
+                    {"detail": "Admin API key is not configured on server."},
+                    status_code=503,
+                )
+            return await call_next(request)
+        provided = request.headers.get("X-API-Key", "")
+        if not secrets.compare_digest(provided, API_KEY):
+            blocked_now, retry_after, fail_count = _admin_auth_record_failure(
+                client_ip, dt.datetime.now(dt.timezone.utc).timestamp()
+            )
+            ua = request.headers.get("user-agent", "-")
+            referer = request.headers.get("referer", "-")
+            LOG.warning(
+                "Unauthorized request blocked method=%s path=%s client_ip=%s fail_count=%s blocked=%s user_agent=%s referer=%s",
+                request.method,
+                path,
+                client_ip,
+                fail_count,
+                blocked_now,
+                ua,
+                referer,
+            )
+            if blocked_now:
+                return JSONResponse(
+                    {"detail": "Too many unauthorized attempts. Try again later."},
+                    status_code=429,
+                    headers={"Retry-After": str(retry_after)},
+                )
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        _admin_auth_clear(client_ip)
     return await call_next(request)
 
 
@@ -1410,7 +1523,10 @@ def config() -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     db_exists = DB_PATH.exists()
-    return {"ok": db_exists, "db_path": str(DB_PATH), "db_exists": db_exists}
+    payload = {"ok": db_exists, "db_exists": db_exists}
+    if EXPOSE_STATUS_INTERNAL:
+        payload["db_path"] = str(DB_PATH)
+    return payload
 
 
 @app.post("/api/admin/trigger-update")
@@ -1886,18 +2002,19 @@ def status() -> dict[str, Any]:
 
     rss_now = _current_rss_mb()
     rss_max = _max_rss_mb()
-    base = {
+    base: dict[str, Any] = {
         "service": "trader_koo-api",
         "now_utc": now.replace(microsecond=0).isoformat(),
-        "db_path": str(DB_PATH),
         "db_exists": DB_PATH.exists(),
-        "process": {
+    }
+    if EXPOSE_STATUS_INTERNAL:
+        base["db_path"] = str(DB_PATH)
+        base["process"] = {
             "pid": os.getpid(),
             "rss_mb": None if rss_now is None else round(rss_now, 2),
             "rss_max_mb": None if rss_max is None else round(rss_max, 2),
             "uptime_sec": int((now - PROCESS_START_UTC).total_seconds()),
-        },
-    }
+        }
     if not DB_PATH.exists():
         return {**base, "ok": False, "error": "Database file not found"}
 
