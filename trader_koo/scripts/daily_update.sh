@@ -24,9 +24,22 @@ PRICE_RETRY_ATTEMPTS="${TRADER_KOO_PRICE_RETRY_ATTEMPTS:-3}"
 INGEST_RETRY_FAILED_PASSES="${TRADER_KOO_INGEST_RETRY_FAILED_PASSES:-1}"
 INGEST_RETRY_FAILED_BACKOFF_SEC="${TRADER_KOO_INGEST_RETRY_FAILED_BACKOFF_SEC:-10}"
 REQUIRE_FULL_DATASET="${TRADER_KOO_REQUIRE_FULL_DATASET:-1}"
+INCLUDE_OPTIONS="${TRADER_KOO_INCLUDE_OPTIONS:-0}"
+OPTIONS_MIN_INTERVAL_HOURS="${TRADER_KOO_OPTIONS_MIN_INTERVAL_HOURS:-4}"
+OPTIONS_MAX_EXPIRIES="${TRADER_KOO_OPTIONS_MAX_EXPIRIES:-2}"
 case "${REQUIRE_FULL_DATASET}" in
     1|true|TRUE|yes|YES|on|ON) REQUIRE_FULL_DATASET_FLAG="--require-full-dataset" ;;
     *) REQUIRE_FULL_DATASET_FLAG="--allow-partial-dataset" ;;
+esac
+case "${INCLUDE_OPTIONS}" in
+    1|true|TRUE|yes|YES|on|ON)
+        INCLUDE_OPTIONS_ARGS=(--include-options --options-min-interval-hours "$OPTIONS_MIN_INTERVAL_HOURS" --options-max-expiries "$OPTIONS_MAX_EXPIRIES")
+        INCLUDE_OPTIONS_BOOL=1
+        ;;
+    *)
+        INCLUDE_OPTIONS_ARGS=()
+        INCLUDE_OPTIONS_BOOL=0
+        ;;
 esac
 UPDATE_MODE_RAW="${TRADER_KOO_UPDATE_MODE:-full}"
 UPDATE_MODE="$(printf '%s' "$UPDATE_MODE_RAW" | tr '[:upper:]' '[:lower:]')"
@@ -62,7 +75,7 @@ mkdir -p "$LOG_DIR"
 
 echo "========================================" >> "$RUN_LOG"
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [START] daily_update.sh mode=${UPDATE_MODE}" >> "$RUN_LOG"
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] config max_secs_per_ticker=${INGEST_MAX_SECS_PER_TICKER} price_timeout_sec=${PRICE_TIMEOUT_SEC} price_retry_attempts=${PRICE_RETRY_ATTEMPTS} retry_failed_passes=${INGEST_RETRY_FAILED_PASSES} retry_failed_backoff_sec=${INGEST_RETRY_FAILED_BACKOFF_SEC} require_full_dataset=${REQUIRE_FULL_DATASET} enabled=${RUN_INGEST}" >> "$RUN_LOG"
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] config max_secs_per_ticker=${INGEST_MAX_SECS_PER_TICKER} price_timeout_sec=${PRICE_TIMEOUT_SEC} price_retry_attempts=${PRICE_RETRY_ATTEMPTS} retry_failed_passes=${INGEST_RETRY_FAILED_PASSES} retry_failed_backoff_sec=${INGEST_RETRY_FAILED_BACKOFF_SEC} require_full_dataset=${REQUIRE_FULL_DATASET} include_options=${INCLUDE_OPTIONS_BOOL} options_min_interval_hours=${OPTIONS_MIN_INTERVAL_HOURS} options_max_expiries=${OPTIONS_MAX_EXPIRIES} enabled=${RUN_INGEST}" >> "$RUN_LOG"
 
 # ── 1. Fetch prices + fundamentals for all S&P 500 tickers ──────────────────
 #      Market context tickers (VIX, SPY, QQQ, ^DJI, ^TNX, SVIX) are always
@@ -86,6 +99,7 @@ if [ "$RUN_INGEST" -eq 1 ]; then
         --price-retry-attempts "$PRICE_RETRY_ATTEMPTS" \
         --retry-failed-passes "$INGEST_RETRY_FAILED_PASSES" \
         --retry-failed-backoff-sec "$INGEST_RETRY_FAILED_BACKOFF_SEC" \
+        "${INCLUDE_OPTIONS_ARGS[@]}" \
         $REQUIRE_FULL_DATASET_FLAG \
         --sleep-min 0.5 \
         --sleep-max 1.2 \
