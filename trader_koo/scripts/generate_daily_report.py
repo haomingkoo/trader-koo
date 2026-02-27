@@ -5,6 +5,7 @@ import argparse
 import calendar
 import datetime as dt
 import json
+import math
 import os
 import smtplib
 import sqlite3
@@ -640,6 +641,130 @@ def _setup_tier(score: float) -> str:
     return "D"
 
 
+def _stdev(values: list[float]) -> float | None:
+    n = len(values)
+    if n < 2:
+        return None
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / (n - 1)
+    return math.sqrt(max(var, 0.0))
+
+
+def _fetch_volatility_inputs(conn: sqlite3.Connection) -> tuple[dict[str, dict[str, float | None]], dict[str, Any]]:
+    """Build per-ticker volatility features and a market volatility context."""
+    by_ticker: dict[str, dict[str, float | None]] = {}
+    market_ctx: dict[str, Any] = {}
+    if not table_exists(conn, "price_daily"):
+        return by_ticker, market_ctx
+
+    rows = conn.execute(
+        """
+        SELECT ticker, date, CAST(high AS REAL), CAST(low AS REAL), CAST(close AS REAL)
+        FROM (
+            SELECT ticker, date, high, low, close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM price_daily
+        )
+        WHERE rn <= 40
+        ORDER BY ticker, date
+        """
+    ).fetchall()
+    bucket: dict[str, list[tuple[float, float, float]]] = defaultdict(list)
+    for r in rows:
+        ticker = str(r[0] or "").upper().strip()
+        if not ticker:
+            continue
+        high = r[2]
+        low = r[3]
+        close = r[4]
+        if high is None or low is None or close is None:
+            continue
+        try:
+            h = float(high)
+            l = float(low)
+            c = float(close)
+        except (TypeError, ValueError):
+            continue
+        if not (h > 0 and l > 0 and c > 0):
+            continue
+        bucket[ticker].append((h, l, c))
+
+    for ticker, bars in bucket.items():
+        if len(bars) < 3:
+            continue
+        highs = [b[0] for b in bars]
+        lows = [b[1] for b in bars]
+        closes = [b[2] for b in bars]
+
+        returns: list[float] = []
+        trs: list[float] = []
+        for i in range(1, len(closes)):
+            prev_close = closes[i - 1]
+            close = closes[i]
+            if prev_close > 0:
+                returns.append((close / prev_close) - 1.0)
+            tr = max(
+                highs[i] - lows[i],
+                abs(highs[i] - prev_close),
+                abs(lows[i] - prev_close),
+            )
+            trs.append(tr)
+
+        atr_pct_14: float | None = None
+        if len(trs) >= 14 and closes[-1] > 0:
+            atr_14 = sum(trs[-14:]) / 14.0
+            atr_pct_14 = (atr_14 / closes[-1]) * 100.0
+
+        realized_vol_20: float | None = None
+        if len(returns) >= 20:
+            ret_sd = _stdev(returns[-20:])
+            if ret_sd is not None:
+                realized_vol_20 = ret_sd * math.sqrt(252.0) * 100.0
+
+        bb_width_20: float | None = None
+        if len(closes) >= 20:
+            win = closes[-20:]
+            mean_20 = sum(win) / 20.0
+            sd_20 = _stdev(win)
+            if mean_20 > 0 and sd_20 is not None:
+                bb_width_20 = ((4.0 * sd_20) / mean_20) * 100.0
+
+        by_ticker[ticker] = {
+            "atr_pct_14": round(atr_pct_14, 2) if atr_pct_14 is not None else None,
+            "realized_vol_20": round(realized_vol_20, 2) if realized_vol_20 is not None else None,
+            "bb_width_20": round(bb_width_20, 2) if bb_width_20 is not None else None,
+        }
+
+    vix_rows = conn.execute(
+        """
+        SELECT CAST(close AS REAL)
+        FROM price_daily
+        WHERE ticker = '^VIX' AND close IS NOT NULL
+        ORDER BY date DESC
+        LIMIT 252
+        """
+    ).fetchall()
+    vix_vals = []
+    for r in vix_rows:
+        try:
+            v = float(r[0])
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            vix_vals.append(v)
+    if vix_vals:
+        vix_now = vix_vals[0]
+        rank_le = sum(1 for v in vix_vals if v <= vix_now)
+        vix_pctile = (rank_le / len(vix_vals)) * 100.0
+        market_ctx = {
+            "vix_close": round(vix_now, 2),
+            "vix_percentile_1y": round(vix_pctile, 1),
+            "vix_points": len(vix_vals),
+        }
+
+    return by_ticker, market_ctx
+
+
 def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any]) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
 
@@ -735,7 +860,7 @@ def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any
                 "detail": (
                     f"{best.get('ticker')} scored {best.get('score')} ({best.get('setup_tier')}) "
                     f"with move {best.get('pct_change')}%, discount {best.get('discount_pct')}%, "
-                    f"PEG {best.get('peg')}."
+                    f"PEG {best.get('peg')}, ATR {best.get('atr_pct_14') if best.get('atr_pct_14') is not None else '-'}%."
                 ),
                 "tone": "positive",
             }
@@ -836,6 +961,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "movers_down_today": [],
         "large_moves_today": [],
         "market_breadth": {},
+        "volatility_context": {},
         "yolo_top_today": [],
         "candle_patterns_today": [],
         "sector_heatmap": [],
@@ -846,6 +972,14 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     movers_all: list[dict[str, Any]] = []
     fundamentals_map: dict[str, dict[str, Any]] = {}
     yolo_by_ticker: dict[str, dict[str, Any]] = {}
+    vol_by_ticker: dict[str, dict[str, float | None]] = {}
+    vol_ctx: dict[str, Any] = {}
+
+    try:
+        vol_by_ticker, vol_ctx = _fetch_volatility_inputs(conn)
+        signals["volatility_context"] = vol_ctx
+    except Exception:
+        pass
 
     # ── 52W high / low proximity ─────────────────────────────────────────────
     try:
@@ -1240,11 +1374,16 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             score += proximity_component
 
             yolo = yolo_by_ticker.get(ticker)
+            vol = vol_by_ticker.get(ticker, {})
             yolo_component = 0.0
+            volatility_component = 0.0
             yolo_pattern = None
             yolo_confidence = None
             yolo_age_days = None
             yolo_timeframe = None
+            atr_pct_14 = vol.get("atr_pct_14")
+            realized_vol_20 = vol.get("realized_vol_20")
+            bb_width_20 = vol.get("bb_width_20")
             if yolo:
                 yolo_pattern = yolo.get("pattern")
                 yolo_confidence = yolo.get("confidence")
@@ -1261,16 +1400,62 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                         yolo_component += 1.0
                 score += yolo_component
 
+            if isinstance(atr_pct_14, (int, float)):
+                atr_v = float(atr_pct_14)
+                if atr_v < 1.0:
+                    volatility_component -= 2.0
+                elif atr_v <= 4.5:
+                    volatility_component += 5.0
+                elif atr_v <= 7.0:
+                    volatility_component += 2.0
+                elif atr_v <= 10.0:
+                    volatility_component -= 2.0
+                else:
+                    volatility_component -= 6.0
+
+            if isinstance(bb_width_20, (int, float)):
+                bb_v = float(bb_width_20)
+                if bb_v <= 6.0 and abs(pct_change) >= 1.5:
+                    volatility_component += 3.0
+                elif bb_v >= 18.0:
+                    volatility_component -= 3.0
+
+            if isinstance(realized_vol_20, (int, float)):
+                rv_v = float(realized_vol_20)
+                if rv_v > 60.0:
+                    volatility_component -= 3.0
+                elif rv_v >= 20.0:
+                    volatility_component += 2.0
+                elif rv_v < 12.0:
+                    volatility_component -= 1.0
+
+            vix_pctile = vol_ctx.get("vix_percentile_1y")
+            if isinstance(vix_pctile, (int, float)):
+                vix_p = float(vix_pctile)
+                if vix_p >= 90.0:
+                    volatility_component -= 4.0
+                elif vix_p >= 75.0:
+                    volatility_component -= 2.0
+                elif vix_p <= 35.0:
+                    volatility_component += 1.0
+
+            volatility_component = _clamp(volatility_component, -15.0, 15.0)
+            score += volatility_component
+
             final_score = round(_clamp(score, 0.0, 100.0), 1)
             setup_rows.append(
                 {
                     "ticker": ticker,
                     "score": final_score,
+                    "confluence_score": final_score,
                     "setup_tier": _setup_tier(final_score),
                     "sector": sector,
                     "pct_change": round(pct_change, 2),
                     "discount_pct": discount,
                     "peg": peg,
+                    "atr_pct_14": atr_pct_14,
+                    "realized_vol_20": realized_vol_20,
+                    "bb_width_20": bb_width_20,
                     "near_52w_high": near_high,
                     "near_52w_low": near_low,
                     "yolo_pattern": yolo_pattern,
@@ -1282,6 +1467,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                         "peg": round(peg_component, 2),
                         "momentum": round(momentum_component, 2),
                         "proximity": round(proximity_component, 2),
+                        "volatility": round(volatility_component, 2),
                         "yolo": round(yolo_component, 2),
                     },
                 }
@@ -1731,6 +1917,14 @@ def to_markdown(report: dict[str, Any]) -> str:
         ]:
             lines.append(_md_line(k, breadth.get(k)))
 
+    vol_ctx = signals.get("volatility_context", {})
+    if vol_ctx:
+        lines.append("")
+        lines.append("## Volatility Context")
+        lines.append(_md_line("vix_close", vol_ctx.get("vix_close")))
+        lines.append(_md_line("vix_percentile_1y", vol_ctx.get("vix_percentile_1y")))
+        lines.append(_md_line("vix_points", vol_ctx.get("vix_points")))
+
     movers_up = signals.get("movers_up_today", [])[:10]
     if movers_up:
         lines.append("")
@@ -1765,13 +1959,16 @@ def to_markdown(report: dict[str, Any]) -> str:
     setup_rows = signals.get("setup_quality_top", [])[:12]
     if setup_rows:
         lines.append("")
-        lines.append("## Setup Quality Score (Top Candidates)")
-        lines.append("| ticker | score | tier | pct_change | discount_pct | peg | yolo_pattern | yolo_confidence |")
-        lines.append("|---|---:|---|---:|---:|---:|---|---:|")
+        lines.append("## Confluence Score (Top Candidates)")
+        lines.append("| ticker | score | tier | pct_change | discount_pct | peg | atr_pct_14 | rv20 | bb_width_20 | yolo_pattern | yolo_confidence |")
+        lines.append("|---|---:|---|---:|---:|---:|---:|---:|---:|---|---:|")
         for r in setup_rows:
             lines.append(
                 f"| {r.get('ticker')} | {r.get('score')} | {r.get('setup_tier')} | "
                 f"{r.get('pct_change')} | {r.get('discount_pct')} | {r.get('peg')} | "
+                f"{r.get('atr_pct_14') if r.get('atr_pct_14') is not None else '-'} | "
+                f"{r.get('realized_vol_20') if r.get('realized_vol_20') is not None else '-'} | "
+                f"{r.get('bb_width_20') if r.get('bb_width_20') is not None else '-'} | "
                 f"{r.get('yolo_pattern') or '-'} | {r.get('yolo_confidence') or '-'} |"
             )
 
