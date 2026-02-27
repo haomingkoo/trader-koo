@@ -8,6 +8,8 @@ import os
 import smtplib
 import sqlite3
 import ssl
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from email.message import EmailMessage
 from pathlib import Path
@@ -115,18 +117,80 @@ def _smtp_cfg() -> dict[str, Any]:
     }
 
 
+def _resend_cfg() -> dict[str, Any]:
+    timeout_raw = os.getenv("TRADER_KOO_RESEND_TIMEOUT_SEC", os.getenv("TRADER_KOO_SMTP_TIMEOUT_SEC", "30")).strip()
+    try:
+        timeout_sec = max(5, int(timeout_raw))
+    except ValueError:
+        timeout_sec = 30
+    return {
+        "api_key": os.getenv("TRADER_KOO_RESEND_API_KEY", "").strip(),
+        "from_email": os.getenv("TRADER_KOO_RESEND_FROM", os.getenv("TRADER_KOO_SMTP_FROM", "")).strip(),
+        "to_email": os.getenv("TRADER_KOO_REPORT_EMAIL_TO", "").strip(),
+        "timeout_sec": timeout_sec,
+    }
+
+
+def _email_transport() -> str:
+    raw = os.getenv("TRADER_KOO_EMAIL_TRANSPORT", "auto").strip().lower()
+    if raw not in {"auto", "smtp", "resend"}:
+        raw = "auto"
+    if raw == "auto":
+        return "resend" if _resend_cfg().get("api_key") else "smtp"
+    return raw
+
+
+def _send_resend_email(subject: str, text: str, resend: dict[str, Any]) -> None:
+    payload = {
+        "from": resend["from_email"],
+        "to": [resend["to_email"]],
+        "subject": subject,
+        "text": text,
+    }
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {resend['api_key']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=int(resend["timeout_sec"])) as resp:
+            status = int(getattr(resp, "status", 200))
+            body = resp.read().decode("utf-8", errors="replace")
+        if status >= 300:
+            raise RuntimeError(f"Resend API failed status={status} body={body[:500]}")
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Resend API HTTP {exc.code}: {err_body[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Resend connect failed: {exc.reason}") from exc
+
+
 def send_report_email(report: dict[str, Any], md_text: str) -> None:
-    """Send the daily report email. Raises on missing config or SMTP failure."""
+    """Send the daily report email. Raises on missing config or delivery failure."""
+    transport = _email_transport()
     smtp = _smtp_cfg()
+    resend = _resend_cfg()
     missing = []
-    if not smtp["host"]:
-        missing.append("TRADER_KOO_SMTP_HOST")
-    if not smtp["from_email"]:
-        missing.append("TRADER_KOO_SMTP_FROM")
-    if not smtp["to_email"]:
-        missing.append("TRADER_KOO_REPORT_EMAIL_TO")
+    if transport == "resend":
+        if not resend["api_key"]:
+            missing.append("TRADER_KOO_RESEND_API_KEY")
+        if not resend["from_email"]:
+            missing.append("TRADER_KOO_RESEND_FROM (or TRADER_KOO_SMTP_FROM)")
+        if not resend["to_email"]:
+            missing.append("TRADER_KOO_REPORT_EMAIL_TO")
+    else:
+        if not smtp["host"]:
+            missing.append("TRADER_KOO_SMTP_HOST")
+        if not smtp["from_email"]:
+            missing.append("TRADER_KOO_SMTP_FROM")
+        if not smtp["to_email"]:
+            missing.append("TRADER_KOO_REPORT_EMAIL_TO")
     if missing:
-        raise RuntimeError(f"Missing SMTP env vars: {', '.join(missing)}")
+        raise RuntimeError(f"Missing email env vars for {transport}: {', '.join(missing)}")
 
     generated = report.get("generated_ts", "unknown")
     ok = report.get("ok", False)
@@ -149,14 +213,21 @@ def send_report_email(report: dict[str, Any], md_text: str) -> None:
         f"YOLO delta: +{new_count} new patterns, -{lost_count} lost patterns",
         f"  comparing: {delta.get('prev_asof', '?')} → {delta.get('today_asof', '?')}",
         "",
-        "Full report (markdown) attached.",
+        "Full report markdown below.",
+        "",
+        md_text,
     ]
+    text_body = "\n".join(body_lines)
+
+    if transport == "resend":
+        _send_resend_email(subject=subject, text=text_body, resend=resend)
+        return
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = smtp["from_email"]
     msg["To"] = smtp["to_email"]
-    msg.set_content("\n".join(body_lines))
+    msg.set_content(text_body)
     msg.add_attachment(md_text.encode(), maintype="text", subtype="markdown",
                        filename=f"daily_report_{generated[:10]}.md")
 
@@ -1331,19 +1402,30 @@ def main() -> None:
     }
     if args.send_email:
         try:
+            transport = _email_transport()
             smtp_cfg = _smtp_cfg()
-            email_meta["to"] = smtp_cfg.get("to_email")
-            print(
-                "[EMAIL] attempt "
-                f"host={smtp_cfg.get('host') or '-'} "
-                f"port={smtp_cfg.get('port')} "
-                f"security={smtp_cfg.get('security')} "
-                f"to={smtp_cfg.get('to_email') or '-'}"
-            )
+            resend_cfg = _resend_cfg()
+            email_meta["to"] = resend_cfg.get("to_email") if transport == "resend" else smtp_cfg.get("to_email")
+            if transport == "resend":
+                print(
+                    "[EMAIL] attempt "
+                    "transport=resend "
+                    f"to={resend_cfg.get('to_email') or '-'} "
+                    f"has_api_key={1 if resend_cfg.get('api_key') else 0}"
+                )
+            else:
+                print(
+                    "[EMAIL] attempt "
+                    "transport=smtp "
+                    f"host={smtp_cfg.get('host') or '-'} "
+                    f"port={smtp_cfg.get('port')} "
+                    f"security={smtp_cfg.get('security')} "
+                    f"to={smtp_cfg.get('to_email') or '-'}"
+                )
             md_text = to_markdown(report)
             send_report_email(report, md_text)
             email_meta["sent"] = True
-            print("[EMAIL] sent ok")
+            print(f"[EMAIL] sent ok transport={transport}")
         except Exception as exc:
             email_meta["error"] = str(exc)
             print(f"[EMAIL] failed {exc}")
