@@ -1101,6 +1101,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     yolo = report.get("yolo", {})
     yolo_summary = yolo.get("summary", {})
     warn = report.get("warnings", [])
+    email = report.get("email", {}) if isinstance(report.get("email"), dict) else {}
 
     lines: list[str] = []
     lines.append("# Trader Koo Daily Report")
@@ -1127,6 +1128,16 @@ def to_markdown(report: dict[str, Any]) -> str:
             lines.append(_md_line(k, run.get(k)))
     else:
         lines.append("- No ingest run found")
+    lines.append("")
+    lines.append("## Email Delivery")
+    if email.get("attempted"):
+        lines.append(_md_line("attempted", "yes"))
+        lines.append(_md_line("sent", "yes" if email.get("sent") else "no"))
+        lines.append(_md_line("to", email.get("to")))
+        if email.get("error"):
+            lines.append(_md_line("error", email.get("error")))
+    else:
+        lines.append("- Not attempted (auto-email disabled for this run).")
     lines.append("")
     lines.append("## YOLO Summary")
     lines.append(_md_line("table_exists", yolo.get("table_exists")))
@@ -1312,12 +1323,16 @@ def main() -> None:
         run_log=Path(args.run_log).resolve(),
         tail_lines=max(0, int(args.tail_lines)),
     )
-    out_paths = write_reports(report, Path(args.out_dir).resolve())
 
-    email_status: dict[str, Any] = {}
+    email_meta: dict[str, Any] = {
+        "attempted": bool(args.send_email),
+        "sent": False,
+        "to": None,
+    }
     if args.send_email:
         try:
             smtp_cfg = _smtp_cfg()
+            email_meta["to"] = smtp_cfg.get("to_email")
             print(
                 "[EMAIL] attempt "
                 f"host={smtp_cfg.get('host') or '-'} "
@@ -1325,14 +1340,24 @@ def main() -> None:
                 f"security={smtp_cfg.get('security')} "
                 f"to={smtp_cfg.get('to_email') or '-'}"
             )
-            md_path = Path(out_paths["latest_md"])
-            md_text = md_path.read_text(encoding="utf-8") if md_path.exists() else to_markdown(report)
+            md_text = to_markdown(report)
             send_report_email(report, md_text)
-            email_status = {"email_sent": True}
+            email_meta["sent"] = True
             print("[EMAIL] sent ok")
         except Exception as exc:
-            email_status = {"email_sent": False, "email_error": str(exc)}
+            email_meta["error"] = str(exc)
             print(f"[EMAIL] failed {exc}")
+    report["email"] = email_meta
+    if email_meta["attempted"] and not email_meta["sent"]:
+        warnings = report.get("warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+            report["warnings"] = warnings
+        if "report_email_failed" not in warnings:
+            warnings.append("report_email_failed")
+    report["ok"] = len(report.get("warnings", [])) == 0
+
+    out_paths = write_reports(report, Path(args.out_dir).resolve())
 
     print(
         json.dumps(
@@ -1341,7 +1366,9 @@ def main() -> None:
                 "warnings": report.get("warnings", []),
                 "generated_ts": report.get("generated_ts"),
                 **out_paths,
-                **email_status,
+                "email_attempted": email_meta.get("attempted", False),
+                "email_sent": email_meta.get("sent", False),
+                "email_error": email_meta.get("error"),
             },
             indent=2,
         )

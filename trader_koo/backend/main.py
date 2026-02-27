@@ -1569,6 +1569,13 @@ def _daily_report_response(
                     f"{generated_ts.replace(microsecond=0).isoformat()}. "
                     f"Report output is stale; check {log_hint} for [REPORT] errors."
                 )
+        email_block = latest_payload.get("email", {}) if isinstance(latest_payload, dict) else {}
+        if detail is None and isinstance(email_block, dict):
+            attempted = bool(email_block.get("attempted"))
+            sent = bool(email_block.get("sent"))
+            if attempted and not sent:
+                error_msg = str(email_block.get("error") or "unknown SMTP error")
+                detail = f"Report generated, but email delivery failed: {error_msg}"
     latest_md_path = report_dir / "daily_report_latest.md"
     md_text = ""
     if include_markdown and latest_md_path.exists():
