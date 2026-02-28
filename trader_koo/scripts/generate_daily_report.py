@@ -988,12 +988,277 @@ def _fmt_pct_short(value: Any) -> str:
     return f"{sign}{num:.1f}%"
 
 
+def _fundamental_context(discount: Any, peg: Any) -> dict[str, Any]:
+    long_points = 0
+    short_points = 0
+    long_notes: list[str] = []
+    short_notes: list[str] = []
+    if isinstance(discount, (int, float)):
+        d = float(discount)
+        if d >= 25.0:
+            long_points += 3
+            long_notes.append("deep discount")
+        elif d >= 12.0:
+            long_points += 2
+            long_notes.append("discounted")
+        elif d >= 5.0:
+            long_points += 1
+            long_notes.append("small discount")
+        elif d <= 0.0:
+            short_points += 2
+            short_notes.append("no discount")
+        elif d <= 3.0:
+            short_points += 1
+            short_notes.append("thin valuation cushion")
+    if isinstance(peg, (int, float)) and float(peg) > 0:
+        p = float(peg)
+        if p <= 0.8:
+            long_points += 3
+            long_notes.append("low PEG")
+        elif p <= 1.5:
+            long_points += 2
+            long_notes.append("reasonable PEG")
+        elif p <= 2.5:
+            long_points += 1
+        elif p >= 5.0:
+            short_points += 3
+            short_notes.append("high PEG")
+        elif p >= 3.0:
+            short_points += 2
+            short_notes.append("rich PEG")
+    bias = "neutral"
+    if long_points >= short_points + 2:
+        bias = "bullish"
+    elif short_points >= long_points + 2:
+        bias = "bearish"
+    return {
+        "bias": bias,
+        "long_points": long_points,
+        "short_points": short_points,
+        "long_notes": long_notes,
+        "short_notes": short_notes,
+    }
+
+
+def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
+    yolo_bias = _yolo_pattern_bias(row.get("yolo_pattern"))
+    yolo_age_days = row.get("yolo_age_days")
+    candle_bias = str(row.get("candle_bias") or "neutral")
+    trend = str(row.get("trend_state") or "mixed")
+    level = str(row.get("level_context") or "mid_range")
+    stretch = str(row.get("stretch_state") or "normal")
+    pct_change = float(row.get("pct_change") or 0.0)
+    yolo_conf = float(row.get("yolo_confidence") or 0.0)
+    candle_conf = float(row.get("candle_confidence") or 0.0)
+    fund = _fundamental_context(row.get("discount_pct"), row.get("peg"))
+    valuation_bias = str(fund.get("bias") or "neutral")
+    near_support = bool(
+        row.get("near_52w_low")
+        or level in {"at_support", "closer_support"}
+        or (isinstance(row.get("pct_to_support"), (int, float)) and float(row.get("pct_to_support")) <= 1.5)
+        or (isinstance(row.get("pct_from_20d_low"), (int, float)) and float(row.get("pct_from_20d_low")) <= 2.5)
+    )
+    near_resistance = bool(
+        row.get("near_52w_high")
+        or level in {"at_resistance", "closer_resistance"}
+        or (isinstance(row.get("pct_to_resistance"), (int, float)) and float(row.get("pct_to_resistance")) <= 1.5)
+        or (isinstance(row.get("pct_from_20d_high"), (int, float)) and float(row.get("pct_from_20d_high")) <= 2.5)
+    )
+
+    bull_score = 0.0
+    bear_score = 0.0
+    confirmations_bull = 0
+    confirmations_bear = 0
+    contradictions_bull = 0
+    contradictions_bear = 0
+
+    yolo_age_factor = 0.0
+    if isinstance(yolo_age_days, int):
+        if yolo_age_days <= 10:
+            yolo_age_factor = 1.0
+        elif yolo_age_days <= 20:
+            yolo_age_factor = 0.8
+        elif yolo_age_days <= 35:
+            yolo_age_factor = 0.55
+        elif yolo_age_days <= 55:
+            yolo_age_factor = 0.3
+        else:
+            yolo_age_factor = 0.1
+    elif yolo_bias != "neutral":
+        yolo_age_factor = 0.45
+
+    if valuation_bias == "bullish":
+        bull_score += 10.0 + (float(fund.get("long_points") or 0) * 2.0)
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif valuation_bias == "bearish":
+        bear_score += 10.0 + (float(fund.get("short_points") or 0) * 2.0)
+        confirmations_bear += 1
+        contradictions_bull += 1
+
+    if yolo_bias == "bullish":
+        boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
+        bull_score += boost
+        if yolo_age_factor >= 0.5:
+            confirmations_bull += 1
+        contradictions_bear += 1
+    elif yolo_bias == "bearish":
+        boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
+        bear_score += boost
+        if yolo_age_factor >= 0.5:
+            confirmations_bear += 1
+        contradictions_bull += 1
+
+    if candle_bias == "bullish":
+        bull_score += 3.0 + min(4.0, candle_conf * 3.0)
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif candle_bias == "bearish":
+        bear_score += 3.0 + min(4.0, candle_conf * 3.0)
+        confirmations_bear += 1
+        contradictions_bull += 1
+
+    if near_support:
+        bull_score += 10.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+    if near_resistance:
+        bear_score += 10.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+
+    if trend == "uptrend":
+        bull_score += 4.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif trend == "downtrend":
+        bear_score += 4.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+
+    if 0.5 <= pct_change <= 4.0:
+        bull_score += 3.0
+    elif pct_change > 5.0:
+        bull_score -= 4.0
+        contradictions_bull += 1
+    if -4.0 <= pct_change <= -0.5:
+        bear_score += 3.0
+    elif pct_change < -5.0:
+        bear_score -= 4.0
+        contradictions_bear += 1
+
+    if stretch == "extended_up":
+        bull_score -= 5.0
+        contradictions_bull += 1
+        bear_score += 2.0
+    elif stretch == "extended_down":
+        bear_score -= 5.0
+        contradictions_bear += 1
+        bull_score += 2.0
+
+    rv20 = row.get("realized_vol_20")
+    atr = row.get("atr_pct_14")
+    if isinstance(rv20, (int, float)):
+        if 18.0 <= float(rv20) <= 45.0:
+            bull_score += 1.5
+            bear_score += 1.5
+        elif float(rv20) >= 65.0:
+            bull_score -= 2.0
+            bear_score -= 2.0
+    if isinstance(atr, (int, float)):
+        if float(atr) >= 9.0:
+            bull_score -= 2.0
+            bear_score -= 2.0
+
+    if yolo_age_factor > 0.0 and yolo_age_factor < 0.3:
+        if yolo_bias == "bullish":
+            bull_score -= 2.0
+        elif yolo_bias == "bearish":
+            bear_score -= 2.0
+
+    if bull_score >= bear_score + 5.0:
+        bias = "bullish"
+    elif bear_score >= bull_score + 5.0:
+        bias = "bearish"
+    else:
+        bias = "neutral"
+
+    family = "neutral_watch"
+    confirmations = 0
+    contradictions = 0
+    score = 42.0
+    if bias == "bullish":
+        confirmations = confirmations_bull
+        contradictions = contradictions_bull
+        if near_support or level == "below_support" or row.get("near_52w_low"):
+            family = "bullish_reversal"
+            score = 35.0 + bull_score
+        elif trend == "uptrend" and not near_resistance:
+            family = "bullish_continuation"
+            score = 33.0 + bull_score
+        else:
+            family = "bullish_watch"
+            score = 28.0 + bull_score
+    elif bias == "bearish":
+        confirmations = confirmations_bear
+        contradictions = contradictions_bear
+        if near_resistance or level == "above_resistance" or row.get("near_52w_high"):
+            family = "bearish_reversal"
+            score = 35.0 + bear_score
+        elif trend == "downtrend" and not near_support:
+            family = "bearish_continuation"
+            score = 33.0 + bear_score
+        else:
+            family = "bearish_watch"
+            score = 28.0 + bear_score
+    else:
+        confirmations = max(confirmations_bull, confirmations_bear)
+        contradictions = max(contradictions_bull, contradictions_bear)
+        score = 25.0 + max(bull_score, bear_score) - abs(bull_score - bear_score)
+
+    score -= contradictions * 5.0
+    if confirmations == 0:
+        score -= 12.0
+    elif confirmations == 1:
+        score -= 6.0
+    score = round(_clamp(score, 0.0, 100.0), 1)
+
+    if bias == "neutral":
+        tier = "C" if score >= 60.0 else "D"
+    elif confirmations >= 4 and contradictions == 0 and score >= 78.0 and "watch" not in family:
+        tier = "A"
+    elif confirmations >= 3 and score >= 68.0:
+        tier = "B"
+    elif score >= 55.0:
+        tier = "C"
+    else:
+        tier = "D"
+
+    return {
+        "signal_bias": bias,
+        "setup_family": family,
+        "score": score,
+        "confluence_score": score,
+        "setup_tier": tier,
+        "confirmation_count": confirmations,
+        "contradiction_count": contradictions,
+        "valuation_bias": valuation_bias,
+        "valuation_notes": ", ".join((fund.get("long_notes") if bias != "bearish" else fund.get("short_notes")) or []),
+        "bull_score": round(bull_score, 1),
+        "bear_score": round(bear_score, 1),
+        "yolo_age_factor": round(yolo_age_factor, 2) if yolo_age_factor else 0.0,
+    }
+
+
 def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     bias = str(row.get("signal_bias") or "neutral")
+    family = str(row.get("setup_family") or "neutral_watch")
     trend = str(row.get("trend_state") or "mixed")
     level = str(row.get("level_context") or "mid_range")
     stretch = str(row.get("stretch_state") or "normal")
     candle_bias = str(row.get("candle_bias") or "neutral")
+    valuation_bias = str(row.get("valuation_bias") or "neutral")
+    valuation_notes = str(row.get("valuation_notes") or "").strip()
     pct_from_high = row.get("pct_from_20d_high")
     pct_from_low = row.get("pct_from_20d_low")
     pct_vs_ma20 = row.get("pct_vs_ma20")
@@ -1024,16 +1289,30 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         "normal": "not overly stretched",
     }.get(stretch, "not overly stretched")
 
+    family_label = {
+        "bullish_reversal": "bullish reversal candidate",
+        "bullish_continuation": "bullish continuation candidate",
+        "bullish_watch": "bullish watchlist candidate",
+        "bearish_reversal": "bearish reversal candidate",
+        "bearish_continuation": "bearish continuation candidate",
+        "bearish_watch": "bearish watchlist candidate",
+        "neutral_watch": "mixed / unconfirmed candidate",
+    }.get(family, "mixed / unconfirmed candidate")
+
     observation_parts: list[str] = []
+    observation_parts.append(family_label)
+    if valuation_notes:
+        observation_parts.append(valuation_notes)
     if pattern:
-        if bias == "bullish":
-            observation_parts.append(f"bullish YOLO ({pattern})")
-        elif bias == "bearish":
-            observation_parts.append(f"bearish YOLO ({pattern})")
-        else:
-            observation_parts.append(f"neutral YOLO ({pattern})")
+        observation_parts.append(f"YOLO: {pattern}")
     else:
-        observation_parts.append("no decisive YOLO pattern")
+        observation_parts.append("no decisive YOLO")
+    if candle_bias == "bullish":
+        observation_parts.append("bullish candle confirmation")
+    elif candle_bias == "bearish":
+        observation_parts.append("bearish candle confirmation")
+    else:
+        observation_parts.append("no candle confirmation")
     observation_parts.append(trend_label)
     observation_parts.append(level_label)
     observation_parts.append(stretch_label)
@@ -1058,16 +1337,22 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     large_day = isinstance(pct_change, (int, float)) and abs(float(pct_change)) >= 5.0
 
     if bias == "bullish":
+        if family == "bullish_reversal":
+            actionability = "conditional"
+            action = "Long only if support holds and the reversal actually confirms. Do not buy a falling knife into earnings or resistance."
+        elif family == "bullish_continuation":
+            actionability = "conditional"
+            action = "Long only on clean continuation through resistance or a disciplined retest. Avoid late chase entries."
         if stretch == "extended_up" or large_day:
             actionability = "wait"
             action = "Bullish idea, but do not chase strength. Prefer a pullback or breakout retest."
         elif level == "above_resistance" and trend == "uptrend":
             actionability = "conditional"
             action = "Breakout is already through resistance. Best follow-through entry is a clean hold or retest, not an emotional chase."
-        elif trend == "uptrend" and near_resistance:
+        elif family == "bullish_continuation" and trend == "uptrend" and near_resistance:
             actionability = "higher-probability"
             action = "Trend continuation watch. Best if price closes through resistance or retests it cleanly."
-        elif near_support and candle_bias != "bearish":
+        elif family == "bullish_reversal" and near_support and candle_bias != "bearish":
             actionability = "higher-probability"
             action = "Reversal watch at support. Actionable only if support holds and the next candles confirm."
         elif level == "below_support":
@@ -1080,16 +1365,22 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
             actionability = "conditional"
             action = "Bullish setup is present, but wait for confirmation instead of buying the first signal."
     elif bias == "bearish":
+        if family == "bearish_reversal":
+            actionability = "conditional"
+            action = "Short only if resistance rejection confirms or support breaks. Do not force a short after an already extended flush."
+        elif family == "bearish_continuation":
+            actionability = "conditional"
+            action = "Short only on failed bounces, rejected retests, or clean continuation below support."
         if stretch == "extended_down" or large_day:
             actionability = "wait"
             action = "Avoid chasing the flush. Better setup is a failed bounce or a clean support break."
-        elif level == "below_support" and trend == "downtrend":
+        elif family == "bearish_continuation" and level == "below_support" and trend == "downtrend":
             actionability = "higher-probability"
             action = "Bearish continuation is already below support. Best entry is failed reclaim or fresh breakdown follow-through."
-        elif near_support:
+        elif family == "bearish_reversal" and near_support:
             actionability = "higher-probability"
             action = "Support-failure watch. It is only actionable if support actually breaks with follow-through."
-        elif trend == "downtrend" and (near_resistance or candle_bias == "bearish"):
+        elif family == "bearish_continuation" and trend == "downtrend" and (near_resistance or candle_bias == "bearish"):
             actionability = "higher-probability"
             action = "Bearish continuation watch. Best entry is rejection near resistance or failed rally."
         elif level == "above_resistance":
@@ -1121,6 +1412,12 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     if isinstance(row.get("discount_pct"), (int, float)) and float(row["discount_pct"]) <= 5.0:
         risk_notes.append("little valuation cushion")
 
+    if valuation_bias != "neutral" and valuation_bias != bias:
+        observation_parts.append("valuation does not fully agree with the direction")
+    if bias == "neutral":
+        actionability = "watch-only"
+        action = "Evidence is mixed. Keep it on watch until price, pattern, and level context line up in one direction."
+
     observation = ". ".join(part[0].upper() + part[1:] if idx == 0 else part for idx, part in enumerate(observation_parts)) + "."
     level_bits = []
     if isinstance(support_level, (int, float)):
@@ -1135,7 +1432,7 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         "action": action,
         "risk_note": ", ".join(risk_notes[:3]) if risk_notes else "none",
         "technical_read": (
-            f"{bias} | {trend} | "
+            f"{family} | {bias} | {trend} | "
             f"{'support' if near_support else ('resistance' if near_resistance else 'mid-range')} | "
             f"vs MA20 {_fmt_pct_short(pct_vs_ma20)}{level_suffix}"
         ),
@@ -1831,68 +2128,67 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             volatility_component = _clamp(volatility_component, -15.0, 15.0)
             score += volatility_component
 
-            final_score = round(_clamp(score, 0.0, 100.0), 1)
-            setup_rows.append(
-                {
-                    "ticker": ticker,
-                    "score": final_score,
-                    "confluence_score": final_score,
-                    "setup_tier": _setup_tier(final_score),
-                    "sector": sector,
-                    "pct_change": round(pct_change, 2),
-                    "discount_pct": discount,
-                    "peg": peg,
-                    "atr_pct_14": atr_pct_14,
-                    "realized_vol_20": realized_vol_20,
-                    "bb_width_20": bb_width_20,
-                    "near_52w_high": near_high,
-                    "near_52w_low": near_low,
-                    "yolo_pattern": yolo_pattern,
-                    "yolo_confidence": yolo_confidence,
-                    "yolo_age_days": yolo_age_days,
-                    "yolo_timeframe": yolo_timeframe,
-                    "signal_bias": signal_bias,
-                    "close": tech.get("close"),
-                    "ma20": tech.get("ma20"),
-                    "ma50": tech.get("ma50"),
-                    "pct_vs_ma20": tech.get("pct_vs_ma20"),
-                    "pct_vs_ma50": tech.get("pct_vs_ma50"),
-                    "pct_from_20d_high": tech.get("pct_from_20d_high"),
-                    "pct_from_20d_low": tech.get("pct_from_20d_low"),
-                    "trend_state": tech.get("trend_state") or "mixed",
-                    "level_context": tech.get("level_context") or "mid_range",
-                    "support_level": tech.get("support_level"),
-                    "support_zone_low": tech.get("support_zone_low"),
-                    "support_zone_high": tech.get("support_zone_high"),
-                    "support_tier": tech.get("support_tier"),
-                    "support_touches": tech.get("support_touches"),
-                    "resistance_level": tech.get("resistance_level"),
-                    "resistance_zone_low": tech.get("resistance_zone_low"),
-                    "resistance_zone_high": tech.get("resistance_zone_high"),
-                    "resistance_tier": tech.get("resistance_tier"),
-                    "resistance_touches": tech.get("resistance_touches"),
-                    "pct_to_support": tech.get("pct_to_support"),
-                    "pct_to_resistance": tech.get("pct_to_resistance"),
-                    "range_position": tech.get("range_position"),
-                    "stretch_state": tech.get("stretch_state") or "normal",
-                    "candle_pattern": None,
-                    "candle_bias": "neutral",
-                    "candle_confidence": None,
-                    "observation": "",
-                    "actionability": "watch-only",
-                    "action": "",
-                    "risk_note": "",
-                    "technical_read": "",
-                    "components": {
-                        "discount": round(discount_component, 2),
-                        "peg": round(peg_component, 2),
-                        "momentum": round(momentum_component, 2),
-                        "proximity": round(proximity_component, 2),
-                        "volatility": round(volatility_component, 2),
-                        "yolo": round(yolo_component, 2),
-                    },
-                }
-            )
+            row = {
+                "ticker": ticker,
+                "score": round(_clamp(score, 0.0, 100.0), 1),
+                "confluence_score": round(_clamp(score, 0.0, 100.0), 1),
+                "setup_tier": _setup_tier(round(_clamp(score, 0.0, 100.0), 1)),
+                "sector": sector,
+                "pct_change": round(pct_change, 2),
+                "discount_pct": discount,
+                "peg": peg,
+                "atr_pct_14": atr_pct_14,
+                "realized_vol_20": realized_vol_20,
+                "bb_width_20": bb_width_20,
+                "near_52w_high": near_high,
+                "near_52w_low": near_low,
+                "yolo_pattern": yolo_pattern,
+                "yolo_confidence": yolo_confidence,
+                "yolo_age_days": yolo_age_days,
+                "yolo_timeframe": yolo_timeframe,
+                "signal_bias": signal_bias,
+                "close": tech.get("close"),
+                "ma20": tech.get("ma20"),
+                "ma50": tech.get("ma50"),
+                "pct_vs_ma20": tech.get("pct_vs_ma20"),
+                "pct_vs_ma50": tech.get("pct_vs_ma50"),
+                "pct_from_20d_high": tech.get("pct_from_20d_high"),
+                "pct_from_20d_low": tech.get("pct_from_20d_low"),
+                "trend_state": tech.get("trend_state") or "mixed",
+                "level_context": tech.get("level_context") or "mid_range",
+                "support_level": tech.get("support_level"),
+                "support_zone_low": tech.get("support_zone_low"),
+                "support_zone_high": tech.get("support_zone_high"),
+                "support_tier": tech.get("support_tier"),
+                "support_touches": tech.get("support_touches"),
+                "resistance_level": tech.get("resistance_level"),
+                "resistance_zone_low": tech.get("resistance_zone_low"),
+                "resistance_zone_high": tech.get("resistance_zone_high"),
+                "resistance_tier": tech.get("resistance_tier"),
+                "resistance_touches": tech.get("resistance_touches"),
+                "pct_to_support": tech.get("pct_to_support"),
+                "pct_to_resistance": tech.get("pct_to_resistance"),
+                "range_position": tech.get("range_position"),
+                "stretch_state": tech.get("stretch_state") or "normal",
+                "candle_pattern": None,
+                "candle_bias": "neutral",
+                "candle_confidence": None,
+                "observation": "",
+                "actionability": "watch-only",
+                "action": "",
+                "risk_note": "",
+                "technical_read": "",
+                "components": {
+                    "discount": round(discount_component, 2),
+                    "peg": round(peg_component, 2),
+                    "momentum": round(momentum_component, 2),
+                    "proximity": round(proximity_component, 2),
+                    "volatility": round(volatility_component, 2),
+                    "yolo": round(yolo_component, 2),
+                },
+            }
+            row.update(_score_setup_from_confluence(row))
+            setup_rows.append(row)
 
         sector_rows: list[dict[str, Any]] = []
         for _, bucket in sector_buckets.items():
@@ -2008,8 +2304,19 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                         row["candle_pattern"] = candle.get("pattern")
                         row["candle_bias"] = candle.get("bias") or "neutral"
                         row["candle_confidence"] = candle.get("confidence")
+                    row.update(_score_setup_from_confluence(row))
                     readout = _describe_setup(row)
                     row.update(readout)
+
+                setup_rows.sort(
+                    key=lambda r: (
+                        float(r.get("score") or 0.0),
+                        float(r.get("confirmation_count") or 0.0),
+                        -float(r.get("contradiction_count") or 0.0),
+                        float(r.get("pct_change") or 0.0),
+                    ),
+                    reverse=True,
+                )
 
                 signals["setup_quality_top"] = setup_rows[:40]
                 signals["watchlist_candidates"] = [
