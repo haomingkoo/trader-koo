@@ -1476,10 +1476,14 @@
         else if (Math.abs(move) >= 1.5) reasons.push("meaningful move");
       }
       if (yoloPattern) {
-        const label = yoloConf >= 0.75 ? "strong YOLO" : "YOLO signal";
-        reasons.push(`${label}: ${yoloPattern}`);
+        if (Number.isFinite(age) && age > 45) reasons.push(`old YOLO context: ${yoloPattern}`);
+        else {
+          const label = yoloConf >= 0.75 ? "strong YOLO" : "YOLO signal";
+          reasons.push(`${label}: ${yoloPattern}`);
+        }
       }
       if (Number.isFinite(age) && age <= 10) reasons.push("fresh pattern");
+      else if (Number.isFinite(age) && age > 45) reasons.push("pattern already aged");
       if (Number.isFinite(rv20)) {
         if (rv20 <= 30) reasons.push("contained vol");
         else if (rv20 >= 55) reasons.push("high vol");
@@ -2450,17 +2454,24 @@
         const weeklyPatterns = yoloPatterns.filter(p => p.timeframe === "weekly");
 
         const renderYoloGroup = (group, isWeekly) => {
-          const borderWidth = isWeekly ? 2.2 : 1.5;
-          const borderDash = isWeekly ? "dash" : "dot";
-          const fillOpacity = isWeekly ? "0.05" : "0.07";
           const maxLabels = isMobile ? (isWeekly ? 2 : 3) : 5;
           let labelCount = 0;
           group.forEach((p) => {
             const y0 = Number(p.y0), y1 = Number(p.y1);
             if (Number.isNaN(y0) || Number.isNaN(y1)) return;
             const baseStyle = yoloStyle(p.pattern);
+            const age = Number(p.age_days);
+            const staleCutoff = isWeekly ? 120 : 45;
+            const agingCutoff = isWeekly ? 70 : 25;
+            const isStale = Number.isFinite(age) && age > staleCutoff;
+            const isAging = !isStale && Number.isFinite(age) && age > agingCutoff;
+            const borderWidth = isStale ? 1.0 : (isWeekly ? 2.2 : 1.5);
+            const borderDash = isStale ? "dot" : (isWeekly ? "dash" : "dot");
+            const fillOpacity = isStale ? "0.02" : (isAging ? "0.04" : (isWeekly ? "0.05" : "0.07"));
             // Weekly uses slightly muted colours to not compete with daily boxes
-            const stroke = isWeekly ? baseStyle.stroke + "cc" : baseStyle.stroke;
+            const stroke = isStale
+              ? baseStyle.stroke + "99"
+              : (isWeekly ? baseStyle.stroke + "cc" : baseStyle.stroke);
             const fill = baseStyle.fill.replace(/[\d.]+\)$/, `${fillOpacity})`);
             const conf = Number(p.confidence);
             const label = isWeekly ? "W" : "D";
@@ -2477,10 +2488,13 @@
             });
             if (labelCount < maxLabels) {
               const confPct = Number.isFinite(conf) ? `${(conf * 100).toFixed(0)}%` : "";
+              const ageText = Number.isFinite(age)
+                ? (isStale ? ` • old ${Math.round(age)}d` : (age > 0 ? ` • ${Math.round(age)}d` : " • fresh"))
+                : "";
               const labelName = yoloLabel(p.pattern, isMobile);
               const text = isMobile
-                ? `${label}:${labelName} ${confPct}`
-                : `[${label}] ${yoloLabel(p.pattern, false)} ${confPct}`;
+                ? `${label}:${labelName} ${confPct}${ageText}`
+                : `[${label}] ${yoloLabel(p.pattern, false)} ${confPct}${ageText}`;
               const yTop = Math.max(y0, y1);
               annotations.push({
                 xref: "x",

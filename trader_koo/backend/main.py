@@ -704,7 +704,22 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
         """,
         (ticker,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        age_days = None
+        as_of_date = str(item.get("as_of_date") or "").strip()
+        x1_date = str(item.get("x1_date") or "").strip()
+        if len(as_of_date) >= 10 and len(x1_date) >= 10:
+            try:
+                asof_dt = dt.date.fromisoformat(as_of_date[:10])
+                x1_dt = dt.date.fromisoformat(x1_date[:10])
+                age_days = max(0, (asof_dt - x1_dt).days)
+            except Exception:
+                age_days = None
+        item["age_days"] = age_days
+        out.append(item)
+    return out
 
 
 def _tail_text_file(path: Path, lines: int = 60, max_bytes: int = 64_000) -> list[str]:

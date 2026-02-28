@@ -980,6 +980,54 @@ def _yolo_pattern_bias(pattern: Any) -> str:
     return "neutral"
 
 
+def _yolo_age_factor(age_days: Any, timeframe: Any) -> float:
+    tf = str(timeframe or "").strip().lower()
+    if not isinstance(age_days, (int, float)):
+        return 0.0
+    age = int(max(0, float(age_days)))
+    if tf == "weekly":
+        if age <= 14:
+            return 1.0
+        if age <= 35:
+            return 0.8
+        if age <= 70:
+            return 0.45
+        if age <= 120:
+            return 0.18
+        return 0.0
+    if age <= 5:
+        return 1.0
+    if age <= 12:
+        return 0.8
+    if age <= 25:
+        return 0.5
+    if age <= 45:
+        return 0.2
+    return 0.0
+
+
+def _yolo_recency_label(age_days: Any, timeframe: Any) -> str:
+    tf = str(timeframe or "").strip().lower()
+    if not isinstance(age_days, (int, float)):
+        return "unknown"
+    age = int(max(0, float(age_days)))
+    if tf == "weekly":
+        if age <= 14:
+            return "fresh"
+        if age <= 35:
+            return "recent"
+        if age <= 70:
+            return "aging"
+        return "stale"
+    if age <= 5:
+        return "fresh"
+    if age <= 12:
+        return "recent"
+    if age <= 25:
+        return "aging"
+    return "stale"
+
+
 def _fmt_pct_short(value: Any) -> str:
     if not isinstance(value, (int, float)):
         return "-"
@@ -1043,6 +1091,7 @@ def _fundamental_context(discount: Any, peg: Any) -> dict[str, Any]:
 def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     yolo_bias = _yolo_pattern_bias(row.get("yolo_pattern"))
     yolo_age_days = row.get("yolo_age_days")
+    yolo_timeframe = str(row.get("yolo_timeframe") or "daily")
     candle_bias = str(row.get("candle_bias") or "neutral")
     trend = str(row.get("trend_state") or "mixed")
     level = str(row.get("level_context") or "mid_range")
@@ -1072,20 +1121,8 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     contradictions_bull = 0
     contradictions_bear = 0
 
-    yolo_age_factor = 0.0
-    if isinstance(yolo_age_days, int):
-        if yolo_age_days <= 10:
-            yolo_age_factor = 1.0
-        elif yolo_age_days <= 20:
-            yolo_age_factor = 0.8
-        elif yolo_age_days <= 35:
-            yolo_age_factor = 0.55
-        elif yolo_age_days <= 55:
-            yolo_age_factor = 0.3
-        else:
-            yolo_age_factor = 0.1
-    elif yolo_bias != "neutral":
-        yolo_age_factor = 0.45
+    yolo_age_factor = _yolo_age_factor(yolo_age_days, yolo_timeframe)
+    yolo_recency = _yolo_recency_label(yolo_age_days, yolo_timeframe)
 
     if valuation_bias == "bullish":
         bull_score += 10.0 + (float(fund.get("long_points") or 0) * 2.0)
@@ -1096,13 +1133,13 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         confirmations_bear += 1
         contradictions_bull += 1
 
-    if yolo_bias == "bullish":
+    if yolo_bias == "bullish" and yolo_age_factor > 0.0:
         boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
         bull_score += boost
         if yolo_age_factor >= 0.5:
             confirmations_bull += 1
         contradictions_bear += 1
-    elif yolo_bias == "bearish":
+    elif yolo_bias == "bearish" and yolo_age_factor > 0.0:
         boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
         bear_score += boost
         if yolo_age_factor >= 0.5:
@@ -1216,6 +1253,16 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         contradictions = max(contradictions_bull, contradictions_bear)
         score = 25.0 + max(bull_score, bear_score) - abs(bull_score - bear_score)
 
+    if bias in {"bullish", "bearish"} and yolo_bias in {"bullish", "bearish"} and bias != yolo_bias:
+        if yolo_age_factor >= 0.5:
+            score -= 8.0
+            contradictions += 1
+        elif yolo_age_factor >= 0.2:
+            score -= 4.0
+            contradictions += 1
+    if yolo_recency == "stale" and yolo_bias in {"bullish", "bearish"}:
+        score -= 3.0
+
     score -= contradictions * 5.0
     if confirmations == 0:
         score -= 12.0
@@ -1247,6 +1294,7 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         "bull_score": round(bull_score, 1),
         "bear_score": round(bear_score, 1),
         "yolo_age_factor": round(yolo_age_factor, 2) if yolo_age_factor else 0.0,
+        "yolo_recency": yolo_recency,
     }
 
 
@@ -1264,6 +1312,9 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     pct_vs_ma20 = row.get("pct_vs_ma20")
     pct_change = row.get("pct_change")
     pattern = str(row.get("yolo_pattern") or "").strip()
+    yolo_age_days = row.get("yolo_age_days")
+    yolo_timeframe = str(row.get("yolo_timeframe") or "daily")
+    yolo_recency = str(row.get("yolo_recency") or _yolo_recency_label(yolo_age_days, yolo_timeframe))
     support_level = row.get("support_level")
     resistance_level = row.get("resistance_level")
     pct_to_support = row.get("pct_to_support")
@@ -1304,7 +1355,14 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     if valuation_notes:
         observation_parts.append(valuation_notes)
     if pattern:
-        observation_parts.append(f"YOLO: {pattern}")
+        if yolo_recency == "fresh":
+            observation_parts.append(f"fresh YOLO: {pattern}")
+        elif yolo_recency == "recent":
+            observation_parts.append(f"recent YOLO: {pattern}")
+        elif yolo_recency == "aging":
+            observation_parts.append(f"older YOLO context: {pattern}")
+        else:
+            observation_parts.append(f"stale YOLO context: {pattern}")
     else:
         observation_parts.append("no decisive YOLO")
     if candle_bias == "bullish":
@@ -1400,6 +1458,16 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
             actionability = "conditional"
             action = "Possible rejection watch near resistance, but the signal is still weak."
 
+    stale_yolo = yolo_recency == "stale"
+    aging_yolo = yolo_recency in {"aging", "stale"}
+    if stale_yolo and pattern:
+        if actionability == "higher-probability":
+            actionability = "conditional"
+        action = "Old YOLO structure only. Use current candle and level confirmation; do not treat the old box as a fresh trigger."
+    elif aging_yolo and pattern and actionability == "higher-probability":
+        actionability = "conditional"
+        action = "Pattern context is older. Keep it on watch and require fresh confirmation from current price action."
+
     risk_notes: list[str] = []
     if stretch == "extended_up":
         risk_notes.append("extended above trend")
@@ -1411,6 +1479,10 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         risk_notes.append("rich PEG")
     if isinstance(row.get("discount_pct"), (int, float)) and float(row["discount_pct"]) <= 5.0:
         risk_notes.append("little valuation cushion")
+    if stale_yolo:
+        risk_notes.append("stale YOLO context")
+    elif aging_yolo and pattern:
+        risk_notes.append("older YOLO context")
 
     if valuation_bias != "neutral" and valuation_bias != bias:
         observation_parts.append("valuation does not fully agree with the direction")
@@ -1424,6 +1496,8 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         level_bits.append(f"support {support_level}")
     if isinstance(resistance_level, (int, float)):
         level_bits.append(f"resistance {resistance_level}")
+    if isinstance(yolo_age_days, (int, float)) and pattern:
+        level_bits.append(f"YOLO age {int(float(yolo_age_days))}d")
     level_suffix = f" | {' / '.join(level_bits)}" if level_bits else ""
     return {
         "signal_bias": bias,
@@ -1894,8 +1968,18 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                         "x1_date": x1_date,
                         "as_of_date": latest_asof,
                         "age_days": age_days,
+                        "recency": _yolo_recency_label(age_days, r[1]),
                     }
                 )
+            yolo_top_today.sort(
+                key=lambda item: (
+                    _yolo_age_factor(item.get("age_days"), item.get("timeframe")),
+                    1 if str(item.get("timeframe") or "").strip().lower() == "daily" else 0,
+                    float(item.get("confidence") or 0.0),
+                    -(int(item.get("age_days")) if isinstance(item.get("age_days"), int) else 9999),
+                ),
+                reverse=True,
+            )
             signals["yolo_top_today"] = yolo_top_today
 
             # Best YOLO signal per ticker for setup scoring.
