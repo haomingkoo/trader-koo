@@ -1624,6 +1624,64 @@ def _find_timeframe_summary(rows: Any, timeframe: str) -> dict[str, Any]:
     return {}
 
 
+def _extract_earnings_value(raw_obj: dict[str, Any]) -> str | None:
+    for key in ("Earnings", "Earnings Date", "earnings", "earningsDate"):
+        value = raw_obj.get(key)
+        if value not in {None, ""}:
+            out = str(value).strip()
+            if out and out != "-":
+                return out
+    return None
+
+
+def _parse_earnings_value(raw_value: Any, market_date: dt.date) -> dict[str, Any]:
+    raw = str(raw_value or "").strip()
+    if not raw or raw == "-":
+        return {}
+    upper = raw.upper()
+    session = "TNS"
+    if "BMO" in upper or "BEFORE OPEN" in upper or "BEFORE MARKET OPEN" in upper:
+        session = "BMO"
+    elif "AMC" in upper or "AFTER CLOSE" in upper or "AFTER MARKET CLOSE" in upper:
+        session = "AMC"
+
+    cleaned = upper
+    for token in ("BMO", "AMC", "BEFORE OPEN", "BEFORE MARKET OPEN", "AFTER CLOSE", "AFTER MARKET CLOSE", "/", "|"):
+        cleaned = cleaned.replace(token, " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
+
+    parsed_date: dt.date | None = None
+    if cleaned.startswith("TODAY"):
+        parsed_date = market_date
+    elif cleaned.startswith("TOMORROW"):
+        parsed_date = market_date + dt.timedelta(days=1)
+    else:
+        fragments = [cleaned]
+        if "," in cleaned:
+            fragments.append(cleaned.replace(",", ""))
+        for frag in fragments:
+            for fmt in ("%b %d %Y", "%B %d %Y", "%b %d", "%B %d"):
+                try:
+                    parsed = dt.datetime.strptime(frag, fmt)
+                except ValueError:
+                    continue
+                year = parsed.year if "%Y" in fmt else market_date.year
+                parsed_date = dt.date(year, parsed.month, parsed.day)
+                if "%Y" not in fmt and parsed_date < (market_date - dt.timedelta(days=45)):
+                    parsed_date = dt.date(year + 1, parsed.month, parsed.day)
+                break
+            if parsed_date is not None:
+                break
+
+    days_until = (parsed_date - market_date).days if parsed_date is not None else None
+    return {
+        "earnings_raw": raw,
+        "earnings_date": parsed_date.isoformat() if parsed_date is not None else None,
+        "earnings_session": session,
+        "days_until": days_until,
+    }
+
+
 def _read_latest_ingest_run() -> dict[str, Any] | None:
     if not DB_PATH.exists():
         return None
@@ -3318,6 +3376,134 @@ def public_daily_report(limit: int = Query(default=20, ge=1, le=200), include_ma
         include_internal_paths=False,
         include_admin_log_hints=False,
     )
+
+
+@app.get("/api/earnings-calendar")
+def earnings_calendar(
+    days: int = Query(default=21, ge=1, le=90),
+    limit: int = Query(default=200, ge=1, le=1000),
+    tickers: str | None = Query(default=None),
+) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        snapshot_ts, universe_count = select_fund_snapshot(conn, min_complete_tickers=400)
+        if snapshot_ts is None:
+            return {
+                "ok": False,
+                "snapshot_ts": None,
+                "market_date": None,
+                "count": 0,
+                "rows": [],
+                "detail": "No fundamentals snapshot available.",
+            }
+
+        _, latest_report = _latest_daily_report_json(REPORT_DIR)
+        market_date = dt.datetime.now(ZoneInfo(_MARKET_TZ_NAME)).date()
+        if isinstance(latest_report, dict):
+            session = latest_report.get("market_session") or {}
+            raw_market_date = str(session.get("market_date") or "").strip()
+            try:
+                if raw_market_date:
+                    market_date = dt.date.fromisoformat(raw_market_date)
+            except ValueError:
+                pass
+        requested = {
+            str(token or "").strip().upper()
+            for token in str(tickers or "").split(",")
+            if str(token or "").strip()
+        }
+        report_setup_rows = []
+        if isinstance(latest_report, dict):
+            report_setup_rows = (((latest_report.get("signals") or {}).get("setup_quality_top")) or [])
+        setup_map = {
+            str(row.get("ticker") or "").upper(): row
+            for row in report_setup_rows
+            if isinstance(row, dict) and row.get("ticker")
+        }
+
+        rows = conn.execute(
+            """
+            SELECT ticker, price, discount_pct, peg, raw_json
+            FROM finviz_fundamentals
+            WHERE snapshot_ts = ?
+            """,
+            (snapshot_ts,),
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        max_date = market_date + dt.timedelta(days=days)
+        for row in rows:
+            ticker = str(row["ticker"] or "").upper().strip()
+            if not ticker:
+                continue
+            if requested and ticker not in requested:
+                continue
+            raw_json = row["raw_json"]
+            if not raw_json:
+                continue
+            try:
+                raw_obj = json.loads(str(raw_json))
+            except Exception:
+                continue
+            if not isinstance(raw_obj, dict):
+                continue
+            earnings_raw = _extract_earnings_value(raw_obj)
+            if not earnings_raw:
+                continue
+            parsed = _parse_earnings_value(earnings_raw, market_date)
+            earnings_date_raw = parsed.get("earnings_date")
+            if not earnings_date_raw:
+                continue
+            try:
+                earnings_date = dt.date.fromisoformat(str(earnings_date_raw))
+            except ValueError:
+                continue
+            if earnings_date < market_date or earnings_date > max_date:
+                continue
+            setup = setup_map.get(ticker, {})
+            out.append(
+                {
+                    "ticker": ticker,
+                    "earnings_raw": earnings_raw,
+                    "earnings_date": earnings_date.isoformat(),
+                    "earnings_session": parsed.get("earnings_session"),
+                    "days_until": parsed.get("days_until"),
+                    "price": _to_float(row["price"]),
+                    "discount_pct": _to_float(row["discount_pct"]),
+                    "peg": _to_float(row["peg"]),
+                    "sector": raw_obj.get("Sector") or raw_obj.get("sector") or "Unknown",
+                    "industry": raw_obj.get("Industry") or raw_obj.get("industry"),
+                    "score": setup.get("score"),
+                    "signal_bias": setup.get("signal_bias"),
+                    "yolo_pattern": setup.get("yolo_pattern"),
+                    "yolo_confidence": setup.get("yolo_confidence"),
+                    "observation": setup.get("observation"),
+                    "action": setup.get("action"),
+                }
+            )
+
+        session_rank = {"BMO": 0, "TNS": 1, "AMC": 2}
+        out.sort(
+            key=lambda r: (
+                str(r.get("earnings_date") or ""),
+                session_rank.get(str(r.get("earnings_session") or "TNS"), 1),
+                -(float(r.get("score") or 0.0)),
+                str(r.get("ticker") or ""),
+            )
+        )
+        return {
+            "ok": True,
+            "snapshot_ts": snapshot_ts,
+            "market_date": market_date.isoformat(),
+            "universe_count": universe_count,
+            "requested_tickers": sorted(requested),
+            "count": len(out[:limit]),
+            "rows": out[:limit],
+            "detail": None if out else f"No upcoming earnings found in the next {days} days.",
+            "report_generated_ts": (latest_report or {}).get("generated_ts") if isinstance(latest_report, dict) else None,
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/api/admin/daily-report")

@@ -728,6 +728,7 @@
       <button id="tabAdminBtn" class="tab-btn">Control Center</button>
       <button id="tabGuideBtn" class="tab-btn active">Guide</button>
       <button id="tabReportBtn" class="tab-btn">Daily Report</button>
+      <button id="tabEarningsBtn" class="tab-btn">Earnings Calendar</button>
       <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
       <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
     </div>
@@ -1005,6 +1006,35 @@
       </div>
       <div id="reportNoData" style="display:none; color:var(--muted); padding:20px 0;">
         No reports generated yet. Reports are written after the first daily cron run (22:00 UTC Mon–Fri).
+      </div>
+    </section>
+
+    <section id="tabEarnings" class="panel hidden">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+        <h2 style="margin:0; font-size:1.1rem;">Earnings Calendar</h2>
+        <span id="earningsStatus" style="font-size:0.8rem; color:var(--muted);"></span>
+      </div>
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="report-watch-wrap">
+          <div class="field" style="min-width:140px;">
+            <label for="earningsDays">Lookahead Days</label>
+            <input id="earningsDays" type="number" min="1" max="90" step="1" value="21" />
+          </div>
+          <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:8px; min-width:220px;">
+            <input id="earningsWatchOnly" type="checkbox" style="width:auto; padding:0; margin:0;" />
+            <span style="font-size:0.8rem; color:var(--muted);">Watchlist only</span>
+          </label>
+          <button id="loadEarningsBtn" type="button">Load</button>
+        </div>
+        <div id="earningsSummary" class="report-inline-note" style="margin-top:8px;"></div>
+      </div>
+      <div id="earningsSummaryCards" class="cards" style="margin-bottom:14px;"></div>
+      <div class="panel">
+        <div class="label" style="margin-bottom:8px;">Upcoming Setups Around Earnings</div>
+        <table id="earningsTable"></table>
+      </div>
+      <div id="earningsNoData" style="display:none; color:var(--muted); padding:20px 0;">
+        No upcoming earnings found for the selected window.
       </div>
     </section>
 
@@ -1351,11 +1381,13 @@
     const tabChartBtn = $("tabChartBtn");
     const tabGuideBtn = $("tabGuideBtn");
     const tabReportBtn = $("tabReportBtn");
+    const tabEarningsBtn = $("tabEarningsBtn");
     const tabAdmin = $("tabAdmin");
     const tabOp = $("tabOp");
     const tabChart = $("tabChart");
     const tabGuide = $("tabGuide");
     const tabReport = $("tabReport");
+    const tabEarnings = $("tabEarnings");
     const API_BASE_STORAGE_KEY = "trader_koo_api_base";
     const ADMIN_KEY_STORAGE_KEY = "trader_koo_admin_api_key";
     const WATCHLIST_STORAGE_KEY = "trader_koo_watchlist";
@@ -1721,12 +1753,14 @@
         chart: [tabChartBtn, tabChart],
         guide: [tabGuideBtn, tabGuide],
         report: [tabReportBtn, tabReport],
+        earnings: [tabEarningsBtn, tabEarnings],
       };
       for (const [k, [btn, sec]] of Object.entries(all)) {
         if (k === which) { btn.classList.add("active"); sec.classList.remove("hidden"); }
         else             { btn.classList.remove("active"); sec.classList.add("hidden"); }
       }
       if (which === "report") loadReport();
+      if (which === "earnings") loadEarnings();
       if (which === "admin") {
         refreshAdminSession(true).then(() => loadControlCenterOverview());
       }
@@ -1737,6 +1771,7 @@
     tabChartBtn.addEventListener("click", () => activateTab("chart"));
     tabGuideBtn.addEventListener("click", () => activateTab("guide"));
     tabReportBtn.addEventListener("click", () => activateTab("report"));
+    tabEarningsBtn.addEventListener("click", () => activateTab("earnings"));
 
     function fillCards(payload) {
       const f = payload.fundamentals || {};
@@ -3403,6 +3438,71 @@
       }
     }
 
+    async function loadEarnings() {
+      const base = getApiBase();
+      if (!base) return;
+      const days = Math.max(1, Math.min(90, Number($("earningsDays").value || 21)));
+      const watchOnly = !!$("earningsWatchOnly").checked;
+      const watchlist = getStoredWatchlist();
+      if (watchOnly && !watchlist.length) {
+        $("earningsStatus").textContent = "Watchlist is empty.";
+        $("earningsSummaryCards").innerHTML = "";
+        $("earningsSummary").textContent = "Add tickers to the Daily Report watchlist first, then reload this tab.";
+        $("earningsNoData").style.display = "block";
+        renderSimpleTable("earningsTable", ["ticker", "earnings_date", "earnings_session"], []);
+        return;
+      }
+      const qs = new URLSearchParams({ days: String(days), limit: "250" });
+      if (watchOnly && watchlist.length) qs.set("tickers", watchlist.join(","));
+      $("earningsStatus").textContent = "Loading...";
+      try {
+        const resp = await apiFetch(`${base}/api/earnings-calendar?${qs.toString()}`);
+        if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+        const payload = await resp.json();
+        const rows = payload.rows || [];
+        $("earningsNoData").style.display = rows.length ? "none" : "block";
+        $("earningsStatus").textContent = payload.detail || `As of ${payload.market_date || "—"}`;
+        const makeCard = (label, val) =>
+          `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
+        $("earningsSummaryCards").innerHTML = [
+          makeCard("Window", `${days}d`),
+          makeCard("Matches", payload.count ?? 0),
+          makeCard("Market Date", payload.market_date || "—"),
+          makeCard("Snapshot", payload.snapshot_ts ? String(payload.snapshot_ts).slice(0, 16).replace("T", " ") : "—"),
+        ].join("");
+        $("earningsSummary").textContent = watchOnly
+          ? `Watchlist filter enabled. ${watchlist.length} local ticker(s) sent to the server.`
+          : "Showing all upcoming earnings found in the latest fundamentals snapshot.";
+        renderSimpleTable(
+          "earningsTable",
+          [
+            { key: "earnings_date", label: "Date" },
+            { key: "earnings_session", label: "Session" },
+            { key: "days_until", label: "Days" },
+            { key: "ticker", label: "Ticker" },
+            { key: "score", label: "Score" },
+            { key: "signal_bias", label: "Bias" },
+            { key: "yolo_pattern", label: "YOLO" },
+            { key: "sector", label: "Sector" },
+            { key: "price", label: "Price" },
+            { key: "discount_pct", label: "Discount %" },
+            { key: "peg", label: "PEG" },
+            { key: "observation", label: "Observation" },
+            { key: "action", label: "Reasonable Action" },
+          ],
+          rows,
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: true },
+        );
+      } catch (err) {
+        $("earningsStatus").textContent = `Error: ${err.message}`;
+        $("earningsSummaryCards").innerHTML = "";
+        $("earningsSummary").textContent = "";
+        renderSimpleTable("earningsTable", ["ticker", "earnings_date", "earnings_session"], []);
+      }
+    }
+
     function setChartTimeframe(tf) {
       CHART_TIMEFRAME = tf;
       $("tfDailyBtn").style.background  = tf === "daily"  ? "var(--blue)" : "var(--card)";
@@ -3464,6 +3564,7 @@
     });
     $("reportSetupCompactBtn").addEventListener("click", () => setReportSetupMode(false));
     $("reportSetupMoreBtn").addEventListener("click", () => setReportSetupMode(true));
+    $("loadEarningsBtn").addEventListener("click", loadEarnings);
     $("tfDailyBtn").addEventListener("click", () => setChartTimeframe("daily"));
     $("tfWeeklyBtn").addEventListener("click", () => setChartTimeframe("weekly"));
     window.addEventListener("keydown", (e) => {
