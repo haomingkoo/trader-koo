@@ -235,6 +235,143 @@
       padding: 10px 12px;
       min-height: 72px;
     }
+    .earnings-mode-toggle {
+      display: inline-flex;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #0f1624;
+      width: auto;
+    }
+    .earnings-mode-toggle button {
+      width: auto;
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 0.78rem;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .earnings-mode-toggle button.active {
+      background: linear-gradient(90deg, #1f7bff, #4e9cff);
+      color: #fff;
+      border-color: transparent;
+    }
+    .earnings-board {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .earnings-day {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #121c2e, #0f1624);
+      padding: 14px;
+    }
+    .earnings-day h3 {
+      margin: 0;
+      font-size: 1rem;
+      line-height: 1.2;
+    }
+    .earnings-day-sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+    .earnings-lanes {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .earnings-lane {
+      border: 1px solid rgba(142, 160, 189, 0.14);
+      border-radius: 12px;
+      background: rgba(11, 15, 22, 0.42);
+      padding: 10px;
+      min-height: 180px;
+    }
+    .earnings-lane-title {
+      color: var(--muted);
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .earnings-card {
+      border: 1px solid rgba(142, 160, 189, 0.14);
+      border-radius: 12px;
+      background: rgba(18, 25, 39, 0.9);
+      padding: 10px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: border-color .15s ease, transform .15s ease;
+    }
+    .earnings-card:hover {
+      border-color: rgba(106, 169, 255, 0.7);
+      transform: translateY(-1px);
+    }
+    .earnings-card:last-child { margin-bottom: 0; }
+    .earnings-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .earnings-card-ticker {
+      font-size: 1rem;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .earnings-score {
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: rgba(106, 169, 255, 0.12);
+      color: #c9dcff;
+      font-size: 0.72rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .earnings-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .earnings-badge {
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      border: 1px solid rgba(142, 160, 189, 0.18);
+      background: rgba(142, 160, 189, 0.08);
+      color: var(--text);
+    }
+    .earnings-badge.bullish { color: #baf0dd; border-color: rgba(56, 211, 159, 0.35); background: rgba(56, 211, 159, 0.12); }
+    .earnings-badge.bearish { color: #ffd0d0; border-color: rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.12); }
+    .earnings-badge.high { color: #ffd0d0; border-color: rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.12); }
+    .earnings-badge.elevated { color: #f7e1a1; border-color: rgba(248, 194, 78, 0.35); background: rgba(248, 194, 78, 0.12); }
+    .earnings-badge.normal { color: #baf0dd; border-color: rgba(56, 211, 159, 0.35); background: rgba(56, 211, 159, 0.10); }
+    .earnings-card-copy {
+      font-size: 0.76rem;
+      line-height: 1.45;
+      color: var(--muted);
+      display: grid;
+      gap: 6px;
+    }
+    .earnings-card-copy strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+    .earnings-lane-empty {
+      color: var(--muted);
+      font-size: 0.75rem;
+      line-height: 1.45;
+      padding-top: 4px;
+    }
     .report-list {
       margin: 0;
       padding-left: 20px;
@@ -1024,12 +1161,20 @@
             <span style="font-size:0.8rem; color:var(--muted);">Watchlist only</span>
           </label>
           <button id="loadEarningsBtn" type="button">Load</button>
+          <div class="earnings-mode-toggle" role="tablist" aria-label="Earnings views">
+            <button id="earningsCalendarModeBtn" type="button" class="active">Calendar View</button>
+            <button id="earningsListModeBtn" type="button">List View</button>
+          </div>
         </div>
         <div id="earningsSummary" class="report-inline-note" style="margin-top:8px;"></div>
       </div>
       <div id="earningsSummaryCards" class="cards" style="margin-bottom:14px;"></div>
-      <div class="panel">
-        <div class="label" style="margin-bottom:8px;">Upcoming Setups Around Earnings</div>
+      <div class="panel" id="earningsBoardWrap" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Calendar View</div>
+        <div id="earningsBoard" class="earnings-board"></div>
+      </div>
+      <div class="panel hidden" id="earningsTableWrap">
+        <div class="label" style="margin-bottom:8px;">List View</div>
         <table id="earningsTable"></table>
       </div>
       <div id="earningsNoData" style="display:none; color:var(--muted); padding:20px 0;">
@@ -1177,6 +1322,7 @@
     let LAST_REPORT_SETUP_ROWS = [];
     let REPORT_SETUP_SHOW_MORE = false;
     let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
+    let EARNINGS_VIEW_MODE = "calendar";
 
     function fmt(v, d = 2) {
       if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
@@ -1572,6 +1718,74 @@
       }
     }
 
+    function setEarningsViewMode(mode) {
+      EARNINGS_VIEW_MODE = mode === "list" ? "list" : "calendar";
+      const calendarActive = EARNINGS_VIEW_MODE === "calendar";
+      $("earningsCalendarModeBtn").classList.toggle("active", calendarActive);
+      $("earningsListModeBtn").classList.toggle("active", !calendarActive);
+      $("earningsBoardWrap").classList.toggle("hidden", !calendarActive);
+      $("earningsTableWrap").classList.toggle("hidden", calendarActive);
+    }
+
+    function earningsToneClass(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (raw === "bullish" || raw === "bearish" || raw === "high" || raw === "elevated" || raw === "normal") return raw;
+      return "";
+    }
+
+    function renderEarningsBoard(groups) {
+      const board = $("earningsBoard");
+      const dayGroups = Array.isArray(groups) ? groups : [];
+      if (!dayGroups.length) {
+        board.innerHTML = `<div class="earnings-day"><div class="earnings-lane-empty">No upcoming earnings found for the selected window.</div></div>`;
+        return;
+      }
+      board.innerHTML = dayGroups.map((group) => {
+        const sessions = Array.isArray(group.sessions) ? group.sessions : [];
+        const lanes = sessions.map((session) => {
+          const rows = Array.isArray(session.rows) ? session.rows : [];
+          const body = rows.length
+            ? rows.slice(0, 6).map((row) => `
+                <div class="earnings-card" data-ticker="${escHtml(row.ticker || "")}">
+                  <div class="earnings-card-head">
+                    <div class="earnings-card-ticker">${escHtml(row.ticker || "-")}</div>
+                    <div class="earnings-score">${row.score != null ? `Score ${fmt(row.score)}` : "Unscored"}</div>
+                  </div>
+                  <div class="earnings-badges">
+                    <span class="earnings-badge ${earningsToneClass(row.signal_bias)}">${escHtml(String(row.signal_bias || "neutral").toUpperCase())}</span>
+                    <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(String(row.earnings_risk || "normal").toUpperCase())}</span>
+                    <span class="earnings-badge">${escHtml(`${row.days_until ?? "-"}d`)}</span>
+                  </div>
+                  <div class="earnings-card-copy">
+                    <div><strong>Observation:</strong> ${escHtml(row.observation || "Upcoming catalyst; refresh the chart before acting.")}</div>
+                    <div><strong>Action:</strong> ${escHtml(row.action || "Watch into the event window; do not chase blindly.")}</div>
+                  </div>
+                </div>
+              `).join("")
+            : `<div class="earnings-lane-empty">No names in this session.</div>`;
+          return `
+            <div class="earnings-lane">
+              <div class="earnings-lane-title">${escHtml(session.label || session.code || "TBD")}</div>
+              ${body}
+            </div>
+          `;
+        }).join("");
+        return `
+          <div class="earnings-day">
+            <h3>${escHtml(group.display_date || group.date || "-")}</h3>
+            <div class="earnings-day-sub">${escHtml(`${group.count ?? 0} event(s)`)}</div>
+            <div class="earnings-lanes">${lanes}</div>
+          </div>
+        `;
+      }).join("");
+      board.querySelectorAll(".earnings-card[data-ticker]").forEach((node) => {
+        node.addEventListener("click", () => {
+          const ticker = node.getAttribute("data-ticker");
+          if (ticker) loadTickerQuick(ticker);
+        });
+      });
+    }
+
     function computeYRangeForXWindow(x, low, high, x0, x1) {
       if (!x.length) return null;
       const t0 = x0 ? new Date(x0).getTime() : -Infinity;
@@ -1684,6 +1898,7 @@
       const patterns = payload.patterns || [];
       const patternOverlays = payload.pattern_overlays || [];
       const yoloPatterns = payload.yolo_patterns || [];
+      const earningsMarkers = payload.earnings_markers || [];
       const ticker = payload.ticker || "N/A";
       const showTrendlines = $("showTrendlines") ? Boolean($("showTrendlines").checked) : false;
       const showPatterns = $("showPatterns") ? Boolean($("showPatterns").checked) : true;
@@ -1843,6 +2058,37 @@
           xshift: 4, borderpad: 2,
           bgcolor: "rgba(18,25,39,0.9)", bordercolor: color,
           font: {color, size: isMobile ? 10 : 11}
+        });
+      });
+
+      earningsMarkers.forEach((marker, idx) => {
+        const markerDate = String(marker.date || "").trim();
+        if (!markerDate) return;
+        const session = String(marker.session || "TBD").toUpperCase();
+        const color = session === "BMO" ? "#38bdf8" : (session === "AMC" ? "#a855f7" : "#94a3b8");
+        shapes.push({
+          type: "line",
+          xref: "x",
+          yref: "paper",
+          x0: markerDate,
+          x1: markerDate,
+          y0: 0,
+          y1: 1,
+          line: { color, width: 1.6, dash: "dot" },
+        });
+        annotations.push({
+          xref: "x",
+          yref: "paper",
+          x: markerDate,
+          y: 1,
+          yshift: -18 - (idx * 18),
+          text: `E ${escHtml(session)}${marker.days_until != null ? ` • ${escHtml(String(marker.days_until))}d` : ""}`,
+          showarrow: false,
+          xanchor: "left",
+          bgcolor: "rgba(18,25,39,0.92)",
+          bordercolor: color,
+          borderpad: 3,
+          font: { color, size: isMobile ? 10 : 11 },
         });
       });
 
@@ -2708,6 +2954,7 @@
         $("earningsSummaryCards").innerHTML = "";
         $("earningsSummary").textContent = "Add tickers to the Daily Report watchlist first, then reload this tab.";
         $("earningsNoData").style.display = "block";
+        renderEarningsBoard([]);
         renderSimpleTable("earningsTable", ["ticker", "earnings_date", "earnings_session"], []);
         return;
       }
@@ -2719,6 +2966,8 @@
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const payload = await resp.json();
         const rows = payload.rows || [];
+        const summary = payload.summary || {};
+        const providerStatus = payload.provider_status || {};
         $("earningsNoData").style.display = rows.length ? "none" : "block";
         $("earningsStatus").textContent = payload.detail || `As of ${payload.market_date || "—"}`;
         const makeCard = (label, val) =>
@@ -2726,12 +2975,15 @@
         $("earningsSummaryCards").innerHTML = [
           makeCard("Window", `${days}d`),
           makeCard("Matches", payload.count ?? 0),
+          makeCard("Provider", payload.provider || "fundamentals"),
+          makeCard("High Risk", summary.high_risk ?? 0),
           makeCard("Market Date", payload.market_date || "—"),
           makeCard("Snapshot", payload.snapshot_ts ? String(payload.snapshot_ts).slice(0, 16).replace("T", " ") : "—"),
         ].join("");
         $("earningsSummary").textContent = watchOnly
-          ? `Watchlist filter enabled. ${watchlist.length} local ticker(s) sent to the server.`
-          : "Showing all upcoming earnings found in the latest fundamentals snapshot.";
+          ? `Watchlist filter enabled. ${watchlist.length} local ticker(s) sent to the server. ${providerStatus.detail || ""}`.trim()
+          : (providerStatus.detail || "Showing upcoming earnings with external calendar + fundamentals fallback.");
+        renderEarningsBoard(payload.groups || []);
         renderSimpleTable(
           "earningsTable",
           [
@@ -2741,6 +2993,7 @@
             { key: "ticker", label: "Ticker" },
             { key: "score", label: "Score" },
             { key: "signal_bias", label: "Bias" },
+            { key: "earnings_risk", label: "Risk" },
             { key: "yolo_pattern", label: "YOLO" },
             { key: "sector", label: "Sector" },
             { key: "price", label: "Price" },
@@ -2758,6 +3011,7 @@
         $("earningsStatus").textContent = `Error: ${err.message}`;
         $("earningsSummaryCards").innerHTML = "";
         $("earningsSummary").textContent = "";
+        renderEarningsBoard([]);
         renderSimpleTable("earningsTable", ["ticker", "earnings_date", "earnings_session"], []);
       }
     }
@@ -2826,10 +3080,13 @@
     $("showRuleClassLines").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showBollinger").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
     $("showYoloPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
+    $("earningsCalendarModeBtn").addEventListener("click", () => setEarningsViewMode("calendar"));
+    $("earningsListModeBtn").addEventListener("click", () => setEarningsViewMode("list"));
 
     (async () => {
       await initApiBase();
       setReportSetupMode(false);
+      setEarningsViewMode("calendar");
       activateTab("guide");
       await refreshServiceStatus();
       await loadTickerUniverse();

@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.report_email import (
     build_report_email_bodies,
     build_report_email_subject,
@@ -1344,7 +1345,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "candle_patterns_today": [],
         "sector_heatmap": [],
         "setup_quality_top": [],
+        "setup_quality_lookup": {},
         "watchlist_candidates": [],
+        "earnings_catalysts": {},
         "tonight_key_changes": [],
     }
     movers_all: list[dict[str, Any]] = []
@@ -1997,9 +2000,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 if prev is None or float(row.get("confidence") or 0.0) > float(prev.get("confidence") or 0.0):
                     candle_by_ticker[ticker] = row
 
-            setup_quality_rows = signals.get("setup_quality_top")
-            if isinstance(setup_quality_rows, list):
-                for row in setup_quality_rows:
+            if isinstance(setup_rows, list):
+                for row in setup_rows:
                     ticker = str(row.get("ticker") or "").upper()
                     candle = candle_by_ticker.get(ticker) or {}
                     if candle:
@@ -2009,28 +2011,64 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     readout = _describe_setup(row)
                     row.update(readout)
 
-            watchlist_rows = signals.get("watchlist_candidates")
-            if isinstance(watchlist_rows, list):
-                setup_map = {
-                    str(row.get("ticker") or "").upper(): row
-                    for row in (setup_quality_rows or [])
+                signals["setup_quality_top"] = setup_rows[:40]
+                signals["watchlist_candidates"] = [
+                    {
+                        "ticker": r.get("ticker"),
+                        "score": r.get("score"),
+                        "setup_tier": r.get("setup_tier"),
+                        "pct_change": r.get("pct_change"),
+                        "yolo_pattern": r.get("yolo_pattern"),
+                        "yolo_confidence": r.get("yolo_confidence"),
+                        "signal_bias": r.get("signal_bias"),
+                        "observation": r.get("observation"),
+                        "actionability": r.get("actionability"),
+                        "action": r.get("action"),
+                        "risk_note": r.get("risk_note"),
+                        "technical_read": r.get("technical_read"),
+                        "candle_pattern": r.get("candle_pattern"),
+                        "candle_bias": r.get("candle_bias"),
+                        "candle_confidence": r.get("candle_confidence"),
+                    }
+                    for r in setup_rows[:20]
+                ]
+                signals["setup_quality_lookup"] = {
+                    str(row.get("ticker") or "").upper(): {
+                        key: row.get(key)
+                        for key in (
+                            "ticker",
+                            "score",
+                            "setup_tier",
+                            "sector",
+                            "pct_change",
+                            "discount_pct",
+                            "peg",
+                            "atr_pct_14",
+                            "realized_vol_20",
+                            "bb_width_20",
+                            "signal_bias",
+                            "actionability",
+                            "observation",
+                            "action",
+                            "risk_note",
+                            "technical_read",
+                            "yolo_pattern",
+                            "yolo_confidence",
+                            "yolo_timeframe",
+                            "support_level",
+                            "resistance_level",
+                            "pct_to_support",
+                            "pct_to_resistance",
+                            "trend_state",
+                            "level_context",
+                            "candle_pattern",
+                            "candle_bias",
+                            "candle_confidence",
+                        )
+                    }
+                    for row in setup_rows
+                    if isinstance(row, dict) and row.get("ticker")
                 }
-                for row in watchlist_rows:
-                    src = setup_map.get(str(row.get("ticker") or "").upper())
-                    if not src:
-                        continue
-                    for key in (
-                        "signal_bias",
-                        "observation",
-                        "actionability",
-                        "action",
-                        "risk_note",
-                        "technical_read",
-                        "candle_pattern",
-                        "candle_bias",
-                        "candle_confidence",
-                    ):
-                        row[key] = src.get(key)
     except Exception:
         pass
 
@@ -2165,6 +2203,25 @@ def fetch_report_payload(
 
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
+        market_date_raw = str((payload.get("market_session") or {}).get("market_date") or "").strip()
+        market_date_obj: dt.date | None = None
+        try:
+            if market_date_raw:
+                market_date_obj = dt.date.fromisoformat(market_date_raw)
+        except ValueError:
+            market_date_obj = None
+        if market_date_obj is not None:
+            try:
+                payload["signals"]["earnings_catalysts"] = build_earnings_calendar_payload(
+                    conn,
+                    market_date=market_date_obj,
+                    days=14 if report_kind_norm == "daily" else 21,
+                    limit=120,
+                    tickers=None,
+                    setup_map=(payload.get("signals") or {}).get("setup_quality_lookup") or {},
+                )
+            except Exception:
+                payload["signals"]["earnings_catalysts"] = {}
 
         # YOLO deltas and persistence by timeframe.
         delta_daily = fetch_yolo_delta(conn, timeframe="daily")
@@ -2404,6 +2461,27 @@ def to_markdown(report: dict[str, Any]) -> str:
         for m in movers_down:
             lines.append(
                 f"| {m.get('ticker')} | {m.get('pct_change')}% | {m.get('close')} | {m.get('prev_close')} | {m.get('near_52w_low')} |"
+            )
+
+    earnings = signals.get("earnings_catalysts", {})
+    if isinstance(earnings, dict) and earnings.get("rows"):
+        lines.append("")
+        lines.append("## Earnings Catalysts")
+        summary = earnings.get("summary", {}) if isinstance(earnings.get("summary"), dict) else {}
+        provider_status = earnings.get("provider_status", {}) if isinstance(earnings.get("provider_status"), dict) else {}
+        lines.append(_md_line("provider", earnings.get("provider")))
+        lines.append(_md_line("window_days", summary.get("window_days")))
+        lines.append(_md_line("total_events", summary.get("total_events")))
+        lines.append(_md_line("high_risk", summary.get("high_risk")))
+        if provider_status.get("detail"):
+            lines.append(_md_line("provider_detail", provider_status.get("detail")))
+        lines.append("")
+        lines.append("| date | session | ticker | score | bias | earnings_risk | action |")
+        lines.append("|---|---|---|---:|---|---|---|")
+        for row in earnings.get("rows", [])[:12]:
+            lines.append(
+                f"| {row.get('earnings_date')} | {row.get('earnings_session')} | {row.get('ticker')} | "
+                f"{row.get('score')} | {row.get('signal_bias')} | {row.get('earnings_risk')} | {row.get('action')} |"
             )
 
     key_changes = signals.get("tonight_key_changes", [])[:5]

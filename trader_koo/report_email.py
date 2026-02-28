@@ -58,6 +58,9 @@ def build_report_email_bodies(
     movers_down = signals.get("movers_down_today") if isinstance(signals.get("movers_down_today"), list) else []
     setup_rows = signals.get("setup_quality_top") if isinstance(signals.get("setup_quality_top"), list) else []
     sector_rows = signals.get("sector_heatmap") if isinstance(signals.get("sector_heatmap"), list) else []
+    earnings = signals.get("earnings_catalysts") if isinstance(signals.get("earnings_catalysts"), dict) else {}
+    earnings_rows = earnings.get("rows") if isinstance(earnings.get("rows"), list) else []
+    earnings_groups = earnings.get("groups") if isinstance(earnings.get("groups"), list) else []
     risk_filters = report.get("risk_filters") if isinstance(report.get("risk_filters"), dict) else {}
     warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
     session = report.get("market_session") if isinstance(report.get("market_session"), dict) else {}
@@ -81,6 +84,7 @@ def build_report_email_bodies(
     )
     daily_delta_line = _format_delta_line(daily_delta, "Daily")
     weekly_delta_line = _format_delta_line(weekly_delta, "Weekly")
+    next_catalyst_line = _format_catalyst_line(earnings_rows[:4])
 
     text_lines = [
         f"trader_koo {report_kind} brief — {generated}",
@@ -91,6 +95,8 @@ def build_report_email_bodies(
         daily_delta_line,
         weekly_delta_line,
     ]
+    if next_catalyst_line:
+        text_lines.append(next_catalyst_line)
     if top_gainer:
         text_lines.append(
             f"Top gainer: {top_gainer.get('ticker')} {_fmt_signed_pct(top_gainer.get('pct_change'))}"
@@ -173,6 +179,7 @@ def build_report_email_bodies(
         _delta_card_html("Daily YOLO", daily_delta)
         + _delta_card_html("Weekly YOLO", weekly_delta)
     )
+    catalyst_board_html = _catalyst_board_html(earnings_groups)
 
     preview_candidates = [
         row
@@ -302,8 +309,18 @@ def build_report_email_bodies(
 
         {(
             '<div style="padding:24px 28px 0;">'
+            '<h2 style="margin:0 0 12px;font-size:18px;line-height:24px;color:#0f172a;">Catalyst Board</h2>'
+            '<div style="font-size:13px;line-height:19px;color:#64748b;margin-bottom:12px;">'
+            'Upcoming earnings are grouped by day and session. Use the board to plan levels before the event, not to blindly chase the headline.'
+            '</div>'
+            f'{catalyst_board_html}'
+            '</div>'
+        ) if catalyst_board_html else ''}
+
+        {(
+            '<div style="padding:24px 28px 0;">'
             '<h2 style="margin:0 0 12px;font-size:18px;line-height:24px;color:#0f172a;">Setup Charts</h2>'
-            '<div style="font-size:13px;line-height:19px;color:#64748b;margin-bottom:12px;">Remote images may be hidden until your email client loads them. Each preview shows price, support/resistance, and the latest YOLO box.</div>'
+            '<div style="font-size:13px;line-height:19px;color:#64748b;margin-bottom:12px;">Remote images may be hidden until your email client loads them. Each preview shows price, support/resistance, the latest YOLO box, and the upcoming earnings marker when one is available.</div>'
             '<table role="presentation" width="100%" cellspacing="0" cellpadding="0">'
             f'{preview_cards_html}'
             '</table>'
@@ -400,6 +417,57 @@ def _delta_card_html(title: str, delta: dict[str, Any]) -> str:
     )
 
 
+def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
+    if not groups:
+        return ""
+    day_blocks = []
+    for group in groups[:3]:
+        sessions = group.get("sessions") if isinstance(group.get("sessions"), list) else []
+        session_rows = []
+        for session in sessions:
+            rows = session.get("rows") if isinstance(session.get("rows"), list) else []
+            code = _fmt_text(session.get("code"))
+            label = _fmt_text(session.get("label"))
+            rendered_rows = []
+            for row in rows[:5]:
+                rendered_rows.append(
+                    "<tr>"
+                    f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;\">{_esc(row.get('ticker'))}</td>"
+                    f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;\">{_esc(_fmt_num(row.get('score')))}</td>"
+                    f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:#475569;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</td>"
+                    f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:{_risk_color(row.get('earnings_risk'))};font-weight:700;\">{_esc(str(row.get('earnings_risk') or 'normal').upper())}</td>"
+                    "</tr>"
+                    "<tr>"
+                    f"<td colspan=\"4\" style=\"padding:0 0 10px 0;border-bottom:1px solid #eef2f7;color:#334155;font-size:13px;line-height:19px;\">"
+                    f"<strong>Action:</strong> {_esc(row.get('action'))}"
+                    "</td>"
+                    "</tr>"
+                )
+            if not rendered_rows:
+                rendered_rows.append(
+                    "<tr><td colspan=\"4\" style=\"padding:8px 0;color:#94a3b8;\">No names</td></tr>"
+                )
+            session_rows.append(
+                "<div style=\"margin-top:12px;border-top:1px solid #eef2f7;padding-top:12px;\">"
+                f"<div style=\"font-size:12px;line-height:18px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;\">{_esc(label)} ({_esc(code)})</div>"
+                "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:8px;\">"
+                + "".join(rendered_rows)
+                + "</table></div>"
+            )
+        day_blocks.append(
+            "<td style=\"padding:8px;vertical-align:top;width:33.33%;\">"
+            "<div style=\"border:1px solid #e6ecf5;border-radius:18px;padding:16px;background:#ffffff;height:100%;\">"
+            f"<div style=\"font-size:17px;line-height:22px;font-weight:800;color:#0f172a;\">{_esc(group.get('display_date'))}</div>"
+            f"<div style=\"margin-top:4px;font-size:12px;line-height:18px;color:#64748b;\">{_esc(_fmt_num(group.get('count')))} earnings events</div>"
+            + "".join(session_rows)
+            + "</div></td>"
+        )
+    rows_html = []
+    for idx in range(0, len(day_blocks), 3):
+        rows_html.append("<tr>" + "".join(day_blocks[idx:idx + 3]) + "</tr>")
+    return "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">" + "".join(rows_html) + "</table>"
+
+
 def _delta_highlight(delta: dict[str, Any]) -> str:
     new_patterns = delta.get("new_patterns") if isinstance(delta.get("new_patterns"), list) else []
     lost_patterns = delta.get("lost_patterns") if isinstance(delta.get("lost_patterns"), list) else []
@@ -427,6 +495,18 @@ def _format_delta_line(delta: dict[str, Any], label: str) -> str:
         f"{label} YOLO delta: +{_fmt_num(delta.get('new_count') or 0)} / -{_fmt_num(delta.get('lost_count') or 0)} "
         f"({_compare_label(delta)})"
     )
+
+
+def _format_catalyst_line(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    parts = []
+    for row in rows[:4]:
+        parts.append(
+            f"{_fmt_text(row.get('earnings_date'))} {str(row.get('earnings_session') or 'TBD').upper()} "
+            f"{_fmt_text(row.get('ticker'))} ({str(row.get('earnings_risk') or 'normal').upper()})"
+        )
+    return "Catalysts: " + " | ".join(parts)
 
 
 def _risk_mode_line(risk_filters: dict[str, Any]) -> str:
@@ -524,3 +604,12 @@ def _fmt_text(value: Any) -> str:
 
 def _esc(value: Any) -> str:
     return html.escape(_fmt_text(value))
+
+
+def _risk_color(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "high":
+        return "#d93025"
+    if raw == "elevated":
+        return "#b45309"
+    return "#0f766e"
