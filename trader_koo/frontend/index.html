@@ -1472,12 +1472,10 @@
         ticker: row.ticker,
         score: row.score,
         setup_tier: row.setup_tier,
-        why_high: buildSetupReason(row),
+        why_high: row.observation || buildSetupReason(row),
+        action: row.action || "Watch only until the setup confirms.",
         pct_change: row.pct_change,
-        value_case: `${fmtPctText(row.discount_pct)} / PEG ${fmt(row.peg)}`,
-        yolo: row.yolo_pattern
-          ? `${row.yolo_pattern} (${fmt(row.yolo_confidence)})`
-          : "-",
+        technical_read: row.technical_read || "-",
       }));
     }
 
@@ -3167,10 +3165,10 @@
         const compactSetupRows = buildCompactSetupRows(setupRows.slice(0, 15));
         LAST_REPORT_SETUP_ROWS = setupRows;
         $("reportSetupSummary").textContent = setupRows.length
-          ? `Compact view keeps the nightly workflow tight: top ${Math.min(15, setupRows.length)} names first, advanced metrics only when needed.`
+          ? `Compact view keeps the nightly workflow tight: top ${Math.min(15, setupRows.length)} names first, with what is happening and the next reasonable action.`
           : "No confluence rows available yet.";
         $("reportSetupExplain").textContent = setupRows.length
-          ? "Why it ranks: value (discount + PEG), today's move, volatility regime, and YOLO strength/freshness."
+          ? "Read it in order: bias, where price sits versus support/resistance and trend, then whether the move is actionable now or better left for a pullback / breakdown confirmation."
           : "";
         renderSimpleTable(
           "reportSetupCompactTable",
@@ -3178,10 +3176,9 @@
             { key: "ticker", label: "Ticker" },
             { key: "score", label: "Score" },
             { key: "setup_tier", label: "Tier" },
-            { key: "why_high", label: "Why It Ranks" },
-            { key: "pct_change", label: "Today %" },
-            { key: "value_case", label: "Value" },
-            { key: "yolo", label: "YOLO" },
+            { key: "why_high", label: "Observation" },
+            { key: "action", label: "Reasonable Action" },
+            { key: "technical_read", label: "Technical Read" },
           ],
           compactSetupRows,
           true,
@@ -3194,6 +3191,10 @@
             { key: "ticker", label: "Ticker" },
             { key: "score", label: "Score" },
             { key: "setup_tier", label: "Tier" },
+            { key: "signal_bias", label: "Bias" },
+            { key: "observation", label: "Observation" },
+            { key: "action", label: "Reasonable Action" },
+            { key: "risk_note", label: "Risk" },
             { key: "sector", label: "Sector" },
             { key: "pct_change", label: "Today %" },
             { key: "discount_pct", label: "Discount %" },
@@ -3204,6 +3205,8 @@
             { key: "yolo_pattern", label: "YOLO Pattern" },
             { key: "yolo_confidence", label: "YOLO Conf" },
             { key: "yolo_age_days", label: "YOLO Age (d)" },
+            { key: "candle_pattern", label: "Candle" },
+            { key: "candle_bias", label: "Candle Bias" },
           ],
           setupRows.slice(0, 25),
           true,
