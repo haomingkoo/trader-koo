@@ -4,6 +4,8 @@ import html
 import os
 from typing import Any
 
+from trader_koo.email_chart_preview import build_chart_preview_url, chart_preview_enabled
+
 
 def report_email_app_url() -> str | None:
     for key in ("TRADER_KOO_EMAIL_REPORT_URL", "TRADER_KOO_ALLOWED_ORIGIN"):
@@ -172,6 +174,48 @@ def build_report_email_bodies(
         + _delta_card_html("Weekly YOLO", weekly_delta)
     )
 
+    preview_candidates = [
+        row
+        for row in setup_rows
+        if str(row.get("actionability") or "").strip() in {"higher-probability", "conditional"}
+        and str(row.get("yolo_pattern") or "").strip()
+    ]
+    if not preview_candidates:
+        preview_candidates = [row for row in setup_rows if str(row.get("yolo_pattern") or "").strip()]
+    if not preview_candidates:
+        preview_candidates = setup_rows[:]
+    preview_rows = preview_candidates[:4]
+    previews_enabled = chart_preview_enabled(app_url)
+    preview_cards_html = ""
+    if previews_enabled and preview_rows:
+        cards_out = []
+        for row in preview_rows:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            timeframe = str(row.get("yolo_timeframe") or ("weekly" if report_kind == "weekly" else "daily")).strip().lower()
+            preview_url = build_chart_preview_url(
+                base_url=str(app_url or ""),
+                ticker=ticker,
+                timeframe=timeframe,
+                report_ts=generated,
+            )
+            if not preview_url:
+                continue
+            cards_out.append(
+                "<td style=\"padding:8px;vertical-align:top;width:50%;\">"
+                "<div style=\"border:1px solid #e6ecf5;border-radius:18px;padding:14px;background:#ffffff;\">"
+                f"<div style=\"font-size:15px;line-height:20px;font-weight:800;color:#0f172a;\">{_esc(ticker)}</div>"
+                f"<div style=\"margin-top:2px;font-size:12px;line-height:18px;color:#64748b;\">{_esc(timeframe.upper())} setup • {_esc(str(row.get('signal_bias') or 'neutral').upper())}</div>"
+                f"<img src=\"{_esc(preview_url)}\" alt=\"{_esc(ticker)} chart preview\" style=\"display:block;width:100%;height:auto;margin-top:12px;border-radius:14px;border:1px solid #e6ecf5;background:#0b1220;\" />"
+                f"<div style=\"margin-top:10px;font-size:13px;line-height:19px;color:#334155;\"><strong>Read:</strong> {_esc(_setup_observation(row))}</div>"
+                f"<div style=\"margin-top:6px;font-size:13px;line-height:19px;color:#475569;\"><strong>Action:</strong> {_esc(_setup_action(row))}</div>"
+                "</div>"
+                "</td>"
+            )
+        preview_rows_html = []
+        for idx in range(0, len(cards_out), 2):
+            preview_rows_html.append("<tr>" + "".join(cards_out[idx:idx + 2]) + "</tr>")
+        preview_cards_html = "".join(preview_rows_html)
+
     setup_table_rows = []
     for row in setup_rows[:6]:
         setup_table_rows.append(
@@ -255,6 +299,16 @@ def build_report_email_bodies(
             <tr>{delta_cards_html}</tr>
           </table>
         </div>
+
+        {(
+            '<div style="padding:24px 28px 0;">'
+            '<h2 style="margin:0 0 12px;font-size:18px;line-height:24px;color:#0f172a;">Setup Charts</h2>'
+            '<div style="font-size:13px;line-height:19px;color:#64748b;margin-bottom:12px;">Remote images may be hidden until your email client loads them. Each preview shows price, support/resistance, and the latest YOLO box.</div>'
+            '<table role="presentation" width="100%" cellspacing="0" cellpadding="0">'
+            f'{preview_cards_html}'
+            '</table>'
+            '</div>'
+        ) if preview_cards_html else ''}
 
         <div style="padding:24px 28px 0;">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0">

@@ -18,10 +18,19 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from trader_koo.report_email import (
     build_report_email_bodies,
     build_report_email_subject,
     report_email_app_url,
+)
+from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
+from trader_koo.structure.levels import (
+    LevelConfig,
+    add_fallback_levels,
+    build_levels_from_pivots,
+    select_target_levels,
 )
 
 
@@ -32,6 +41,8 @@ except Exception:
     MARKET_TZ = dt.timezone.utc
 MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
 TRUTHY_VALUES = {"1", "true", "yes", "on"}
+REPORT_FEATURE_CFG = FeatureConfig()
+REPORT_LEVEL_CFG = LevelConfig()
 
 
 def _as_bool(value: Any) -> bool:
@@ -737,24 +748,24 @@ def _fetch_volatility_inputs(conn: sqlite3.Connection) -> tuple[dict[str, dict[s
 
 
 def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    """Build lightweight trend/level context for per-ticker report interpretation."""
+    """Build report interpretation context using the same level engine as the dashboard."""
     by_ticker: dict[str, dict[str, Any]] = {}
     if not table_exists(conn, "price_daily"):
         return by_ticker
 
     rows = conn.execute(
         """
-        SELECT ticker, date, CAST(open AS REAL), CAST(high AS REAL), CAST(low AS REAL), CAST(close AS REAL)
+        SELECT ticker, date, CAST(open AS REAL), CAST(high AS REAL), CAST(low AS REAL), CAST(close AS REAL), CAST(volume AS REAL)
         FROM (
-            SELECT ticker, date, open, high, low, close,
+            SELECT ticker, date, open, high, low, close, volume,
                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
             FROM price_daily
         )
-        WHERE rn <= 80
+        WHERE rn <= 320
         ORDER BY ticker, date
         """
     ).fetchall()
-    bucket: dict[str, list[tuple[str, float, float, float, float]]] = defaultdict(list)
+    bucket: dict[str, list[tuple[str, float, float, float, float, float]]] = defaultdict(list)
     for r in rows:
         ticker = str(r[0] or "").upper().strip()
         if not ticker:
@@ -764,14 +775,15 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
             high_v = float(r[3])
             low_v = float(r[4])
             close_v = float(r[5])
+            volume_v = float(r[6] or 0.0)
         except (TypeError, ValueError):
             continue
         if min(open_v, high_v, low_v, close_v) <= 0:
             continue
-        bucket[ticker].append((str(r[1]), open_v, high_v, low_v, close_v))
+        bucket[ticker].append((str(r[1]), open_v, high_v, low_v, close_v, volume_v))
 
     for ticker, bars in bucket.items():
-        if len(bars) < 20:
+        if len(bars) < 60:
             continue
         closes = [b[4] for b in bars]
         highs = [b[2] for b in bars]
@@ -822,6 +834,108 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
             elif pct_vs_ma20 <= -8.0:
                 stretch_state = "extended_down"
 
+        support_level = None
+        support_zone_low = None
+        support_zone_high = None
+        support_tier = None
+        support_touches = None
+        resistance_level = None
+        resistance_zone_low = None
+        resistance_zone_high = None
+        resistance_tier = None
+        resistance_touches = None
+        pct_to_support = None
+        pct_to_resistance = None
+        range_position = None
+
+        try:
+            frame = pd.DataFrame(
+                bars,
+                columns=["date", "open", "high", "low", "close", "volume"],
+            )
+            frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+            frame = frame.dropna(subset=["date"]).reset_index(drop=True)
+            if len(frame) >= 60:
+                model = add_basic_features(frame.copy(), REPORT_FEATURE_CFG)
+                model = compute_pivots(model, left=3, right=3)
+                levels_raw = build_levels_from_pivots(model, REPORT_LEVEL_CFG)
+                levels = select_target_levels(levels_raw, float(close_now), REPORT_LEVEL_CFG)
+                levels = add_fallback_levels(model, levels, float(close_now), REPORT_LEVEL_CFG)
+
+                def _pick_level(side: str) -> dict[str, Any] | None:
+                    if levels is None or levels.empty:
+                        return None
+                    pool = levels[levels["type"] == side].copy()
+                    if pool.empty:
+                        return None
+                    if side == "support":
+                        preferred = pool[pool["level"] <= close_now].sort_values("level", ascending=False)
+                    else:
+                        preferred = pool[pool["level"] >= close_now].sort_values("level", ascending=True)
+                    if preferred.empty:
+                        preferred = pool.sort_values(
+                            ["dist", "touches", "recency_score"],
+                            ascending=[True, False, False],
+                        )
+                    return preferred.iloc[0].to_dict() if not preferred.empty else None
+
+                support = _pick_level("support")
+                resistance = _pick_level("resistance")
+                if support:
+                    support_level = round(float(support.get("level") or 0.0), 2)
+                    support_zone_low = round(float(support.get("zone_low") or 0.0), 2)
+                    support_zone_high = round(float(support.get("zone_high") or 0.0), 2)
+                    support_tier = str(support.get("tier") or "")
+                    support_touches = int(support.get("touches") or 0)
+                    if support_level > 0:
+                        pct_to_support = round(((close_now - support_level) / support_level) * 100.0, 2)
+                if resistance:
+                    resistance_level = round(float(resistance.get("level") or 0.0), 2)
+                    resistance_zone_low = round(float(resistance.get("zone_low") or 0.0), 2)
+                    resistance_zone_high = round(float(resistance.get("zone_high") or 0.0), 2)
+                    resistance_tier = str(resistance.get("tier") or "")
+                    resistance_touches = int(resistance.get("touches") or 0)
+                    if resistance_level > 0:
+                        pct_to_resistance = round(((resistance_level - close_now) / resistance_level) * 100.0, 2)
+                if (
+                    isinstance(support_level, (int, float))
+                    and isinstance(resistance_level, (int, float))
+                    and resistance_level > support_level
+                ):
+                    range_position = round(
+                        (close_now - support_level) / max(resistance_level - support_level, 0.01),
+                        3,
+                    )
+                if (
+                    isinstance(support_zone_low, (int, float))
+                    and close_now < float(support_zone_low)
+                ):
+                    level_context = "below_support"
+                elif (
+                    isinstance(resistance_zone_high, (int, float))
+                    and close_now > float(resistance_zone_high)
+                ):
+                    level_context = "above_resistance"
+                elif (
+                    isinstance(support_zone_high, (int, float))
+                    and close_now <= float(support_zone_high)
+                ):
+                    level_context = "at_support"
+                elif (
+                    isinstance(resistance_zone_low, (int, float))
+                    and close_now >= float(resistance_zone_low)
+                ):
+                    level_context = "at_resistance"
+                elif isinstance(range_position, (int, float)):
+                    if float(range_position) <= 0.35:
+                        level_context = "closer_support"
+                    elif float(range_position) >= 0.65:
+                        level_context = "closer_resistance"
+                    else:
+                        level_context = "mid_range"
+        except Exception:
+            pass
+
         by_ticker[ticker] = {
             "close": round(close_now, 2),
             "ma20": round(ma20, 2) if ma20 is not None else None,
@@ -835,6 +949,19 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
             "trend_state": trend_state,
             "level_context": level_context,
             "stretch_state": stretch_state,
+            "support_level": support_level,
+            "support_zone_low": support_zone_low,
+            "support_zone_high": support_zone_high,
+            "support_tier": support_tier,
+            "support_touches": support_touches,
+            "resistance_level": resistance_level,
+            "resistance_zone_low": resistance_zone_low,
+            "resistance_zone_high": resistance_zone_high,
+            "resistance_tier": resistance_tier,
+            "resistance_touches": resistance_touches,
+            "pct_to_support": pct_to_support,
+            "pct_to_resistance": pct_to_resistance,
+            "range_position": range_position,
         }
     return by_ticker
 
@@ -871,10 +998,18 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     pct_vs_ma20 = row.get("pct_vs_ma20")
     pct_change = row.get("pct_change")
     pattern = str(row.get("yolo_pattern") or "").strip()
+    support_level = row.get("support_level")
+    resistance_level = row.get("resistance_level")
+    pct_to_support = row.get("pct_to_support")
+    pct_to_resistance = row.get("pct_to_resistance")
 
     level_label = {
-        "at_support": "sitting near short-term support",
-        "at_resistance": "pressing into short-term resistance",
+        "below_support": "trading below nearby support",
+        "at_support": "sitting inside real support",
+        "closer_support": "trading closer to support than resistance",
+        "at_resistance": "pressing into real resistance",
+        "closer_resistance": "trading closer to resistance than support",
+        "above_resistance": "trading above nearby resistance",
         "mid_range": "trading in the middle of its recent range",
     }.get(level, "trading in the middle of its recent range")
     trend_label = {
@@ -909,20 +1044,34 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     actionability = "watch-only"
     action = "No strong edge yet. Keep it on watch, do not force a trade."
 
-    near_support = isinstance(pct_from_low, (int, float)) and float(pct_from_low) <= 2.5
-    near_resistance = isinstance(pct_from_high, (int, float)) and float(pct_from_high) <= 2.5
+    near_support = (
+        level in {"at_support", "closer_support"}
+        or (isinstance(pct_to_support, (int, float)) and float(pct_to_support) <= 1.5)
+        or (isinstance(pct_from_low, (int, float)) and float(pct_from_low) <= 2.5)
+    )
+    near_resistance = (
+        level in {"at_resistance", "closer_resistance"}
+        or (isinstance(pct_to_resistance, (int, float)) and float(pct_to_resistance) <= 1.5)
+        or (isinstance(pct_from_high, (int, float)) and float(pct_from_high) <= 2.5)
+    )
     large_day = isinstance(pct_change, (int, float)) and abs(float(pct_change)) >= 5.0
 
     if bias == "bullish":
         if stretch == "extended_up" or large_day:
             actionability = "wait"
             action = "Bullish idea, but do not chase strength. Prefer a pullback or breakout retest."
+        elif level == "above_resistance" and trend == "uptrend":
+            actionability = "conditional"
+            action = "Breakout is already through resistance. Best follow-through entry is a clean hold or retest, not an emotional chase."
         elif trend == "uptrend" and near_resistance:
             actionability = "higher-probability"
             action = "Trend continuation watch. Best if price closes through resistance or retests it cleanly."
         elif near_support and candle_bias != "bearish":
             actionability = "higher-probability"
             action = "Reversal watch at support. Actionable only if support holds and the next candles confirm."
+        elif level == "below_support":
+            actionability = "wait"
+            action = "Bullish pattern is fighting broken support. Stand aside until price reclaims the level."
         elif trend == "downtrend":
             actionability = "conditional"
             action = "Counter-trend bounce only. Wait for trend repair before treating it as a core long."
@@ -933,12 +1082,18 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         if stretch == "extended_down" or large_day:
             actionability = "wait"
             action = "Avoid chasing the flush. Better setup is a failed bounce or a clean support break."
+        elif level == "below_support" and trend == "downtrend":
+            actionability = "higher-probability"
+            action = "Bearish continuation is already below support. Best entry is failed reclaim or fresh breakdown follow-through."
         elif near_support:
             actionability = "higher-probability"
             action = "Support-failure watch. It is only actionable if support actually breaks with follow-through."
         elif trend == "downtrend" and (near_resistance or candle_bias == "bearish"):
             actionability = "higher-probability"
             action = "Bearish continuation watch. Best entry is rejection near resistance or failed rally."
+        elif level == "above_resistance":
+            actionability = "wait"
+            action = "Bearish idea is fighting price above resistance. Wait for failure back under the level before acting."
         elif trend == "uptrend":
             actionability = "conditional"
             action = "Bearish warning against the trend. Avoid new longs until structure improves."
@@ -966,6 +1121,12 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         risk_notes.append("little valuation cushion")
 
     observation = ". ".join(part[0].upper() + part[1:] if idx == 0 else part for idx, part in enumerate(observation_parts)) + "."
+    level_bits = []
+    if isinstance(support_level, (int, float)):
+        level_bits.append(f"support {support_level}")
+    if isinstance(resistance_level, (int, float)):
+        level_bits.append(f"resistance {resistance_level}")
+    level_suffix = f" | {' / '.join(level_bits)}" if level_bits else ""
     return {
         "signal_bias": bias,
         "observation": observation,
@@ -975,7 +1136,7 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         "technical_read": (
             f"{bias} | {trend} | "
             f"{'support' if near_support else ('resistance' if near_resistance else 'mid-range')} | "
-            f"vs MA20 {_fmt_pct_short(pct_vs_ma20)}"
+            f"vs MA20 {_fmt_pct_short(pct_vs_ma20)}{level_suffix}"
         ),
     }
 
@@ -1697,6 +1858,19 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     "pct_from_20d_low": tech.get("pct_from_20d_low"),
                     "trend_state": tech.get("trend_state") or "mixed",
                     "level_context": tech.get("level_context") or "mid_range",
+                    "support_level": tech.get("support_level"),
+                    "support_zone_low": tech.get("support_zone_low"),
+                    "support_zone_high": tech.get("support_zone_high"),
+                    "support_tier": tech.get("support_tier"),
+                    "support_touches": tech.get("support_touches"),
+                    "resistance_level": tech.get("resistance_level"),
+                    "resistance_zone_low": tech.get("resistance_zone_low"),
+                    "resistance_zone_high": tech.get("resistance_zone_high"),
+                    "resistance_tier": tech.get("resistance_tier"),
+                    "resistance_touches": tech.get("resistance_touches"),
+                    "pct_to_support": tech.get("pct_to_support"),
+                    "pct_to_resistance": tech.get("pct_to_resistance"),
+                    "range_position": tech.get("range_position"),
                     "stretch_state": tech.get("stretch_state") or "normal",
                     "candle_pattern": None,
                     "candle_bias": "neutral",
