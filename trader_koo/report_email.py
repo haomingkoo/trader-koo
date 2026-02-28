@@ -430,6 +430,23 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
             label = _fmt_text(session.get("label"))
             rendered_rows = []
             for row in rows[:5]:
+                rec_state = str(row.get("recommendation_state") or "calendar_only").strip().lower()
+                rec_label = {
+                    "setup_ready": "SETUP READY",
+                    "watch": "WATCH",
+                    "calendar_only": "CALENDAR ONLY",
+                }.get(rec_state, "CALENDAR ONLY")
+                rec_color = {
+                    "setup_ready": "#0f9d58",
+                    "watch": "#b7791f",
+                    "calendar_only": "#64748b",
+                }.get(rec_state, "#64748b")
+                schedule_label = {
+                    "confirmed": "Confirmed",
+                    "date_only": "Date only",
+                    "snapshot": "Snapshot",
+                    "unverified": "Unverified",
+                }.get(str(row.get("schedule_quality") or "").strip().lower(), _fmt_text(row.get("schedule_quality")))
                 rendered_rows.append(
                     "<tr>"
                     f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;\">{_esc(row.get('ticker'))}</td>"
@@ -439,7 +456,8 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
                     "</tr>"
                     "<tr>"
                     f"<td colspan=\"4\" style=\"padding:0 0 10px 0;border-bottom:1px solid #eef2f7;color:#334155;font-size:13px;line-height:19px;\">"
-                    f"<strong>Action:</strong> {_esc(row.get('action'))}"
+                    f"<div><strong style=\"color:{rec_color};\">{_esc(rec_label)}</strong> • {_esc(schedule_label)}</div>"
+                    f"<div style=\"margin-top:4px;\"><strong>Action:</strong> {_esc(row.get('action'))}</div>"
                     "</td>"
                     "</tr>"
                 )
@@ -502,9 +520,10 @@ def _format_catalyst_line(rows: list[dict[str, Any]]) -> str:
         return ""
     parts = []
     for row in rows[:4]:
+        rec_state = str(row.get("recommendation_state") or "calendar_only").replace("_", " ").upper()
         parts.append(
             f"{_fmt_text(row.get('earnings_date'))} {str(row.get('earnings_session') or 'TBD').upper()} "
-            f"{_fmt_text(row.get('ticker'))} ({str(row.get('earnings_risk') or 'normal').upper()})"
+            f"{_fmt_text(row.get('ticker'))} ({rec_state}, {str(row.get('earnings_risk') or 'normal').upper()})"
         )
     return "Catalysts: " + " | ".join(parts)
 
