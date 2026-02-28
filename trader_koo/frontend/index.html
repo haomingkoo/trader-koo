@@ -102,6 +102,17 @@
       outline: none;
     }
     .status { color: var(--muted); font-size: 0.9rem; }
+    .top-disclaimer {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border: 1px solid rgba(248, 194, 78, 0.32);
+      background: linear-gradient(180deg, rgba(248, 194, 78, 0.08), rgba(255, 107, 107, 0.05));
+      border-radius: 12px;
+      color: #f3dfb1;
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+    .top-disclaimer b { color: #ffe2a1; }
     .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
     .tab-btn {
       border: 1px solid var(--line);
@@ -244,6 +255,33 @@
       cursor: pointer;
     }
     .mini-actions button:hover { border-color: var(--blue); }
+    .report-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin: 8px 0;
+    }
+    .report-toggle-btn {
+      width: auto;
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 0.76rem;
+      border: 1px solid var(--line);
+      background: #0f1624;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .report-toggle-btn.active {
+      color: #fff;
+      border-color: transparent;
+      background: linear-gradient(90deg, #1f7bff, #4e9cff);
+    }
+    .report-inline-note {
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }
     .report-watch-wrap {
       display: flex;
       gap: 8px;
@@ -294,7 +332,24 @@
     tr.clickable:hover { background: rgba(106,169,255,0.12); cursor: pointer; }
     .table-wrap { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(420px, 1fr)); gap: 12px; }
     .table-wrap > .panel { min-width: 0; overflow-x: auto; }
-    #tabReport .panel { min-width: 0; }
+    #tabReport .panel { min-width: 0; overflow-x: auto; }
+    #tabReport table {
+      width: max-content;
+      min-width: 100%;
+      font-size: 0.82rem;
+    }
+    #reportSetupCompactTable {
+      width: 100%;
+      min-width: 100%;
+      table-layout: fixed;
+    }
+    #tabReport th,
+    #tabReport td {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      vertical-align: top;
+    }
     #reportStatus,
     #reportBreadthSummary,
     #reportYoloDeltaSummary,
@@ -475,6 +530,7 @@
       .guide details { padding: 8px; }
       .guide summary { font-size: 0.82rem; }
       .site-footnote { padding: 10px 12px; font-size: 0.76rem; }
+      .top-disclaimer { font-size: 0.76rem; padding: 9px 10px; }
     }
   </style>
 </head>
@@ -487,6 +543,9 @@
         <a href="https://github.com/haomingkoo" target="_blank" rel="noopener">GitHub</a>
       </div>
     </nav>
+    <div class="top-disclaimer">
+      <b>Research only. Not financial advice.</b> This dashboard can be wrong, stale, or incomplete. Treat it as a decision-support tool, not an instruction to buy or sell.
+    </div>
     <section class="hero">
       <div>
         <h1 class="hero-title">trader_koo</h1>
@@ -500,9 +559,9 @@
 
     <div class="tabs">
       <button id="tabGuideBtn" class="tab-btn active">Guide</button>
-      <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
-      <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
       <button id="tabReportBtn" class="tab-btn">Daily Report</button>
+      <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
+      <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
     </div>
 
     <section id="tabOp" class="panel hidden">
@@ -679,8 +738,17 @@
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">Confluence Score</div>
         <div id="reportSetupSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:8px;"></div>
+        <div id="reportSetupExplain" class="report-inline-note"></div>
+        <div class="report-actions">
+          <button id="reportSetupCompactBtn" class="report-toggle-btn active" type="button" aria-pressed="true">Compact View</button>
+          <button id="reportSetupMoreBtn" class="report-toggle-btn" type="button" aria-pressed="false">More Metrics</button>
+        </div>
         <div id="reportSetupQuickAdds" class="mini-actions"></div>
-        <table id="reportSetupQualityTable"></table>
+        <table id="reportSetupCompactTable"></table>
+        <div id="reportSetupDetailWrap" class="hidden" style="margin-top:10px;">
+          <div class="report-inline-note" style="margin-bottom:8px;">Advanced view adds raw volatility and YOLO aging metrics so you can audit why a name ranked where it did.</div>
+          <table id="reportSetupQualityTable"></table>
+        </div>
       </div>
 
       <div class="panel" style="margin-bottom:12px;">
@@ -781,6 +849,7 @@
 
         <h3>Quick Start (2 Minutes)</h3>
         <ol class="guide-list">
+          <li>Start here. Read the risk note above so the dashboard is used as research support, not as a trading instruction.</li>
           <li>Open <b>Daily Report</b> after the nightly run completes.</li>
           <li>Review <b>Tonight's 5 Key Changes</b> first for the fast market summary.</li>
           <li>Check <b>YOLO Changes</b> for new patterns and patterns no longer detected.</li>
@@ -797,23 +866,23 @@
             <div class="guide-v">How to use the app, read signals, and avoid common mistakes.</div>
           </div>
           <div class="guide-card">
-            <div class="guide-k">Opportunities (PEG)</div>
-            <div class="guide-v">Valuation screener for S&amp;P 500. Filter by discount, PEG, and view presets.</div>
+            <div class="guide-k">Daily Report</div>
+            <div class="guide-v">Nightly summary of what changed, strongest setups, market regime, and YOLO deltas.</div>
           </div>
           <div class="guide-card">
             <div class="guide-k">Chart + Levels</div>
             <div class="guide-v">Per-ticker chart with support/resistance, gaps, trendlines, rule/hybrid overlays, candlestick signals, optional Bollinger Bands, and YOLO boxes.</div>
           </div>
           <div class="guide-card">
-            <div class="guide-k">Daily Report</div>
-            <div class="guide-v">Nightly summary of what changed, strongest patterns, movers, and regime context.</div>
+            <div class="guide-k">Opportunities (PEG)</div>
+            <div class="guide-v">Valuation screener for S&amp;P 500. Use it after report/chart review, not before.</div>
           </div>
         </div>
 
         <h3>Daily Report Read Order</h3>
         <ol class="guide-list">
           <li><b>Tonight's 5 Key Changes</b>: one-screen summary of what materially changed.</li>
-          <li><b>Confluence Score</b>: ranked candidates combining valuation, momentum, volatility, and YOLO freshness.</li>
+          <li><b>Confluence Score</b>: start in compact view, then open <b>More Metrics</b> only when you need to audit volatility and aging inputs.</li>
           <li><b>Sector Heatmap</b>: identify leadership/laggards and rotation.</li>
           <li><b>YOLO Changes vs Previous Run</b>: actionable delta, not raw count noise.</li>
           <li><b>Large Moves + 52-week Extremes</b>: momentum continuation or exhaustion candidates.</li>
@@ -908,6 +977,7 @@
     const DEFAULT_MONTHS = 3;
     let LAST_CHART_PAYLOAD = null;
     let LAST_REPORT_SETUP_ROWS = [];
+    let REPORT_SETUP_SHOW_MORE = false;
     let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
     let _apiKey = "";
 
@@ -925,7 +995,18 @@
         .replaceAll("'", "&#39;");
     }
 
-    const PERCENT_COLUMNS = new Set(["discount_pct", "eps_growth_5y", "atr_pct"]);
+    const PERCENT_COLUMNS = new Set([
+      "discount_pct",
+      "eps_growth_5y",
+      "atr_pct",
+      "atr_pct_14",
+      "realized_vol_20",
+      "bb_width_20",
+      "pct_change",
+      "pct_advancing",
+      "pct_from_high",
+      "pct_from_low",
+    ]);
     const DECIMAL_BY_COLUMN = {
       price: 2,
       pe: 2,
@@ -945,6 +1026,79 @@
       call_oi: 0,
       put_oi: 0,
     };
+
+    function fmtPctText(raw, digits = 2) {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return "-";
+      return `${n.toFixed(digits)}%`;
+    }
+
+    function buildSetupReason(row) {
+      const reasons = [];
+      const discount = Number(row.discount_pct);
+      const peg = Number(row.peg);
+      const move = Number(row.pct_change);
+      const yoloConf = Number(row.yolo_confidence);
+      const yoloPattern = String(row.yolo_pattern || "").trim();
+      const age = Number(row.yolo_age_days);
+      const rv20 = Number(row.realized_vol_20);
+
+      if (Number.isFinite(discount)) {
+        if (discount >= 25) reasons.push("deep discount");
+        else if (discount >= 15) reasons.push("discounted");
+      }
+      if (Number.isFinite(peg)) {
+        if (peg <= 0.8) reasons.push("low PEG");
+        else if (peg <= 1.2) reasons.push("reasonable PEG");
+      }
+      if (Number.isFinite(move)) {
+        if (move >= 3) reasons.push("strong up day");
+        else if (move <= -3) reasons.push("washout move");
+        else if (Math.abs(move) >= 1.5) reasons.push("meaningful move");
+      }
+      if (yoloPattern) {
+        const label = yoloConf >= 0.75 ? "strong YOLO" : "YOLO signal";
+        reasons.push(`${label}: ${yoloPattern}`);
+      }
+      if (Number.isFinite(age) && age <= 10) reasons.push("fresh pattern");
+      if (Number.isFinite(rv20)) {
+        if (rv20 <= 30) reasons.push("contained vol");
+        else if (rv20 >= 55) reasons.push("high vol");
+      }
+      return reasons.slice(0, 3).join(" • ") || "balanced multi-factor setup";
+    }
+
+    function buildCompactSetupRows(rows) {
+      return (rows || []).map((row) => ({
+        ticker: row.ticker,
+        score: row.score,
+        setup_tier: row.setup_tier,
+        why_high: buildSetupReason(row),
+        pct_change: row.pct_change,
+        value_case: `${fmtPctText(row.discount_pct)} / PEG ${fmt(row.peg)}`,
+        yolo: row.yolo_pattern
+          ? `${row.yolo_pattern} (${fmt(row.yolo_confidence)})`
+          : "-",
+      }));
+    }
+
+    function setReportSetupMode(showMore) {
+      REPORT_SETUP_SHOW_MORE = !!showMore;
+      const compactBtn = $("reportSetupCompactBtn");
+      const moreBtn = $("reportSetupMoreBtn");
+      const detailWrap = $("reportSetupDetailWrap");
+      if (compactBtn) {
+        compactBtn.classList.toggle("active", !REPORT_SETUP_SHOW_MORE);
+        compactBtn.setAttribute("aria-pressed", String(!REPORT_SETUP_SHOW_MORE));
+      }
+      if (moreBtn) {
+        moreBtn.classList.toggle("active", REPORT_SETUP_SHOW_MORE);
+        moreBtn.setAttribute("aria-pressed", String(REPORT_SETUP_SHOW_MORE));
+      }
+      if (detailWrap) {
+        detailWrap.classList.toggle("hidden", !REPORT_SETUP_SHOW_MORE);
+      }
+    }
 
     function formatTableValue(col, raw) {
       if (raw === null || raw === undefined || raw === "") return "-";
@@ -1192,13 +1346,18 @@
       const state = TABLE_STATE[elId] || { sortCol: null, sortAsc: false };
       TABLE_STATE[elId] = state;
       const el = $(elId);
+      const colDefs = columns.map((col) => (
+        typeof col === "string"
+          ? { key: col, label: col }
+          : { key: col.key, label: col.label || col.key }
+      ));
       let viewRows = [...rows];
       const searchId = opts.searchInputId || "";
       if (searchId && $(searchId)) {
         const q = String($(searchId).value || "").trim().toLowerCase();
         if (q) {
           viewRows = viewRows.filter((r) =>
-            columns.some((c) => String(r[c] ?? "").toLowerCase().includes(q))
+            colDefs.some(({ key }) => String(r[key] ?? "").toLowerCase().includes(q))
           );
         }
       }
@@ -1214,18 +1373,18 @@
         });
       }
 
-      const head = `<tr>${columns.map((c) => {
-        if (!opts.sortable) return `<th>${c}</th>`;
-        const marker = state.sortCol === c ? (state.sortAsc ? " ▲" : " ▼") : "";
-        return `<th data-sort-col="${c}" style="cursor:pointer;">${c}${marker}</th>`;
+      const head = `<tr>${colDefs.map(({ key, label }) => {
+        if (!opts.sortable) return `<th>${label}</th>`;
+        const marker = state.sortCol === key ? (state.sortAsc ? " ▲" : " ▼") : "";
+        return `<th data-sort-col="${key}" style="cursor:pointer;">${label}${marker}</th>`;
       }).join("")}</tr>`;
 
       const body = viewRows.length
         ? viewRows.map((r, idx) => {
             const cls = clickable ? "clickable" : "";
-            return `<tr class="${cls}" data-idx="${idx}">${columns.map(c => `<td>${formatTableValue(c, r[c])}</td>`).join("")}</tr>`;
+            return `<tr class="${cls}" data-idx="${idx}">${colDefs.map(({ key }) => `<td>${formatTableValue(key, r[key])}</td>`).join("")}</tr>`;
           }).join("")
-        : `<tr><td colspan="${columns.length}">No data</td></tr>`;
+        : `<tr><td colspan="${colDefs.length}">No data</td></tr>`;
       el.innerHTML = head + body;
 
       if (opts.sortable) {
@@ -2134,13 +2293,47 @@
           : "<li>No active no-trade conditions.</li>";
 
         const setupRows = (signals.setup_quality_top || []).slice(0, 40);
+        const compactSetupRows = buildCompactSetupRows(setupRows.slice(0, 15));
         LAST_REPORT_SETUP_ROWS = setupRows;
         $("reportSetupSummary").textContent = setupRows.length
-          ? `Confluence score combines valuation (discount/PEG), one-day momentum, volatility regime (ATR/RV/VIX + BB width), 52W proximity, and YOLO confidence/age. Top ${Math.min(25, setupRows.length)} shown below.`
+          ? `Compact view keeps the nightly workflow tight: top ${Math.min(15, setupRows.length)} names first, advanced metrics only when needed.`
           : "No confluence rows available yet.";
+        $("reportSetupExplain").textContent = setupRows.length
+          ? "Why it ranks: value (discount + PEG), today's move, volatility regime, and YOLO strength/freshness."
+          : "";
+        renderSimpleTable(
+          "reportSetupCompactTable",
+          [
+            { key: "ticker", label: "Ticker" },
+            { key: "score", label: "Score" },
+            { key: "setup_tier", label: "Tier" },
+            { key: "why_high", label: "Why It Ranks" },
+            { key: "pct_change", label: "Today %" },
+            { key: "value_case", label: "Value" },
+            { key: "yolo", label: "YOLO" },
+          ],
+          compactSetupRows,
+          true,
+          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          { sortable: true },
+        );
         renderSimpleTable(
           "reportSetupQualityTable",
-          ["ticker", "score", "setup_tier", "sector", "pct_change", "discount_pct", "peg", "atr_pct_14", "realized_vol_20", "bb_width_20", "yolo_pattern", "yolo_confidence", "yolo_age_days"],
+          [
+            { key: "ticker", label: "Ticker" },
+            { key: "score", label: "Score" },
+            { key: "setup_tier", label: "Tier" },
+            { key: "sector", label: "Sector" },
+            { key: "pct_change", label: "Today %" },
+            { key: "discount_pct", label: "Discount %" },
+            { key: "peg", label: "PEG" },
+            { key: "atr_pct_14", label: "ATR %" },
+            { key: "realized_vol_20", label: "RV20 %" },
+            { key: "bb_width_20", label: "BB Width %" },
+            { key: "yolo_pattern", label: "YOLO Pattern" },
+            { key: "yolo_confidence", label: "YOLO Conf" },
+            { key: "yolo_age_days", label: "YOLO Age (d)" },
+          ],
           setupRows.slice(0, 25),
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
@@ -2157,6 +2350,7 @@
             addTickerToWatchlist(t);
           });
         });
+        setReportSetupMode(REPORT_SETUP_SHOW_MORE);
 
         const sectorRows = signals.sector_heatmap || [];
         const maxAbs = Math.max(1, ...sectorRows.map((r) => Math.abs(Number(r.avg_pct_change || 0))));
@@ -2381,6 +2575,8 @@
       e.preventDefault();
       $("reportWatchAddBtn").click();
     });
+    $("reportSetupCompactBtn").addEventListener("click", () => setReportSetupMode(false));
+    $("reportSetupMoreBtn").addEventListener("click", () => setReportSetupMode(true));
     $("tfDailyBtn").addEventListener("click", () => setChartTimeframe("daily"));
     $("tfWeeklyBtn").addEventListener("click", () => setChartTimeframe("weekly"));
     window.addEventListener("keydown", (e) => { if (e.key === "Enter") loadChart(); });
@@ -2391,9 +2587,10 @@
     $("showYoloPatterns").addEventListener("change", () => { if (LAST_CHART_PAYLOAD) renderChart(LAST_CHART_PAYLOAD); });
 
     (async () => {
-      activateTab("guide");
       await initApiBase();
       await initApiKey();
+      setReportSetupMode(false);
+      activateTab("guide");
       await refreshServiceStatus();
       await loadTickerUniverse();
       await loadOpportunities();
