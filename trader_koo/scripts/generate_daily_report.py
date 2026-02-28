@@ -736,6 +736,250 @@ def _fetch_volatility_inputs(conn: sqlite3.Connection) -> tuple[dict[str, dict[s
     return by_ticker, market_ctx
 
 
+def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Build lightweight trend/level context for per-ticker report interpretation."""
+    by_ticker: dict[str, dict[str, Any]] = {}
+    if not table_exists(conn, "price_daily"):
+        return by_ticker
+
+    rows = conn.execute(
+        """
+        SELECT ticker, date, CAST(open AS REAL), CAST(high AS REAL), CAST(low AS REAL), CAST(close AS REAL)
+        FROM (
+            SELECT ticker, date, open, high, low, close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM price_daily
+        )
+        WHERE rn <= 80
+        ORDER BY ticker, date
+        """
+    ).fetchall()
+    bucket: dict[str, list[tuple[str, float, float, float, float]]] = defaultdict(list)
+    for r in rows:
+        ticker = str(r[0] or "").upper().strip()
+        if not ticker:
+            continue
+        try:
+            open_v = float(r[2])
+            high_v = float(r[3])
+            low_v = float(r[4])
+            close_v = float(r[5])
+        except (TypeError, ValueError):
+            continue
+        if min(open_v, high_v, low_v, close_v) <= 0:
+            continue
+        bucket[ticker].append((str(r[1]), open_v, high_v, low_v, close_v))
+
+    for ticker, bars in bucket.items():
+        if len(bars) < 20:
+            continue
+        closes = [b[4] for b in bars]
+        highs = [b[2] for b in bars]
+        lows = [b[3] for b in bars]
+        close_now = closes[-1]
+        ma20 = sum(closes[-20:]) / 20.0 if len(closes) >= 20 else None
+        ma50 = sum(closes[-50:]) / 50.0 if len(closes) >= 50 else None
+        recent_high_20 = max(highs[-20:]) if len(highs) >= 20 else None
+        recent_low_20 = min(lows[-20:]) if len(lows) >= 20 else None
+
+        pct_vs_ma20 = ((close_now / ma20) - 1.0) * 100.0 if ma20 and ma20 > 0 else None
+        pct_vs_ma50 = ((close_now / ma50) - 1.0) * 100.0 if ma50 and ma50 > 0 else None
+        pct_from_20d_high = (
+            ((recent_high_20 - close_now) / recent_high_20) * 100.0
+            if recent_high_20 and recent_high_20 > 0
+            else None
+        )
+        pct_from_20d_low = (
+            ((close_now - recent_low_20) / recent_low_20) * 100.0
+            if recent_low_20 and recent_low_20 > 0
+            else None
+        )
+
+        trend_state = "mixed"
+        if (
+            ma20 is not None
+            and ma50 is not None
+            and close_now > ma20 > ma50
+        ):
+            trend_state = "uptrend"
+        elif (
+            ma20 is not None
+            and ma50 is not None
+            and close_now < ma20 < ma50
+        ):
+            trend_state = "downtrend"
+
+        level_context = "mid_range"
+        if isinstance(pct_from_20d_low, (int, float)) and pct_from_20d_low <= 2.5:
+            level_context = "at_support"
+        elif isinstance(pct_from_20d_high, (int, float)) and pct_from_20d_high <= 2.5:
+            level_context = "at_resistance"
+
+        stretch_state = "normal"
+        if isinstance(pct_vs_ma20, (int, float)):
+            if pct_vs_ma20 >= 8.0:
+                stretch_state = "extended_up"
+            elif pct_vs_ma20 <= -8.0:
+                stretch_state = "extended_down"
+
+        by_ticker[ticker] = {
+            "close": round(close_now, 2),
+            "ma20": round(ma20, 2) if ma20 is not None else None,
+            "ma50": round(ma50, 2) if ma50 is not None else None,
+            "pct_vs_ma20": round(pct_vs_ma20, 2) if pct_vs_ma20 is not None else None,
+            "pct_vs_ma50": round(pct_vs_ma50, 2) if pct_vs_ma50 is not None else None,
+            "recent_high_20": round(recent_high_20, 2) if recent_high_20 is not None else None,
+            "recent_low_20": round(recent_low_20, 2) if recent_low_20 is not None else None,
+            "pct_from_20d_high": round(pct_from_20d_high, 2) if pct_from_20d_high is not None else None,
+            "pct_from_20d_low": round(pct_from_20d_low, 2) if pct_from_20d_low is not None else None,
+            "trend_state": trend_state,
+            "level_context": level_context,
+            "stretch_state": stretch_state,
+        }
+    return by_ticker
+
+
+def _yolo_pattern_bias(pattern: Any) -> str:
+    name = str(pattern or "").strip().lower()
+    if not name:
+        return "neutral"
+    if ("bottom" in name) or ("w_bottom" in name):
+        return "bullish"
+    if ("top" in name) or ("m_head" in name):
+        return "bearish"
+    if "triangle" in name:
+        return "neutral"
+    return "neutral"
+
+
+def _fmt_pct_short(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return "-"
+    num = float(value)
+    sign = "+" if num > 0 else ""
+    return f"{sign}{num:.1f}%"
+
+
+def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
+    bias = str(row.get("signal_bias") or "neutral")
+    trend = str(row.get("trend_state") or "mixed")
+    level = str(row.get("level_context") or "mid_range")
+    stretch = str(row.get("stretch_state") or "normal")
+    candle_bias = str(row.get("candle_bias") or "neutral")
+    pct_from_high = row.get("pct_from_20d_high")
+    pct_from_low = row.get("pct_from_20d_low")
+    pct_vs_ma20 = row.get("pct_vs_ma20")
+    pct_change = row.get("pct_change")
+    pattern = str(row.get("yolo_pattern") or "").strip()
+
+    level_label = {
+        "at_support": "sitting near short-term support",
+        "at_resistance": "pressing into short-term resistance",
+        "mid_range": "trading in the middle of its recent range",
+    }.get(level, "trading in the middle of its recent range")
+    trend_label = {
+        "uptrend": "in an uptrend",
+        "downtrend": "in a downtrend",
+        "mixed": "in mixed trend structure",
+    }.get(trend, "in mixed trend structure")
+    stretch_label = {
+        "extended_up": "already stretched above trend",
+        "extended_down": "already stretched below trend",
+        "normal": "not overly stretched",
+    }.get(stretch, "not overly stretched")
+
+    observation_parts: list[str] = []
+    if pattern:
+        if bias == "bullish":
+            observation_parts.append(f"bullish YOLO ({pattern})")
+        elif bias == "bearish":
+            observation_parts.append(f"bearish YOLO ({pattern})")
+        else:
+            observation_parts.append(f"neutral YOLO ({pattern})")
+    else:
+        observation_parts.append("no decisive YOLO pattern")
+    observation_parts.append(trend_label)
+    observation_parts.append(level_label)
+    observation_parts.append(stretch_label)
+    if candle_bias == "bullish":
+        observation_parts.append("latest candle bias is supportive")
+    elif candle_bias == "bearish":
+        observation_parts.append("latest candle bias is conflicting")
+
+    actionability = "watch-only"
+    action = "No strong edge yet. Keep it on watch, do not force a trade."
+
+    near_support = isinstance(pct_from_low, (int, float)) and float(pct_from_low) <= 2.5
+    near_resistance = isinstance(pct_from_high, (int, float)) and float(pct_from_high) <= 2.5
+    large_day = isinstance(pct_change, (int, float)) and abs(float(pct_change)) >= 5.0
+
+    if bias == "bullish":
+        if stretch == "extended_up" or large_day:
+            actionability = "wait"
+            action = "Bullish idea, but do not chase strength. Prefer a pullback or breakout retest."
+        elif trend == "uptrend" and near_resistance:
+            actionability = "higher-probability"
+            action = "Trend continuation watch. Best if price closes through resistance or retests it cleanly."
+        elif near_support and candle_bias != "bearish":
+            actionability = "higher-probability"
+            action = "Reversal watch at support. Actionable only if support holds and the next candles confirm."
+        elif trend == "downtrend":
+            actionability = "conditional"
+            action = "Counter-trend bounce only. Wait for trend repair before treating it as a core long."
+        else:
+            actionability = "conditional"
+            action = "Bullish setup is present, but wait for confirmation instead of buying the first signal."
+    elif bias == "bearish":
+        if stretch == "extended_down" or large_day:
+            actionability = "wait"
+            action = "Avoid chasing the flush. Better setup is a failed bounce or a clean support break."
+        elif near_support:
+            actionability = "higher-probability"
+            action = "Support-failure watch. It is only actionable if support actually breaks with follow-through."
+        elif trend == "downtrend" and (near_resistance or candle_bias == "bearish"):
+            actionability = "higher-probability"
+            action = "Bearish continuation watch. Best entry is rejection near resistance or failed rally."
+        elif trend == "uptrend":
+            actionability = "conditional"
+            action = "Bearish warning against the trend. Avoid new longs until structure improves."
+        else:
+            actionability = "conditional"
+            action = "Bearish risk is present, but wait for breakdown confirmation rather than front-running it."
+    else:
+        if near_support and candle_bias == "bullish":
+            actionability = "conditional"
+            action = "Possible support bounce watch, but there is no strong AI edge yet."
+        elif near_resistance and candle_bias == "bearish":
+            actionability = "conditional"
+            action = "Possible rejection watch near resistance, but the signal is still weak."
+
+    risk_notes: list[str] = []
+    if stretch == "extended_up":
+        risk_notes.append("extended above trend")
+    elif stretch == "extended_down":
+        risk_notes.append("washed out below trend")
+    if isinstance(row.get("realized_vol_20"), (int, float)) and float(row["realized_vol_20"]) >= 60.0:
+        risk_notes.append("high volatility")
+    if isinstance(row.get("peg"), (int, float)) and float(row["peg"]) >= 2.5:
+        risk_notes.append("rich PEG")
+    if isinstance(row.get("discount_pct"), (int, float)) and float(row["discount_pct"]) <= 5.0:
+        risk_notes.append("little valuation cushion")
+
+    observation = ". ".join(part[0].upper() + part[1:] if idx == 0 else part for idx, part in enumerate(observation_parts)) + "."
+    return {
+        "signal_bias": bias,
+        "observation": observation,
+        "actionability": actionability,
+        "action": action,
+        "risk_note": ", ".join(risk_notes[:3]) if risk_notes else "none",
+        "technical_read": (
+            f"{bias} | {trend} | "
+            f"{'support' if near_support else ('resistance' if near_resistance else 'mid-range')} | "
+            f"vs MA20 {_fmt_pct_short(pct_vs_ma20)}"
+        ),
+    }
+
+
 def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any]) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
 
@@ -831,7 +1075,9 @@ def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any
                 "detail": (
                     f"{best.get('ticker')} scored {best.get('score')} ({best.get('setup_tier')}) "
                     f"with move {best.get('pct_change')}%, discount {best.get('discount_pct')}%, "
-                    f"PEG {best.get('peg')}, ATR {best.get('atr_pct_14') if best.get('atr_pct_14') is not None else '-'}%."
+                    f"PEG {best.get('peg')}, ATR {best.get('atr_pct_14') if best.get('atr_pct_14') is not None else '-'}%. "
+                    f"Read: {best.get('observation') or 'no technical read yet'} "
+                    f"Action: {best.get('action') or 'watch only'}"
                 ),
                 "tone": "positive",
             }
@@ -945,12 +1191,17 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     yolo_by_ticker: dict[str, dict[str, Any]] = {}
     vol_by_ticker: dict[str, dict[str, float | None]] = {}
     vol_ctx: dict[str, Any] = {}
+    technical_by_ticker: dict[str, dict[str, Any]] = {}
 
     try:
         vol_by_ticker, vol_ctx = _fetch_volatility_inputs(conn)
         signals["volatility_context"] = vol_ctx
     except Exception:
         pass
+    try:
+        technical_by_ticker = _fetch_technical_context(conn)
+    except Exception:
+        technical_by_ticker = {}
 
     # ── 52W high / low proximity ─────────────────────────────────────────────
     try:
@@ -1346,12 +1597,14 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
 
             yolo = yolo_by_ticker.get(ticker)
             vol = vol_by_ticker.get(ticker, {})
+            tech = technical_by_ticker.get(ticker, {})
             yolo_component = 0.0
             volatility_component = 0.0
             yolo_pattern = None
             yolo_confidence = None
             yolo_age_days = None
             yolo_timeframe = None
+            signal_bias = "neutral"
             atr_pct_14 = vol.get("atr_pct_14")
             realized_vol_20 = vol.get("realized_vol_20")
             bb_width_20 = vol.get("bb_width_20")
@@ -1360,6 +1613,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 yolo_confidence = yolo.get("confidence")
                 yolo_age_days = yolo.get("age_days")
                 yolo_timeframe = yolo.get("timeframe")
+                signal_bias = _yolo_pattern_bias(yolo_pattern)
                 conf = float(yolo_confidence or 0.0)
                 yolo_component += _clamp(conf * 20.0, 0.0, 18.0)
                 if str(yolo_timeframe) == "daily":
@@ -1433,6 +1687,25 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     "yolo_confidence": yolo_confidence,
                     "yolo_age_days": yolo_age_days,
                     "yolo_timeframe": yolo_timeframe,
+                    "signal_bias": signal_bias,
+                    "close": tech.get("close"),
+                    "ma20": tech.get("ma20"),
+                    "ma50": tech.get("ma50"),
+                    "pct_vs_ma20": tech.get("pct_vs_ma20"),
+                    "pct_vs_ma50": tech.get("pct_vs_ma50"),
+                    "pct_from_20d_high": tech.get("pct_from_20d_high"),
+                    "pct_from_20d_low": tech.get("pct_from_20d_low"),
+                    "trend_state": tech.get("trend_state") or "mixed",
+                    "level_context": tech.get("level_context") or "mid_range",
+                    "stretch_state": tech.get("stretch_state") or "normal",
+                    "candle_pattern": None,
+                    "candle_bias": "neutral",
+                    "candle_confidence": None,
+                    "observation": "",
+                    "actionability": "watch-only",
+                    "action": "",
+                    "risk_note": "",
+                    "technical_read": "",
                     "components": {
                         "discount": round(discount_component, 2),
                         "peg": round(peg_component, 2),
@@ -1525,6 +1798,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
 
             cfg = CandlePatternConfig(lookback_bars=10, use_talib=False)
             candle_signals: list[dict] = []
+            candle_by_ticker: dict[str, dict[str, Any]] = {}
             for ticker, candles in ticker_rows.items():
                 df = pd.DataFrame(candles)
                 try:
@@ -1543,6 +1817,46 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
 
             candle_signals.sort(key=lambda x: x["confidence"], reverse=True)
             signals["candle_patterns_today"] = candle_signals[:60]
+            for row in candle_signals:
+                ticker = str(row.get("ticker") or "").upper()
+                prev = candle_by_ticker.get(ticker)
+                if prev is None or float(row.get("confidence") or 0.0) > float(prev.get("confidence") or 0.0):
+                    candle_by_ticker[ticker] = row
+
+            setup_quality_rows = signals.get("setup_quality_top")
+            if isinstance(setup_quality_rows, list):
+                for row in setup_quality_rows:
+                    ticker = str(row.get("ticker") or "").upper()
+                    candle = candle_by_ticker.get(ticker) or {}
+                    if candle:
+                        row["candle_pattern"] = candle.get("pattern")
+                        row["candle_bias"] = candle.get("bias") or "neutral"
+                        row["candle_confidence"] = candle.get("confidence")
+                    readout = _describe_setup(row)
+                    row.update(readout)
+
+            watchlist_rows = signals.get("watchlist_candidates")
+            if isinstance(watchlist_rows, list):
+                setup_map = {
+                    str(row.get("ticker") or "").upper(): row
+                    for row in (setup_quality_rows or [])
+                }
+                for row in watchlist_rows:
+                    src = setup_map.get(str(row.get("ticker") or "").upper())
+                    if not src:
+                        continue
+                    for key in (
+                        "signal_bias",
+                        "observation",
+                        "actionability",
+                        "action",
+                        "risk_note",
+                        "technical_read",
+                        "candle_pattern",
+                        "candle_bias",
+                        "candle_confidence",
+                    ):
+                        row[key] = src.get(key)
     except Exception:
         pass
 
@@ -1931,16 +2245,12 @@ def to_markdown(report: dict[str, Any]) -> str:
     if setup_rows:
         lines.append("")
         lines.append("## Confluence Score (Top Candidates)")
-        lines.append("| ticker | score | tier | pct_change | discount_pct | peg | atr_pct_14 | rv20 | bb_width_20 | yolo_pattern | yolo_confidence |")
-        lines.append("|---|---:|---|---:|---:|---:|---:|---:|---:|---|---:|")
+        lines.append("| ticker | score | bias | observation | reasonable_action | risk_note |")
+        lines.append("|---|---:|---|---|---|---|")
         for r in setup_rows:
             lines.append(
-                f"| {r.get('ticker')} | {r.get('score')} | {r.get('setup_tier')} | "
-                f"{r.get('pct_change')} | {r.get('discount_pct')} | {r.get('peg')} | "
-                f"{r.get('atr_pct_14') if r.get('atr_pct_14') is not None else '-'} | "
-                f"{r.get('realized_vol_20') if r.get('realized_vol_20') is not None else '-'} | "
-                f"{r.get('bb_width_20') if r.get('bb_width_20') is not None else '-'} | "
-                f"{r.get('yolo_pattern') or '-'} | {r.get('yolo_confidence') or '-'} |"
+                f"| {r.get('ticker')} | {r.get('score')} | {r.get('signal_bias') or '-'} | "
+                f"{r.get('observation') or '-'} | {r.get('action') or '-'} | {r.get('risk_note') or '-'} |"
             )
 
     sector_rows = signals.get("sector_heatmap", [])[:12]

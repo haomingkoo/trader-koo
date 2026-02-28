@@ -101,7 +101,8 @@ def build_report_email_bodies(
         text_lines.append(
             "Top setup: "
             f"{top_setup.get('ticker')} score {_fmt_num(top_setup.get('score'))} ({top_setup.get('setup_tier') or '-'})"
-            f" — {_setup_reason(top_setup)}"
+            f" — {_setup_observation(top_setup)}"
+            f" | Action: {_setup_action(top_setup)}"
         )
     if key_changes:
         text_lines += ["", "Tonight's key changes:"]
@@ -115,7 +116,7 @@ def build_report_email_bodies(
         text_lines += ["", f"Market holiday: {session.get('holiday_name') or '-'}"]
     if app_url:
         text_lines += ["", f"Dashboard: {app_url}"]
-    text_lines += ["", "Full markdown report attached."]
+    text_lines += ["", "Use the dashboard for the full report and chart context."]
     text_body = "\n".join(text_lines)
 
     cards = [
@@ -177,7 +178,10 @@ def build_report_email_bodies(
             "<tr>"
             f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;\">{_esc(row.get('ticker'))}</td>"
             f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;\">{_esc(_fmt_num(row.get('score')))}</td>"
-            f"<td style=\"padding:10px 0 10px 12px;border-bottom:1px solid #eef2f7;color:#334155;\">{_esc(_setup_reason(row))}</td>"
+            f"<td style=\"padding:10px 0 10px 12px;border-bottom:1px solid #eef2f7;color:#334155;\">"
+            f"<div><strong>Read:</strong> {_esc(_setup_observation(row))}</div>"
+            f"<div style=\"margin-top:4px;color:#475569;\"><strong>Action:</strong> {_esc(_setup_action(row))}</div>"
+            f"</td>"
             "</tr>"
         )
     setup_rows_html = "".join(setup_table_rows) or (
@@ -276,12 +280,12 @@ def build_report_email_bodies(
             <tr>
               <td style="width:58%;padding-right:10px;vertical-align:top;">
                 <div style="border:1px solid #e6ecf5;border-radius:18px;padding:18px;background:#ffffff;">
-                  <h3 style="margin:0 0 12px;font-size:17px;line-height:22px;color:#0f172a;">Top Confluence Setups</h3>
+                  <h3 style="margin:0 0 12px;font-size:17px;line-height:22px;color:#0f172a;">Actionable Setup Read</h3>
                   <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                     <tr>
                       <th align="left" style="padding:0 0 10px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Ticker</th>
                       <th align="right" style="padding:0 0 10px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Score</th>
-                      <th align="left" style="padding:0 0 10px 12px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Why it ranks</th>
+                      <th align="left" style="padding:0 0 10px 12px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Observation / Action</th>
                     </tr>
                     {setup_rows_html}
                   </table>
@@ -307,6 +311,7 @@ def build_report_email_bodies(
         <div style="padding:24px 28px 28px;">
           <div style="border:1px solid #e6ecf5;border-radius:18px;padding:18px;background:#f8fbff;">
             <div style="font-size:14px;line-height:22px;color:#334155;">
+              <strong>How to use this:</strong> Bullish does not mean buy immediately, and bearish does not mean short immediately. The higher-probability cases are where pattern, trend, and level location align.<br />
               <strong>Session context:</strong> {_esc(_session_context_line(session))}<br />
               <strong>Risk mode:</strong> {_esc(_risk_mode_line(risk_filters))}<br />
               <strong>Warnings:</strong> {_esc(", ".join(str(w) for w in warnings) if warnings else "none")}<br />
@@ -406,6 +411,20 @@ def _setup_reason(row: dict[str, Any]) -> str:
     if row.get("atr_pct_14") not in {None, ""}:
         parts.append(f"ATR {_fmt_num(row.get('atr_pct_14'))}%")
     return ", ".join(parts[:4]) or "Composite valuation, momentum, volatility, and pattern strength."
+
+
+def _setup_observation(row: dict[str, Any]) -> str:
+    observation = str(row.get("observation") or "").strip()
+    if observation:
+        return observation
+    return _setup_reason(row)
+
+
+def _setup_action(row: dict[str, Any]) -> str:
+    action = str(row.get("action") or "").strip()
+    if action:
+        return action
+    return "Watch only until trend, pattern, and level location line up."
 
 
 def _fmt_signed_pct(value: Any) -> str:
