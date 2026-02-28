@@ -80,6 +80,9 @@ LOG_PATHS: dict[str, Path] = {
 STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
 PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
 INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STALE_MIN", "75")))
+AUTO_RESUME_POST_INGEST = _as_bool(os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1"))
+AUTO_RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_AGE_HOURS", "18")))
+AUTO_RESUME_MAX_RETRIES = max(0, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_RETRIES", "2")))
 ADMIN_STRICT_API_KEY = _as_bool(os.getenv("TRADER_KOO_ADMIN_STRICT_KEY", "1"))
 ADMIN_AUTH_WINDOW_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_WINDOW_SEC", "300")))
 ADMIN_AUTH_MAX_FAILS = max(3, int(os.getenv("TRADER_KOO_ADMIN_AUTH_MAX_FAILS", "20")))
@@ -430,6 +433,14 @@ async def lifespan(_app: FastAPI):
         )
     _scheduler.start()
     LOG.info("Scheduler started — daily_update: 22:00 UTC Mon–Fri | weekly_yolo: 00:30 UTC Sat")
+    resume = _queue_post_ingest_resume(source="startup_resume")
+    if resume.get("scheduled"):
+        LOG.warning(
+            "Startup queued post-ingest resume job_id=%s mode=%s reason=%s",
+            resume.get("job_id"),
+            resume.get("mode"),
+            resume.get("reason"),
+        )
     yield
     _scheduler.shutdown(wait=False)
 
@@ -817,6 +828,117 @@ def _read_latest_ingest_run() -> dict[str, Any] | None:
         return None
     finally:
         conn.close()
+
+
+def _count_post_ingest_resume_attempts(run_id: str, *, source: str = "startup_resume") -> int:
+    if not run_id:
+        return 0
+    tail = _tail_text_file(RUN_LOG_PATH, lines=5000, max_bytes=1_000_000)
+    needle_source = f"source={source}"
+    needle_run = f"run_id={run_id}"
+    return sum(
+        1
+        for line in tail
+        if "[RESUME]" in line and "queued mode=yolo" in line and needle_source in line and needle_run in line
+    )
+
+
+def _post_ingest_resume_candidate(
+    *,
+    latest_run: dict[str, Any] | None = None,
+    pipeline_active: bool | None = None,
+    now_utc: dt.datetime | None = None,
+) -> dict[str, Any] | None:
+    if not AUTO_RESUME_POST_INGEST:
+        return None
+
+    now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
+    latest_run = latest_run or _read_latest_ingest_run()
+    if not latest_run or str(latest_run.get("status") or "").lower() != "ok":
+        return None
+
+    run_finished_ts = parse_iso_utc(latest_run.get("finished_ts"))
+    if run_finished_ts is None:
+        return None
+    run_age_sec = max(0.0, (now_utc - run_finished_ts).total_seconds())
+    if run_age_sec > (AUTO_RESUME_MAX_AGE_HOURS * 3600):
+        return None
+
+    if pipeline_active:
+        return None
+
+    _, latest_payload = _latest_daily_report_json(REPORT_DIR)
+    generated_ts = parse_iso_utc((latest_payload or {}).get("generated_ts")) if latest_payload else None
+    if generated_ts is not None and generated_ts >= (run_finished_ts - dt.timedelta(seconds=60)):
+        return None
+
+    reason = (
+        "report_missing_after_completed_ingest"
+        if generated_ts is None
+        else "report_stale_after_completed_ingest"
+    )
+    run_id = str(latest_run.get("run_id") or "")
+    resume_attempts = _count_post_ingest_resume_attempts(run_id, source="startup_resume")
+    eligible = resume_attempts < AUTO_RESUME_MAX_RETRIES
+    return {
+        "mode": "yolo",
+        "reason": reason,
+        "eligible": eligible,
+        "resume_attempts": resume_attempts,
+        "max_retries": AUTO_RESUME_MAX_RETRIES,
+        "blocked_reason": None if eligible else "max_retries_reached",
+        "latest_run": latest_run,
+        "run_finished_ts": run_finished_ts.replace(microsecond=0).isoformat(),
+        "report_generated_ts": generated_ts.replace(microsecond=0).isoformat() if generated_ts else None,
+        "run_age_sec": round(run_age_sec, 1),
+        "max_age_hours": AUTO_RESUME_MAX_AGE_HOURS,
+    }
+
+
+def _queue_post_ingest_resume(source: str = "startup") -> dict[str, Any]:
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    pipeline = _pipeline_status_snapshot(log_lines=120)
+    candidate = _post_ingest_resume_candidate(
+        latest_run=pipeline.get("latest_run"),
+        pipeline_active=bool(pipeline.get("active")),
+        now_utc=now_utc,
+    )
+    if candidate is None:
+        return {"scheduled": False}
+    if not candidate.get("eligible", True):
+        LOG.warning(
+            "Post-ingest resume not queued: mode=%s reason=%s run_id=%s retries=%s/%s",
+            candidate.get("mode"),
+            candidate.get("reason"),
+            ((candidate.get("latest_run") or {}).get("run_id") or "-"),
+            candidate.get("resume_attempts"),
+            candidate.get("max_retries"),
+        )
+        return {"scheduled": False, **candidate}
+
+    job_id = f"resume_daily_update_{now_utc.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
+    _scheduler.add_job(
+        _run_daily_update,
+        trigger="date",
+        run_date=now_utc,
+        id=job_id,
+        kwargs={"mode": str(candidate.get("mode") or "yolo"), "source": source},
+    )
+    _append_run_log(
+        "RESUME",
+        (
+            f"queued mode={candidate.get('mode')} source={source} "
+            f"reason={candidate.get('reason')} run_id={((candidate.get('latest_run') or {}).get('run_id') or '-')}"
+        ),
+    )
+    LOG.warning(
+        "Queued post-ingest resume mode=%s source=%s reason=%s run_id=%s",
+        candidate.get("mode"),
+        source,
+        candidate.get("reason"),
+        ((candidate.get("latest_run") or {}).get("run_id") or "-"),
+    )
+    return {"scheduled": True, "job_id": job_id, **candidate}
 
 
 def _reconcile_stale_running_runs() -> dict[str, Any]:
@@ -1920,9 +2042,14 @@ def report_stability(limit: int = Query(default=60, ge=1, le=365)) -> dict[str, 
 def pipeline_status(log_lines: int = Query(default=120, ge=20, le=1000)) -> dict[str, Any]:
     """Return current pipeline phase inferred from run logs + latest ingest run."""
     snap = _pipeline_status_snapshot(log_lines=log_lines)
+    resume_candidate = _post_ingest_resume_candidate(
+        latest_run=snap.get("latest_run"),
+        pipeline_active=bool(snap.get("active")),
+    )
     return {
         "ok": True,
         **snap,
+        "post_ingest_resume": resume_candidate,
     }
 
 
@@ -2300,6 +2427,11 @@ def status() -> dict[str, Any]:
                 latest_run["tickers_processed"] = completed or int(latest_run.get("tickers_total") or 0)
 
         pipeline_snap = _pipeline_status_snapshot(log_lines=60)
+        resume_candidate = _post_ingest_resume_candidate(
+            latest_run=latest_run,
+            pipeline_active=bool(pipeline_snap.get("active")),
+            now_utc=now,
+        )
         pipeline_active = bool(pipeline_snap.get("active"))
         pipeline_stage = pipeline_snap.get("stage") or "unknown"
         pipeline_stage_line = pipeline_snap.get("stage_line")
@@ -2309,6 +2441,8 @@ def status() -> dict[str, Any]:
                 pipeline_stage = "ingest"
         if latest_run and latest_run.get("status") == "running" and pipeline_snap.get("running_stale"):
             warnings.append("latest ingest run appears stale-running")
+        if resume_candidate:
+            warnings.append("post-ingest yolo/report recovery recommended")
 
         payload = {
             **base,
@@ -2328,6 +2462,7 @@ def status() -> dict[str, Any]:
                 "running_age_sec": pipeline_snap.get("running_age_sec"),
                 "running_stale_min": pipeline_snap.get("running_stale_min"),
                 "running_stale": pipeline_snap.get("running_stale"),
+                "post_ingest_resume": resume_candidate,
                 "run_log_path": str(RUN_LOG_PATH),
             },
             "freshness": {
