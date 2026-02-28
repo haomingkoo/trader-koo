@@ -725,7 +725,6 @@
 
 
     <div class="tabs">
-      <button id="tabAdminBtn" class="tab-btn">Control Center</button>
       <button id="tabGuideBtn" class="tab-btn active">Guide</button>
       <button id="tabReportBtn" class="tab-btn">Daily Report</button>
       <button id="tabEarningsBtn" class="tab-btn">Earnings Calendar</button>
@@ -1038,222 +1037,6 @@
       </div>
     </section>
 
-    <section id="tabAdmin" class="panel hidden">
-      <div class="admin-shell">
-        <div class="admin-top">
-          <div class="panel">
-            <div class="admin-panel-head">
-              <div>
-                <div class="label">Private Admin</div>
-                <div style="font-size:1rem; font-weight:700; margin-top:6px;">Control Center</div>
-              </div>
-              <div id="adminSessionStatus" class="admin-inline-status">Checking auth...</div>
-            </div>
-            <div class="admin-subtle">One place to manage `trader_koo` now, then plug in your other apps without rewriting the control surface.</div>
-
-            <div id="adminLoginWrap" class="admin-login-grid">
-              <div class="field">
-                <label for="adminUsername">Username</label>
-                <input id="adminUsername" type="text" value="admin" autocomplete="username" />
-              </div>
-              <div class="field">
-                <label for="adminPassword">Password</label>
-                <input id="adminPassword" type="password" autocomplete="current-password" />
-              </div>
-              <div class="field full">
-                <button id="adminLoginBtn" type="button">Log In</button>
-              </div>
-            </div>
-
-            <div id="adminActiveSessionWrap" class="hidden">
-              <div id="adminWhoami" class="admin-subtle" style="margin-top:10px;"></div>
-              <div class="admin-form-actions">
-                <button id="adminRefreshBtn" type="button">Refresh Overview</button>
-                <button id="adminLogoutBtn" type="button">Log Out</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="admin-panel-head">
-              <div>
-                <div class="label">Fleet Overview</div>
-                <div id="adminOverviewStatus" class="admin-inline-status" style="margin-top:6px;">Waiting for admin login.</div>
-              </div>
-            </div>
-            <div id="adminSummaryCards" class="cards"></div>
-          </div>
-        </div>
-
-        <div class="admin-grid">
-          <div class="panel">
-            <div class="admin-panel-head">
-              <div class="label">Managed Services</div>
-              <div id="adminServiceTableHint" class="admin-inline-status">Select a row for details.</div>
-            </div>
-            <table id="adminServicesTable"></table>
-          </div>
-
-          <div class="panel">
-            <div class="admin-panel-head">
-              <div>
-                <div class="label">Selected Service</div>
-                <div id="adminSelectedServiceName" style="font-size:1rem; font-weight:700; margin-top:6px;">Choose a service</div>
-              </div>
-              <div id="adminSelectedServiceStatus" class="admin-inline-status"></div>
-            </div>
-            <div id="adminServiceMeta" class="admin-meta"></div>
-            <div id="adminServiceLinks" class="admin-links"></div>
-            <div id="adminServiceChecks" class="admin-checks"></div>
-            <div id="adminServiceActions" class="mini-actions"></div>
-            <div id="adminServiceEmpty" class="admin-empty">No service selected yet.</div>
-            <div id="adminServiceDetailGrid" class="admin-detail-grid hidden">
-              <div class="admin-detail-block">
-                <div class="label">Health</div>
-                <pre id="adminHealthJson" class="json-block"></pre>
-              </div>
-              <div class="admin-detail-block">
-                <div class="label">Status</div>
-                <pre id="adminStatusJson" class="json-block"></pre>
-              </div>
-              <div class="admin-detail-block">
-                <div class="label">Pipeline</div>
-                <pre id="adminPipelineJson" class="json-block"></pre>
-              </div>
-              <div class="admin-detail-block">
-                <div class="label">Cost</div>
-                <pre id="adminCostJson" class="json-block"></pre>
-              </div>
-              <div class="admin-detail-block">
-                <div class="label">Report</div>
-                <pre id="adminReportJson" class="json-block"></pre>
-              </div>
-              <div class="admin-detail-block">
-                <div class="label">Logs</div>
-                <pre id="adminLogsJson" class="json-block"></pre>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="admin-grid admin-lower">
-          <div class="panel">
-            <div class="admin-panel-head">
-              <div>
-                <div class="label">Service Registry</div>
-                <div class="admin-inline-status" style="margin-top:6px;">Use `__self__` as the base URL for this app. Secrets stay server-side via env var names.</div>
-              </div>
-            </div>
-            <div class="admin-form-grid">
-              <div class="field">
-                <label for="ccServiceId">Service ID</label>
-                <input id="ccServiceId" type="text" placeholder="billing-api" />
-              </div>
-              <div class="field">
-                <label for="ccName">Name</label>
-                <input id="ccName" type="text" placeholder="Billing API" />
-              </div>
-              <div class="field">
-                <label for="ccServiceType">Service Type</label>
-                <input id="ccServiceType" type="text" value="generic" />
-              </div>
-              <div class="field">
-                <label for="ccBaseUrl">Base URL</label>
-                <input id="ccBaseUrl" type="text" placeholder="https://app.example.com or __self__" />
-              </div>
-              <div class="field">
-                <label for="ccAppUrl">App URL</label>
-                <input id="ccAppUrl" type="text" placeholder="https://app.example.com" />
-              </div>
-              <div class="field">
-                <label for="ccRepoUrl">Repo URL</label>
-                <input id="ccRepoUrl" type="text" placeholder="https://github.com/org/repo" />
-              </div>
-              <div class="field">
-                <label for="ccHealthPath">Health Path</label>
-                <input id="ccHealthPath" type="text" value="/api/health" />
-              </div>
-              <div class="field">
-                <label for="ccStatusPath">Status Path</label>
-                <input id="ccStatusPath" type="text" value="/api/status" />
-              </div>
-              <div class="field">
-                <label for="ccCostPath">Cost Path</label>
-                <input id="ccCostPath" type="text" placeholder="/api/admin/cost" />
-              </div>
-              <div class="field">
-                <label for="ccPipelinePath">Pipeline Path</label>
-                <input id="ccPipelinePath" type="text" placeholder="/api/admin/pipeline-status" />
-              </div>
-              <div class="field">
-                <label for="ccReportPath">Report Path</label>
-                <input id="ccReportPath" type="text" placeholder="/api/admin/report" />
-              </div>
-              <div class="field">
-                <label for="ccLogsPath">Logs Path</label>
-                <input id="ccLogsPath" type="text" placeholder="/api/admin/logs" />
-              </div>
-              <div class="field">
-                <label for="ccAuthType">Auth Type</label>
-                <select id="ccAuthType">
-                  <option value="none">none</option>
-                  <option value="x_api_key" selected>x_api_key</option>
-                  <option value="bearer">bearer</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="ccAuthHeader">Auth Header</label>
-                <input id="ccAuthHeader" type="text" value="X-API-Key" />
-              </div>
-              <div class="field">
-                <label for="ccSecretEnvVar">Secret Env Var</label>
-                <input id="ccSecretEnvVar" type="text" placeholder="BILLING_ADMIN_KEY" />
-              </div>
-              <div class="field">
-                <label for="ccTags">Tags</label>
-                <input id="ccTags" type="text" placeholder="internal, critical" />
-              </div>
-              <div class="field">
-                <label for="ccSortOrder">Sort Order</label>
-                <input id="ccSortOrder" type="number" step="1" value="100" />
-              </div>
-              <div class="field">
-                <label for="ccTimeoutSec">Timeout Sec</label>
-                <input id="ccTimeoutSec" type="number" step="1" value="10" />
-              </div>
-              <div class="field full" style="display:flex; flex-direction:row; align-items:center; gap:8px; padding-top:22px;">
-                <input id="ccEnabled" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
-                <label for="ccEnabled" style="margin:0; color:var(--text); font-size:0.84rem;">Enabled</label>
-              </div>
-              <div class="field full">
-                <label for="ccActionsJson">Actions JSON</label>
-                <textarea id="ccActionsJson" placeholder='[{"id":"refresh","label":"Refresh","method":"POST","path":"/api/admin/refresh"}]'></textarea>
-              </div>
-              <div class="field full">
-                <label for="ccNotes">Notes</label>
-                <textarea id="ccNotes" placeholder="Purpose, gotchas, cost notes, runbook reminders."></textarea>
-              </div>
-            </div>
-            <div class="admin-form-actions">
-              <button id="ccSaveBtn" type="button">Save Service</button>
-              <button id="ccResetBtn" type="button">New Blank</button>
-              <span id="ccFormStatus" class="admin-inline-status"></span>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="admin-panel-head">
-              <div>
-                <div class="label">Audit Log</div>
-                <div class="admin-inline-status" style="margin-top:6px;">Each admin action is recorded here.</div>
-              </div>
-            </div>
-            <table id="adminAuditTable"></table>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <section id="tabGuide" class="panel">
       <div class="guide">
         <div class="guide-callout">
@@ -1376,20 +1159,17 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const tabAdminBtn = $("tabAdminBtn");
     const tabOpBtn = $("tabOpBtn");
     const tabChartBtn = $("tabChartBtn");
     const tabGuideBtn = $("tabGuideBtn");
     const tabReportBtn = $("tabReportBtn");
     const tabEarningsBtn = $("tabEarningsBtn");
-    const tabAdmin = $("tabAdmin");
     const tabOp = $("tabOp");
     const tabChart = $("tabChart");
     const tabGuide = $("tabGuide");
     const tabReport = $("tabReport");
     const tabEarnings = $("tabEarnings");
     const API_BASE_STORAGE_KEY = "trader_koo_api_base";
-    const ADMIN_KEY_STORAGE_KEY = "trader_koo_admin_api_key";
     const WATCHLIST_STORAGE_KEY = "trader_koo_watchlist";
     const TABLE_STATE = {};
     const DEFAULT_MONTHS = 3;
@@ -1397,10 +1177,6 @@
     let LAST_REPORT_SETUP_ROWS = [];
     let REPORT_SETUP_SHOW_MORE = false;
     let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
-    let ADMIN_SESSION = null;
-    let CONTROL_CENTER_OVERVIEW = null;
-    let SELECTED_CONTROL_SERVICE_ID = "";
-    let _apiKey = "";
 
     function fmt(v, d = 2) {
       if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
@@ -1615,37 +1391,8 @@
     }
 
     function apiFetch(url, opts = {}) {
-      const headers = { ...(opts.headers || {}) };
-      if (_apiKey) headers["X-API-Key"] = _apiKey;
       const credentials = opts.credentials || "include";
-      return fetch(url, { ...opts, headers, credentials });
-    }
-
-    function setAdminApiKey(key) {
-      _apiKey = String(key || "").trim();
-      if (_apiKey) sessionStorage.setItem(ADMIN_KEY_STORAGE_KEY, _apiKey);
-      else sessionStorage.removeItem(ADMIN_KEY_STORAGE_KEY);
-    }
-
-    async function adminFetch(url, opts = {}) {
-      const resp = await apiFetch(url, { ...opts, credentials: "include" });
-      if (resp.status === 401) {
-        ADMIN_SESSION = { authenticated: false };
-        renderAdminSession();
-      }
-      return resp;
-    }
-
-    async function initApiKey() {
-      const params = new URLSearchParams(window.location.search);
-      if (params.has("admin_key")) {
-        // Never load admin keys from URL; strip if user pasted one.
-        params.delete("admin_key");
-        const qs = params.toString();
-        const next = qs ? `${window.location.pathname}?${qs}${window.location.hash}` : `${window.location.pathname}${window.location.hash}`;
-        window.history.replaceState({}, document.title, next);
-      }
-      setAdminApiKey(sessionStorage.getItem(ADMIN_KEY_STORAGE_KEY) || "");
+      return fetch(url, { ...opts, credentials });
     }
 
     function setApiBase(base, persist = true) {
@@ -1728,27 +1475,8 @@
       }
     }
 
-    async function triggerUpdate() {
-      const base = getApiBase();
-      if (!base) { alert("API base not resolved yet."); return; }
-      const btn = $("triggerUpdateBtn");
-      btn.disabled = true;
-      btn.textContent = "Triggering...";
-      try {
-        const resp = await adminFetch(`${base}/api/admin/trigger-update`, { method: "POST" });
-        if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
-        btn.textContent = "Triggered ✓";
-        setTimeout(() => { btn.textContent = "Run Update"; btn.disabled = false; }, 5000);
-      } catch (err) {
-        alert(`Failed: ${err.message}`);
-        btn.textContent = "Run Update";
-        btn.disabled = false;
-      }
-    }
-
     function activateTab(which) {
       const all = {
-        admin: [tabAdminBtn, tabAdmin],
         op: [tabOpBtn, tabOp],
         chart: [tabChartBtn, tabChart],
         guide: [tabGuideBtn, tabGuide],
@@ -1761,12 +1489,8 @@
       }
       if (which === "report") loadReport();
       if (which === "earnings") loadEarnings();
-      if (which === "admin") {
-        refreshAdminSession(true).then(() => loadControlCenterOverview());
-      }
     }
 
-    tabAdminBtn.addEventListener("click", () => activateTab("admin"));
     tabOpBtn.addEventListener("click", () => activateTab("op"));
     tabChartBtn.addEventListener("click", () => activateTab("chart"));
     tabGuideBtn.addEventListener("click", () => activateTab("guide"));
@@ -3524,19 +3248,6 @@
       if ($("opSearch")) $("opSearch").value = "";
       loadOpportunities();
     });
-    $("adminLoginBtn").addEventListener("click", loginAdmin);
-    $("adminRefreshBtn").addEventListener("click", () => loadControlCenterOverview(SELECTED_CONTROL_SERVICE_ID));
-    $("adminLogoutBtn").addEventListener("click", logoutAdmin);
-    $("ccSaveBtn").addEventListener("click", saveControlCenterService);
-    $("ccResetBtn").addEventListener("click", () => {
-      resetControlCenterForm();
-      $("ccName").focus();
-    });
-    $("adminPassword").addEventListener("keydown", (e) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      loginAdmin();
-    });
     $("loadChartBtn").addEventListener("click", loadChart);
     $("reportWatchAddBtn").addEventListener("click", () => {
       const input = $("reportWatchTickerInput");
@@ -3584,8 +3295,6 @@
     (async () => {
       await initApiBase();
       await initApiKey();
-      resetControlCenterForm();
-      await refreshAdminSession(true);
       setReportSetupMode(false);
       activateTab("guide");
       await refreshServiceStatus();
