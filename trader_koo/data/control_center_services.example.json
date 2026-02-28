@@ -1,0 +1,42 @@
+[
+  {
+    "service_id": "inventory-api",
+    "name": "Inventory API",
+    "service_type": "internal_api",
+    "base_url": "https://inventory.example.com",
+    "app_url": "https://inventory.example.com",
+    "repo_url": "https://github.com/your-org/inventory-api",
+    "health_path": "/api/health",
+    "status_path": "/api/status",
+    "cost_path": "/api/admin/cost",
+    "pipeline_path": "/api/admin/pipeline-status",
+    "report_path": "/api/admin/daily-report",
+    "logs_path": "/api/admin/logs?name=api&lines=80",
+    "auth_type": "x_api_key",
+    "auth_header": "X-API-Key",
+    "secret_env_var": "INVENTORY_API_ADMIN_KEY",
+    "enabled": true,
+    "sort_order": 40,
+    "timeout_sec": 10,
+    "tags": ["internal", "critical"],
+    "notes": "Example managed service definition for the control center bootstrap loader.",
+    "actions": [
+      {
+        "id": "refresh-cache",
+        "label": "Refresh Cache",
+        "description": "Trigger a cache refresh on the service.",
+        "method": "POST",
+        "path": "/api/admin/refresh-cache",
+        "confirm_text": "Refresh cache now?"
+      },
+      {
+        "id": "rerun-sync",
+        "label": "Rerun Sync",
+        "description": "Trigger the upstream sync job again.",
+        "method": "POST",
+        "path": "/api/admin/trigger-sync",
+        "confirm_text": "Rerun the sync job now?"
+      }
+    ]
+  }
+]

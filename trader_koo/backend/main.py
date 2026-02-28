@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import datetime as dt
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -20,6 +23,7 @@ from email.message import EmailMessage
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -27,7 +31,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
@@ -50,6 +54,20 @@ DEFAULT_DB_PRIMARY = (PROJECT_DIR / "data" / "trader_koo.db").resolve()
 DB_PATH = Path(os.getenv("TRADER_KOO_DB_PATH", str(DEFAULT_DB_PRIMARY)))
 FRONTEND_INDEX = (PROJECT_DIR / "frontend" / "index.html").resolve()
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")  # empty = auth disabled (local dev)
+ADMIN_USER = str(os.getenv("TRADER_KOO_ADMIN_USERNAME", "admin") or "admin").strip() or "admin"
+ADMIN_PASSWORD = str(os.getenv("TRADER_KOO_ADMIN_PASSWORD", API_KEY) or "").strip()
+ADMIN_SESSION_SECRET = str(os.getenv("TRADER_KOO_ADMIN_SESSION_SECRET", API_KEY) or "").strip()
+ADMIN_SESSION_COOKIE = str(os.getenv("TRADER_KOO_ADMIN_SESSION_COOKIE", "trader_koo_admin_session") or "trader_koo_admin_session").strip()
+ADMIN_SESSION_TTL_SEC = max(900, int(os.getenv("TRADER_KOO_ADMIN_SESSION_TTL_SEC", "1209600")))
+CONTROL_CENTER_BOOTSTRAP_PATH = Path(
+    os.getenv(
+        "TRADER_KOO_CONTROL_CENTER_BOOTSTRAP_PATH",
+        str((PROJECT_DIR / "data" / "control_center_services.json").resolve()),
+    )
+)
+CONTROL_CENTER_SELF_SERVICE_ID = str(
+    os.getenv("TRADER_KOO_CONTROL_CENTER_SELF_SERVICE_ID", "trader_koo") or "trader_koo"
+).strip() or "trader_koo"
 PROCESS_START_UTC = dt.datetime.now(dt.timezone.utc)
 
 
@@ -380,6 +398,7 @@ def _run_weekly_yolo() -> None:
 
     # Regenerate report so weekly patterns appear
     LOG.info("Scheduler: regenerating report after weekly YOLO")
+    _append_run_log("WEEKLY", "Report regeneration starting")
     with run_log.open("a", encoding="utf-8") as log_file:
         report_result = subprocess.run(
             [
@@ -431,6 +450,18 @@ async def lifespan(_app: FastAPI):
             reconcile.get("reconciled"),
             ",".join(reconcile.get("run_ids", [])),
         )
+    if DB_PATH.exists():
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            conn.row_factory = sqlite3.Row
+            _ensure_control_center_tables(conn)
+            _seed_control_center_builtin_services(conn)
+            bootstrapped = _bootstrap_control_center_services_from_file(conn)
+            if bootstrapped:
+                LOG.info("Control center bootstrapped %s managed service(s) from %s", bootstrapped, CONTROL_CENTER_BOOTSTRAP_PATH)
+            conn.close()
+        except Exception as exc:
+            LOG.warning("Failed to initialize control center tables: %s", exc)
     _scheduler.start()
     LOG.info("Scheduler started — daily_update: 22:00 UTC Mon–Fri | weekly_yolo: 00:30 UTC Sat")
     resume = _queue_post_ingest_resume(source="startup_resume")
@@ -471,9 +502,18 @@ app.add_middleware(
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
-    """Require X-API-Key on /api/admin/* routes only."""
+    """Require a valid admin session or X-API-Key on /api/admin/* routes."""
     path = request.url.path
+    session_identity = _load_admin_session_identity(request)
+    if session_identity is not None:
+        request.state.admin_identity = session_identity
+
+    if path.startswith(ADMIN_SESSION_PREFIX):
+        return await call_next(request)
+
     if path.startswith(ADMIN_API_PREFIX):
+        if session_identity is not None:
+            return await call_next(request)
         client_ip = _client_ip(request)
         blocked, retry_after = _admin_auth_blocked(client_ip, dt.datetime.now(dt.timezone.utc).timestamp())
         if blocked:
@@ -487,9 +527,11 @@ async def api_key_middleware(request: Request, call_next):
             return JSONResponse(
                 {"detail": "Too many unauthorized attempts. Try again later."},
                 status_code=429,
-                headers={"Retry-After": str(retry_after)},
-            )
+                    headers={"Retry-After": str(retry_after)},
+                )
         if not API_KEY:
+            if _login_enabled():
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
             if ADMIN_STRICT_API_KEY:
                 LOG.error(
                     "Admin endpoint denied because TRADER_KOO_API_KEY is not configured (path=%s, client_ip=%s)",
@@ -500,6 +542,7 @@ async def api_key_middleware(request: Request, call_next):
                     {"detail": "Admin API key is not configured on server."},
                     status_code=503,
                 )
+            request.state.admin_identity = {"username": "local-dev", "mode": "open-admin"}
             return await call_next(request)
         provided = request.headers.get("X-API-Key", "")
         if not secrets.compare_digest(provided, API_KEY):
@@ -522,10 +565,11 @@ async def api_key_middleware(request: Request, call_next):
                 return JSONResponse(
                     {"detail": "Too many unauthorized attempts. Try again later."},
                     status_code=429,
-                    headers={"Retry-After": str(retry_after)},
-                )
+                        headers={"Retry-After": str(retry_after)},
+                    )
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
         _admin_auth_clear(client_ip)
+        request.state.admin_identity = {"username": ADMIN_USER or "admin", "mode": "api_key"}
     return await call_next(request)
 
 
@@ -624,6 +668,791 @@ def get_conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
+
+CONTROL_CENTER_SELF_BASE_URL = "__self__"
+ADMIN_SESSION_PREFIX = "/api/admin/session"
+CONTROL_CENTER_AUTH_TYPES = {"none", "x_api_key", "bearer"}
+CONTROL_CENTER_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+
+def _utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().replace(microsecond=0).isoformat()
+
+
+def _slugify_service_id(value: str | None) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return text or "service"
+
+
+def _normalize_service_path(value: Any, *, default: str = "") -> str:
+    text = str(value or default).strip()
+    if not text:
+        return ""
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    if text.startswith("/"):
+        return text
+    return f"/{text}"
+
+
+def _json_loads_safe(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return default
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return default
+
+
+def _json_dumps_compact(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _clip_text(value: Any, *, limit: int = 1200) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "..."
+
+
+def _extract_scalar(payload: Any, keys: list[str]) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    for key in keys:
+        if key in payload and payload[key] not in {None, ""}:
+            return payload[key]
+    for value in payload.values():
+        if isinstance(value, dict):
+            nested = _extract_scalar(value, keys)
+            if nested not in {None, ""}:
+                return nested
+    return None
+
+
+def _service_auth_secret(service: dict[str, Any]) -> str:
+    env_name = str(service.get("secret_env_var") or "").strip()
+    if not env_name:
+        return ""
+    return str(os.getenv(env_name, "") or "").strip()
+
+
+def _service_request_headers(service: dict[str, Any]) -> tuple[dict[str, str], str | None]:
+    auth_type = str(service.get("auth_type") or "none").strip().lower()
+    if auth_type == "none":
+        return {}, None
+
+    secret = _service_auth_secret(service)
+    if not secret:
+        env_name = str(service.get("secret_env_var") or "").strip() or "missing secret"
+        return {}, f"Missing secret env var: {env_name}"
+
+    header_name = str(service.get("auth_header") or "X-API-Key").strip() or "X-API-Key"
+    if auth_type == "bearer":
+        if header_name.lower() == "authorization":
+            return {"Authorization": f"Bearer {secret}"}, None
+        return {header_name: f"Bearer {secret}"}, None
+    return {header_name: secret}, None
+
+
+def _service_base_url(service: dict[str, Any], request: Request | None = None) -> str:
+    raw = str(service.get("base_url") or "").strip()
+    if raw == CONTROL_CENTER_SELF_BASE_URL:
+        if request is None:
+            raise RuntimeError("Self service resolution requires request context")
+        return str(request.base_url).rstrip("/")
+    return raw.rstrip("/")
+
+
+def _service_full_url(service: dict[str, Any], path: str, request: Request | None = None) -> str:
+    target = str(path or "").strip()
+    if target.startswith("http://") or target.startswith("https://"):
+        return target
+    base = _service_base_url(service, request=request)
+    if not base:
+        raise RuntimeError(f"Service {service.get('service_id') or service.get('name') or '-'} has no base_url")
+    if not target:
+        return base
+    return urljoin(base.rstrip("/") + "/", target.lstrip("/"))
+
+
+def _parse_response_payload(body: str, content_type: str) -> Any:
+    text = body.strip()
+    if not text:
+        return None
+    if "json" in content_type.lower() or text[:1] in {"{", "["}:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return body
+    return body
+
+
+def _http_json_request(
+    *,
+    service: dict[str, Any],
+    path: str,
+    request: Request | None,
+    method: str = "GET",
+    payload: Any = None,
+    timeout_sec: int | None = None,
+) -> dict[str, Any]:
+    req_headers, auth_error = _service_request_headers(service)
+    try:
+        url = _service_full_url(service, path, request=request)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status_code": None,
+            "url": "",
+            "error": str(exc),
+            "payload": None,
+            "text": "",
+        }
+    if auth_error:
+        return {
+            "ok": False,
+            "status_code": None,
+            "url": url,
+            "error": auth_error,
+            "payload": None,
+            "text": "",
+        }
+
+    method_norm = str(method or "GET").strip().upper()
+    data_bytes: bytes | None = None
+    if payload is not None:
+        if isinstance(payload, (dict, list)):
+            data_bytes = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+            req_headers.setdefault("Content-Type", "application/json")
+        else:
+            data_bytes = str(payload).encode("utf-8")
+    req_headers.setdefault("Accept", "application/json, text/plain;q=0.9, */*;q=0.8")
+
+    req = urllib.request.Request(url, data=data_bytes, method=method_norm, headers=req_headers)
+    timeout_value = max(2, int(timeout_sec or service.get("timeout_sec") or 10))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_value) as resp:
+            status_code = int(getattr(resp, "status", 200))
+            body = resp.read().decode("utf-8", errors="replace")
+            content_type = str(resp.headers.get("Content-Type", ""))
+            parsed = _parse_response_payload(body, content_type)
+            return {
+                "ok": status_code < 400,
+                "status_code": status_code,
+                "url": url,
+                "error": None,
+                "payload": parsed,
+                "text": _clip_text(body, limit=8000),
+            }
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        content_type = str(exc.headers.get("Content-Type", "")) if exc.headers else ""
+        parsed = _parse_response_payload(body, content_type)
+        return {
+            "ok": False,
+            "status_code": int(exc.code),
+            "url": url,
+            "error": f"HTTP {exc.code}",
+            "payload": parsed,
+            "text": _clip_text(body, limit=8000),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status_code": None,
+            "url": url,
+            "error": str(exc),
+            "payload": None,
+            "text": "",
+        }
+
+
+def _control_center_builtin_actions() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "run_full_update",
+            "label": "Run Full Update",
+            "description": "Ingest, YOLO refresh, and report generation.",
+            "method": "POST",
+            "path": "/api/admin/trigger-update?mode=full",
+            "confirm_text": "Queue the full nightly pipeline now?",
+        },
+        {
+            "id": "run_yolo_refresh",
+            "label": "Run YOLO + Report",
+            "description": "Skip ingest and rerun YOLO plus report generation.",
+            "method": "POST",
+            "path": "/api/admin/trigger-update?mode=yolo",
+            "confirm_text": "Queue YOLO plus report now?",
+        },
+        {
+            "id": "run_report_only",
+            "label": "Rebuild Report",
+            "description": "Generate the latest report without ingesting new data.",
+            "method": "POST",
+            "path": "/api/admin/trigger-update?mode=report",
+        },
+        {
+            "id": "run_yolo_seed",
+            "label": "Run YOLO Seed",
+            "description": "Full backfill pattern scan across the tracked universe.",
+            "method": "POST",
+            "path": "/api/admin/run-yolo-seed?timeframe=both",
+            "confirm_text": "Start the full YOLO seed run?",
+        },
+    ]
+
+
+def _control_center_builtin_services() -> list[dict[str, Any]]:
+    return [
+        {
+            "service_id": CONTROL_CENTER_SELF_SERVICE_ID,
+            "name": "trader_koo",
+            "service_type": "trading_dashboard",
+            "base_url": CONTROL_CENTER_SELF_BASE_URL,
+            "app_url": "",
+            "repo_url": "https://github.com/haomingkoo/trader-koo",
+            "health_path": "/api/health",
+            "status_path": "/api/status",
+            "cost_path": "",
+            "pipeline_path": "/api/admin/pipeline-status",
+            "report_path": "/api/admin/daily-report",
+            "logs_path": "/api/admin/logs?name=cron&lines=80",
+            "auth_type": "x_api_key",
+            "auth_header": "X-API-Key",
+            "secret_env_var": "TRADER_KOO_API_KEY",
+            "enabled": True,
+            "sort_order": 10,
+            "timeout_sec": 12,
+            "notes": "Self-managed service seeded automatically by trader_koo.",
+            "tags": ["self", "seeded"],
+            "actions": _control_center_builtin_actions(),
+        }
+    ]
+
+
+def _ensure_control_center_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_managed_services (
+            service_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            service_type TEXT NOT NULL DEFAULT 'generic',
+            base_url TEXT NOT NULL,
+            app_url TEXT NOT NULL DEFAULT '',
+            repo_url TEXT NOT NULL DEFAULT '',
+            health_path TEXT NOT NULL DEFAULT '/api/health',
+            status_path TEXT NOT NULL DEFAULT '/api/status',
+            cost_path TEXT NOT NULL DEFAULT '',
+            pipeline_path TEXT NOT NULL DEFAULT '',
+            report_path TEXT NOT NULL DEFAULT '',
+            logs_path TEXT NOT NULL DEFAULT '',
+            auth_type TEXT NOT NULL DEFAULT 'none',
+            auth_header TEXT NOT NULL DEFAULT 'X-API-Key',
+            secret_env_var TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 100,
+            timeout_sec INTEGER NOT NULL DEFAULT 10,
+            notes TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            actions_json TEXT NOT NULL DEFAULT '[]',
+            created_ts TEXT NOT NULL,
+            updated_ts TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_ts TEXT NOT NULL,
+            actor TEXT NOT NULL DEFAULT '',
+            client_ip TEXT NOT NULL DEFAULT '',
+            event_type TEXT NOT NULL,
+            service_id TEXT NOT NULL DEFAULT '',
+            action_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'ok',
+            message TEXT NOT NULL DEFAULT '',
+            request_json TEXT NOT NULL DEFAULT '',
+            response_json TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action_ts ON admin_audit_log(action_ts DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_audit_log_service_id ON admin_audit_log(service_id, action_ts DESC)"
+    )
+    conn.commit()
+
+
+def _normalize_control_center_action(raw: Any, *, idx: int = 0) -> dict[str, Any]:
+    item = raw if isinstance(raw, dict) else {}
+    action_id = _slugify_service_id(item.get("id") or item.get("label") or f"action-{idx + 1}")
+    method = str(item.get("method") or "POST").strip().upper()
+    if method not in CONTROL_CENTER_HTTP_METHODS:
+        method = "POST"
+    return {
+        "id": action_id,
+        "label": str(item.get("label") or action_id.replace("-", " ").title()).strip() or action_id,
+        "description": str(item.get("description") or "").strip(),
+        "method": method,
+        "path": _normalize_service_path(item.get("path"), default=""),
+        "body": item.get("body") if isinstance(item, dict) and "body" in item else None,
+        "confirm_text": str(item.get("confirm_text") or "").strip(),
+    }
+
+
+def _normalize_control_center_service(payload: dict[str, Any], *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    base: dict[str, Any] = dict(existing or {})
+    service_id = _slugify_service_id(payload.get("service_id") or base.get("service_id") or payload.get("name"))
+    if not service_id:
+        raise HTTPException(status_code=400, detail="service_id or name is required")
+
+    name = str(payload.get("name") or base.get("name") or service_id).strip()
+    base_url = str(payload.get("base_url", base.get("base_url", "")) or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail=f"base_url is required for service {service_id}")
+
+    auth_type = str(payload.get("auth_type", base.get("auth_type", "none")) or "none").strip().lower()
+    if auth_type not in CONTROL_CENTER_AUTH_TYPES:
+        raise HTTPException(status_code=400, detail="auth_type must be one of: none, x_api_key, bearer")
+
+    raw_actions = payload.get("actions", base.get("actions", []))
+    if isinstance(raw_actions, str):
+        raw_actions = _json_loads_safe(raw_actions, [])
+    if not isinstance(raw_actions, list):
+        raise HTTPException(status_code=400, detail="actions must be a JSON array")
+
+    raw_tags = payload.get("tags", base.get("tags", []))
+    if isinstance(raw_tags, str):
+        raw_tags = _json_loads_safe(raw_tags, [])
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+
+    enabled_raw = payload.get("enabled", base.get("enabled", True))
+    timeout_raw = payload.get("timeout_sec", base.get("timeout_sec", 10))
+    sort_raw = payload.get("sort_order", base.get("sort_order", 100))
+    now_ts = _utc_now_iso()
+    created_ts = str(base.get("created_ts") or now_ts)
+
+    out = {
+        "service_id": service_id,
+        "name": name,
+        "service_type": str(payload.get("service_type", base.get("service_type", "generic")) or "generic").strip(),
+        "base_url": base_url.rstrip("/") if base_url != CONTROL_CENTER_SELF_BASE_URL else CONTROL_CENTER_SELF_BASE_URL,
+        "app_url": str(payload.get("app_url", base.get("app_url", "")) or "").strip(),
+        "repo_url": str(payload.get("repo_url", base.get("repo_url", "")) or "").strip(),
+        "health_path": _normalize_service_path(payload.get("health_path", base.get("health_path", "/api/health")), default="/api/health"),
+        "status_path": _normalize_service_path(payload.get("status_path", base.get("status_path", "/api/status")), default="/api/status"),
+        "cost_path": _normalize_service_path(payload.get("cost_path", base.get("cost_path", "")), default=""),
+        "pipeline_path": _normalize_service_path(payload.get("pipeline_path", base.get("pipeline_path", "")), default=""),
+        "report_path": _normalize_service_path(payload.get("report_path", base.get("report_path", "")), default=""),
+        "logs_path": _normalize_service_path(payload.get("logs_path", base.get("logs_path", "")), default=""),
+        "auth_type": auth_type,
+        "auth_header": str(payload.get("auth_header", base.get("auth_header", "X-API-Key")) or "X-API-Key").strip(),
+        "secret_env_var": str(payload.get("secret_env_var", base.get("secret_env_var", "")) or "").strip(),
+        "enabled": bool(enabled_raw),
+        "sort_order": max(0, int(sort_raw)),
+        "timeout_sec": max(2, int(timeout_raw)),
+        "notes": str(payload.get("notes", base.get("notes", "")) or "").strip(),
+        "tags": [str(x).strip() for x in raw_tags if str(x).strip()],
+        "actions": [_normalize_control_center_action(item, idx=idx) for idx, item in enumerate(raw_actions)],
+        "created_ts": created_ts,
+        "updated_ts": now_ts,
+    }
+    return out
+
+
+def _service_row_to_public_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    item["enabled"] = bool(item.get("enabled"))
+    item["sort_order"] = int(item.get("sort_order") or 0)
+    item["timeout_sec"] = int(item.get("timeout_sec") or 10)
+    item["tags"] = _json_loads_safe(item.pop("tags_json", item.get("tags", [])), [])
+    item["actions"] = _json_loads_safe(item.pop("actions_json", item.get("actions", [])), [])
+    return item
+
+
+def _save_control_center_service(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
+    _ensure_control_center_tables(conn)
+    existing_row = conn.execute(
+        "SELECT * FROM admin_managed_services WHERE service_id = ?",
+        (payload.get("service_id"),),
+    ).fetchone()
+    existing = _service_row_to_public_dict(existing_row) if existing_row is not None else None
+    normalized = _normalize_control_center_service(payload, existing=existing)
+    conn.execute(
+        """
+        INSERT INTO admin_managed_services (
+            service_id, name, service_type, base_url, app_url, repo_url,
+            health_path, status_path, cost_path, pipeline_path, report_path, logs_path,
+            auth_type, auth_header, secret_env_var, enabled, sort_order, timeout_sec,
+            notes, tags_json, actions_json, created_ts, updated_ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(service_id) DO UPDATE SET
+            name=excluded.name,
+            service_type=excluded.service_type,
+            base_url=excluded.base_url,
+            app_url=excluded.app_url,
+            repo_url=excluded.repo_url,
+            health_path=excluded.health_path,
+            status_path=excluded.status_path,
+            cost_path=excluded.cost_path,
+            pipeline_path=excluded.pipeline_path,
+            report_path=excluded.report_path,
+            logs_path=excluded.logs_path,
+            auth_type=excluded.auth_type,
+            auth_header=excluded.auth_header,
+            secret_env_var=excluded.secret_env_var,
+            enabled=excluded.enabled,
+            sort_order=excluded.sort_order,
+            timeout_sec=excluded.timeout_sec,
+            notes=excluded.notes,
+            tags_json=excluded.tags_json,
+            actions_json=excluded.actions_json,
+            created_ts=admin_managed_services.created_ts,
+            updated_ts=excluded.updated_ts
+        """,
+        (
+            normalized["service_id"],
+            normalized["name"],
+            normalized["service_type"],
+            normalized["base_url"],
+            normalized["app_url"],
+            normalized["repo_url"],
+            normalized["health_path"],
+            normalized["status_path"],
+            normalized["cost_path"],
+            normalized["pipeline_path"],
+            normalized["report_path"],
+            normalized["logs_path"],
+            normalized["auth_type"],
+            normalized["auth_header"],
+            normalized["secret_env_var"],
+            1 if normalized["enabled"] else 0,
+            normalized["sort_order"],
+            normalized["timeout_sec"],
+            normalized["notes"],
+            _json_dumps_compact(normalized["tags"]),
+            _json_dumps_compact(normalized["actions"]),
+            normalized["created_ts"],
+            normalized["updated_ts"],
+        ),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM admin_managed_services WHERE service_id = ?",
+        (normalized["service_id"],),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to load saved service")
+    return _service_row_to_public_dict(row)
+
+
+def _seed_control_center_builtin_services(conn: sqlite3.Connection) -> None:
+    _ensure_control_center_tables(conn)
+    for service in _control_center_builtin_services():
+        existing = conn.execute(
+            "SELECT 1 FROM admin_managed_services WHERE service_id = ? LIMIT 1",
+            (service["service_id"],),
+        ).fetchone()
+        if existing is None:
+            _save_control_center_service(conn, service)
+
+
+def _bootstrap_control_center_services_from_file(conn: sqlite3.Connection) -> int:
+    path = CONTROL_CENTER_BOOTSTRAP_PATH
+    if not path.exists():
+        return 0
+    payload = _load_json_file(path)
+    if not isinstance(payload, list):
+        LOG.warning("Ignoring control center bootstrap file %s because it is not a JSON array", path)
+        return 0
+    saved = 0
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        _save_control_center_service(conn, item)
+        saved += 1
+    return saved
+
+
+def _list_control_center_services(conn: sqlite3.Connection, *, include_disabled: bool = True) -> list[dict[str, Any]]:
+    _ensure_control_center_tables(conn)
+    sql = "SELECT * FROM admin_managed_services"
+    params: list[Any] = []
+    if not include_disabled:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY enabled DESC, sort_order ASC, name ASC, service_id ASC"
+    rows = conn.execute(sql, params).fetchall()
+    return [_service_row_to_public_dict(row) for row in rows]
+
+
+def _get_control_center_service(conn: sqlite3.Connection, service_id: str) -> dict[str, Any]:
+    _ensure_control_center_tables(conn)
+    row = conn.execute(
+        "SELECT * FROM admin_managed_services WHERE service_id = ? LIMIT 1",
+        (service_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown managed service: {service_id}")
+    return _service_row_to_public_dict(row)
+
+
+def _audit_actor(request: Request | None) -> str:
+    if request is None:
+        return ""
+    identity = getattr(request.state, "admin_identity", None)
+    if isinstance(identity, dict):
+        username = str(identity.get("username") or "").strip()
+        mode = str(identity.get("mode") or "").strip()
+        if username and mode:
+            return f"{username} ({mode})"
+        return username or mode
+    return ""
+
+
+def _write_admin_audit_log(
+    conn: sqlite3.Connection,
+    *,
+    request: Request | None,
+    event_type: str,
+    service_id: str = "",
+    action_id: str = "",
+    status: str = "ok",
+    message: str = "",
+    request_payload: Any = None,
+    response_payload: Any = None,
+) -> None:
+    _ensure_control_center_tables(conn)
+    conn.execute(
+        """
+        INSERT INTO admin_audit_log (
+            action_ts, actor, client_ip, event_type, service_id, action_id, status,
+            message, request_json, response_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _utc_now_iso(),
+            _audit_actor(request),
+            _client_ip(request) if request is not None else "",
+            event_type,
+            service_id,
+            action_id,
+            status,
+            _clip_text(message, limit=600),
+            _clip_text(_json_dumps_compact(request_payload), limit=4000) if request_payload is not None else "",
+            _clip_text(_json_dumps_compact(response_payload), limit=6000) if response_payload is not None else "",
+        ),
+    )
+    conn.commit()
+
+
+def _list_admin_audit_log(conn: sqlite3.Connection, *, limit: int = 100) -> list[dict[str, Any]]:
+    _ensure_control_center_tables(conn)
+    rows = conn.execute(
+        """
+        SELECT id, action_ts, actor, client_ip, event_type, service_id, action_id, status, message
+        FROM admin_audit_log
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (max(1, min(limit, 500)),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _service_check_names(include_verbose: bool = True) -> list[str]:
+    names = ["health", "status", "cost", "pipeline"]
+    if include_verbose:
+        names += ["report", "logs"]
+    return names
+
+
+def _service_check_path(service: dict[str, Any], name: str) -> str:
+    key = f"{name}_path"
+    return str(service.get(key) or "").strip()
+
+
+def _service_check_summary(name: str, result: dict[str, Any]) -> dict[str, Any]:
+    payload = result.get("payload")
+    status_code = result.get("status_code")
+    summary: dict[str, Any] = {
+        "ok": bool(result.get("ok")),
+        "status_code": status_code,
+        "url": result.get("url"),
+        "error": result.get("error"),
+    }
+    if isinstance(payload, dict):
+        if name == "health":
+            summary["value"] = payload.get("ok", summary["ok"])
+        elif name == "status":
+            latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+            pipeline = payload.get("pipeline") if isinstance(payload.get("pipeline"), dict) else {}
+            summary["value"] = latest_run.get("status") or payload.get("status") or "ok"
+            summary["detail"] = pipeline.get("stage") or payload.get("pipeline_stage")
+            summary["freshness_days"] = _extract_scalar(
+                payload,
+                ["price_age_days", "freshness_days", "age_days", "latest_data_age_days"],
+            )
+        elif name == "cost":
+            summary["value"] = _extract_scalar(
+                payload,
+                ["daily_usd", "cost_usd", "monthly_usd", "spend_usd", "cost", "spend"],
+            )
+        elif name == "pipeline":
+            summary["value"] = payload.get("stage") or payload.get("detail") or ("running" if payload.get("active") else "idle")
+            summary["detail"] = payload.get("detail")
+        elif name == "report":
+            latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else {}
+            summary["value"] = latest.get("generated_ts") or payload.get("detail") or ("ok" if payload.get("ok") else "missing")
+        elif name == "logs":
+            tail = payload.get("tail") if isinstance(payload.get("tail"), list) else []
+            summary["value"] = f"{len(tail)} lines" if tail else "empty"
+    elif isinstance(payload, list):
+        summary["value"] = f"{len(payload)} items"
+    elif payload not in {None, ""}:
+        summary["value"] = _clip_text(payload, limit=140)
+    elif result.get("text"):
+        summary["value"] = _clip_text(result["text"], limit=140)
+    return summary
+
+
+def _build_service_snapshot(
+    *,
+    service: dict[str, Any],
+    request: Request,
+    include_verbose: bool = True,
+) -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+    for name in _service_check_names(include_verbose=include_verbose):
+        path = _service_check_path(service, name)
+        if not path:
+            continue
+        checks[name] = _http_json_request(
+            service=service,
+            path=path,
+            request=request,
+            method="GET",
+            timeout_sec=int(service.get("timeout_sec") or 10),
+        )
+
+    unhealthy = [
+        name for name, result in checks.items()
+        if not result.get("ok") or (
+            isinstance(result.get("payload"), dict) and result["payload"].get("ok") is False
+        )
+    ]
+    status_payload = checks.get("status", {}).get("payload")
+    pipeline_payload = checks.get("pipeline", {}).get("payload")
+    report_payload = checks.get("report", {}).get("payload")
+    summary = {
+        "checked_ts": _utc_now_iso(),
+        "health_ok": not unhealthy if checks else True,
+        "unhealthy_checks": unhealthy,
+        "status": _extract_scalar(status_payload, ["status"]) if isinstance(status_payload, dict) else None,
+        "latest_run_status": _extract_scalar(status_payload, ["status", "latest_run_status"]),
+        "pipeline_stage": _extract_scalar(pipeline_payload, ["stage"]) or _extract_scalar(status_payload, ["pipeline_stage"]),
+        "cost_value": _extract_scalar(
+            checks.get("cost", {}).get("payload"),
+            ["daily_usd", "cost_usd", "monthly_usd", "spend_usd", "cost", "spend"],
+        ),
+        "report_generated_ts": _extract_scalar(report_payload, ["generated_ts"]),
+        "freshness_days": _extract_scalar(
+            status_payload,
+            ["price_age_days", "freshness_days", "age_days", "latest_data_age_days"],
+        ),
+        "checks": {
+            name: _service_check_summary(name, result)
+            for name, result in checks.items()
+        },
+    }
+    if isinstance(status_payload, dict):
+        latest_run = status_payload.get("latest_run")
+        if isinstance(latest_run, dict):
+            summary["latest_run_status"] = latest_run.get("status") or summary["latest_run_status"]
+            summary["latest_run_finished_ts"] = latest_run.get("finished_ts")
+    if isinstance(report_payload, dict):
+        latest = report_payload.get("latest")
+        if isinstance(latest, dict):
+            summary["report_generated_ts"] = latest.get("generated_ts") or summary["report_generated_ts"]
+
+    return {
+        "service": service,
+        "summary": summary,
+        "checks": checks,
+    }
+
+
+def _load_admin_session_identity(request: Request) -> dict[str, Any] | None:
+    token = str(request.cookies.get(ADMIN_SESSION_COOKIE, "") or "").strip()
+    if not token or not ADMIN_SESSION_SECRET:
+        return None
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except Exception:
+        return None
+    parts = decoded.split("|")
+    if len(parts) != 4:
+        return None
+    username, issued_ts, expires_ts, signature = parts
+    payload = f"{username}|{issued_ts}|{expires_ts}"
+    expected = hmac.new(
+        ADMIN_SESSION_SECRET.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    now_ts = int(_utc_now().timestamp())
+    try:
+        expires_int = int(expires_ts)
+        issued_int = int(issued_ts)
+    except ValueError:
+        return None
+    if expires_int <= now_ts:
+        return None
+    return {
+        "username": username,
+        "mode": "session",
+        "issued_ts": dt.datetime.fromtimestamp(issued_int, tz=dt.timezone.utc).replace(microsecond=0).isoformat(),
+        "expires_ts": dt.datetime.fromtimestamp(expires_int, tz=dt.timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+
+def _create_admin_session_token(username: str) -> tuple[str, dict[str, Any]]:
+    now_ts = int(_utc_now().timestamp())
+    expires_ts = now_ts + ADMIN_SESSION_TTL_SEC
+    payload = f"{username}|{now_ts}|{expires_ts}"
+    signature = hmac.new(
+        ADMIN_SESSION_SECRET.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    token = base64.urlsafe_b64encode(f"{payload}|{signature}".encode("utf-8")).decode("ascii").rstrip("=")
+    meta = {
+        "username": username,
+        "issued_ts": dt.datetime.fromtimestamp(now_ts, tz=dt.timezone.utc).replace(microsecond=0).isoformat(),
+        "expires_ts": dt.datetime.fromtimestamp(expires_ts, tz=dt.timezone.utc).replace(microsecond=0).isoformat(),
+        "ttl_sec": ADMIN_SESSION_TTL_SEC,
+    }
+    return token, meta
+
+
+def _login_enabled() -> bool:
+    return bool(ADMIN_PASSWORD and ADMIN_SESSION_SECRET)
 
 def get_latest_fundamentals(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
     row = conn.execute(
@@ -1081,6 +1910,12 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     report_done_idx = _last_idx(tail, "[REPORT] Done.")
     yolo_start_idx = _last_idx(tail, "[YOLO]  Starting")
     yolo_done_idx = _last_idx(tail, "[YOLO]  Daily pattern detection done.")
+    weekly_start_idx = _last_idx(tail, "[WEEKLY] Starting weekly YOLO pass")
+    weekly_report_start_idx = _last_idx(tail, "[WEEKLY] Report regeneration starting")
+    weekly_yolo_done_idx = _last_idx(tail, "[WEEKLY] Weekly YOLO completed OK")
+    weekly_yolo_failed_idx = _last_idx(tail, "[WEEKLY] Weekly YOLO failed")
+    weekly_report_done_idx = _last_idx(tail, "[WEEKLY] Report regeneration completed")
+    weekly_report_failed_idx = _last_idx(tail, "[WEEKLY] Report regeneration failed")
     yolo_progress_idx = _last_idx_any(
         tail,
         [
@@ -1102,6 +1937,7 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
             or "[weekly " in ln
             or "[REPORT]" in ln
             or "[DONE]  daily_update.sh" in ln
+            or "[WEEKLY]" in ln
             or "run_id=" in ln
         )
     ]
@@ -1114,8 +1950,21 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
         "marker_lines": markers[-40:],
     }
     if start_idx < 0:
+        weekly_report_terminal_idx = max(weekly_report_done_idx, weekly_report_failed_idx)
+        weekly_yolo_terminal_idx = max(weekly_yolo_done_idx, weekly_yolo_failed_idx, weekly_report_terminal_idx)
+
         # Fallback: infer active phase from recent markers even if the explicit
         # [START] line is outside the retained tail window.
+        if weekly_report_start_idx >= 0 and weekly_report_start_idx > weekly_report_terminal_idx:
+            out["active"] = True
+            out["stage"] = "report"
+            out["stage_line"] = tail[weekly_report_start_idx]
+            return out
+        if weekly_start_idx >= 0 and weekly_start_idx > weekly_yolo_terminal_idx:
+            out["active"] = True
+            out["stage"] = "yolo"
+            out["stage_line"] = tail[yolo_progress_idx] if yolo_progress_idx > weekly_start_idx else tail[weekly_start_idx]
+            return out
         if report_start_idx >= 0 and report_start_idx > report_done_idx:
             out["active"] = True
             out["stage"] = "report"
@@ -1159,9 +2008,39 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     return out
 
 
+def _infer_last_completed_event_from_tail(tail: list[str]) -> dict[str, Any] | None:
+    candidates = [
+        ("weekly_report", "ok", "[WEEKLY] Report regeneration completed"),
+        ("weekly_report", "failed", "[WEEKLY] Report regeneration failed"),
+        ("weekly_yolo", "ok", "[WEEKLY] Weekly YOLO completed OK"),
+        ("weekly_yolo", "failed", "[WEEKLY] Weekly YOLO failed"),
+        ("report", "ok", "[REPORT] Done."),
+        ("report", "failed", "[REPORT] Failed to generate report"),
+        ("daily_update", "ok", "[DONE]  daily_update.sh"),
+        ("ingest", "failed", "[ERROR] ingest failed rc="),
+    ]
+    best_idx = -1
+    best: dict[str, Any] | None = None
+    for stage, status, token in candidates:
+        for idx in range(len(tail) - 1, -1, -1):
+            line = tail[idx]
+            if token in line and idx > best_idx:
+                ts = parse_log_line_ts_utc(line)
+                best_idx = idx
+                best = {
+                    "stage": stage,
+                    "status": status,
+                    "line": line,
+                    "ts": ts.replace(microsecond=0).isoformat() if ts else None,
+                }
+                break
+    return best
+
+
 def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
     tail = _tail_text_file(RUN_LOG_PATH, lines=log_lines, max_bytes=256_000)
     inferred = _infer_pipeline_from_log_tail(tail)
+    last_completed = _infer_last_completed_event_from_tail(tail)
     latest_run = _read_latest_ingest_run()
     stage = inferred.get("stage", "unknown")
     active = bool(inferred.get("active"))
@@ -1193,6 +2072,12 @@ def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
             stale_inference = True
             active = False
             stage = "idle"
+    if not active and stage != "stale_running":
+        if last_completed is not None:
+            stage = "idle"
+        stage_line = None
+        stage_line_ts = None
+        stage_age_sec = None
     return {
         "run_log_path": str(RUN_LOG_PATH),
         "active": active,
@@ -1207,6 +2092,10 @@ def _pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
         "running_age_sec": round(running_age_sec, 1) if running_age_sec is not None else None,
         "running_stale_min": INGEST_RUNNING_STALE_MIN,
         "running_stale": running_stale,
+        "last_completed_stage": last_completed.get("stage") if last_completed else None,
+        "last_completed_status": last_completed.get("status") if last_completed else None,
+        "last_completed_line": last_completed.get("line") if last_completed else None,
+        "last_completed_ts": last_completed.get("ts") if last_completed else None,
         "tail": tail[-60:],
     }
 
@@ -1672,8 +2561,278 @@ def config() -> dict[str, Any]:
         "auth": {
             "admin_api_key_required": bool(API_KEY),
             "admin_api_key_header": "X-API-Key",
+            "admin_login_enabled": _login_enabled(),
+            "admin_session_cookie": ADMIN_SESSION_COOKIE,
+            "admin_session_ttl_sec": ADMIN_SESSION_TTL_SEC,
         },
     }
+
+
+@app.get("/api/admin/session")
+def admin_session(request: Request) -> dict[str, Any]:
+    identity = _load_admin_session_identity(request)
+    if identity is None and API_KEY:
+        provided = request.headers.get("X-API-Key", "")
+        if provided and secrets.compare_digest(provided, API_KEY):
+            identity = {"username": ADMIN_USER or "admin", "mode": "api_key"}
+    return {
+        "ok": True,
+        "authenticated": identity is not None,
+        "identity": identity,
+        "login_enabled": _login_enabled(),
+        "api_key_enabled": bool(API_KEY),
+    }
+
+
+@app.post("/api/admin/session/login")
+async def admin_session_login(request: Request) -> Response:
+    if not _login_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Admin login is not configured. Set TRADER_KOO_ADMIN_PASSWORD and TRADER_KOO_ADMIN_SESSION_SECRET.",
+        )
+
+    client_ip = _client_ip(request)
+    blocked, retry_after = _admin_auth_blocked(client_ip, _utc_now().timestamp())
+    if blocked:
+        return JSONResponse(
+            {"detail": "Too many unauthorized attempts. Try again later."},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    body = await request.json()
+    username = str(body.get("username") or "").strip()
+    password = str(body.get("password") or "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="username and password are required")
+    if username != ADMIN_USER or not secrets.compare_digest(password, ADMIN_PASSWORD):
+        blocked_now, retry_after, _ = _admin_auth_record_failure(client_ip, _utc_now().timestamp())
+        if blocked_now:
+            return JSONResponse(
+                {"detail": "Too many unauthorized attempts. Try again later."},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    _admin_auth_clear(client_ip)
+    request.state.admin_identity = {"username": username, "mode": "session"}
+    token, meta = _create_admin_session_token(username)
+    response = JSONResponse({"ok": True, "authenticated": True, "identity": {"username": username, "mode": "session", **meta}})
+    response.set_cookie(
+        key=ADMIN_SESSION_COOKIE,
+        value=token,
+        max_age=ADMIN_SESSION_TTL_SEC,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+    if DB_PATH.exists():
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            conn.row_factory = sqlite3.Row
+            _write_admin_audit_log(
+                conn,
+                request=request,
+                event_type="admin_login",
+                status="ok",
+                message="Administrator logged in",
+                response_payload={"identity": {"username": username, "mode": "session", **meta}},
+            )
+            conn.close()
+        except Exception as exc:
+            LOG.warning("Failed to write admin login audit log: %s", exc)
+    return response
+
+
+@app.post("/api/admin/session/logout")
+def admin_session_logout(request: Request) -> Response:
+    identity = _load_admin_session_identity(request)
+    if identity is not None:
+        request.state.admin_identity = identity
+    response = JSONResponse({"ok": True, "authenticated": False})
+    response.delete_cookie(key=ADMIN_SESSION_COOKIE, path="/")
+    if identity is not None and DB_PATH.exists():
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            conn.row_factory = sqlite3.Row
+            _write_admin_audit_log(
+                conn,
+                request=request,
+                event_type="admin_logout",
+                status="ok",
+                message="Administrator logged out",
+                response_payload={"identity": identity},
+            )
+            conn.close()
+        except Exception as exc:
+            LOG.warning("Failed to write admin logout audit log: %s", exc)
+    return response
+
+
+@app.get("/api/admin/control-center/overview")
+def control_center_overview(
+    request: Request,
+    refresh: bool = Query(default=True),
+    include_disabled: bool = Query(default=True),
+    audit_limit: int = Query(default=25, ge=1, le=200),
+) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        services = _list_control_center_services(conn, include_disabled=include_disabled)
+        rows: list[dict[str, Any]] = []
+        for service in services:
+            if refresh and service.get("enabled"):
+                snapshot = _build_service_snapshot(service=service, request=request, include_verbose=False)
+                rows.append(snapshot)
+            else:
+                rows.append(
+                    {
+                        "service": service,
+                        "summary": {
+                            "checked_ts": None,
+                            "health_ok": None,
+                            "unhealthy_checks": [],
+                            "checks": {},
+                        },
+                    }
+                )
+        counts = {
+            "total_services": len(rows),
+            "enabled_services": sum(1 for row in rows if row["service"].get("enabled")),
+            "disabled_services": sum(1 for row in rows if not row["service"].get("enabled")),
+            "unhealthy_services": sum(
+                1 for row in rows
+                if row.get("summary", {}).get("health_ok") is False
+            ),
+        }
+        counts["healthy_services"] = max(0, counts["enabled_services"] - counts["unhealthy_services"])
+        counts["cost_reporting_services"] = sum(
+            1 for row in rows if row.get("summary", {}).get("cost_value") not in {None, ""}
+        )
+        return {
+            "ok": True,
+            "generated_ts": _utc_now_iso(),
+            "counts": counts,
+            "services": rows,
+            "recent_audit": _list_admin_audit_log(conn, limit=audit_limit),
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/control-center/audit-log")
+def control_center_audit_log(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        return {"ok": True, "rows": _list_admin_audit_log(conn, limit=limit)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/control-center/services/{service_id}")
+def control_center_service(service_id: str) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        return {"ok": True, "service": _get_control_center_service(conn, service_id)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/control-center/services/{service_id}/snapshot")
+def control_center_service_snapshot(request: Request, service_id: str) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        service = _get_control_center_service(conn, service_id)
+        return {"ok": True, **_build_service_snapshot(service=service, request=request, include_verbose=True)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/control-center/services")
+async def control_center_save_service(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON object expected")
+    conn = get_conn()
+    try:
+        saved = _save_control_center_service(conn, payload)
+        _write_admin_audit_log(
+            conn,
+            request=request,
+            event_type="service_upsert",
+            service_id=saved["service_id"],
+            status="ok",
+            message=f"Saved managed service {saved['service_id']}",
+            request_payload=payload,
+            response_payload={"service_id": saved["service_id"]},
+        )
+        return {"ok": True, "service": saved}
+    finally:
+        conn.close()
+
+
+@app.put("/api/admin/control-center/services/{service_id}")
+async def control_center_update_service(request: Request, service_id: str) -> dict[str, Any]:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON object expected")
+    payload["service_id"] = service_id
+    conn = get_conn()
+    try:
+        saved = _save_control_center_service(conn, payload)
+        _write_admin_audit_log(
+            conn,
+            request=request,
+            event_type="service_upsert",
+            service_id=saved["service_id"],
+            status="ok",
+            message=f"Updated managed service {saved['service_id']}",
+            request_payload=payload,
+            response_payload={"service_id": saved["service_id"]},
+        )
+        return {"ok": True, "service": saved}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/control-center/services/{service_id}/actions/{action_id}")
+def control_center_invoke_action(request: Request, service_id: str, action_id: str) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        service = _get_control_center_service(conn, service_id)
+        action = next((item for item in service.get("actions", []) if item.get("id") == action_id), None)
+        if action is None:
+            raise HTTPException(status_code=404, detail=f"Unknown action {action_id} for service {service_id}")
+        result = _http_json_request(
+            service=service,
+            path=str(action.get("path") or ""),
+            request=request,
+            method=str(action.get("method") or "POST"),
+            payload=action.get("body"),
+            timeout_sec=int(service.get("timeout_sec") or 10),
+        )
+        _write_admin_audit_log(
+            conn,
+            request=request,
+            event_type="remote_action",
+            service_id=service_id,
+            action_id=action_id,
+            status="ok" if result.get("ok") else "failed",
+            message=f"Invoked action {action_id} on {service_id}",
+            request_payload={"action": action},
+            response_payload={
+                "ok": result.get("ok"),
+                "status_code": result.get("status_code"),
+                "error": result.get("error"),
+                "url": result.get("url"),
+            },
+        )
+        return {"ok": bool(result.get("ok")), "service_id": service_id, "action": action, "result": result}
+    finally:
+        conn.close()
 
 
 @app.get("/api/health")
@@ -2462,6 +3621,10 @@ def status() -> dict[str, Any]:
                 "running_age_sec": pipeline_snap.get("running_age_sec"),
                 "running_stale_min": pipeline_snap.get("running_stale_min"),
                 "running_stale": pipeline_snap.get("running_stale"),
+                "last_completed_stage": pipeline_snap.get("last_completed_stage"),
+                "last_completed_status": pipeline_snap.get("last_completed_status"),
+                "last_completed_line": pipeline_snap.get("last_completed_line"),
+                "last_completed_ts": pipeline_snap.get("last_completed_ts"),
                 "post_ingest_resume": resume_candidate,
                 "run_log_path": str(RUN_LOG_PATH),
             },

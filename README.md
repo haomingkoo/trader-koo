@@ -121,6 +121,13 @@ When `TRADER_KOO_API_KEY` is set, admin routes under `/api/admin/*` require `X-A
 | GET | `/api/dashboard/{ticker}` | Full chart payload (OHLCV + all layers) |
 | GET | `/api/opportunities` | Valuation screening across all tickers |
 | GET | `/api/yolo/{ticker}` | YOLO pattern detections for one ticker |
+| GET | `/api/admin/session` | Current admin session state for the private control center |
+| POST | `/api/admin/session/login` | Cookie-based admin login for mobile/desktop control center use |
+| POST | `/api/admin/session/logout` | Clear the admin session cookie |
+| GET | `/api/admin/control-center/overview` | Managed-service overview with live health/status snapshots |
+| GET | `/api/admin/control-center/services/{service_id}/snapshot` | Full control-center snapshot for one managed service |
+| POST | `/api/admin/control-center/services` | Add/update a managed service definition |
+| POST | `/api/admin/control-center/services/{service_id}/actions/{action_id}` | Proxy a configured remote admin action |
 | POST | `/api/admin/trigger-update` | Manually trigger the daily data refresh |
 | POST | `/api/admin/run-yolo-seed` | Trigger full YOLO seed (background thread) |
 | GET | `/api/admin/yolo-status` | YOLO thread state + DB summary + log tail |
@@ -139,11 +146,16 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | Variable | Description |
 |---|---|
 | `TRADER_KOO_API_KEY` | Random secret — enforces `X-API-Key` auth on `/api/admin/*` routes |
+| `TRADER_KOO_ADMIN_USERNAME` | Control-center login username (default `admin`) |
+| `TRADER_KOO_ADMIN_PASSWORD` | Control-center login password; defaults to `TRADER_KOO_API_KEY` when unset |
+| `TRADER_KOO_ADMIN_SESSION_SECRET` | HMAC secret for the admin session cookie; defaults to `TRADER_KOO_API_KEY` when unset |
+| `TRADER_KOO_ADMIN_SESSION_TTL_SEC` | Admin session lifetime in seconds (default `1209600`, 14 days) |
 | `TRADER_KOO_DB_PATH` | SQLite path, e.g. `/data/trader_koo.db` |
 | `TRADER_KOO_LOG_DIR` | Log directory, e.g. `/data/logs` |
 | `TRADER_KOO_LOG_LEVEL` | `INFO` (default) or `DEBUG` |
 | `TRADER_KOO_REPORT_DIR` | Report directory, e.g. `/data/reports` |
 | `TRADER_KOO_ALLOWED_ORIGIN` | Your Railway app URL (CORS) |
+| `TRADER_KOO_CONTROL_CENTER_BOOTSTRAP_PATH` | Optional JSON file of additional managed services to seed at startup |
 | `TRADER_KOO_INGEST_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout in ingest (default `120`) |
 | `TRADER_KOO_PRICE_TIMEOUT_SEC` | yfinance HTTP timeout in seconds (default `25`) |
 | `TRADER_KOO_PRICE_RETRY_ATTEMPTS` | yfinance retry attempts per ticker (default `3`) |
@@ -169,6 +181,8 @@ The app is designed for a single Railway service with a persistent `/data` volum
 curl -X POST "https://your-app.up.railway.app/api/admin/run-yolo-seed" \
      -H "X-API-Key: YOUR_KEY"
 ```
+
+For additional managed apps, use the built-in Control Center tab in the frontend and optionally seed services from [trader_koo/data/control_center_services.example.json](/Users/koohaoming/dev/trader-koo/trader_koo/data/control_center_services.example.json).
 
 ### Daily cron
 
