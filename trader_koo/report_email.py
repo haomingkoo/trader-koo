@@ -164,10 +164,11 @@ def build_report_email_bodies(
     def _mover_rows(rows: list[dict[str, Any]], near_key: str) -> str:
         out = []
         for row in rows[:5]:
+            move_color = _signed_color(row.get("pct_change"))
             out.append(
                 "<tr>"
                 f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;\">{_esc(row.get('ticker'))}</td>"
-                f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;\">{_esc(_fmt_signed_pct(row.get('pct_change')))}</td>"
+                f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;text-align:right;color:{move_color};font-weight:700;\">{_esc(_fmt_signed_pct(row.get('pct_change')))}</td>"
                 f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:#6b7280;\">{_esc('near 52W ' + ('high' if near_key.endswith('high') else 'low') if row.get(near_key) else '-')}</td>"
                 "</tr>"
             )
@@ -241,10 +242,11 @@ def build_report_email_bodies(
 
     sector_table_rows = []
     for row in sector_rows[:6]:
+        move_color = _signed_color(row.get("avg_pct_change"))
         sector_table_rows.append(
             "<tr>"
             f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;color:#0f172a;\">{_esc(row.get('sector'))}</td>"
-            f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;\">{_esc(_fmt_signed_pct(row.get('avg_pct_change')))}</td>"
+            f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;text-align:right;color:{move_color};font-weight:700;\">{_esc(_fmt_signed_pct(row.get('avg_pct_change')))}</td>"
             f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:#6b7280;\">{_esc(_fmt_num(row.get('pct_advancing')))}% adv.</td>"
             "</tr>"
         )
@@ -421,15 +423,17 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
     if not groups:
         return ""
     day_blocks = []
-    for group in groups[:3]:
+    for group in groups[:7]:
         sessions = group.get("sessions") if isinstance(group.get("sessions"), list) else []
         session_rows = []
         for session in sessions:
             rows = session.get("rows") if isinstance(session.get("rows"), list) else []
+            if not rows:
+                continue
             code = _fmt_text(session.get("code"))
             label = _fmt_text(session.get("label"))
             rendered_rows = []
-            for row in rows[:5]:
+            for row in rows[:10]:
                 rec_state = str(row.get("recommendation_state") or "calendar_only").strip().lower()
                 rec_label = {
                     "setup_ready": "SETUP READY",
@@ -447,23 +451,19 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
                     "snapshot": "Snapshot",
                     "unverified": "Unverified",
                 }.get(str(row.get("schedule_quality") or "").strip().lower(), _fmt_text(row.get("schedule_quality")))
+                bias_color = _bias_color(row.get("signal_bias"))
                 rendered_rows.append(
                     "<tr>"
-                    f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;\">{_esc(row.get('ticker'))}</td>"
-                    f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;\">{_esc(_fmt_num(row.get('score')))}</td>"
-                    f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:#475569;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</td>"
-                    f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:{_risk_color(row.get('earnings_risk'))};font-weight:700;\">{_esc(str(row.get('earnings_risk') or 'normal').upper())}</td>"
-                    "</tr>"
-                    "<tr>"
-                    f"<td colspan=\"4\" style=\"padding:0 0 10px 0;border-bottom:1px solid #eef2f7;color:#334155;font-size:13px;line-height:19px;\">"
-                    f"<div><strong style=\"color:{rec_color};\">{_esc(rec_label)}</strong> • {_esc(schedule_label)}</div>"
-                    f"<div style=\"margin-top:4px;\"><strong>Action:</strong> {_esc(row.get('action'))}</div>"
+                    f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;vertical-align:top;\">{_esc(row.get('ticker'))}</td>"
+                    f"<td style=\"padding:8px 0 8px 10px;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;vertical-align:top;white-space:nowrap;\">{_esc(_fmt_num(row.get('score')))}</td>"
+                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:{bias_color};font-weight:700;vertical-align:top;white-space:nowrap;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</td>"
+                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:{_risk_color(row.get('earnings_risk'))};font-weight:700;vertical-align:top;white-space:nowrap;\">{_esc(str(row.get('earnings_risk') or 'normal').upper())}</td>"
+                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:{rec_color};font-weight:700;vertical-align:top;white-space:nowrap;\">{_esc(rec_label)}</td>"
+                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:#475569;vertical-align:top;\">"
+                    f"<div style=\"font-weight:600;color:#64748b;\">{_esc(schedule_label)}</div>"
+                    f"<div style=\"margin-top:4px;line-height:19px;\">{_esc(str(row.get('recommendation_note') or row.get('action') or '').strip())}</div>"
                     "</td>"
                     "</tr>"
-                )
-            if not rendered_rows:
-                rendered_rows.append(
-                    "<tr><td colspan=\"4\" style=\"padding:8px 0;color:#94a3b8;\">No names</td></tr>"
                 )
             session_rows.append(
                 "<div style=\"margin-top:12px;border-top:1px solid #eef2f7;padding-top:12px;\">"
@@ -472,18 +472,16 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
                 + "".join(rendered_rows)
                 + "</table></div>"
             )
+        if not session_rows:
+            continue
         day_blocks.append(
-            "<td style=\"padding:8px;vertical-align:top;width:33.33%;\">"
-            "<div style=\"border:1px solid #e6ecf5;border-radius:18px;padding:16px;background:#ffffff;height:100%;\">"
+            "<div style=\"margin-top:12px;border:1px solid #e6ecf5;border-radius:18px;padding:16px;background:#ffffff;\">"
             f"<div style=\"font-size:17px;line-height:22px;font-weight:800;color:#0f172a;\">{_esc(group.get('display_date'))}</div>"
             f"<div style=\"margin-top:4px;font-size:12px;line-height:18px;color:#64748b;\">{_esc(_fmt_num(group.get('count')))} earnings events</div>"
             + "".join(session_rows)
-            + "</div></td>"
+            + "</div>"
         )
-    rows_html = []
-    for idx in range(0, len(day_blocks), 3):
-        rows_html.append("<tr>" + "".join(day_blocks[idx:idx + 3]) + "</tr>")
-    return "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">" + "".join(rows_html) + "</table>"
+    return "".join(day_blocks)
 
 
 def _delta_highlight(delta: dict[str, Any]) -> str:
@@ -632,3 +630,24 @@ def _risk_color(value: Any) -> str:
     if raw == "elevated":
         return "#b45309"
     return "#0f766e"
+
+
+def _bias_color(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "bullish":
+        return "#0f766e"
+    if raw == "bearish":
+        return "#d93025"
+    return "#64748b"
+
+
+def _signed_color(value: Any) -> str:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return "#0f172a"
+    if num > 0:
+        return "#0f9d58"
+    if num < 0:
+        return "#d93025"
+    return "#64748b"
