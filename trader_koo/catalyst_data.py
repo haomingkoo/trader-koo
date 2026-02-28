@@ -560,6 +560,75 @@ def _display_date(day: dt.date) -> str:
     return f"{day.strftime('%a')} {day.strftime('%b')} {day.day}"
 
 
+def _load_tracked_tickers(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute("SELECT DISTINCT ticker FROM price_daily").fetchall()
+    return {
+        str(row[0] or "").upper().strip()
+        for row in rows
+        if str(row[0] or "").strip()
+    }
+
+
+def _schedule_quality(event_date: dt.date, session: str, source: str) -> tuple[str, str]:
+    if event_date.weekday() >= 5:
+        return (
+            "unverified",
+            "Weekend earnings date with no regular-session anchor. Treat this as calendar context only until timing is verified.",
+        )
+    if session in {"BMO", "AMC"}:
+        return (
+            "confirmed",
+            f"Session timing is explicit ({SESSION_LABELS.get(session, session)}).",
+        )
+    if source == "alpha_vantage":
+        return (
+            "date_only",
+            "Date is sourced from Alpha Vantage, but session timing is still TBD.",
+        )
+    return (
+        "snapshot",
+        "Date is inferred from the fundamentals snapshot. Verify timing closer to the event.",
+    )
+
+
+def _recommendation_state(row: dict[str, Any]) -> tuple[str, str]:
+    if not bool(row.get("tracked")):
+        return "calendar_only", "Outside the tracked universe."
+
+    schedule_quality = str(row.get("schedule_quality") or "unverified")
+    if schedule_quality == "unverified":
+        return "calendar_only", "Timing is not verified enough for a pre-event trade plan."
+
+    bias = str(row.get("signal_bias") or "neutral")
+    if bias not in {"bullish", "bearish"}:
+        return "calendar_only", "Directional evidence is still mixed."
+
+    tier = str(row.get("setup_tier") or "D")
+    actionability = str(row.get("actionability") or "watch-only")
+    confirmations = int(row.get("confirmation_count") or 0)
+    contradictions = int(row.get("contradiction_count") or 0)
+    yolo_age_days = row.get("yolo_age_days")
+    candle_bias = str(row.get("candle_bias") or "neutral")
+    days_until = row.get("days_until")
+    has_candle_confirmation = candle_bias == bias and candle_bias != "neutral"
+
+    if schedule_quality in {"date_only", "snapshot"}:
+        return "watch", "Calendar date is useful, but session timing still needs confirmation."
+    if tier not in {"A", "B"}:
+        return "watch", "Setup quality is not strong enough yet."
+    if actionability not in {"higher-probability", "conditional"}:
+        return "watch", "Setup still needs better location or confirmation."
+    if confirmations < 3:
+        return "watch", "Too few aligned confirmations."
+    if contradictions >= 2:
+        return "watch", "Too many conflicting signals remain."
+    if isinstance(yolo_age_days, int) and yolo_age_days > 35 and not has_candle_confirmation:
+        return "watch", "YOLO context is stale and not backed by a fresh candle confirmation."
+    if isinstance(days_until, int) and days_until <= 1 and actionability != "higher-probability":
+        return "watch", "Earnings are too close to front-run without a cleaner confirmation."
+    return "setup_ready", "Setup, level context, and catalyst timing are aligned enough to monitor actively."
+
+
 def build_earnings_calendar_payload(
     conn: sqlite3.Connection,
     *,
@@ -570,10 +639,12 @@ def build_earnings_calendar_payload(
     setup_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     requested = {str(t or "").strip().upper() for t in (tickers or set()) if str(t or "").strip()}
+    tracked_tickers = _load_tracked_tickers(conn)
+    effective_universe = requested or tracked_tickers
     snapshot_ts, universe_count = _select_fund_snapshot(conn, min_complete_tickers=400)
     fundamentals_map = _load_fundamentals_snapshot_map(conn, market_date=market_date, snapshot_ts=snapshot_ts)
     primary_rows, source_meta = _get_primary_calendar_rows(conn, days)
-    yolo_map = _load_latest_yolo_map(conn, tickers=requested or None)
+    yolo_map = _load_latest_yolo_map(conn, tickers=effective_universe or None)
     max_date = market_date + dt.timedelta(days=days)
     setup_map = {str(k or "").upper(): v for k, v in (setup_map or {}).items() if str(k or "").strip()}
 
@@ -590,7 +661,7 @@ def build_earnings_calendar_payload(
             return
         if event_date < market_date or event_date > max_date:
             return
-        if requested and ticker not in requested:
+        if effective_universe and ticker not in effective_universe:
             return
         key = (ticker, event_date.isoformat())
         row = dict(merged.get(key) or {})
@@ -598,6 +669,7 @@ def build_earnings_calendar_payload(
         setup = setup_map.get(ticker) or {}
         yolo = yolo_map.get(ticker) or {}
         session = _normalize_session(seed.get("earnings_session") or fund.get("earnings_session"))
+        schedule_quality, schedule_note = _schedule_quality(event_date, session, str(seed.get("source") or row.get("source") or "fundamentals_snapshot"))
         row.update(
             {
                 "ticker": ticker,
@@ -609,6 +681,7 @@ def build_earnings_calendar_payload(
                 "days_until": (event_date - market_date).days,
                 "source": seed.get("source") or row.get("source") or "fundamentals_snapshot",
                 "provider": seed.get("source") or row.get("provider") or source_meta.get("provider") or "fundamentals_snapshot",
+                "tracked": ticker in tracked_tickers,
                 "fiscal_date_ending": seed.get("fiscal_date_ending") or row.get("fiscal_date_ending"),
                 "estimate_eps": seed.get("estimate_eps") if seed.get("estimate_eps") is not None else row.get("estimate_eps"),
                 "currency": seed.get("currency") or row.get("currency"),
@@ -619,19 +692,30 @@ def build_earnings_calendar_payload(
                 "industry": fund.get("industry"),
                 "score": setup.get("score"),
                 "setup_tier": setup.get("setup_tier"),
+                "setup_family": setup.get("setup_family"),
                 "signal_bias": setup.get("signal_bias") or ("bearish" if "top" in str(yolo.get("pattern") or "").lower() or "m_head" in str(yolo.get("pattern") or "").lower() else ("bullish" if "bottom" in str(yolo.get("pattern") or "").lower() or "w_bottom" in str(yolo.get("pattern") or "").lower() else "neutral")),
                 "actionability": setup.get("actionability") or "watch-only",
                 "observation": setup.get("observation") or "Upcoming earnings catalyst; refresh the chart and levels before acting.",
                 "action": setup.get("action"),
                 "technical_read": setup.get("technical_read"),
                 "risk_note": setup.get("risk_note"),
+                "confirmation_count": setup.get("confirmation_count"),
+                "contradiction_count": setup.get("contradiction_count"),
+                "candle_pattern": setup.get("candle_pattern"),
+                "candle_bias": setup.get("candle_bias"),
+                "candle_confidence": setup.get("candle_confidence"),
+                "valuation_bias": setup.get("valuation_bias"),
                 "yolo_pattern": setup.get("yolo_pattern") or yolo.get("pattern"),
                 "yolo_confidence": setup.get("yolo_confidence") if setup.get("yolo_confidence") is not None else yolo.get("confidence"),
+                "yolo_age_days": setup.get("yolo_age_days") if setup.get("yolo_age_days") is not None else yolo.get("age_days"),
                 "yolo_timeframe": setup.get("yolo_timeframe") or yolo.get("timeframe"),
                 "atr_pct_14": setup.get("atr_pct_14"),
                 "realized_vol_20": setup.get("realized_vol_20"),
                 "bb_width_20": setup.get("bb_width_20"),
                 "pct_change": setup.get("pct_change"),
+                "schedule_quality": schedule_quality,
+                "schedule_note": schedule_note,
+                "is_weekend_event": event_date.weekday() >= 5,
             }
         )
         risk, risk_note = _derive_earnings_risk(row)
@@ -640,6 +724,15 @@ def build_earnings_calendar_payload(
         if not row.get("action"):
             row["action"] = _default_catalyst_action(row)
         row["score"] = _fallback_catalyst_score(row)
+        recommendation_state, recommendation_note = _recommendation_state(row)
+        row["recommendation_state"] = recommendation_state
+        row["recommendation_note"] = recommendation_note
+        row["recommendation_ready"] = recommendation_state == "setup_ready"
+        if recommendation_state == "calendar_only":
+            row["actionability"] = "calendar-only"
+            row["action"] = "Calendar event only. Verify session timing and chart structure before building a trade plan."
+        elif recommendation_state == "watch" and str(row.get("actionability") or "").strip() == "watch-only":
+            row["action"] = "Watch the event on the calendar, but wait for chart confirmation before treating it as a setup."
         merged[key] = row
 
     for row in primary_rows:
@@ -660,6 +753,7 @@ def build_earnings_calendar_payload(
         key=lambda r: (
             str(r.get("earnings_date") or ""),
             SESSION_ORDER.get(str(r.get("earnings_session") or "TBD"), 1),
+            {"setup_ready": 0, "watch": 1, "calendar_only": 2}.get(str(r.get("recommendation_state") or "calendar_only"), 2),
             -(float(r.get("score") or 0.0)),
             str(r.get("ticker") or ""),
         ),
@@ -669,6 +763,10 @@ def build_earnings_calendar_payload(
     groups: list[dict[str, Any]] = []
     high_risk = 0
     elevated_risk = 0
+    setup_ready = 0
+    watch_count = 0
+    calendar_only = 0
+    unverified_count = 0
     by_session = {"BMO": 0, "TBD": 0, "AMC": 0}
     current_day: dt.date | None = None
     current_rows: list[dict[str, Any]] = []
@@ -680,6 +778,15 @@ def build_earnings_calendar_payload(
             high_risk += 1
         elif risk == "elevated":
             elevated_risk += 1
+        state = str(row.get("recommendation_state") or "calendar_only")
+        if state == "setup_ready":
+            setup_ready += 1
+        elif state == "watch":
+            watch_count += 1
+        else:
+            calendar_only += 1
+        if str(row.get("schedule_quality") or "") == "unverified":
+            unverified_count += 1
         try:
             row_day = dt.date.fromisoformat(str(row.get("earnings_date") or "")[:10])
         except ValueError:
@@ -701,7 +808,9 @@ def build_earnings_calendar_payload(
         "market_date": market_date.isoformat(),
         "snapshot_ts": snapshot_ts,
         "universe_count": universe_count,
+        "tracked_universe_count": len(tracked_tickers),
         "requested_tickers": sorted(requested),
+        "scope": "watchlist" if requested else "tracked",
         "count": len(rows),
         "rows": rows,
         "groups": groups,
@@ -713,6 +822,10 @@ def build_earnings_calendar_payload(
             "total_events": len(rows),
             "high_risk": high_risk,
             "elevated_risk": elevated_risk,
+            "setup_ready": setup_ready,
+            "watch": watch_count,
+            "calendar_only": calendar_only,
+            "unverified": unverified_count,
             "by_session": by_session,
             "scored_rows": sum(1 for row in rows if isinstance(row.get("score"), (int, float))),
         },

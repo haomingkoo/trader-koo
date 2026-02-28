@@ -282,6 +282,7 @@
     }
     .earnings-lanes {
       display: grid;
+      grid-template-columns: 1fr;
       gap: 10px;
       margin-top: 12px;
     }
@@ -330,7 +331,7 @@
     .earnings-card:last-child { margin-bottom: 0; }
     .earnings-card-head {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
       gap: 8px;
       margin-bottom: 7px;
@@ -339,6 +340,9 @@
       font-size: 1rem;
       font-weight: 700;
       line-height: 1.1;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .earnings-score {
       border-radius: 999px;
@@ -348,6 +352,7 @@
       font-size: 0.72rem;
       font-weight: 700;
       white-space: nowrap;
+      flex: 0 0 auto;
     }
     .earnings-badges {
       display: flex;
@@ -368,11 +373,20 @@
     .earnings-badge.high { color: #ffd0d0; border-color: rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.12); }
     .earnings-badge.elevated { color: #f7e1a1; border-color: rgba(248, 194, 78, 0.35); background: rgba(248, 194, 78, 0.12); }
     .earnings-badge.normal { color: #baf0dd; border-color: rgba(56, 211, 159, 0.35); background: rgba(56, 211, 159, 0.10); }
+    .earnings-badge.setup_ready,
+    .earnings-badge.confirmed { color: #baf0dd; border-color: rgba(56, 211, 159, 0.35); background: rgba(56, 211, 159, 0.12); }
+    .earnings-badge.watch,
+    .earnings-badge.date_only,
+    .earnings-badge.snapshot { color: #f7e1a1; border-color: rgba(248, 194, 78, 0.35); background: rgba(248, 194, 78, 0.12); }
+    .earnings-badge.calendar_only,
+    .earnings-badge.unverified { color: #d2d9e6; border-color: rgba(142, 160, 189, 0.24); background: rgba(142, 160, 189, 0.10); }
     .earnings-card-sub {
       margin-top: 8px;
       font-size: 0.73rem;
       line-height: 1.35;
       color: var(--muted);
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .earnings-card-sub strong {
       color: var(--text);
@@ -1791,7 +1805,11 @@
 
     function earningsToneClass(value) {
       const raw = String(value || "").trim().toLowerCase();
-      if (raw === "bullish" || raw === "bearish" || raw === "high" || raw === "elevated" || raw === "normal") return raw;
+      if ([
+        "bullish", "bearish", "high", "elevated", "normal",
+        "setup_ready", "watch", "calendar_only",
+        "confirmed", "date_only", "snapshot", "unverified"
+      ].includes(raw)) return raw;
       return "";
     }
 
@@ -1800,6 +1818,34 @@
       if (raw === "alpha_vantage") return "Alpha Vantage";
       if (raw === "fundamentals_snapshot") return "Snapshot Fallback";
       return value || "—";
+    }
+
+    function formatRecommendationState(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (raw === "setup_ready") return "Setup Ready";
+      if (raw === "watch") return "Watch";
+      if (raw === "calendar_only") return "Calendar Only";
+      return value || "—";
+    }
+
+    function formatScheduleQuality(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (raw === "confirmed") return "Confirmed";
+      if (raw === "date_only") return "Date Only";
+      if (raw === "snapshot") return "Snapshot";
+      if (raw === "unverified") return "Unverified";
+      return value || "—";
+    }
+
+    function earningsCardSummary(row) {
+      const state = String(row && row.recommendation_state || "").trim().toLowerCase();
+      if (state === "setup_ready") {
+        return `${formatRecommendationState(row.recommendation_state)} • ${row.setup_family ? String(row.setup_family).replaceAll("_", " ") : "aligned"} • ${formatScheduleQuality(row.schedule_quality)}`;
+      }
+      if (state === "watch") {
+        return `${formatRecommendationState(row.recommendation_state)} • ${row.recommendation_note || "Needs chart confirmation before acting."}`;
+      }
+      return `${formatRecommendationState(row.recommendation_state)} • ${row.schedule_note || "Verify timing before treating this as a setup."}`;
     }
 
     function earningsRowKey(row) {
@@ -1816,19 +1862,25 @@
         <div class="earnings-detail-head">
           <div>
             <div class="earnings-detail-title">${escHtml(row.ticker || "-")} • ${escHtml(row.earnings_date || "-")} ${escHtml(String(row.earnings_session || "TBD").toUpperCase())}</div>
-            <div class="earnings-detail-subtitle">${escHtml(row.sector || "Unknown")} • ${row.score != null ? `Score ${fmt(row.score)}` : "Unscored"} • ${escHtml(`${row.days_until ?? "-"} day(s) to earnings`)}</div>
+            <div class="earnings-detail-subtitle">${escHtml(row.sector || "Unknown")} • ${row.score != null ? `Score ${fmt(row.score)}` : "Unscored"} • ${escHtml(`${row.days_until ?? "-"} day(s) to earnings`)} • ${escHtml(formatRecommendationState(row.recommendation_state))}</div>
           </div>
           <div class="mini-actions" style="margin-top:0;">
             <button type="button" id="earningsOpenChartBtn">Open Chart</button>
           </div>
         </div>
         <div class="earnings-badges">
+          <span class="earnings-badge ${earningsToneClass(row.recommendation_state)}">${escHtml(formatRecommendationState(row.recommendation_state).toUpperCase())}</span>
+          <span class="earnings-badge ${earningsToneClass(row.schedule_quality)}">${escHtml(formatScheduleQuality(row.schedule_quality).toUpperCase())}</span>
           <span class="earnings-badge ${earningsToneClass(row.signal_bias)}">${escHtml(String(row.signal_bias || "neutral").toUpperCase())}</span>
           <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(String(row.earnings_risk || "normal").toUpperCase())}</span>
           ${row.yolo_pattern ? `<span class="earnings-badge">${escHtml(String(row.yolo_pattern))}</span>` : ""}
           ${row.actionability ? `<span class="earnings-badge">${escHtml(String(row.actionability).toUpperCase())}</span>` : ""}
         </div>
         <div class="earnings-detail-grid">
+          <div class="earnings-detail-block">
+            <div class="label">Catalyst State</div>
+            <div class="earnings-detail-copy">${escHtml(row.recommendation_note || row.schedule_note || "Review timing and chart confirmation before acting.")}</div>
+          </div>
           <div class="earnings-detail-block">
             <div class="label">Observation</div>
             <div class="earnings-detail-copy">${escHtml(row.observation || "Upcoming earnings catalyst; refresh the chart and levels before acting.")}</div>
@@ -1873,15 +1925,17 @@
                 <button type="button" class="earnings-card${active}" data-earnings-key="${escHtml(key)}">
                   <div class="earnings-card-head">
                     <div class="earnings-card-ticker">${escHtml(row.ticker || "-")}</div>
-                    <div class="earnings-score">${row.score != null ? `Score ${fmt(row.score)}` : "Unscored"}</div>
+                    <div class="earnings-score">${row.score != null ? `${escHtml(String(row.setup_tier || "—"))} • ${fmt(row.score)}` : "Unscored"}</div>
                   </div>
                   <div class="earnings-badges">
+                    <span class="earnings-badge ${earningsToneClass(row.recommendation_state)}">${escHtml(formatRecommendationState(row.recommendation_state).toUpperCase())}</span>
+                    <span class="earnings-badge ${earningsToneClass(row.schedule_quality)}">${escHtml(formatScheduleQuality(row.schedule_quality).toUpperCase())}</span>
                     <span class="earnings-badge ${earningsToneClass(row.signal_bias)}">${escHtml(String(row.signal_bias || "neutral").toUpperCase())}</span>
                     <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(String(row.earnings_risk || "normal").toUpperCase())}</span>
                     <span class="earnings-badge">${escHtml(`${row.days_until ?? "-"}d`)}</span>
                   </div>
                   <div class="earnings-card-sub">
-                    ${escHtml(row.yolo_pattern || row.actionability || row.earnings_session_label || "Catalyst setup")}
+                    ${escHtml(earningsCardSummary(row))}
                   </div>
                 </button>
               `}).join("")
@@ -3133,14 +3187,15 @@
         $("earningsSummaryCards").innerHTML = [
           makeCard("Window", `${days}d`),
           makeCard("Matches", payload.count ?? 0),
+          makeCard("Setup Ready", summary.setup_ready ?? 0),
+          makeCard("Watch", summary.watch ?? 0),
+          makeCard("Calendar Only", summary.calendar_only ?? 0),
+          makeCard("Unverified", summary.unverified ?? 0),
           makeCard("Provider", formatEarningsProvider(payload.provider || "fundamentals")),
-          makeCard("High Risk", summary.high_risk ?? 0),
-          makeCard("Market Date", payload.market_date || "—"),
-          makeCard("Snapshot", payload.snapshot_ts ? String(payload.snapshot_ts).slice(0, 16).replace("T", " ") : "—"),
         ].join("");
         $("earningsSummary").textContent = watchOnly
           ? `Watchlist filter enabled. ${watchlist.length} local ticker(s) sent to the server. ${providerStatus.detail || ""}`.trim()
-          : (providerStatus.detail || "Showing upcoming earnings with external calendar + fundamentals fallback.");
+          : (`${providerStatus.detail || "Showing upcoming earnings."} Default scope is the tracked universe only. Date-only / unverified rows stay watch-only until timing is confirmed.`).trim();
         renderEarningsBoard(payload.groups || []);
         renderEarningsDetail(rows[0] || null);
         renderSimpleTable(
@@ -3148,8 +3203,10 @@
           [
             { key: "earnings_date", label: "Date" },
             { key: "earnings_session", label: "Session" },
+            { key: "schedule_quality", label: "Timing" },
             { key: "days_until", label: "Days" },
             { key: "ticker", label: "Ticker" },
+            { key: "recommendation_state", label: "State" },
             { key: "score", label: "Score" },
             { key: "signal_bias", label: "Bias" },
             { key: "earnings_risk", label: "Risk" },
