@@ -81,6 +81,8 @@ def ensure_yolo_table(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_yolo_ticker ON yolo_patterns(ticker)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_yolo_timeframe_asof ON yolo_patterns(timeframe, as_of_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_yolo_ticker_timeframe_asof ON yolo_patterns(ticker, timeframe, as_of_date)")
     conn.commit()
     # Migrations for older schema versions
     for col, defn in [
@@ -225,10 +227,10 @@ def save_detections(
     lookback_days: int,
     as_of_date: str,
 ) -> None:
-    # Only delete rows for this ticker + timeframe — preserve the other timeframe
+    # Preserve historical snapshots. Only replace rows for the same ticker/timeframe/as_of_date.
     conn.execute(
-        "DELETE FROM yolo_patterns WHERE ticker = ? AND timeframe = ?",
-        (ticker, timeframe),
+        "DELETE FROM yolo_patterns WHERE ticker = ? AND timeframe = ? AND as_of_date = ?",
+        (ticker, timeframe, as_of_date),
     )
     for d in detections:
         conn.execute(
