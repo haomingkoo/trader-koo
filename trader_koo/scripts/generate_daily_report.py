@@ -394,6 +394,7 @@ def fetch_yolo_delta(
         "timeframe": tf or "all",
         "today_asof": None,
         "prev_asof": None,
+        "history_retained": 0,
         "new_patterns": [],
         "lost_patterns": [],
         "new_count": 0,
@@ -422,11 +423,14 @@ def fetch_yolo_delta(
                 LIMIT 2
                 """
             ).fetchall()
-        if len(dates) < 2:
+        delta["history_retained"] = len(dates)
+        if not dates:
             return delta
         today_asof = dates[0][0]
-        prev_asof = dates[1][0]
         delta["today_asof"] = today_asof
+        if len(dates) < 2:
+            return delta
+        prev_asof = dates[1][0]
         delta["prev_asof"] = prev_asof
 
         def load_patterns(asof: str) -> list[dict]:

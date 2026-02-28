@@ -3023,8 +3023,11 @@
         const yoloLost = yoloDelta.lost_patterns || [];
         const wkNew = Number(yoloDeltaWeekly.new_count || 0);
         const wkLost = Number(yoloDeltaWeekly.lost_count || 0);
+        const yoloCompareText = Number(yoloDelta.history_retained || 0) === 1 && yoloDelta.today_asof
+          ? `History starts at ${yoloDelta.today_asof}`
+          : `Comparing ${yoloDelta.prev_asof || "?"} -> ${yoloDelta.today_asof || "?"}`;
         $("reportYoloDeltaSummary").textContent =
-          `Comparing ${yoloDelta.prev_asof || "?"} -> ${yoloDelta.today_asof || "?"}` +
+          `${yoloCompareText}` +
           ` • New: ${yoloDelta.new_count ?? yoloNew.length}` +
           ` • No longer detected: ${yoloDelta.lost_count ?? yoloLost.length}` +
           (yoloDeltaWeekly && Object.keys(yoloDeltaWeekly).length
@@ -3044,9 +3047,14 @@
         const persistWeekly = ((yoloPersistence.weekly || {}).rows || []).slice(0, 15);
         const pDailyMeta = yoloPersistence.daily || {};
         const pWeeklyMeta = yoloPersistence.weekly || {};
+        const dailyWindowText = Number(pDailyMeta.lookback_asof || 0) <= 1
+          ? `Daily window: 1 retained snapshot (latest ${pDailyMeta.latest_asof || "?"})`
+          : `Daily window: ${pDailyMeta.lookback_asof ?? "?"} as-ofs (latest ${pDailyMeta.latest_asof || "?"})`;
+        const weeklyWindowText = Number(pWeeklyMeta.lookback_asof || 0) <= 1
+          ? `Weekly window: 1 retained snapshot (latest ${pWeeklyMeta.latest_asof || "?"})`
+          : `Weekly window: ${pWeeklyMeta.lookback_asof ?? "?"} as-ofs (latest ${pWeeklyMeta.latest_asof || "?"})`;
         $("reportYoloPersistenceSummary").textContent =
-          `Daily window: ${pDailyMeta.lookback_asof ?? "?"} as-ofs (latest ${pDailyMeta.latest_asof || "?"})` +
-          ` • Weekly window: ${pWeeklyMeta.lookback_asof ?? "?"} as-ofs (latest ${pWeeklyMeta.latest_asof || "?"})`;
+          `${dailyWindowText} • ${weeklyWindowText}`;
         renderSimpleTable(
           "reportYoloPersistenceDailyTable",
           ["ticker", "pattern", "streak", "seen_in_lookback", "coverage_pct", "latest_confidence"],

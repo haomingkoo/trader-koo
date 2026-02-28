@@ -501,6 +501,8 @@ def _compare_label(delta: dict[str, Any]) -> str:
     today_asof = _fmt_text(delta.get("today_asof"))
     if prev_asof != "-" and today_asof != "-":
         return f"{prev_asof} -> {today_asof}"
+    if int(delta.get("history_retained") or 0) == 1 and today_asof != "-":
+        return f"Only one retained snapshot so far ({today_asof})"
     return "Insufficient history for a prior comparison."
 
 
