@@ -261,8 +261,8 @@
     }
     .earnings-board {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
     }
     .earnings-day {
       border: 1px solid var(--line);
@@ -282,7 +282,6 @@
     }
     .earnings-lanes {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 10px;
       margin-top: 12px;
     }
@@ -291,27 +290,42 @@
       border-radius: 12px;
       background: rgba(11, 15, 22, 0.42);
       padding: 10px;
-      min-height: 180px;
+    }
+    .earnings-lane-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
     }
     .earnings-lane-title {
       color: var(--muted);
       font-size: 0.74rem;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      margin-bottom: 8px;
+    }
+    .earnings-lane-count {
+      color: var(--muted);
+      font-size: 0.72rem;
     }
     .earnings-card {
       border: 1px solid rgba(142, 160, 189, 0.14);
       border-radius: 12px;
       background: rgba(18, 25, 39, 0.9);
-      padding: 10px;
+      padding: 10px 11px;
       margin-bottom: 8px;
       cursor: pointer;
       transition: border-color .15s ease, transform .15s ease;
+      width: 100%;
+      text-align: left;
     }
     .earnings-card:hover {
       border-color: rgba(106, 169, 255, 0.7);
       transform: translateY(-1px);
+    }
+    .earnings-card.active {
+      border-color: rgba(106, 169, 255, 0.88);
+      box-shadow: 0 0 0 1px rgba(106, 169, 255, 0.28) inset;
     }
     .earnings-card:last-child { margin-bottom: 0; }
     .earnings-card-head {
@@ -319,7 +333,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 6px;
+      margin-bottom: 7px;
     }
     .earnings-card-ticker {
       font-size: 1rem;
@@ -339,7 +353,6 @@
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      margin-bottom: 8px;
     }
     .earnings-badge {
       border-radius: 999px;
@@ -355,14 +368,13 @@
     .earnings-badge.high { color: #ffd0d0; border-color: rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.12); }
     .earnings-badge.elevated { color: #f7e1a1; border-color: rgba(248, 194, 78, 0.35); background: rgba(248, 194, 78, 0.12); }
     .earnings-badge.normal { color: #baf0dd; border-color: rgba(56, 211, 159, 0.35); background: rgba(56, 211, 159, 0.10); }
-    .earnings-card-copy {
-      font-size: 0.76rem;
-      line-height: 1.45;
+    .earnings-card-sub {
+      margin-top: 8px;
+      font-size: 0.73rem;
+      line-height: 1.35;
       color: var(--muted);
-      display: grid;
-      gap: 6px;
     }
-    .earnings-card-copy strong {
+    .earnings-card-sub strong {
       color: var(--text);
       font-weight: 700;
     }
@@ -371,6 +383,49 @@
       font-size: 0.75rem;
       line-height: 1.45;
       padding-top: 4px;
+    }
+    .earnings-detail {
+      display: grid;
+      gap: 12px;
+    }
+    .earnings-detail-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .earnings-detail-title {
+      font-size: 1.05rem;
+      font-weight: 800;
+      line-height: 1.15;
+      margin: 0;
+    }
+    .earnings-detail-subtitle {
+      margin-top: 4px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .earnings-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .earnings-detail-block {
+      border: 1px solid rgba(142, 160, 189, 0.14);
+      border-radius: 12px;
+      background: rgba(11, 15, 22, 0.42);
+      padding: 12px;
+    }
+    .earnings-detail-block .label {
+      margin-bottom: 6px;
+    }
+    .earnings-detail-copy {
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: var(--text);
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .report-list {
       margin: 0;
@@ -923,16 +978,16 @@
           <input id="ticker" list="tickerList" value="SPY" placeholder="Ticker e.g. NVDA" />
           <datalist id="tickerList"></datalist>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
-            <input id="showTrendlines" type="checkbox" style="width:auto; padding:0; margin:0;" />
-            <span style="font-size:0.8rem; color:var(--muted);">Show Trendlines</span>
+            <input id="showTrendlines" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
+            <span id="showTrendlinesLabel" style="font-size:0.8rem; color:var(--muted);">Trendlines</span>
           </label>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
             <input id="showPatterns" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
-            <span style="font-size:0.8rem; color:var(--muted);">Show Patterns</span>
+            <span id="showPatternsLabel" style="font-size:0.8rem; color:var(--muted);">Pattern Boxes</span>
           </label>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
             <input id="showRuleClassLines" type="checkbox" checked style="width:auto; padding:0; margin:0;" />
-            <span style="font-size:0.8rem; color:var(--muted);">Rule/Hybrid Lines</span>
+            <span id="showRuleClassLinesLabel" style="font-size:0.8rem; color:var(--muted);">Rule/Hybrid Lines</span>
           </label>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:6px;">
             <input id="showBollinger" type="checkbox" style="width:auto; padding:0; margin:0;" />
@@ -1173,6 +1228,10 @@
         <div class="label" style="margin-bottom:8px;">Calendar View</div>
         <div id="earningsBoard" class="earnings-board"></div>
       </div>
+      <div class="panel" id="earningsDetailWrap" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Selected Catalyst</div>
+        <div id="earningsDetail" class="earnings-detail"></div>
+      </div>
       <div class="panel hidden" id="earningsTableWrap">
         <div class="label" style="margin-bottom:8px;">List View</div>
         <table id="earningsTable"></table>
@@ -1323,6 +1382,9 @@
     let REPORT_SETUP_SHOW_MORE = false;
     let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
     let EARNINGS_VIEW_MODE = "calendar";
+    let LAST_EARNINGS_ROWS = [];
+    let LAST_EARNINGS_LOOKUP = {};
+    let LAST_EARNINGS_SELECTED = "";
 
     function fmt(v, d = 2) {
       if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
@@ -1733,20 +1795,82 @@
       return "";
     }
 
+    function formatEarningsProvider(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (raw === "alpha_vantage") return "Alpha Vantage";
+      if (raw === "fundamentals_snapshot") return "Snapshot Fallback";
+      return value || "—";
+    }
+
+    function earningsRowKey(row) {
+      return [row && row.earnings_date, row && row.earnings_session, row && row.ticker].join("|");
+    }
+
+    function renderEarningsDetail(row) {
+      const detail = $("earningsDetail");
+      if (!row) {
+        detail.innerHTML = `<div class="earnings-lane-empty">Select a catalyst card to inspect the setup, action, and risk before opening the chart.</div>`;
+        return;
+      }
+      detail.innerHTML = `
+        <div class="earnings-detail-head">
+          <div>
+            <div class="earnings-detail-title">${escHtml(row.ticker || "-")} • ${escHtml(row.earnings_date || "-")} ${escHtml(String(row.earnings_session || "TBD").toUpperCase())}</div>
+            <div class="earnings-detail-subtitle">${escHtml(row.sector || "Unknown")} • ${row.score != null ? `Score ${fmt(row.score)}` : "Unscored"} • ${escHtml(`${row.days_until ?? "-"} day(s) to earnings`)}</div>
+          </div>
+          <div class="mini-actions" style="margin-top:0;">
+            <button type="button" id="earningsOpenChartBtn">Open Chart</button>
+          </div>
+        </div>
+        <div class="earnings-badges">
+          <span class="earnings-badge ${earningsToneClass(row.signal_bias)}">${escHtml(String(row.signal_bias || "neutral").toUpperCase())}</span>
+          <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(String(row.earnings_risk || "normal").toUpperCase())}</span>
+          ${row.yolo_pattern ? `<span class="earnings-badge">${escHtml(String(row.yolo_pattern))}</span>` : ""}
+          ${row.actionability ? `<span class="earnings-badge">${escHtml(String(row.actionability).toUpperCase())}</span>` : ""}
+        </div>
+        <div class="earnings-detail-grid">
+          <div class="earnings-detail-block">
+            <div class="label">Observation</div>
+            <div class="earnings-detail-copy">${escHtml(row.observation || "Upcoming earnings catalyst; refresh the chart and levels before acting.")}</div>
+          </div>
+          <div class="earnings-detail-block">
+            <div class="label">Reasonable Action</div>
+            <div class="earnings-detail-copy">${escHtml(row.action || "Watch into the event window. Do not force a chase ahead of the print.")}</div>
+          </div>
+          <div class="earnings-detail-block">
+            <div class="label">Technical Read</div>
+            <div class="earnings-detail-copy">${escHtml(row.technical_read || "Review chart structure, support/resistance, and event risk together before acting.")}</div>
+          </div>
+          <div class="earnings-detail-block">
+            <div class="label">Risk Note</div>
+            <div class="earnings-detail-copy">${escHtml(row.risk_note || row.earnings_risk_note || "Earnings can gap through levels; size accordingly.")}</div>
+          </div>
+        </div>
+      `;
+      const btn = $("earningsOpenChartBtn");
+      if (btn) btn.addEventListener("click", () => row.ticker ? loadTickerQuick(row.ticker) : null);
+    }
+
     function renderEarningsBoard(groups) {
       const board = $("earningsBoard");
       const dayGroups = Array.isArray(groups) ? groups : [];
       if (!dayGroups.length) {
         board.innerHTML = `<div class="earnings-day"><div class="earnings-lane-empty">No upcoming earnings found for the selected window.</div></div>`;
+        renderEarningsDetail(null);
         return;
       }
       board.innerHTML = dayGroups.map((group) => {
         const sessions = Array.isArray(group.sessions) ? group.sessions : [];
-        const lanes = sessions.map((session) => {
+        const populatedSessions = sessions.filter((session) => Array.isArray(session.rows) && session.rows.length);
+        const activeSessions = populatedSessions.length ? populatedSessions : sessions;
+        const lanes = activeSessions.map((session) => {
           const rows = Array.isArray(session.rows) ? session.rows : [];
           const body = rows.length
-            ? rows.slice(0, 6).map((row) => `
-                <div class="earnings-card" data-ticker="${escHtml(row.ticker || "")}">
+            ? rows.slice(0, 8).map((row) => {
+                const key = earningsRowKey(row);
+                const active = key === LAST_EARNINGS_SELECTED ? ' active' : '';
+                return `
+                <button type="button" class="earnings-card${active}" data-earnings-key="${escHtml(key)}">
                   <div class="earnings-card-head">
                     <div class="earnings-card-ticker">${escHtml(row.ticker || "-")}</div>
                     <div class="earnings-score">${row.score != null ? `Score ${fmt(row.score)}` : "Unscored"}</div>
@@ -1756,16 +1880,18 @@
                     <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(String(row.earnings_risk || "normal").toUpperCase())}</span>
                     <span class="earnings-badge">${escHtml(`${row.days_until ?? "-"}d`)}</span>
                   </div>
-                  <div class="earnings-card-copy">
-                    <div><strong>Observation:</strong> ${escHtml(row.observation || "Upcoming catalyst; refresh the chart before acting.")}</div>
-                    <div><strong>Action:</strong> ${escHtml(row.action || "Watch into the event window; do not chase blindly.")}</div>
+                  <div class="earnings-card-sub">
+                    ${escHtml(row.yolo_pattern || row.actionability || row.earnings_session_label || "Catalyst setup")}
                   </div>
-                </div>
-              `).join("")
+                </button>
+              `}).join("")
             : `<div class="earnings-lane-empty">No names in this session.</div>`;
           return `
             <div class="earnings-lane">
-              <div class="earnings-lane-title">${escHtml(session.label || session.code || "TBD")}</div>
+              <div class="earnings-lane-head">
+                <div class="earnings-lane-title">${escHtml(session.label || session.code || "TBD")}</div>
+                <div class="earnings-lane-count">${escHtml(`${session.count ?? rows.length} name(s)`)}</div>
+              </div>
               ${body}
             </div>
           `;
@@ -1778,10 +1904,13 @@
           </div>
         `;
       }).join("");
-      board.querySelectorAll(".earnings-card[data-ticker]").forEach((node) => {
+      board.querySelectorAll(".earnings-card[data-earnings-key]").forEach((node) => {
         node.addEventListener("click", () => {
-          const ticker = node.getAttribute("data-ticker");
-          if (ticker) loadTickerQuick(ticker);
+          const key = node.getAttribute("data-earnings-key") || "";
+          const row = LAST_EARNINGS_LOOKUP[key];
+          LAST_EARNINGS_SELECTED = key;
+          renderEarningsBoard(dayGroups);
+          renderEarningsDetail(row || null);
         });
       });
     }
@@ -2398,6 +2527,31 @@
       });
     }
 
+    function syncChartToggleState(payload) {
+      const trendCount = Array.isArray(payload?.trendlines) ? payload.trendlines.length : 0;
+      const overlayCount = Array.isArray(payload?.pattern_overlays)
+        ? payload.pattern_overlays.filter((p) => String((p && p.source) || "") !== "cv_proxy").length
+        : 0;
+      const fallbackPatternCount = Array.isArray(payload?.patterns) ? payload.patterns.length : 0;
+      const visibleRuleCount = overlayCount || fallbackPatternCount;
+      const yoloCount = Array.isArray(payload?.yolo_patterns) ? payload.yolo_patterns.length : 0;
+
+      const setToggle = (inputId, labelId, baseText, count) => {
+        const input = $(inputId);
+        const label = $(labelId);
+        if (!input || !label) return;
+        const hasData = count > 0;
+        input.disabled = !hasData;
+        if (!hasData) input.checked = false;
+        label.textContent = `${baseText}${hasData ? ` (${count})` : " (none)"}`;
+        label.style.opacity = hasData ? "1" : "0.55";
+      };
+
+      setToggle("showTrendlines", "showTrendlinesLabel", "Trendlines", trendCount);
+      setToggle("showPatterns", "showPatternsLabel", "YOLO Boxes", yoloCount);
+      setToggle("showRuleClassLines", "showRuleClassLinesLabel", "Rule/Hybrid Lines", visibleRuleCount);
+    }
+
     function setOpportunityFilters({view, minDiscount, maxPeg, overvaluedThreshold, limitRows}) {
       if (view !== undefined) $("opView").value = String(view);
       if (minDiscount !== undefined) $("minDiscount").value = String(minDiscount);
@@ -2482,6 +2636,7 @@
         const resp = await apiFetch(`${base}/api/dashboard/${ticker}?months=${months}`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const payload = await resp.json();
+        syncChartToggleState(payload);
         fillCards(payload);
         renderChart(payload);
         renderSimpleTable("levelsTable", ["type", "level", "zone_low", "zone_high", "tier", "touches", "last_touch_date"], payload.levels || [], false, null, { sortable: true });
@@ -2968,6 +3123,9 @@
         const rows = payload.rows || [];
         const summary = payload.summary || {};
         const providerStatus = payload.provider_status || {};
+        LAST_EARNINGS_ROWS = rows;
+        LAST_EARNINGS_LOOKUP = Object.fromEntries(rows.map((row) => [earningsRowKey(row), row]));
+        LAST_EARNINGS_SELECTED = rows.length ? earningsRowKey(rows[0]) : "";
         $("earningsNoData").style.display = rows.length ? "none" : "block";
         $("earningsStatus").textContent = payload.detail || `As of ${payload.market_date || "—"}`;
         const makeCard = (label, val) =>
@@ -2975,7 +3133,7 @@
         $("earningsSummaryCards").innerHTML = [
           makeCard("Window", `${days}d`),
           makeCard("Matches", payload.count ?? 0),
-          makeCard("Provider", payload.provider || "fundamentals"),
+          makeCard("Provider", formatEarningsProvider(payload.provider || "fundamentals")),
           makeCard("High Risk", summary.high_risk ?? 0),
           makeCard("Market Date", payload.market_date || "—"),
           makeCard("Snapshot", payload.snapshot_ts ? String(payload.snapshot_ts).slice(0, 16).replace("T", " ") : "—"),
@@ -2984,6 +3142,7 @@
           ? `Watchlist filter enabled. ${watchlist.length} local ticker(s) sent to the server. ${providerStatus.detail || ""}`.trim()
           : (providerStatus.detail || "Showing upcoming earnings with external calendar + fundamentals fallback.");
         renderEarningsBoard(payload.groups || []);
+        renderEarningsDetail(rows[0] || null);
         renderSimpleTable(
           "earningsTable",
           [
@@ -3011,7 +3170,11 @@
         $("earningsStatus").textContent = `Error: ${err.message}`;
         $("earningsSummaryCards").innerHTML = "";
         $("earningsSummary").textContent = "";
+        LAST_EARNINGS_ROWS = [];
+        LAST_EARNINGS_LOOKUP = {};
+        LAST_EARNINGS_SELECTED = "";
         renderEarningsBoard([]);
+        renderEarningsDetail(null);
         renderSimpleTable("earningsTable", ["ticker", "earnings_date", "earnings_session"], []);
       }
     }
