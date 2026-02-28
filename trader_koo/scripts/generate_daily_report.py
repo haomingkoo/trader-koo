@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from trader_koo.report_email import (
+    build_report_email_bodies,
+    build_report_email_subject,
+    report_email_app_url,
+)
+
 
 MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
 try:
@@ -267,13 +273,14 @@ def _email_transport() -> str:
     return raw
 
 
-def _send_resend_email(subject: str, text: str, resend: dict[str, Any]) -> None:
+def _send_resend_email(subject: str, text: str, html_body: str, resend: dict[str, Any]) -> None:
     user_agent = os.getenv("TRADER_KOO_EMAIL_USER_AGENT", "trader-koo/1.0")
     payload = {
         "from": resend["from_email"],
         "to": [resend["to_email"]],
         "subject": subject,
         "text": text,
+        "html": html_body,
     }
     req = urllib.request.Request(
         "https://api.resend.com/emails",
@@ -322,52 +329,15 @@ def send_report_email(report: dict[str, Any], md_text: str) -> None:
         raise RuntimeError(f"Missing email env vars for {transport}: {', '.join(missing)}")
 
     generated = report.get("generated_ts", "unknown")
-    report_kind = _normalize_report_kind((report.get("meta") or {}).get("report_kind"))
-    cadence_label = "WEEKLY" if report_kind == "weekly" else "DAILY"
-    ok = report.get("ok", False)
-    status = "OK" if ok else "WARN"
-    warnings = report.get("warnings", [])
-    yolo = report.get("yolo", {}) if isinstance(report.get("yolo"), dict) else {}
-    delta_daily = yolo.get("delta_daily") or yolo.get("delta") or {}
-    delta_weekly = yolo.get("delta_weekly") or {}
-    primary_delta = delta_weekly if report_kind == "weekly" else delta_daily
-    primary_tf = "weekly" if report_kind == "weekly" else "daily"
-    new_count = primary_delta.get("new_count", 0)
-    lost_count = primary_delta.get("lost_count", 0)
-
-    subject = f"[trader_koo] {cadence_label} {status} | {generated[:10]} | +{new_count} new -{lost_count} lost {primary_tf} patterns"
-
-    body_lines = [
-        f"trader_koo {report_kind} report — {generated}",
-        f"Status: {status}",
-    ]
-    if warnings:
-        body_lines.append(f"Warnings: {', '.join(warnings)}")
-    body_lines += [
-        "",
-        f"YOLO {primary_tf} delta: +{new_count} new patterns, -{lost_count} lost patterns",
-        f"  comparing: {primary_delta.get('prev_asof', '?')} → {primary_delta.get('today_asof', '?')}",
-    ]
-    if delta_daily:
-        body_lines += [
-            f"YOLO daily delta: +{delta_daily.get('new_count', 0)} / -{delta_daily.get('lost_count', 0)} "
-            f"({delta_daily.get('prev_asof', '?')} → {delta_daily.get('today_asof', '?')})",
-        ]
-    if delta_weekly:
-        body_lines += [
-            f"YOLO weekly delta: +{delta_weekly.get('new_count', 0)} / -{delta_weekly.get('lost_count', 0)} "
-            f"({delta_weekly.get('prev_asof', '?')} → {delta_weekly.get('today_asof', '?')})",
-        ]
-    body_lines += [
-        "",
-        "Full report markdown below.",
-        "",
+    subject = build_report_email_subject(report)
+    text_body, html_body = build_report_email_bodies(
+        report,
         md_text,
-    ]
-    text_body = "\n".join(body_lines)
+        app_url=report_email_app_url(),
+    )
 
     if transport == "resend":
-        _send_resend_email(subject=subject, text=text_body, resend=resend)
+        _send_resend_email(subject=subject, text=text_body, html_body=html_body, resend=resend)
         return
 
     msg = EmailMessage()
@@ -375,6 +345,7 @@ def send_report_email(report: dict[str, Any], md_text: str) -> None:
     msg["From"] = smtp["from_email"]
     msg["To"] = smtp["to_email"]
     msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
     msg.add_attachment(md_text.encode(), maintype="text", subtype="markdown",
                        filename=f"daily_report_{generated[:10]}.md")
 
