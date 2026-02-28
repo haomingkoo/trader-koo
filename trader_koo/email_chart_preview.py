@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
+from trader_koo.catalyst_data import get_ticker_earnings_markers
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
 from trader_koo.scripts.run_yolo_patterns import render_chart, resample_to_weekly
 from trader_koo.structure.levels import LevelConfig, add_fallback_levels, build_levels_from_pivots, select_target_levels
@@ -25,6 +26,11 @@ RESISTANCE_COLOR = (249, 115, 22)
 BOX_BULL = (45, 212, 191)
 BOX_BEAR = (248, 113, 113)
 BOX_NEUTRAL = (250, 204, 21)
+EARNINGS_COLORS = {
+    "BMO": (14, 165, 233),
+    "TBD": (148, 163, 184),
+    "AMC": (168, 85, 247),
+}
 
 
 def _chart_secret() -> str:
@@ -138,8 +144,21 @@ def build_email_chart_preview_png(
     font, small_font = _load_fonts()
     dates = [str(v) for v in view_df["date"].tolist()]
     yolo = _load_yolo_patterns(conn, symbol, tf, dates)
+    marker_market_date = dt.date.today()
+    try:
+        marker_market_date = dt.date.fromisoformat(str(dates[-1])[:10])
+    except Exception:
+        pass
+    earnings_markers = get_ticker_earnings_markers(
+        conn,
+        ticker=symbol,
+        market_date=marker_market_date,
+        forward_days=120,
+        max_markers=2,
+    )
 
     _draw_levels(draw, image, axes_info, levels, font, small_font)
+    _draw_earnings_markers(draw, axes_info, dates, earnings_markers, font, small_font)
     _draw_yolo_boxes(draw, axes_info, dates, yolo, font)
     _draw_header(draw, image, symbol, tf, last_close, font, small_font)
 
@@ -298,6 +317,37 @@ def _draw_yolo_boxes(
         label_w = int(min(260, max(90, len(label) * 8)))
         draw.rounded_rectangle((left + 6, top + 6, left + 6 + label_w, top + 30), radius=8, fill=(15, 23, 42, 210))
         draw.text((left + 12, top + 10), label, font=font, fill=(*color, 255))
+
+
+def _draw_earnings_markers(
+    draw: ImageDraw.ImageDraw,
+    axes_info: dict[str, Any],
+    dates: list[str],
+    markers: list[dict[str, Any]],
+    font: ImageFont.ImageFont,
+    small_font: ImageFont.ImageFont,
+) -> None:
+    if not markers:
+        return
+    axis_top = float(axes_info["fig_h_px"]) - float(axes_info["ax_y1"])
+    axis_bottom = float(axes_info["fig_h_px"]) - float(axes_info["ax_y0"])
+    for idx, marker in enumerate(markers[:2]):
+        marker_date = str(marker.get("date") or "").strip()
+        if not marker_date:
+            continue
+        try:
+            x = _date_to_px_x(marker_date, dates, axes_info)
+        except Exception:
+            continue
+        session = str(marker.get("session") or "TBD").upper()
+        color = EARNINGS_COLORS.get(session, EARNINGS_COLORS["TBD"])
+        draw.line((x, axis_top, x, axis_bottom), fill=(*color, 210), width=2)
+        label = f"E {session}"
+        badge_w = 58
+        x0 = max(float(axes_info["ax_x0"]) + 6, min(x - (badge_w / 2), float(axes_info["ax_x1"]) - badge_w - 6))
+        y0 = axis_top + 8 + idx * 26
+        draw.rounded_rectangle((x0, y0, x0 + badge_w, y0 + 20), radius=8, fill=(15, 23, 42, 225), outline=(*color, 220))
+        draw.text((x0 + 8, y0 + 4), label, font=small_font, fill=(*color, 255))
 
 
 def _date_to_px_x(value: Any, dates: list[str], axes_info: dict[str, Any]) -> float:

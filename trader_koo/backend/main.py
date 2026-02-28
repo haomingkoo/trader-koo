@@ -27,7 +27,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
@@ -38,6 +38,14 @@ from trader_koo.cv.compare import HybridCVCompareConfig, compare_hybrid_vs_cv
 from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
+from trader_koo.catalyst_data import (
+    build_earnings_calendar_payload,
+    get_ticker_earnings_markers,
+)
+from trader_koo.email_chart_preview import (
+    build_email_chart_preview_png,
+    verify_chart_preview_signature,
+)
 from trader_koo.report_email import (
     build_report_email_bodies,
     build_report_email_subject,
@@ -797,64 +805,6 @@ def _find_timeframe_summary(rows: Any, timeframe: str) -> dict[str, Any]:
         if isinstance(row, dict) and str(row.get("timeframe", "")).strip().lower() == target:
             return row
     return {}
-
-
-def _extract_earnings_value(raw_obj: dict[str, Any]) -> str | None:
-    for key in ("Earnings", "Earnings Date", "earnings", "earningsDate"):
-        value = raw_obj.get(key)
-        if value not in {None, ""}:
-            out = str(value).strip()
-            if out and out != "-":
-                return out
-    return None
-
-
-def _parse_earnings_value(raw_value: Any, market_date: dt.date) -> dict[str, Any]:
-    raw = str(raw_value or "").strip()
-    if not raw or raw == "-":
-        return {}
-    upper = raw.upper()
-    session = "TNS"
-    if "BMO" in upper or "BEFORE OPEN" in upper or "BEFORE MARKET OPEN" in upper:
-        session = "BMO"
-    elif "AMC" in upper or "AFTER CLOSE" in upper or "AFTER MARKET CLOSE" in upper:
-        session = "AMC"
-
-    cleaned = upper
-    for token in ("BMO", "AMC", "BEFORE OPEN", "BEFORE MARKET OPEN", "AFTER CLOSE", "AFTER MARKET CLOSE", "/", "|"):
-        cleaned = cleaned.replace(token, " ")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
-
-    parsed_date: dt.date | None = None
-    if cleaned.startswith("TODAY"):
-        parsed_date = market_date
-    elif cleaned.startswith("TOMORROW"):
-        parsed_date = market_date + dt.timedelta(days=1)
-    else:
-        fragments = [cleaned]
-        if "," in cleaned:
-            fragments.append(cleaned.replace(",", ""))
-        for frag in fragments:
-            for fmt in ("%b %d %Y", "%B %d %Y", "%b %d", "%B %d"):
-                try:
-                    parsed = dt.datetime.strptime(frag, fmt)
-                except ValueError:
-                    continue
-                year = parsed.year if "%Y" in fmt else market_date.year
-                parsed_date = dt.date(year, parsed.month, parsed.day)
-                if "%Y" not in fmt and parsed_date < (market_date - dt.timedelta(days=45)):
-                    parsed_date = dt.date(year + 1, parsed.month, parsed.day)
-                break
-            if parsed_date is not None:
-                break
-
-    days_until = (parsed_date - market_date).days if parsed_date is not None else None
-    return {
-        "earnings_raw": raw,
-        "earnings_date": parsed_date.isoformat() if parsed_date is not None else None,
-        "earnings_session": session,
-        "days_until": days_until,
-    }
 
 
 def _read_latest_ingest_run() -> dict[str, Any] | None:
@@ -1732,6 +1682,14 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
         "atr_pct",
     ]
     chart_rows = chart_rows[[c for c in chart_cols if c in chart_rows.columns]].copy()
+    market_date = dt.datetime.now(MARKET_TZ).date()
+    earnings_markers = get_ticker_earnings_markers(
+        conn,
+        ticker=ticker,
+        market_date=market_date,
+        forward_days=120,
+        max_markers=3,
+    )
 
     return {
         "ticker": ticker,
@@ -1749,6 +1707,7 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
         "hybrid_cv_compare": _serialize_df(hybrid_cv_compare),
         "pattern_overlays": _serialize_df(pattern_overlays),
         "yolo_patterns": get_yolo_patterns(conn, ticker),
+        "earnings_markers": earnings_markers,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
             "config": {
@@ -2290,17 +2249,6 @@ def earnings_calendar(
 ) -> dict[str, Any]:
     conn = get_conn()
     try:
-        snapshot_ts, universe_count = select_fund_snapshot(conn, min_complete_tickers=400)
-        if snapshot_ts is None:
-            return {
-                "ok": False,
-                "snapshot_ts": None,
-                "market_date": None,
-                "count": 0,
-                "rows": [],
-                "detail": "No fundamentals snapshot available.",
-            }
-
         _, latest_report = _latest_daily_report_json(REPORT_DIR)
         market_date = dt.datetime.now(ZoneInfo(_MARKET_TZ_NAME)).date()
         if isinstance(latest_report, dict):
@@ -2316,98 +2264,55 @@ def earnings_calendar(
             for token in str(tickers or "").split(",")
             if str(token or "").strip()
         }
-        report_setup_rows = []
+        setup_lookup = {}
         if isinstance(latest_report, dict):
-            report_setup_rows = (((latest_report.get("signals") or {}).get("setup_quality_top")) or [])
-        setup_map = {
-            str(row.get("ticker") or "").upper(): row
-            for row in report_setup_rows
-            if isinstance(row, dict) and row.get("ticker")
-        }
-
-        rows = conn.execute(
-            """
-            SELECT ticker, price, discount_pct, peg, raw_json
-            FROM finviz_fundamentals
-            WHERE snapshot_ts = ?
-            """,
-            (snapshot_ts,),
-        ).fetchall()
-
-        out: list[dict[str, Any]] = []
-        max_date = market_date + dt.timedelta(days=days)
-        for row in rows:
-            ticker = str(row["ticker"] or "").upper().strip()
-            if not ticker:
-                continue
-            if requested and ticker not in requested:
-                continue
-            raw_json = row["raw_json"]
-            if not raw_json:
-                continue
-            try:
-                raw_obj = json.loads(str(raw_json))
-            except Exception:
-                continue
-            if not isinstance(raw_obj, dict):
-                continue
-            earnings_raw = _extract_earnings_value(raw_obj)
-            if not earnings_raw:
-                continue
-            parsed = _parse_earnings_value(earnings_raw, market_date)
-            earnings_date_raw = parsed.get("earnings_date")
-            if not earnings_date_raw:
-                continue
-            try:
-                earnings_date = dt.date.fromisoformat(str(earnings_date_raw))
-            except ValueError:
-                continue
-            if earnings_date < market_date or earnings_date > max_date:
-                continue
-            setup = setup_map.get(ticker, {})
-            out.append(
-                {
-                    "ticker": ticker,
-                    "earnings_raw": earnings_raw,
-                    "earnings_date": earnings_date.isoformat(),
-                    "earnings_session": parsed.get("earnings_session"),
-                    "days_until": parsed.get("days_until"),
-                    "price": _to_float(row["price"]),
-                    "discount_pct": _to_float(row["discount_pct"]),
-                    "peg": _to_float(row["peg"]),
-                    "sector": raw_obj.get("Sector") or raw_obj.get("sector") or "Unknown",
-                    "industry": raw_obj.get("Industry") or raw_obj.get("industry"),
-                    "score": setup.get("score"),
-                    "signal_bias": setup.get("signal_bias"),
-                    "yolo_pattern": setup.get("yolo_pattern"),
-                    "yolo_confidence": setup.get("yolo_confidence"),
-                    "observation": setup.get("observation"),
-                    "action": setup.get("action"),
-                }
-            )
-
-        session_rank = {"BMO": 0, "TNS": 1, "AMC": 2}
-        out.sort(
-            key=lambda r: (
-                str(r.get("earnings_date") or ""),
-                session_rank.get(str(r.get("earnings_session") or "TNS"), 1),
-                -(float(r.get("score") or 0.0)),
-                str(r.get("ticker") or ""),
-            )
+            setup_lookup = (((latest_report.get("signals") or {}).get("setup_quality_lookup")) or {})
+        payload = build_earnings_calendar_payload(
+            conn,
+            market_date=market_date,
+            days=days,
+            limit=limit,
+            tickers=requested,
+            setup_map=setup_lookup,
         )
-        return {
-            "ok": True,
-            "snapshot_ts": snapshot_ts,
-            "market_date": market_date.isoformat(),
-            "universe_count": universe_count,
-            "requested_tickers": sorted(requested),
-            "count": len(out[:limit]),
-            "rows": out[:limit],
-            "detail": None if out else f"No upcoming earnings found in the next {days} days.",
-            "report_generated_ts": (latest_report or {}).get("generated_ts") if isinstance(latest_report, dict) else None,
-        }
+        payload["report_generated_ts"] = (latest_report or {}).get("generated_ts") if isinstance(latest_report, dict) else None
+        return payload
     finally:
         conn.close()
+
+
+@app.get("/api/email/chart-preview")
+def email_chart_preview(
+    ticker: str = Query(..., min_length=1, max_length=16),
+    timeframe: str = Query(default="daily"),
+    report_ts: str | None = Query(default=None),
+    exp: int = Query(...),
+    sig: str = Query(..., min_length=32, max_length=128),
+) -> Response:
+    if not verify_chart_preview_signature(
+        ticker=ticker,
+        timeframe=timeframe,
+        report_ts=report_ts,
+        exp=exp,
+        sig=sig,
+    ):
+        raise HTTPException(status_code=403, detail="Invalid chart preview signature")
+    conn = get_conn()
+    try:
+        png = build_email_chart_preview_png(
+            conn,
+            ticker=ticker,
+            timeframe=timeframe,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        conn.close()
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @app.get("/api/admin/daily-report")
