@@ -2406,7 +2406,7 @@
       const close = chart.map(r => Number(r.close));
       const vol = chart.map(r => Number(r.volume || 0));
       const volColor = chart.map(r => Number(r.close) >= Number(r.open) ? "rgba(56,211,159,0.7)" : "rgba(255,107,107,0.7)");
-      const missingWeekdayBreaks = buildMissingWeekdayRangebreakValues(x);
+      const missingWeekdayBreaks = isWeeklyChart ? [] : buildMissingWeekdayRangebreakValues(x);
 
       const ma = (arr, n) => arr.map((_, i) => {
         if (i < n - 1) return null;
@@ -2723,7 +2723,8 @@
           if (n.includes("top") || n.includes("m_head") || n.includes("shoulders top")) return yoloColorMap.bear;
           return yoloColorMap.neutral;
         };
-        // Separate daily vs weekly so weekly renders with a wider, dashed border
+        // Keep weekly charts timeframe-aligned: weekly candles should not be cluttered
+        // by daily YOLO boxes. Daily view may still show both.
         const dailyPatterns = yoloPatterns.filter(p => (p.timeframe || "daily") === "daily");
         const weeklyPatterns = yoloPatterns.filter(p => p.timeframe === "weekly");
 
@@ -2780,8 +2781,12 @@
           });
         };
 
-        renderYoloGroup(dailyPatterns, false);
-        renderYoloGroup(weeklyPatterns, true);
+        if (isWeeklyChart) {
+          renderYoloGroup(weeklyPatterns, true);
+        } else {
+          renderYoloGroup(dailyPatterns, false);
+          renderYoloGroup(weeklyPatterns, true);
+        }
       }
 
       const layout = {
@@ -2797,10 +2802,12 @@
           domain: [0, 1], anchor: "y", rangeslider: {visible: false},
           showgrid: true, gridcolor: "#25334f",
           range: defaultX0 && defaultX1 ? [defaultX0, defaultX1] : undefined,
-          rangebreaks: [
-            {bounds: ["sat", "mon"]},
-            ...(missingWeekdayBreaks.length ? [{values: missingWeekdayBreaks}] : []),
-          ],
+          rangebreaks: isWeeklyChart
+            ? [{bounds: ["sat", "mon"]}]
+            : [
+                {bounds: ["sat", "mon"]},
+                ...(missingWeekdayBreaks.length ? [{values: missingWeekdayBreaks}] : []),
+              ],
           rangeselector: {
             bgcolor: "#e9eef8",
             activecolor: "#6aa9ff",

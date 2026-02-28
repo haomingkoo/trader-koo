@@ -42,6 +42,11 @@ from trader_koo.cv.compare import HybridCVCompareConfig, compare_hybrid_vs_cv
 from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
+from trader_koo.report_email import (
+    build_report_email_bodies,
+    build_report_email_subject,
+    report_email_app_url,
+)
 from trader_koo.structure.gaps import GapConfig, detect_gaps, select_gaps_for_display
 from trader_koo.structure.hybrid_patterns import HybridPatternConfig, score_hybrid_patterns
 from trader_koo.structure.levels import LevelConfig, add_fallback_levels, build_levels_from_pivots, select_target_levels
@@ -2153,7 +2158,14 @@ def _email_transport() -> str:
     return raw
 
 
-def _send_resend_email(subject: str, text: str, recipient: str, resend: dict[str, Any]) -> None:
+def _send_resend_email(
+    subject: str,
+    text: str,
+    recipient: str,
+    resend: dict[str, Any],
+    *,
+    html_body: str | None = None,
+) -> None:
     user_agent = os.getenv("TRADER_KOO_EMAIL_USER_AGENT", "trader-koo/1.0")
     payload = {
         "from": resend["from_email"],
@@ -2161,6 +2173,8 @@ def _send_resend_email(subject: str, text: str, recipient: str, resend: dict[str
         "subject": subject,
         "text": text,
     }
+    if html_body:
+        payload["html"] = html_body
     req = urllib.request.Request(
         "https://api.resend.com/emails",
         data=json.dumps(payload).encode("utf-8"),
@@ -3424,34 +3438,15 @@ def email_latest_report(
         except Exception:
             md_text = ""
 
-    generated = (
-        str(latest_payload.get("generated_at_utc") or latest_payload.get("snapshot_ts") or "").strip()
-        or dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    generated = str(latest_payload.get("generated_ts") or latest_payload.get("generated_at_utc") or latest_payload.get("snapshot_ts") or "").strip()
+    if not generated:
+        generated = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    subject = build_report_email_subject(latest_payload)
+    text_body, html_body = build_report_email_bodies(
+        latest_payload,
+        md_text if include_markdown else "",
+        app_url=report_email_app_url(),
     )
-
-    status_block = latest_payload.get("status", {}) if isinstance(latest_payload, dict) else {}
-    yolo_block = latest_payload.get("yolo", {}) if isinstance(latest_payload, dict) else {}
-    counts_block = latest_payload.get("counts", {}) if isinstance(latest_payload, dict) else {}
-
-    lines = [
-        f"trader_koo daily report ({generated})",
-        "",
-        "Quick summary:",
-        f"- tracked_tickers: {counts_block.get('tracked_tickers', 'n/a')}",
-        f"- price_rows: {counts_block.get('price_rows', 'n/a')}",
-        f"- fundamentals_rows: {counts_block.get('fundamentals_rows', 'n/a')}",
-        f"- yolo_rows_total: {yolo_block.get('rows_total', 'n/a')}",
-        f"- yolo_tickers_total: {yolo_block.get('tickers_total', 'n/a')}",
-        f"- latest_ingest_status: {status_block.get('latest_run_status', 'n/a')}",
-        "",
-    ]
-    if include_markdown and md_text:
-        lines += ["Full markdown report:", "", md_text]
-    else:
-        lines += ["Use /api/admin/daily-report?include_markdown=true to fetch full markdown."]
-
-    subject = f"[trader_koo] Daily report {generated}"
-    text_body = "\n".join(lines)
 
     from_header = resend["from_email"] if transport == "resend" else smtp["from_email"]
     message = EmailMessage()
@@ -3459,6 +3454,7 @@ def email_latest_report(
     message["From"] = from_header
     message["To"] = recipient
     message.set_content(text_body)
+    message.add_alternative(html_body, subtype="html")
 
     if attach_json:
         filename = latest_path.name if latest_path is not None else "daily_report_latest.json"
@@ -3475,7 +3471,13 @@ def email_latest_report(
 
     try:
         if transport == "resend":
-            _send_resend_email(subject=subject, text=text_body, recipient=recipient, resend=resend)
+            _send_resend_email(
+                subject=subject,
+                text=text_body,
+                recipient=recipient,
+                resend=resend,
+                html_body=html_body,
+            )
         else:
             _send_smtp_email(message, smtp)
     except Exception as exc:
