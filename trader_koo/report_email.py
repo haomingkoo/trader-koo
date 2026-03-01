@@ -72,7 +72,7 @@ def build_report_email_bodies(
     setup_cluster = _setup_cluster(setup_rows)
     cluster_family = str(top_setup.get("setup_family") or "").replace("_", " ").strip()
     cluster_summary = ", ".join(
-        f"{row.get('ticker')} {_fmt_num(row.get('score'))} ({row.get('setup_tier') or '-'})"
+        f"{row.get('ticker')} setup score {_fmt_num(row.get('score'))} ({row.get('setup_tier') or '-'})"
         for row in setup_cluster[:3]
     )
     setup_sections = _setup_bucket_sections(setup_rows)
@@ -120,7 +120,7 @@ def build_report_email_bodies(
                 if len(setup_cluster) > 1
                 else "Top setup: "
             )
-            + f"Highest-rated: {top_setup.get('ticker')} score {_fmt_num(top_setup.get('score'))} ({top_setup.get('setup_tier') or '-'})"
+            + f"Highest-rated: {top_setup.get('ticker')} setup score {_fmt_num(top_setup.get('score'))} ({top_setup.get('setup_tier') or '-'})"
             + f" — {_setup_observation(top_setup)}"
             + f" | Action: {_setup_action(top_setup)}"
         )
@@ -128,7 +128,7 @@ def build_report_email_bodies(
         text_lines.append(
             f"{title}: "
             + ", ".join(
-                f"{row.get('ticker')} {_fmt_num(row.get('score'))} ({row.get('setup_tier') or '-'})"
+                f"{row.get('ticker')} setup score {_fmt_num(row.get('score'))} ({row.get('setup_tier') or '-'})"
                 for row in bucket_rows[:4]
             )
         )
@@ -249,14 +249,32 @@ def build_report_email_bodies(
         bucket_rows_html = []
         for row in bucket_rows:
             bucket_rows_html.append(
+                "<tr><td style=\"padding:0;border:none;\">"
+                "<div style=\"padding:12px 0;border-bottom:1px solid #eef2f7;\">"
+                "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">"
                 "<tr>"
-                f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;width:70px;vertical-align:top;\">{_esc(row.get('ticker'))}</td>"
-                f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;width:60px;vertical-align:top;\">{_esc(_fmt_num(row.get('score')))}</td>"
-                f"<td style=\"padding:10px 0 10px 12px;border-bottom:1px solid #eef2f7;color:#334155;vertical-align:top;\">"
-                f"<div><strong>Read:</strong> {_esc(_setup_observation(row))}</div>"
-                f"<div style=\"margin-top:4px;color:#475569;\"><strong>Action:</strong> {_esc(_setup_action(row))}</div>"
-                f"</td>"
+                f"<td style=\"font-weight:800;color:#0f172a;font-size:15px;line-height:20px;vertical-align:top;\">{_esc(row.get('ticker'))}</td>"
+                f"<td align=\"right\" style=\"color:#475569;font-size:12px;line-height:18px;vertical-align:top;white-space:nowrap;\"><strong>Setup Score:</strong> {_esc(_fmt_num(row.get('score')))} &nbsp; <strong>Tier:</strong> {_esc(row.get('setup_tier') or '-')}</td>"
                 "</tr>"
+                "</table>"
+                "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:8px;border-collapse:collapse;\">"
+                "<tr>"
+                "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Family</td>"
+                f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:#334155;\">{_esc(_setup_family_label(row))}</td>"
+                "</tr>"
+                "<tr>"
+                "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Bias</td>"
+                f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:{_bias_color(row.get('signal_bias'))};font-weight:700;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</td>"
+                "</tr>"
+                "<tr>"
+                "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Context</td>"
+                f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:#334155;\">{_esc(_setup_context_label(row))}</td>"
+                "</tr>"
+                "</table>"
+                f"<div style=\"margin-top:8px;font-size:13px;line-height:20px;color:#334155;\"><strong>What it is:</strong> {_esc(_compact_copy(_setup_observation(row), max_sentences=2, max_chars=130))}</div>"
+                f"<div style=\"margin-top:6px;font-size:13px;line-height:20px;color:#475569;\"><strong>Next step:</strong> {_esc(_compact_copy(_setup_action(row), max_sentences=2, max_chars=115))}</div>"
+                "</div>"
+                "</td></tr>"
             )
         setup_section_blocks.append(
             "<div style=\"margin-top:16px;border:1px solid #eef2f7;border-radius:16px;padding:16px;background:#f8fbff;\">"
@@ -343,7 +361,7 @@ def build_report_email_bodies(
             '<div style="padding:24px 28px 0;">'
             '<h2 style="margin:0 0 12px;font-size:18px;line-height:24px;color:#0f172a;">Catalyst Board</h2>'
             '<div style="font-size:13px;line-height:19px;color:#64748b;margin-bottom:12px;">'
-            'Upcoming earnings are grouped by day and session. Use the board to plan levels before the event, not to blindly chase the headline.'
+            'Upcoming earnings are grouped by day and session. Each entry shows labeled fields: Setup Score, bias, event risk, action state, timing quality, and the next step.'
             '</div>'
             f'{catalyst_board_html}'
             '</div>'
@@ -386,6 +404,7 @@ def build_report_email_bodies(
                   <h3 style="margin:0 0 6px;font-size:17px;line-height:22px;color:#0f172a;">Actionable Setup Board</h3>
                   <div style="margin:0 0 12px;font-size:13px;line-height:19px;color:#64748b;">
                     Fresh active YOLO ranks first, then recent persistence, then older context only. Several names can be valid at once; the leader cluster highlights the closest current contenders.
+                    <br /><strong>Each setup card shows:</strong> ticker, Setup Score, tier, family, bias, context, what it is, and next step.
                     {f"<br /><strong>Leader cluster:</strong> {_esc(cluster_summary)}" if len(setup_cluster) > 1 else ""}
                     {f"<br /><strong>Shared setup family:</strong> {_esc(cluster_family)}" if len(setup_cluster) > 1 and cluster_family else ""}
                   </div>
@@ -481,17 +500,31 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
                 }.get(str(row.get("schedule_quality") or "").strip().lower(), _fmt_text(row.get("schedule_quality")))
                 bias_color = _bias_color(row.get("signal_bias"))
                 rendered_rows.append(
+                    "<tr><td style=\"padding:0;border:none;\">"
+                    "<div style=\"padding:12px 0;border-bottom:1px solid #eef2f7;\">"
+                    "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">"
                     "<tr>"
-                    f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;vertical-align:top;\">{_esc(row.get('ticker'))}</td>"
-                    f"<td style=\"padding:8px 0 8px 10px;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;vertical-align:top;white-space:nowrap;\">{_esc(_fmt_num(row.get('score')))}</td>"
-                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:{bias_color};font-weight:700;vertical-align:top;white-space:nowrap;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</td>"
-                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:{_risk_color(row.get('earnings_risk'))};font-weight:700;vertical-align:top;white-space:nowrap;\">{_esc(str(row.get('earnings_risk') or 'normal').upper())}</td>"
-                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:{rec_color};font-weight:700;vertical-align:top;white-space:nowrap;\">{_esc(rec_label)}</td>"
-                    f"<td style=\"padding:8px 0 8px 14px;border-bottom:1px solid #eef2f7;color:#475569;vertical-align:top;\">"
-                    f"<div style=\"font-weight:600;color:#64748b;\">{_esc(schedule_label)}</div>"
-                    f"<div style=\"margin-top:4px;line-height:19px;\">{_esc(str(row.get('recommendation_note') or row.get('action') or '').strip())}</div>"
-                    "</td>"
+                    f"<td style=\"font-weight:800;color:#0f172a;font-size:15px;line-height:20px;vertical-align:top;\">{_esc(row.get('ticker'))}</td>"
+                    f"<td align=\"right\" style=\"color:#475569;font-size:12px;line-height:18px;vertical-align:top;white-space:nowrap;\"><strong>Setup Score:</strong> {_esc(_fmt_num(row.get('score')))}</td>"
                     "</tr>"
+                    "</table>"
+                    "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:8px;border-collapse:collapse;\">"
+                    "<tr>"
+                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Bias</td>"
+                    f"<td style=\"padding:0 14px 4px 0;font-size:12px;line-height:18px;color:{bias_color};font-weight:700;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</td>"
+                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Risk</td>"
+                    f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:{_risk_color(row.get('earnings_risk'))};font-weight:700;\">{_esc(str(row.get('earnings_risk') or 'normal').upper())}</td>"
+                    "</tr>"
+                    "<tr>"
+                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">State</td>"
+                    f"<td style=\"padding:0 14px 4px 0;font-size:12px;line-height:18px;color:{rec_color};font-weight:700;\">{_esc(rec_label)}</td>"
+                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Timing</td>"
+                    f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:#334155;\">{_esc(schedule_label)}</td>"
+                    "</tr>"
+                    "</table>"
+                    f"<div style=\"margin-top:8px;font-size:13px;line-height:19px;color:#334155;\"><strong>Next step:</strong> {_esc(_compact_copy(str(row.get('recommendation_note') or row.get('action') or '').strip(), max_sentences=2, max_chars=150))}</div>"
+                    "</div>"
+                    "</td></tr>"
                 )
             session_rows.append(
                 "<div style=\"margin-top:12px;border-top:1px solid #eef2f7;padding-top:12px;\">"
@@ -606,6 +639,51 @@ def _setup_action(row: dict[str, Any]) -> str:
     if action:
         return action
     return "Watch only until trend, pattern, and level location line up."
+
+
+def _compact_copy(value: Any, *, max_sentences: int = 2, max_chars: int = 140) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return "-"
+    sentence_parts = [part.strip() for part in text.split(". ") if part.strip()]
+    if max_sentences > 0 and len(sentence_parts) > max_sentences:
+        text = ". ".join(sentence_parts[:max_sentences]).strip()
+        if not text.endswith("."):
+            text += "."
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rstrip()
+    cut = clipped.rfind(" ")
+    if cut > 80:
+        clipped = clipped[:cut]
+    return clipped.rstrip(".,;: ") + "..."
+
+
+def _setup_family_label(row: dict[str, Any]) -> str:
+    raw = str(row.get("setup_family") or "").strip()
+    if not raw:
+        return "Unclassified"
+    return raw.replace("_", " ").strip().title()
+
+
+def _setup_context_label(row: dict[str, Any]) -> str:
+    recency = str(row.get("yolo_recency") or "").strip().lower()
+    role = str(row.get("yolo_role") or row.get("primary_yolo_role") or "").strip().lower()
+    if recency == "fresh":
+        return "Fresh"
+    if recency == "recent":
+        return "Persistent"
+    if recency == "aging":
+        return "Aging"
+    if recency == "stale":
+        return "Stale"
+    if role == "primary":
+        return "Primary"
+    if role == "recent_context":
+        return "Recent Context"
+    if role == "stale_context":
+        return "Stale Context"
+    return "No YOLO"
 
 
 def _setup_cluster(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
