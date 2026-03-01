@@ -381,6 +381,109 @@ def send_report_email(report: dict[str, Any], md_text: str) -> None:
         server.send_message(msg)
 
 
+def _parse_iso_date(value: Any) -> dt.date | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if len(raw) < 10:
+        return None
+    try:
+        return dt.date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def _yolo_match_tolerance_days(timeframe: Any) -> int:
+    tf = str(timeframe or "").strip().lower()
+    return 35 if tf == "weekly" else 14
+
+
+def _yolo_snapshot_matches(anchor: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    if str(anchor.get("ticker") or "").upper() != str(candidate.get("ticker") or "").upper():
+        return False
+    if str(anchor.get("timeframe") or "").strip().lower() != str(candidate.get("timeframe") or "").strip().lower():
+        return False
+    if str(anchor.get("pattern") or "").strip() != str(candidate.get("pattern") or "").strip():
+        return False
+
+    tolerance = _yolo_match_tolerance_days(anchor.get("timeframe"))
+    anchor_x0 = _parse_iso_date(anchor.get("x0_date"))
+    anchor_x1 = _parse_iso_date(anchor.get("x1_date"))
+    cand_x0 = _parse_iso_date(candidate.get("x0_date"))
+    cand_x1 = _parse_iso_date(candidate.get("x1_date"))
+
+    x0_match = (
+        anchor_x0 is not None
+        and cand_x0 is not None
+        and abs((anchor_x0 - cand_x0).days) <= tolerance
+    )
+    x1_match = (
+        anchor_x1 is not None
+        and cand_x1 is not None
+        and abs((anchor_x1 - cand_x1).days) <= tolerance
+    )
+    return x0_match or x1_match
+
+
+def _yolo_seen_streak(seen_asofs: set[str], asof_dates_desc: list[str], latest_asof: str | None = None) -> int:
+    if not seen_asofs or not asof_dates_desc:
+        return 0
+    target_start = str(latest_asof or asof_dates_desc[0] or "")
+    started = False
+    streak = 0
+    for asof in asof_dates_desc:
+        if not started:
+            if asof != target_start:
+                continue
+            started = True
+        if asof in seen_asofs:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _summarize_yolo_lifecycle(
+    anchor: dict[str, Any],
+    history_rows: list[dict[str, Any]],
+    asof_dates_desc: list[str],
+) -> dict[str, Any]:
+    current_asof = str(anchor.get("as_of_date") or "").strip() or None
+    seen_asofs: set[str] = set()
+    for row in history_rows:
+        asof = str(row.get("as_of_date") or "").strip()
+        if not asof:
+            continue
+        if _yolo_snapshot_matches(anchor, row):
+            seen_asofs.add(asof)
+
+    if not seen_asofs:
+        return {
+            "first_seen_asof": current_asof,
+            "last_seen_asof": current_asof,
+            "snapshots_seen": 1 if current_asof else 0,
+            "current_streak": 1 if current_asof else 0,
+            "first_seen_days_ago": 0 if current_asof else None,
+        }
+
+    seen_sorted = sorted(seen_asofs)
+    first_seen = seen_sorted[0]
+    last_seen = seen_sorted[-1]
+    first_dt = _parse_iso_date(first_seen)
+    current_dt = _parse_iso_date(current_asof)
+    first_seen_days_ago = None
+    if first_dt is not None and current_dt is not None:
+        first_seen_days_ago = max(0, (current_dt - first_dt).days)
+
+    return {
+        "first_seen_asof": first_seen,
+        "last_seen_asof": last_seen,
+        "snapshots_seen": len(seen_asofs),
+        "current_streak": _yolo_seen_streak(seen_asofs, asof_dates_desc, current_asof),
+        "first_seen_days_ago": first_seen_days_ago,
+    }
+
+
 def fetch_yolo_delta(
     conn: sqlite3.Connection,
     timeframe: str | None = None,
@@ -594,6 +697,8 @@ def fetch_yolo_pattern_persistence(
                 "seen_in_lookback": seen,
                 "lookback_asof": len(asof_dates),
                 "coverage_pct": coverage_pct,
+                "first_seen_asof": min(state["asof_dates"]),
+                "last_seen_asof": max(state["asof_dates"]),
                 "latest_asof": latest_asof,
             }
         )
@@ -793,11 +898,28 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
         closes = [b[4] for b in bars]
         highs = [b[2] for b in bars]
         lows = [b[3] for b in bars]
+        volumes = [b[5] for b in bars]
         close_now = closes[-1]
+        high_now = highs[-1]
+        low_now = lows[-1]
         ma20 = sum(closes[-20:]) / 20.0 if len(closes) >= 20 else None
         ma50 = sum(closes[-50:]) / 50.0 if len(closes) >= 50 else None
         recent_high_20 = max(highs[-20:]) if len(highs) >= 20 else None
         recent_low_20 = min(lows[-20:]) if len(lows) >= 20 else None
+        recent_high_prev_20 = max(highs[-21:-1]) if len(highs) >= 21 else None
+        recent_low_prev_20 = min(lows[-21:-1]) if len(lows) >= 21 else None
+        avg_volume_20 = (sum(volumes[-20:]) / 20.0) if len(volumes) >= 20 else None
+        volume_ratio_20 = (volumes[-1] / avg_volume_20) if avg_volume_20 and avg_volume_20 > 0 else None
+        recent_range_pct_10 = (
+            ((max(highs[-10:]) - min(lows[-10:])) / close_now) * 100.0
+            if len(highs) >= 10 and close_now > 0
+            else None
+        )
+        recent_range_pct_20 = (
+            ((max(highs[-20:]) - min(lows[-20:])) / close_now) * 100.0
+            if len(highs) >= 20 and close_now > 0
+            else None
+        )
 
         pct_vs_ma20 = ((close_now / ma20) - 1.0) * 100.0 if ma20 and ma20 > 0 else None
         pct_vs_ma50 = ((close_now / ma50) - 1.0) * 100.0 if ma50 and ma50 > 0 else None
@@ -852,6 +974,8 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
         pct_to_support = None
         pct_to_resistance = None
         range_position = None
+        breakout_state = "none"
+        structure_state = "normal"
 
         try:
             frame = pd.DataFrame(
@@ -938,22 +1062,71 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
                         level_context = "closer_resistance"
                     else:
                         level_context = "mid_range"
+
+                if isinstance(resistance_zone_high, (int, float)):
+                    rzh = float(resistance_zone_high)
+                    if close_now > rzh:
+                        breakout_state = "breakout_up"
+                    elif high_now > rzh and close_now <= rzh:
+                        breakout_state = "failed_breakout_up"
+                if isinstance(support_zone_low, (int, float)):
+                    szl = float(support_zone_low)
+                    if close_now < szl:
+                        breakout_state = "breakout_down"
+                    elif low_now < szl and close_now >= szl and breakout_state == "none":
+                        breakout_state = "failed_breakdown_down"
         except Exception:
             pass
+
+        if (
+            isinstance(recent_range_pct_10, (int, float))
+            and isinstance(recent_range_pct_20, (int, float))
+            and recent_range_pct_10 <= 7.0
+            and recent_range_pct_20 <= 12.0
+        ):
+            if (
+                (isinstance(range_position, (int, float)) and float(range_position) >= 0.58)
+                or (isinstance(resistance_touches, int) and resistance_touches >= 2)
+            ):
+                structure_state = "tight_consolidation_high"
+            elif (
+                (isinstance(range_position, (int, float)) and float(range_position) <= 0.42)
+                or (isinstance(support_touches, int) and support_touches >= 2)
+            ):
+                structure_state = "tight_consolidation_low"
+            else:
+                structure_state = "tight_consolidation_mid"
+
+        if isinstance(pct_vs_ma20, (int, float)) and trend_state == "uptrend" and float(pct_vs_ma20) >= 7.5:
+            if breakout_state == "breakout_up" or (
+                isinstance(pct_from_20d_high, (int, float)) and float(pct_from_20d_high) <= 1.5
+            ):
+                structure_state = "parabolic_up"
+        elif isinstance(pct_vs_ma20, (int, float)) and trend_state == "downtrend" and float(pct_vs_ma20) <= -7.5:
+            if breakout_state == "breakout_down" or (
+                isinstance(pct_from_20d_low, (int, float)) and float(pct_from_20d_low) <= 1.5
+            ):
+                structure_state = "parabolic_down"
 
         by_ticker[ticker] = {
             "close": round(close_now, 2),
             "ma20": round(ma20, 2) if ma20 is not None else None,
             "ma50": round(ma50, 2) if ma50 is not None else None,
+            "avg_volume_20": round(avg_volume_20, 2) if avg_volume_20 is not None else None,
+            "volume_ratio_20": round(volume_ratio_20, 2) if volume_ratio_20 is not None else None,
             "pct_vs_ma20": round(pct_vs_ma20, 2) if pct_vs_ma20 is not None else None,
             "pct_vs_ma50": round(pct_vs_ma50, 2) if pct_vs_ma50 is not None else None,
             "recent_high_20": round(recent_high_20, 2) if recent_high_20 is not None else None,
             "recent_low_20": round(recent_low_20, 2) if recent_low_20 is not None else None,
+            "recent_range_pct_10": round(recent_range_pct_10, 2) if recent_range_pct_10 is not None else None,
+            "recent_range_pct_20": round(recent_range_pct_20, 2) if recent_range_pct_20 is not None else None,
             "pct_from_20d_high": round(pct_from_20d_high, 2) if pct_from_20d_high is not None else None,
             "pct_from_20d_low": round(pct_from_20d_low, 2) if pct_from_20d_low is not None else None,
             "trend_state": trend_state,
             "level_context": level_context,
             "stretch_state": stretch_state,
+            "breakout_state": breakout_state,
+            "structure_state": structure_state,
             "support_level": support_level,
             "support_zone_low": support_zone_low,
             "support_zone_high": support_zone_high,
@@ -1100,6 +1273,8 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     trend = str(row.get("trend_state") or "mixed")
     level = str(row.get("level_context") or "mid_range")
     stretch = str(row.get("stretch_state") or "normal")
+    breakout_state = str(row.get("breakout_state") or "none")
+    structure_state = str(row.get("structure_state") or "normal")
     pct_change = float(row.get("pct_change") or 0.0)
     yolo_conf = float(row.get("yolo_confidence") or 0.0)
     candle_conf = float(row.get("candle_confidence") or 0.0)
@@ -1177,6 +1352,43 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         confirmations_bear += 1
         contradictions_bull += 1
 
+    if breakout_state == "breakout_up":
+        bull_score += 8.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif breakout_state == "breakout_down":
+        bear_score += 8.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+    elif breakout_state == "failed_breakout_up":
+        bear_score += 6.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+    elif breakout_state == "failed_breakdown_down":
+        bull_score += 6.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+
+    if structure_state == "tight_consolidation_high":
+        bull_score += 5.0 if trend != "downtrend" else 2.0
+        confirmations_bull += 1 if trend != "downtrend" else 0
+    elif structure_state == "tight_consolidation_low":
+        bear_score += 5.0 if trend != "uptrend" else 2.0
+        confirmations_bear += 1 if trend != "uptrend" else 0
+    elif structure_state == "tight_consolidation_mid":
+        bull_score += 1.5
+        bear_score += 1.5
+    elif structure_state == "parabolic_up":
+        bull_score += 3.5
+        confirmations_bull += 1
+        contradictions_bull += 1
+        contradictions_bear += 1
+    elif structure_state == "parabolic_down":
+        bear_score += 3.5
+        confirmations_bear += 1
+        contradictions_bear += 1
+        contradictions_bull += 1
+
     if 0.5 <= pct_change <= 4.0:
         bull_score += 3.0
     elif pct_change > 5.0:
@@ -1231,7 +1443,12 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     if bias == "bullish":
         confirmations = confirmations_bull
         contradictions = contradictions_bull
-        if near_support or level == "below_support" or row.get("near_52w_low"):
+        if breakout_state in {"breakout_up", "failed_breakdown_down"} or (
+            trend == "uptrend" and structure_state in {"tight_consolidation_high", "parabolic_up"}
+        ):
+            family = "bullish_continuation"
+            score = 36.0 + bull_score
+        elif near_support or level == "below_support" or row.get("near_52w_low"):
             family = "bullish_reversal"
             score = 35.0 + bull_score
         elif trend == "uptrend" and not near_resistance:
@@ -1243,7 +1460,12 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     elif bias == "bearish":
         confirmations = confirmations_bear
         contradictions = contradictions_bear
-        if near_resistance or level == "above_resistance" or row.get("near_52w_high"):
+        if breakout_state in {"breakout_down", "failed_breakout_up"} or (
+            trend == "downtrend" and structure_state in {"tight_consolidation_low", "parabolic_down"}
+        ):
+            family = "bearish_continuation"
+            score = 36.0 + bear_score
+        elif near_resistance or level == "above_resistance" or row.get("near_52w_high"):
             family = "bearish_reversal"
             score = 35.0 + bear_score
         elif trend == "downtrend" and not near_support:
@@ -1308,6 +1530,8 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     trend = str(row.get("trend_state") or "mixed")
     level = str(row.get("level_context") or "mid_range")
     stretch = str(row.get("stretch_state") or "normal")
+    breakout_state = str(row.get("breakout_state") or "none")
+    structure_state = str(row.get("structure_state") or "normal")
     candle_bias = str(row.get("candle_bias") or "neutral")
     valuation_bias = str(row.get("valuation_bias") or "neutral")
     valuation_notes = str(row.get("valuation_notes") or "").strip()
@@ -1319,10 +1543,15 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     yolo_age_days = row.get("yolo_age_days")
     yolo_timeframe = str(row.get("yolo_timeframe") or "daily")
     yolo_recency = str(row.get("yolo_recency") or _yolo_recency_label(yolo_age_days, yolo_timeframe))
+    yolo_first_seen_asof = row.get("yolo_first_seen_asof")
+    yolo_last_seen_asof = row.get("yolo_last_seen_asof")
+    yolo_snapshots_seen = row.get("yolo_snapshots_seen")
+    yolo_current_streak = row.get("yolo_current_streak")
     support_level = row.get("support_level")
     resistance_level = row.get("resistance_level")
     pct_to_support = row.get("pct_to_support")
     pct_to_resistance = row.get("pct_to_resistance")
+    volume_ratio_20 = row.get("volume_ratio_20")
 
     level_label = {
         "below_support": "trading below nearby support",
@@ -1358,6 +1587,24 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     observation_parts.append(family_label)
     if valuation_notes:
         observation_parts.append(valuation_notes)
+    if breakout_state == "breakout_up":
+        observation_parts.append("price is already through resistance")
+    elif breakout_state == "breakout_down":
+        observation_parts.append("price is already below support")
+    elif breakout_state == "failed_breakout_up":
+        observation_parts.append("recent breakout attempt failed back under resistance")
+    elif breakout_state == "failed_breakdown_down":
+        observation_parts.append("recent breakdown attempt failed back above support")
+    if structure_state == "tight_consolidation_high":
+        observation_parts.append("tight consolidation is building just under resistance")
+    elif structure_state == "tight_consolidation_low":
+        observation_parts.append("tight consolidation is building just above support")
+    elif structure_state == "tight_consolidation_mid":
+        observation_parts.append("price is compressing in a tight range")
+    elif structure_state == "parabolic_up":
+        observation_parts.append("move is becoming parabolic / extended")
+    elif structure_state == "parabolic_down":
+        observation_parts.append("selloff is becoming climactic / stretched")
     if pattern:
         if yolo_recency == "fresh":
             observation_parts.append(f"fresh YOLO: {pattern}")
@@ -1369,6 +1616,11 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
             observation_parts.append(f"stale YOLO context: {pattern}")
     else:
         observation_parts.append("no decisive YOLO")
+    if isinstance(yolo_snapshots_seen, int) and yolo_snapshots_seen > 1:
+        if isinstance(yolo_current_streak, int) and yolo_current_streak > 1:
+            observation_parts.append(f"YOLO has persisted {yolo_current_streak} snapshots")
+        else:
+            observation_parts.append(f"YOLO has appeared in {yolo_snapshots_seen} retained snapshots")
     if candle_bias == "bullish":
         observation_parts.append("bullish candle confirmation")
     elif candle_bias == "bearish":
@@ -1405,6 +1657,15 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         elif family == "bullish_continuation":
             actionability = "conditional"
             action = "Long only on clean continuation through resistance or a disciplined retest. Avoid late chase entries."
+        if structure_state == "parabolic_up":
+            actionability = "wait"
+            action = "Uptrend is still intact, but the move is getting parabolic. Wait for a hold above resistance or a cleaner retest instead of chasing."
+        elif breakout_state == "breakout_up":
+            actionability = "higher-probability" if trend == "uptrend" else "conditional"
+            action = "Breakout / continuation watch. Best entry is a clean hold above resistance or a disciplined retest, not a momentum chase."
+        elif structure_state == "tight_consolidation_high":
+            actionability = "conditional"
+            action = "Compression under resistance. Higher-probability entry is a decisive close through the level or a clean retest after the break."
         if stretch == "extended_up" or large_day:
             actionability = "wait"
             action = "Bullish idea, but do not chase strength. Prefer a pullback or breakout retest."
@@ -1433,6 +1694,15 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         elif family == "bearish_continuation":
             actionability = "conditional"
             action = "Short only on failed bounces, rejected retests, or clean continuation below support."
+        if structure_state == "parabolic_down":
+            actionability = "wait"
+            action = "Downtrend is still intact, but the move is already stretched lower. Prefer a failed bounce or retest rather than chasing the flush."
+        elif breakout_state == "breakout_down":
+            actionability = "higher-probability" if trend == "downtrend" else "conditional"
+            action = "Breakdown / continuation watch. Best entry is a failed reclaim of broken support or fresh downside follow-through."
+        elif structure_state == "tight_consolidation_low":
+            actionability = "conditional"
+            action = "Compression above support. Higher-probability short only comes if support gives way with follow-through."
         if stretch == "extended_down" or large_day:
             actionability = "wait"
             action = "Avoid chasing the flush. Better setup is a failed bounce or a clean support break."
@@ -1502,6 +1772,17 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         level_bits.append(f"resistance {resistance_level}")
     if isinstance(yolo_age_days, (int, float)) and pattern:
         level_bits.append(f"YOLO age {int(float(yolo_age_days))}d")
+    if isinstance(yolo_snapshots_seen, int) and yolo_snapshots_seen > 0 and yolo_first_seen_asof:
+        if isinstance(yolo_current_streak, int) and yolo_current_streak > 1:
+            level_bits.append(f"YOLO {yolo_current_streak}x since {yolo_first_seen_asof}")
+        else:
+            level_bits.append(f"YOLO first seen {yolo_first_seen_asof}")
+    if breakout_state != "none":
+        level_bits.append(breakout_state.replace("_", " "))
+    if structure_state != "normal":
+        level_bits.append(structure_state.replace("_", " "))
+    if isinstance(volume_ratio_20, (int, float)):
+        level_bits.append(f"vol {float(volume_ratio_20):.2f}x")
     level_suffix = f" | {' / '.join(level_bits)}" if level_bits else ""
     return {
         "signal_bias": bias,
@@ -1731,6 +2012,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     vol_by_ticker: dict[str, dict[str, float | None]] = {}
     vol_ctx: dict[str, Any] = {}
     technical_by_ticker: dict[str, dict[str, Any]] = {}
+    yolo_history_rows: list[dict[str, Any]] = []
+    yolo_asof_dates_desc: dict[str, list[str]] = {"daily": [], "weekly": []}
 
     try:
         vol_by_ticker, vol_ctx = _fetch_volatility_inputs(conn)
@@ -1938,6 +2221,33 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         row = conn.execute("SELECT MAX(as_of_date) FROM yolo_patterns").fetchone()
         latest_asof = row[0] if row else None
         if latest_asof:
+            hist_rows = conn.execute(
+                """
+                SELECT ticker, timeframe, pattern, x0_date, x1_date, as_of_date
+                FROM yolo_patterns
+                WHERE as_of_date IS NOT NULL
+                ORDER BY as_of_date DESC
+                """
+            ).fetchall()
+            yolo_history_rows = [
+                {
+                    "ticker": str(r[0] or ""),
+                    "timeframe": str(r[1] or ""),
+                    "pattern": str(r[2] or ""),
+                    "x0_date": r[3],
+                    "x1_date": r[4],
+                    "as_of_date": r[5],
+                }
+                for r in hist_rows
+            ]
+            for timeframe_key in ("daily", "weekly"):
+                dates = {
+                    str(row.get("as_of_date") or "")
+                    for row in yolo_history_rows
+                    if str(row.get("timeframe") or "").strip().lower() == timeframe_key
+                    and str(row.get("as_of_date") or "").strip()
+                }
+                yolo_asof_dates_desc[timeframe_key] = sorted(dates, reverse=True)
             asof_date: dt.date | None = None
             try:
                 asof_date = dt.date.fromisoformat(str(latest_asof))
@@ -1975,9 +2285,18 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                         "recency": _yolo_recency_label(age_days, r[1]),
                     }
                 )
+            for item in yolo_top_today:
+                item.update(
+                    _summarize_yolo_lifecycle(
+                        item,
+                        yolo_history_rows,
+                        yolo_asof_dates_desc.get(str(item.get("timeframe") or "").strip().lower(), []),
+                    )
+                )
             yolo_top_today.sort(
                 key=lambda item: (
                     _yolo_age_factor(item.get("age_days"), item.get("timeframe")),
+                    int(item.get("current_streak") or 0),
                     1 if str(item.get("timeframe") or "").strip().lower() == "daily" else 0,
                     float(item.get("confidence") or 0.0),
                     -(int(item.get("age_days")) if isinstance(item.get("age_days"), int) else 9999),
@@ -2019,6 +2338,13 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     "as_of_date": latest_asof,
                     "age_days": age_days,
                 }
+                candidate.update(
+                    _summarize_yolo_lifecycle(
+                        candidate,
+                        yolo_history_rows,
+                        yolo_asof_dates_desc.get(str(candidate.get("timeframe") or "").strip().lower(), []),
+                    )
+                )
                 prev = yolo_by_ticker.get(ticker)
                 if prev is None:
                     yolo_by_ticker[ticker] = candidate
@@ -2028,7 +2354,17 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 if cand_daily and not prev_daily:
                     yolo_by_ticker[ticker] = candidate
                     continue
-                if cand_daily == prev_daily and conf > float(prev.get("confidence") or 0.0):
+                prev_rank = (
+                    _yolo_age_factor(prev.get("age_days"), prev.get("timeframe")),
+                    int(prev.get("current_streak") or 0),
+                    float(prev.get("confidence") or 0.0),
+                )
+                cand_rank = (
+                    _yolo_age_factor(candidate.get("age_days"), candidate.get("timeframe")),
+                    int(candidate.get("current_streak") or 0),
+                    float(candidate.get("confidence") or 0.0),
+                )
+                if cand_daily == prev_daily and cand_rank > prev_rank:
                     yolo_by_ticker[ticker] = candidate
     except Exception:
         pass
@@ -2153,6 +2489,11 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             yolo_confidence = None
             yolo_age_days = None
             yolo_timeframe = None
+            yolo_first_seen_asof = None
+            yolo_last_seen_asof = None
+            yolo_snapshots_seen = None
+            yolo_current_streak = None
+            yolo_first_seen_days_ago = None
             signal_bias = "neutral"
             atr_pct_14 = vol.get("atr_pct_14")
             realized_vol_20 = vol.get("realized_vol_20")
@@ -2162,6 +2503,11 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 yolo_confidence = yolo.get("confidence")
                 yolo_age_days = yolo.get("age_days")
                 yolo_timeframe = yolo.get("timeframe")
+                yolo_first_seen_asof = yolo.get("first_seen_asof")
+                yolo_last_seen_asof = yolo.get("last_seen_asof")
+                yolo_snapshots_seen = yolo.get("snapshots_seen")
+                yolo_current_streak = yolo.get("current_streak")
+                yolo_first_seen_days_ago = yolo.get("first_seen_days_ago")
                 signal_bias = _yolo_pattern_bias(yolo_pattern)
                 conf = float(yolo_confidence or 0.0)
                 yolo_component += _clamp(conf * 20.0, 0.0, 18.0)
@@ -2228,12 +2574,21 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 "atr_pct_14": atr_pct_14,
                 "realized_vol_20": realized_vol_20,
                 "bb_width_20": bb_width_20,
+                "avg_volume_20": tech.get("avg_volume_20"),
+                "volume_ratio_20": tech.get("volume_ratio_20"),
+                "recent_range_pct_10": tech.get("recent_range_pct_10"),
+                "recent_range_pct_20": tech.get("recent_range_pct_20"),
                 "near_52w_high": near_high,
                 "near_52w_low": near_low,
                 "yolo_pattern": yolo_pattern,
                 "yolo_confidence": yolo_confidence,
                 "yolo_age_days": yolo_age_days,
                 "yolo_timeframe": yolo_timeframe,
+                "yolo_first_seen_asof": yolo_first_seen_asof,
+                "yolo_last_seen_asof": yolo_last_seen_asof,
+                "yolo_snapshots_seen": yolo_snapshots_seen,
+                "yolo_current_streak": yolo_current_streak,
+                "yolo_first_seen_days_ago": yolo_first_seen_days_ago,
                 "signal_bias": signal_bias,
                 "close": tech.get("close"),
                 "ma20": tech.get("ma20"),
@@ -2258,6 +2613,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 "pct_to_resistance": tech.get("pct_to_resistance"),
                 "range_position": tech.get("range_position"),
                 "stretch_state": tech.get("stretch_state") or "normal",
+                "breakout_state": tech.get("breakout_state") or "none",
+                "structure_state": tech.get("structure_state") or "normal",
                 "candle_pattern": None,
                 "candle_bias": "neutral",
                 "candle_confidence": None,
@@ -2771,13 +3128,14 @@ def to_markdown(report: dict[str, Any]) -> str:
                     )
                 )
                 lines.append(
-                    "| ticker | pattern | streak | seen_in_lookback | coverage_pct | latest_confidence | avg_confidence_window |"
+                    "| ticker | pattern | streak | seen_in_lookback | coverage_pct | latest_confidence | avg_confidence_window | first_seen_asof | last_seen_asof |"
                 )
-                lines.append("|---|---|---:|---:|---:|---:|---:|")
+                lines.append("|---|---|---:|---:|---:|---:|---:|---|---|")
                 for p in rows[:15]:
                     lines.append(
                         f"| {p.get('ticker')} | {p.get('pattern')} | {p.get('streak')} | {p.get('seen_in_lookback')} | "
-                        f"{p.get('coverage_pct')} | {p.get('latest_confidence')} | {p.get('avg_confidence_window')} |"
+                        f"{p.get('coverage_pct')} | {p.get('latest_confidence')} | {p.get('avg_confidence_window')} | "
+                        f"{p.get('first_seen_asof', '-')} | {p.get('last_seen_asof', '-')} |"
                     )
 
     def _render_delta_section(title: str, delta: dict[str, Any]) -> None:
@@ -2960,7 +3318,77 @@ def to_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def write_reports(report: dict[str, Any], out_dir: Path) -> dict[str, str]:
+def _parse_report_snapshot_ts(path: Path) -> dt.datetime | None:
+    stem = path.stem
+    prefix = "daily_report_"
+    if not stem.startswith(prefix):
+        return None
+    ts = stem[len(prefix):]
+    if ts == "latest":
+        return None
+    try:
+        return dt.datetime.strptime(ts, "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+
+
+def _prune_report_snapshots(out_dir: Path) -> dict[str, int]:
+    keep_files_raw = os.getenv("TRADER_KOO_REPORT_KEEP_FILES", "21").strip()
+    max_age_days_raw = os.getenv("TRADER_KOO_REPORT_MAX_AGE_DAYS", "45").strip()
+    try:
+        keep_files = max(3, int(keep_files_raw))
+    except ValueError:
+        keep_files = 21
+    try:
+        max_age_days = max(7, int(max_age_days_raw))
+    except ValueError:
+        max_age_days = 45
+
+    snapshots: list[tuple[dt.datetime, list[Path]]] = []
+    grouped: dict[str, list[Path]] = {}
+    for path in out_dir.glob("daily_report_*"):
+        if path.name in {"daily_report_latest.json", "daily_report_latest.md"}:
+            continue
+        ts = _parse_report_snapshot_ts(path)
+        if ts is None:
+            continue
+        grouped.setdefault(ts.isoformat(), []).append(path)
+    for ts_key, paths in grouped.items():
+        try:
+            ts = dt.datetime.fromisoformat(ts_key)
+        except ValueError:
+            continue
+        snapshots.append((ts, sorted(paths)))
+    snapshots.sort(key=lambda item: item[0], reverse=True)
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    deleted_files = 0
+    deleted_snapshots = 0
+    retained_snapshots = 0
+    for idx, (snap_ts, paths) in enumerate(snapshots):
+        age_days = max(0.0, (now_utc - snap_ts).total_seconds() / 86400.0)
+        should_delete = idx >= keep_files or age_days > float(max_age_days)
+        if should_delete:
+            removed_any = False
+            for path in paths:
+                try:
+                    path.unlink(missing_ok=True)
+                    deleted_files += 1
+                    removed_any = True
+                except OSError:
+                    continue
+            if removed_any:
+                deleted_snapshots += 1
+        else:
+            retained_snapshots += 1
+    return {
+        "retained_snapshots": retained_snapshots,
+        "deleted_snapshots": deleted_snapshots,
+        "deleted_files": deleted_files,
+    }
+
+
+def write_reports(report: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     json_path = out_dir / f"daily_report_{ts}.json"
@@ -2974,12 +3402,16 @@ def write_reports(report: dict[str, Any], out_dir: Path) -> dict[str, str]:
     md_path.write_text(md_text + "\n", encoding="utf-8")
     latest_json.write_text(json_text + "\n", encoding="utf-8")
     latest_md.write_text(md_text + "\n", encoding="utf-8")
+    prune_info = _prune_report_snapshots(out_dir)
 
     return {
         "json_path": str(json_path),
         "md_path": str(md_path),
         "latest_json": str(latest_json),
         "latest_md": str(latest_md),
+        "retained_snapshots": prune_info["retained_snapshots"],
+        "pruned_snapshots": prune_info["deleted_snapshots"],
+        "pruned_files": prune_info["deleted_files"],
     }
 
 
