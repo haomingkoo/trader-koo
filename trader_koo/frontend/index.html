@@ -21,11 +21,17 @@
       --blue: #6aa9ff;
     }
     * { box-sizing: border-box; }
+    html {
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
     body {
       margin: 0;
       font-family: "JetBrains Mono", "IBM Plex Sans", ui-monospace, SFMono-Regular, Menlo, monospace;
       background: radial-gradient(1200px 600px at 10% -10%, #1d2740 0%, var(--bg) 45%);
       color: var(--text);
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
     .wrap { max-width: 1360px; margin: 0 auto; padding: 24px; }
 
@@ -133,7 +139,7 @@
       background: linear-gradient(90deg, #1f7bff, #4e9cff);
       border: none;
     }
-    .hidden { display: none; }
+    .hidden { display: none !important; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -492,6 +498,7 @@
       color: var(--muted);
       font-size: 0.78rem;
       line-height: 1.5;
+      font-family: 'Inter', sans-serif;
     }
     .chart-commentary-panel {
       margin: 10px 0 14px;
@@ -516,10 +523,18 @@
       line-height: 1.58;
       white-space: normal;
       overflow-wrap: anywhere;
+      font-family: 'Inter', sans-serif;
     }
     .chart-commentary-copy strong {
       color: var(--text);
       font-weight: 800;
+    }
+    .chart-commentary-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
     }
     .report-watch-wrap {
       display: flex;
@@ -558,9 +573,338 @@
       overflow: hidden;
       position: relative;
     }
+    .heat-track::after {
+      content: "";
+      position: absolute;
+      top: 1px;
+      bottom: 1px;
+      left: 50%;
+      width: 1px;
+      background: rgba(142, 160, 189, 0.28);
+      transform: translateX(-0.5px);
+    }
     .heat-fill {
-      height: 100%;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+    }
+    .heat-fill.positive {
+      left: 50%;
+      border-radius: 0 999px 999px 0;
+    }
+    .heat-fill.negative {
+      right: 50%;
+      border-radius: 999px 0 0 999px;
+    }
+    .report-split-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .report-split-grid.report-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .report-split-panel {
+      min-width: 0;
+      overflow-x: auto;
+    }
+    .setup-compact-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .setup-compact-card {
+      appearance: none;
+      border: 1px solid rgba(142, 160, 189, 0.16);
+      border-radius: 14px;
+      background: #0f1624;
+      padding: 12px;
+      min-width: 0;
+      width: 100%;
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+    }
+    .setup-compact-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: start;
+    }
+    .setup-compact-title {
+      font-size: 0.98rem;
+      line-height: 1.2;
+      font-weight: 800;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+    }
+    .setup-compact-score {
+      font-size: 0.68rem;
+      line-height: 1.2;
+      font-weight: 700;
+      color: #c9dcff;
       border-radius: 999px;
+      padding: 5px 9px;
+      background: rgba(106, 169, 255, 0.12);
+      white-space: nowrap;
+      font-family: 'Inter', sans-serif;
+    }
+    .setup-compact-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0 10px;
+    }
+    .setup-compact-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border-radius: 999px;
+      padding: 4px 8px;
+      border: 1px solid rgba(142, 160, 189, 0.18);
+      background: rgba(142, 160, 189, 0.08);
+      color: var(--text);
+      font-size: 0.68rem;
+      line-height: 1.1;
+      font-weight: 700;
+      white-space: nowrap;
+      font-family: 'Inter', sans-serif;
+    }
+    .setup-compact-copy {
+      font-size: 0.73rem;
+      line-height: 1.38;
+      color: var(--text);
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-family: 'Inter', sans-serif;
+    }
+    .setup-compact-copy + .setup-compact-copy {
+      margin-top: 8px;
+      color: var(--muted);
+    }
+    .setup-compact-copy strong {
+      color: var(--text);
+      font-weight: 800;
+    }
+    .report-chip-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 8px;
+    }
+    .report-chip-btn {
+      width: 100%;
+      text-align: left;
+      border-radius: 12px;
+      border: 1px solid rgba(142, 160, 189, 0.16);
+      background: #0f1624;
+      padding: 10px 12px;
+      cursor: pointer;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+    }
+    .report-chip-btn:hover {
+      border-color: var(--blue);
+    }
+    .report-chip-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 0.8rem;
+      line-height: 1.3;
+    }
+    .report-chip-top strong {
+      color: var(--blue);
+      font-size: 0.86rem;
+    }
+    .report-chip-sub {
+      margin-top: 4px;
+      font-size: 0.74rem;
+      line-height: 1.4;
+      color: var(--muted);
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-family: 'Inter', sans-serif;
+    }
+    .report-limit-note {
+      margin-top: 8px;
+      font-size: 0.74rem;
+      line-height: 1.4;
+      color: var(--muted);
+      font-family: 'Inter', sans-serif;
+    }
+    .report-persist-list {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .report-persist-card {
+      border: 1px solid rgba(142, 160, 189, 0.16);
+      border-radius: 12px;
+      background: #0f1624;
+      padding: 10px 12px;
+      font-family: 'Inter', sans-serif;
+    }
+    .report-persist-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+    }
+    .report-persist-title {
+      font-size: 0.82rem;
+      line-height: 1.3;
+      color: var(--text);
+      font-weight: 800;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-family: 'Inter', sans-serif;
+    }
+    .report-persist-conf {
+      font-size: 0.74rem;
+      line-height: 1.2;
+      color: #c9dcff;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .report-persist-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 7px;
+    }
+    .report-persist-meta span {
+      border-radius: 999px;
+      padding: 4px 8px;
+      border: 1px solid rgba(142, 160, 189, 0.16);
+      background: rgba(142, 160, 189, 0.08);
+      color: var(--muted);
+      font-size: 0.68rem;
+      line-height: 1.1;
+      font-weight: 700;
+    }
+    .report-persist-note {
+      margin-top: 7px;
+      font-size: 0.74rem;
+      line-height: 1.4;
+      color: var(--muted);
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-family: 'Inter', sans-serif;
+    }
+    .mobile-detail-list {
+      display: grid;
+      gap: 10px;
+    }
+    .mobile-detail-card {
+      appearance: none;
+      width: 100%;
+      text-align: left;
+      border: 1px solid rgba(142, 160, 189, 0.16);
+      border-radius: 14px;
+      background: #0f1624;
+      color: var(--text);
+      padding: 12px;
+      cursor: pointer;
+      font: inherit;
+      font-family: 'Inter', sans-serif;
+    }
+    .mobile-detail-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+    }
+    .mobile-detail-title {
+      font-size: 0.92rem;
+      line-height: 1.2;
+      font-weight: 800;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+    }
+    .mobile-detail-score {
+      font-size: 0.7rem;
+      line-height: 1.2;
+      font-weight: 700;
+      color: #c9dcff;
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: rgba(106, 169, 255, 0.12);
+      white-space: nowrap;
+      font-family: 'Inter', sans-serif;
+    }
+    .mobile-detail-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0 10px;
+    }
+    .mobile-detail-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border-radius: 999px;
+      padding: 4px 8px;
+      border: 1px solid rgba(142, 160, 189, 0.18);
+      background: rgba(142, 160, 189, 0.08);
+      color: var(--text);
+      font-size: 0.68rem;
+      line-height: 1.1;
+      font-weight: 700;
+      white-space: nowrap;
+      font-family: 'Inter', sans-serif;
+    }
+    .mobile-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .mobile-detail-cell {
+      min-width: 0;
+      border: 1px solid rgba(142, 160, 189, 0.12);
+      border-radius: 10px;
+      background: rgba(142, 160, 189, 0.05);
+      padding: 8px;
+    }
+    .mobile-detail-cell .k {
+      display: block;
+      color: var(--muted);
+      font-size: 0.64rem;
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+      font-family: 'Inter', sans-serif;
+    }
+    .mobile-detail-cell .v {
+      display: block;
+      color: var(--text);
+      font-size: 0.72rem;
+      line-height: 1.35;
+      font-family: 'Inter', sans-serif;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .mobile-detail-copy {
+      font-size: 0.72rem;
+      line-height: 1.42;
+      color: var(--text);
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-family: 'Inter', sans-serif;
+    }
+    .mobile-detail-copy + .mobile-detail-copy {
+      margin-top: 8px;
+      color: var(--muted);
+    }
+    .mobile-detail-copy strong {
+      color: var(--text);
+      font-weight: 800;
     }
     .admin-shell {
       display: grid;
@@ -719,11 +1063,7 @@
     #tabReport table {
       width: max-content;
       min-width: 100%;
-      font-size: 0.82rem;
-    }
-    #reportSetupCompactTable {
-      width: 100%;
-      min-width: 100%;
+      font-size: 0.78rem;
       table-layout: fixed;
     }
     #tabReport th,
@@ -732,6 +1072,38 @@
       overflow-wrap: anywhere;
       word-break: break-word;
       vertical-align: top;
+    }
+    #reportSetupDetailWrap table th:nth-child(1),
+    #reportSetupDetailWrap table td:nth-child(1) { width: 88px; }
+    #reportSetupDetailWrap table th:nth-child(2),
+    #reportSetupDetailWrap table td:nth-child(2) { width: 96px; }
+    #reportSetupDetailWrap table th:nth-child(3),
+    #reportSetupDetailWrap table td:nth-child(3) { width: 72px; }
+    #reportSetupDetailWrap table th:nth-child(4),
+    #reportSetupDetailWrap table td:nth-child(4) { width: 156px; }
+    #reportSetupDetailWrap table th:nth-child(5),
+    #reportSetupDetailWrap table td:nth-child(5) { width: 96px; }
+    #reportSetupDetailWrap table th:nth-child(6),
+    #reportSetupDetailWrap table td:nth-child(6) { width: 120px; }
+    #reportSetupDetailWrap table th:nth-child(7),
+    #reportSetupDetailWrap table td:nth-child(7) { width: 132px; }
+    #reportSetupDetailWrap table th:nth-child(8),
+    #reportSetupDetailWrap table td:nth-child(8) {
+      width: 360px;
+      font-family: 'Inter', sans-serif;
+      line-height: 1.45;
+    }
+    #reportSetupDetailWrap table th:nth-child(9),
+    #reportSetupDetailWrap table td:nth-child(9) {
+      width: 300px;
+      font-family: 'Inter', sans-serif;
+      line-height: 1.45;
+    }
+    #reportSetupDetailWrap table th:nth-child(10),
+    #reportSetupDetailWrap table td:nth-child(10) {
+      width: 260px;
+      font-family: 'Inter', sans-serif;
+      line-height: 1.45;
     }
     #reportStatus,
     #reportBreadthSummary,
@@ -799,11 +1171,63 @@
       .nav-links { gap: 14px; flex-wrap: wrap; }
       .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
       .tab-btn { padding: 8px 10px; font-size: 0.82rem; }
-      #tabReport .panel { padding: 8px; overflow-x: auto; }
-      #tabReport table { min-width: 560px; font-size: 0.78rem; }
+      #tabReport .panel { padding: 8px; }
+      #tabReport table { min-width: 320px; font-size: 0.68rem; }
+      #reportSetupDetailWrap table { display: none; }
+      #reportSetupQualityCards { display: grid; }
       #report52wHigh span, #report52wLow span {
         display: block !important;
         margin-right: 0 !important;
+      }
+      .report-split-grid,
+      .setup-compact-list {
+        grid-template-columns: 1fr;
+      }
+      .setup-compact-card {
+        padding: 10px;
+      }
+      .setup-compact-head {
+        grid-template-columns: 1fr;
+      }
+      .setup-compact-score {
+        justify-self: start;
+      }
+      .setup-compact-copy {
+        font-size: 0.64rem;
+        line-height: 1.28;
+      }
+      .setup-compact-title {
+        font-size: 0.82rem;
+      }
+      .setup-compact-score,
+      .setup-compact-badge {
+        font-size: 0.62rem;
+      }
+      .report-persist-card {
+        padding: 9px 10px;
+      }
+      .report-persist-title {
+        font-size: 0.68rem;
+      }
+      .report-persist-note {
+        font-size: 0.64rem;
+      }
+      .report-chip-list {
+        grid-template-columns: 1fr;
+      }
+      .mobile-detail-grid {
+        grid-template-columns: 1fr;
+      }
+      .mobile-detail-copy {
+        font-size: 0.69rem;
+        line-height: 1.38;
+      }
+      .mobile-detail-title {
+        font-size: 0.82rem;
+      }
+      .mobile-detail-score,
+      .mobile-detail-badge {
+        font-size: 0.62rem;
       }
       .report-watch-wrap { flex-direction: column; align-items: stretch; }
       .report-watch-wrap input, .report-watch-wrap button { width: 100%; }
@@ -825,7 +1249,10 @@
       .tabs { grid-template-columns: 1fr; }
       .cards { grid-template-columns: 1fr; }
       .mini-actions button { flex: 1 1 100%; }
-      #tabReport table { min-width: 500px; }
+      #tabReport table { min-width: 380px; }
+    }
+    @media (min-width: 641px) {
+      #reportSetupQualityCards { display: none; }
     }
     .guide {
       line-height: 1.55;
@@ -1070,7 +1497,7 @@
         <div class="panel chart-commentary-panel">
           <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
             <div class="label">Chart Commentary</div>
-            <div id="chartCommentaryStatus" class="report-inline-note">Rule-based read of the current chart. Fresh active YOLO comes first, then persistence, then older context.</div>
+            <div id="chartCommentaryStatus" class="report-inline-note">Load a ticker to generate commentary.</div>
           </div>
           <div id="chartCommentaryBadges" class="earnings-badges"></div>
           <div class="chart-commentary-grid">
@@ -1083,8 +1510,8 @@
               <div id="chartAction" class="chart-commentary-copy">The chart read will explain whether the setup is actionable now or only on confirmation.</div>
             </div>
             <div class="chart-commentary-block">
-              <div class="label">Technical Read</div>
-              <div id="chartTechnicalRead" class="chart-commentary-copy">Fresh YOLO, candle confirmation, level location, and trend state are combined here.</div>
+              <div class="label">Details</div>
+              <div id="chartTechnicalRead" class="chart-commentary-copy">Trend, levels, momentum, and YOLO context are summarized here.</div>
             </div>
           </div>
         </div>
@@ -1161,7 +1588,7 @@
       </div>
 
       <div class="panel" style="margin-bottom:12px;">
-        <div class="label" style="margin-bottom:8px;">Confluence Score</div>
+        <div class="label" style="margin-bottom:8px;">Setup Score Board</div>
         <div id="reportSetupSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:8px;"></div>
         <div id="reportSetupExplain" class="report-inline-note"></div>
         <div class="report-actions">
@@ -1169,9 +1596,10 @@
           <button id="reportSetupMoreBtn" class="report-toggle-btn" type="button" aria-pressed="false">More Metrics</button>
         </div>
         <div id="reportSetupQuickAdds" class="mini-actions"></div>
-        <table id="reportSetupCompactTable"></table>
+        <div id="reportSetupCompactList" class="setup-compact-list"></div>
         <div id="reportSetupDetailWrap" class="hidden" style="margin-top:10px;">
-          <div class="report-inline-note" style="margin-bottom:8px;">Advanced view adds raw volatility and YOLO aging metrics so you can audit why a name ranked where it did.</div>
+          <div class="report-inline-note" style="margin-bottom:8px;">Advanced view adds labeled audit fields so you can see why a name ranked where it did without reading one giant sentence.</div>
+          <div id="reportSetupQualityCards" class="mobile-detail-list"></div>
           <table id="reportSetupQualityTable"></table>
         </div>
       </div>
@@ -1186,12 +1614,12 @@
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">YOLO Changes vs Previous Run</div>
         <div id="reportYoloDeltaSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;"></div>
-        <div style="display:flex; gap:16px; flex-wrap:wrap;">
-          <div style="flex:1; min-width:280px;">
+        <div class="report-split-grid">
+          <div class="report-split-panel">
             <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NEW PATTERNS</div>
             <table id="reportYoloNewTable"></table>
           </div>
-          <div style="flex:1; min-width:280px;">
+          <div class="report-split-panel">
             <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NO LONGER DETECTED</div>
             <table id="reportYoloLostTable"></table>
           </div>
@@ -1201,14 +1629,14 @@
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">YOLO Pattern Persistence</div>
         <div id="reportYoloPersistenceSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;"></div>
-        <div style="display:flex; gap:16px; flex-wrap:wrap;">
-          <div style="flex:1; min-width:280px;">
+        <div class="report-split-grid report-stack">
+          <div class="report-split-panel">
             <div style="font-size:0.72rem; color:var(--blue); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">DAILY</div>
-            <table id="reportYoloPersistenceDailyTable"></table>
+            <div id="reportYoloPersistenceDailyTable" class="report-persist-list"></div>
           </div>
-          <div style="flex:1; min-width:280px;">
+          <div class="report-split-panel">
             <div style="font-size:0.72rem; color:var(--blue); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">WEEKLY</div>
-            <table id="reportYoloPersistenceWeeklyTable"></table>
+            <div id="reportYoloPersistenceWeeklyTable" class="report-persist-list"></div>
           </div>
         </div>
       </div>
@@ -1217,12 +1645,12 @@
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">Large Moves Today (vs Prior Close)</div>
         <div id="reportBreadthSummary" style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;"></div>
-        <div style="display:flex; gap:16px; flex-wrap:wrap;">
-          <div style="flex:1; min-width:280px;">
+        <div class="report-split-grid">
+          <div class="report-split-panel">
             <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">TOP GAINERS</div>
             <table id="reportMoversUpTable"></table>
           </div>
-          <div style="flex:1; min-width:280px;">
+          <div class="report-split-panel">
             <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">TOP LOSERS</div>
             <table id="reportMoversDownTable"></table>
           </div>
@@ -1232,14 +1660,16 @@
       <!-- 52W Extremes -->
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">52-Week Extremes (within 3% of high/low)</div>
-        <div style="display:flex; gap:16px; flex-wrap:wrap;">
-          <div style="flex:1; min-width:220px;">
-            <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NEAR 52W HIGH</div>
-            <div id="report52wHigh" style="font-size:0.82rem; line-height:1.7;"></div>
+        <div class="report-split-grid">
+          <div class="report-split-panel">
+            <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">CLOSEST TO 52W HIGH</div>
+            <div id="report52wHigh" class="report-chip-list"></div>
+            <div id="report52wHighNote" class="report-limit-note"></div>
           </div>
-          <div style="flex:1; min-width:220px;">
-            <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">NEAR 52W LOW</div>
-            <div id="report52wLow" style="font-size:0.82rem; line-height:1.7;"></div>
+          <div class="report-split-panel">
+            <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">CLOSEST TO 52W LOW</div>
+            <div id="report52wLow" class="report-chip-list"></div>
+            <div id="report52wLowNote" class="report-limit-note"></div>
           </div>
         </div>
       </div>
@@ -1248,12 +1678,14 @@
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">Top AI Patterns at Close (YOLO)</div>
         <table id="reportYoloTopTable"></table>
+        <div id="reportYoloTopNote" class="report-limit-note"></div>
       </div>
 
       <!-- Candle signals at close -->
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">Candle Signals at Close</div>
         <table id="reportCandleTable"></table>
+        <div id="reportCandleNote" class="report-limit-note"></div>
       </div>
 
       <div class="panel" style="margin-bottom:12px;">
@@ -1690,16 +2122,249 @@
       return reasons.slice(0, 3).join(" • ") || "balanced multi-factor setup";
     }
 
+    function titleCaseWords(value) {
+      return String(value || "")
+        .replaceAll("_", " ")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+        .join(" ");
+    }
+
+    function humanizeSetupFamily(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (!raw) return "Unclassified";
+      return titleCaseWords(raw);
+    }
+
+    function humanizeSetupContext(row) {
+      const recency = String(row?.yolo_recency || "").trim().toLowerCase();
+      const role = String(row?.yolo_role || row?.primary_yolo_role || "").trim().toLowerCase();
+      if (recency === "fresh") return "Fresh YOLO";
+      if (recency === "recent") return "Persistent YOLO";
+      if (recency === "aging") return "Aging YOLO";
+      if (recency === "stale") return "Stale YOLO";
+      if (role === "primary") return "Primary YOLO";
+      if (role === "recent_context") return "Recent Context";
+      if (role === "stale_context") return "Stale Context";
+      return "No YOLO";
+    }
+
+    function humanizeActionability(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (!raw) return "Watch";
+      if (raw === "watch_only" || raw === "watch-only") return "Watch";
+      if (raw === "conditional") return "Conditional";
+      if (raw === "higher-probability") return "Ready";
+      return titleCaseWords(raw);
+    }
+
+    function humanizeBreakoutState(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (!raw || raw === "none" || raw === "neutral") return "None";
+      if (raw === "resistance_breakout") return "Resistance Break";
+      if (raw === "support_breakdown") return "Support Break";
+      if (raw === "resistance_reject") return "Resistance Reject";
+      if (raw === "support_reclaim") return "Support Reclaim";
+      if (raw === "failed_breakdown") return "Failed Breakdown";
+      if (raw === "failed_breakout") return "Failed Breakout";
+      if (raw === "tight_consolidation") return "Tight Coil";
+      if (raw === "parabolic_extension") return "Parabolic";
+      return titleCaseWords(raw);
+    }
+
+    function shortenCopy(value, maxChars = 168) {
+      const text = String(value || "").replace(/\s+/g, " ").trim();
+      if (!text) return "-";
+      if (text.length <= maxChars) return text;
+      const clipped = text.slice(0, maxChars);
+      const cut = clipped.lastIndexOf(" ");
+      return `${(cut > 90 ? clipped.slice(0, cut) : clipped).trim()}...`;
+    }
+
     function buildCompactSetupRows(rows) {
       return (rows || []).map((row) => ({
         ticker: row.ticker,
         score: row.score,
         setup_tier: row.setup_tier,
-        why_high: row.observation || buildSetupReason(row),
-        action: row.action || "Watch only until the setup confirms.",
-        pct_change: row.pct_change,
-        technical_read: row.technical_read || "-",
+        setup_family_label: humanizeSetupFamily(row.setup_family),
+        signal_bias_label: titleCaseWords(row.signal_bias || "neutral"),
+        actionability_label: humanizeActionability(row.actionability),
+        context_label: humanizeSetupContext(row),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 78),
+        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 70),
       }));
+    }
+
+    function buildSetupAuditRows(rows) {
+      return (rows || []).map((row) => ({
+        ticker: row.ticker,
+        setup_score: row.score,
+        setup_tier: row.setup_tier || "-",
+        setup_label: humanizeSetupFamily(row.setup_family),
+        bias_label: titleCaseWords(row.signal_bias || "neutral"),
+        yolo_context: humanizeSetupContext(row),
+        level_event: humanizeBreakoutState(row.breakout_state),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 150),
+        next_step_short: shortenCopy(row.action || "Watch only until the setup confirms.", 120),
+        audit_notes: shortenCopy(humanizeTechnicalRead(row.technical_read, row), 130),
+        signal_bias: row.signal_bias,
+      }));
+    }
+
+    function renderSetupCompactList(rows) {
+      const el = $("reportSetupCompactList");
+      if (!el) return;
+      if (!rows.length) {
+        el.innerHTML = `<div class="setup-compact-card"><div class="setup-compact-copy">No setup candidates yet.</div></div>`;
+        return;
+      }
+      el.innerHTML = rows.map((row) => {
+        const biasTone = earningsToneClass(row.signal_bias_label);
+        return (
+          `<button type="button" class="setup-compact-card" data-setup-load="${escHtml(row.ticker)}">` +
+          `<div class="setup-compact-head">` +
+          `<div class="setup-compact-title">${escHtml(row.ticker)}</div>` +
+          `<div class="setup-compact-score">${escHtml(formatTableValue("score", row.score))} • Tier ${escHtml(row.setup_tier || "-")}</div>` +
+          `</div>` +
+          `<div class="setup-compact-meta">` +
+          `<span class="setup-compact-badge">${escHtml(row.setup_family_label)}</span>` +
+          `<span class="setup-compact-badge ${biasTone}">${escHtml(row.signal_bias_label)}</span>` +
+          `<span class="setup-compact-badge">${escHtml(row.context_label)}</span>` +
+          `<span class="setup-compact-badge">${escHtml(row.actionability_label)}</span>` +
+          `</div>` +
+          `<div class="setup-compact-copy"><strong>What it is:</strong> ${escHtml(row.observation_short)}</div>` +
+          `<div class="setup-compact-copy"><strong>Next step:</strong> ${escHtml(row.action_short)}</div>` +
+          `</button>`
+        );
+      }).join("");
+      el.querySelectorAll("button[data-setup-load]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const ticker = btn.getAttribute("data-setup-load");
+          if (ticker) loadTickerQuick(ticker);
+        });
+      });
+    }
+
+    function renderSetupAuditCards(rows) {
+      const el = $("reportSetupQualityCards");
+      if (!el) return;
+      if (!rows.length) {
+        el.innerHTML = `<div class="mobile-detail-card"><div class="mobile-detail-copy">No setup candidates yet.</div></div>`;
+        return;
+      }
+      el.innerHTML = rows.map((row) => {
+        const biasTone = earningsToneClass(row.signal_bias);
+        const badges = [
+          `<span class="mobile-detail-badge">Tier ${escHtml(row.setup_tier)}</span>`,
+          `<span class="mobile-detail-badge">${escHtml(row.setup_label)}</span>`,
+          `<span class="mobile-detail-badge ${biasTone}">${escHtml(row.bias_label)}</span>`,
+        ];
+        if (row.yolo_context && row.yolo_context !== "No YOLO") {
+          badges.push(`<span class="mobile-detail-badge">${escHtml(row.yolo_context)}</span>`);
+        }
+        if (row.level_event && row.level_event !== "None") {
+          badges.push(`<span class="mobile-detail-badge">${escHtml(row.level_event)}</span>`);
+        }
+        return (
+          `<button type="button" class="mobile-detail-card" data-setup-audit-load="${escHtml(row.ticker)}">` +
+          `<div class="mobile-detail-head">` +
+          `<div class="mobile-detail-title">${escHtml(row.ticker)}</div>` +
+          `<div class="mobile-detail-score">Setup Score ${escHtml(formatTableValue("setup_score", row.setup_score))}</div>` +
+          `</div>` +
+          `<div class="mobile-detail-meta">${badges.join("")}</div>` +
+          `<div class="mobile-detail-grid">` +
+          `<div class="mobile-detail-cell"><span class="k">What It Is</span><span class="v">${escHtml(row.observation_short)}</span></div>` +
+          `<div class="mobile-detail-cell"><span class="k">Next Step</span><span class="v">${escHtml(row.next_step_short)}</span></div>` +
+          `</div>` +
+          `<div class="mobile-detail-copy"><strong>Audit Notes:</strong> ${escHtml(row.audit_notes)}</div>` +
+          `</button>`
+        );
+      }).join("");
+      el.querySelectorAll("button[data-setup-audit-load]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const ticker = btn.getAttribute("data-setup-audit-load");
+          if (ticker) loadTickerQuick(ticker);
+        });
+      });
+    }
+
+    function renderTickerChipList(elId, noteId, rows, type) {
+      const el = $(elId);
+      const note = $(noteId);
+      if (!el || !note) return;
+      const limited = (rows || []).slice(0, 6);
+      if (!limited.length) {
+        el.innerHTML = `<div class="setup-compact-copy">None</div>`;
+        note.textContent = "";
+        return;
+      }
+      el.innerHTML = limited.map((row) => {
+        const pct = type === "high"
+          ? `${Number(row.pct_from_high || 0).toFixed(2)}% below`
+          : `${Number(row.pct_from_low || 0).toFixed(2)}% above`;
+        const ref = type === "high" ? row.high_52w : row.low_52w;
+        return (
+          `<button type="button" class="report-chip-btn" data-chip-load="${escHtml(row.ticker)}">` +
+          `<div class="report-chip-top"><strong>${escHtml(row.ticker)}</strong><span>$${escHtml(row.close)}</span></div>` +
+          `<div class="report-chip-sub">${escHtml(`${pct} $${ref}`)}</div>` +
+          `</button>`
+        );
+      }).join("");
+      note.textContent = rows.length > limited.length
+        ? `Showing closest ${limited.length} of ${rows.length}. Use the chart for the full scan.`
+        : `Showing ${limited.length} names.`;
+      el.querySelectorAll("button[data-chip-load]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const ticker = btn.getAttribute("data-chip-load");
+          if (ticker) loadTickerQuick(ticker);
+        });
+      });
+    }
+
+    function renderYoloPersistenceList(elId, rows) {
+      const el = $(elId);
+      if (!el) return;
+      const limited = (rows || []).slice(0, 6);
+      if (!limited.length) {
+        el.innerHTML = `<div class="report-persist-card"><div class="report-persist-note">No retained pattern history yet.</div></div>`;
+        return;
+      }
+      const cards = limited.map((row) => {
+        const conf = formatTableValue("latest_confidence", row.latest_confidence);
+        const streak = formatTableValue("streak", row.streak);
+        const seen = formatTableValue("seen_in_lookback", row.seen_in_lookback);
+        const coverage = formatTableValue("coverage_pct", row.coverage_pct);
+        const firstSeen = row.first_seen_asof || "-";
+        const lastSeen = row.last_seen_asof || "-";
+        return (
+          `<button type="button" class="report-persist-card" data-persist-load="${escHtml(row.ticker)}">` +
+          `<div class="report-persist-head">` +
+          `<div class="report-persist-title">${escHtml(row.ticker)} • ${escHtml(row.pattern)}</div>` +
+          `<div class="report-persist-conf">Conf ${escHtml(conf)}</div>` +
+          `</div>` +
+          `<div class="report-persist-meta">` +
+          `<span>Streak ${escHtml(streak)}</span>` +
+          `<span>Seen ${escHtml(seen)}</span>` +
+          `<span>Coverage ${escHtml(coverage)}</span>` +
+          `</div>` +
+          `<div class="report-persist-note">First seen ${escHtml(firstSeen)} • Last seen ${escHtml(lastSeen)}</div>` +
+          `</button>`
+        );
+      });
+      if ((rows || []).length > limited.length) {
+        cards.push(
+          `<div class="report-persist-card"><div class="report-persist-note">Showing ${limited.length} of ${(rows || []).length}. Open the chart for the full audit.</div></div>`
+        );
+      }
+      el.innerHTML = cards.join("");
+      el.querySelectorAll("button[data-persist-load]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const ticker = btn.getAttribute("data-persist-load");
+          if (ticker) loadTickerQuick(ticker);
+        });
+      });
     }
 
     function setReportSetupMode(showMore) {
@@ -1707,6 +2372,7 @@
       const compactBtn = $("reportSetupCompactBtn");
       const moreBtn = $("reportSetupMoreBtn");
       const detailWrap = $("reportSetupDetailWrap");
+      const compactList = $("reportSetupCompactList");
       if (compactBtn) {
         compactBtn.classList.toggle("active", !REPORT_SETUP_SHOW_MORE);
         compactBtn.setAttribute("aria-pressed", String(!REPORT_SETUP_SHOW_MORE));
@@ -1717,6 +2383,9 @@
       }
       if (detailWrap) {
         detailWrap.classList.toggle("hidden", !REPORT_SETUP_SHOW_MORE);
+      }
+      if (compactList) {
+        compactList.style.display = REPORT_SETUP_SHOW_MORE ? "none" : "";
       }
     }
 
@@ -1771,18 +2440,44 @@
       return value || "—";
     }
 
+    function humanizeTechnicalRead(value, row = {}) {
+      const text = String(value || "").trim();
+      if (!text) return "Trend, levels, momentum, and YOLO context are summarized here.";
+      const familyNorm = String(row.setup_family || "").trim().toLowerCase().replaceAll("_", "");
+      const biasNorm = String(row.signal_bias || "").trim().toLowerCase().replaceAll("_", "");
+      const parts = text
+        .split("|")
+        .map((part) => {
+          const clean = part.trim();
+          if (!clean) return "";
+          if (/^[a-z]+(?:_[a-z]+)+$/i.test(clean)) return titleCaseWords(clean.replace(/_/g, " "));
+          return clean.replace(/\b([a-z]+(?:_[a-z]+)+)\b/gi, (match) => titleCaseWords(match.replace(/_/g, " ")));
+        })
+        .filter(Boolean);
+      const filtered = parts.filter((part, idx) => {
+        const norm = String(part || "").toLowerCase().replace(/[^a-z]/g, "");
+        if (idx === 0 && familyNorm && norm === familyNorm) return false;
+        if ((idx === 0 || idx === 1) && biasNorm && (norm === biasNorm || norm === `${biasNorm}bias`)) return false;
+        return true;
+      });
+      return (filtered.length ? filtered : parts).join(" | ");
+    }
+
     function renderChartCommentary(payload) {
       const data = payload && payload.chart_commentary ? payload.chart_commentary : {};
       const badges = [];
       if (data.setup_tier) badges.push(`<span class="earnings-badge">${escHtml(`Tier ${data.setup_tier}`)}</span>`);
       if (data.signal_bias) badges.push(`<span class="earnings-badge ${earningsToneClass(data.signal_bias)}">${escHtml(String(data.signal_bias).toUpperCase())}</span>`);
-      if (data.actionability) badges.push(`<span class="earnings-badge">${escHtml(String(data.actionability).replaceAll("_", " ").toUpperCase())}</span>`);
-      if (data.primary_yolo_role && data.primary_yolo_role !== "none") badges.push(`<span class="earnings-badge">${escHtml(`YOLO ${formatSignalRole(data.primary_yolo_role)}`)}</span>`);
-      if (data.primary_yolo_recency && data.primary_yolo_recency !== "none") badges.push(`<span class="earnings-badge">${escHtml(String(data.primary_yolo_recency).toUpperCase())}</span>`);
+      if (data.actionability) badges.push(`<span class="earnings-badge">${escHtml(humanizeActionability(data.actionability).toUpperCase())}</span>`);
+      const yoloContextLabel = humanizeSetupContext({ yolo_recency: data.primary_yolo_recency, primary_yolo_role: data.primary_yolo_role });
+      if (yoloContextLabel !== "No YOLO") {
+        const yoloLabel = data.primary_yolo_recency
+          ? `${yoloContextLabel} YOLO`
+          : yoloContextLabel;
+        badges.push(`<span class="earnings-badge">${escHtml(yoloLabel.toUpperCase())}</span>`);
+      }
       $("chartCommentaryBadges").innerHTML = badges.join("");
-      $("chartCommentaryStatus").textContent = data.asof
-        ? `Rule-based read asof ${data.asof}. Fresh active YOLO is weighted first, then persistence, then older context.`
-        : "Rule-based read of the current chart. Fresh active YOLO comes first, then persistence, then older context.";
+      $("chartCommentaryStatus").textContent = data.asof ? `As of ${data.asof}` : "Load a ticker to generate commentary.";
       $("chartObservation").innerHTML = data.observation
         ? escHtml(data.observation)
         : "Load a ticker to generate commentary.";
@@ -1791,7 +2486,7 @@
         <strong>Risk:</strong> ${escHtml(data.risk_note || "none")}
       `;
       $("chartTechnicalRead").innerHTML = `
-        <strong>Read:</strong> ${escHtml(data.technical_read || "Fresh YOLO, candle confirmation, level location, and trend state are combined here.")}
+        <strong>Details:</strong> ${escHtml(humanizeTechnicalRead(data.technical_read, data))}
       `;
     }
 
@@ -3199,59 +3894,31 @@
 
         const setupRows = (signals.setup_quality_top || []).slice(0, 40);
         const compactSetupRows = buildCompactSetupRows(setupRows.slice(0, 15));
+        const setupAuditRows = buildSetupAuditRows(setupRows.slice(0, 25));
         LAST_REPORT_SETUP_ROWS = setupRows;
         $("reportSetupSummary").textContent = setupRows.length
-          ? `Compact view keeps the nightly workflow tight: top ${Math.min(15, setupRows.length)} names first, with what is happening and the next reasonable action.`
+          ? `Compact view shows the top ${Math.min(15, setupRows.length)} names as short cards. More Metrics is the labeled audit view.`
           : "No confluence rows available yet.";
         $("reportSetupExplain").textContent = setupRows.length
-          ? "Read it in order: bias, where price sits versus support/resistance and trend, then whether the move is actionable now or better left for a pullback / breakdown confirmation."
+          ? "Setup Score = overall setup quality. Setup = pattern family. Bias = current directional lean. YOLO Context = fresh, persistent, or stale. Level Event = recent break, reclaim, or rejection."
           : "";
-        renderSimpleTable(
-          "reportSetupCompactTable",
-          [
-            { key: "ticker", label: "Ticker" },
-            { key: "score", label: "Score" },
-            { key: "setup_tier", label: "Tier" },
-            { key: "why_high", label: "Observation" },
-            { key: "action", label: "Reasonable Action" },
-            { key: "technical_read", label: "Technical Read" },
-          ],
-          compactSetupRows,
-          true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
-          { sortable: true },
-        );
+        renderSetupCompactList(compactSetupRows);
+        renderSetupAuditCards(setupAuditRows);
         renderSimpleTable(
           "reportSetupQualityTable",
           [
             { key: "ticker", label: "Ticker" },
-            { key: "score", label: "Score" },
+            { key: "setup_score", label: "Setup Score" },
             { key: "setup_tier", label: "Tier" },
-            { key: "signal_bias", label: "Bias" },
-            { key: "breakout_state", label: "Breakout" },
-            { key: "structure_state", label: "Structure" },
-            { key: "observation", label: "Observation" },
-            { key: "action", label: "Reasonable Action" },
-            { key: "risk_note", label: "Risk" },
-            { key: "sector", label: "Sector" },
-            { key: "pct_change", label: "Today %" },
-            { key: "discount_pct", label: "Discount %" },
-            { key: "peg", label: "PEG" },
-            { key: "atr_pct_14", label: "ATR %" },
-            { key: "realized_vol_20", label: "RV20 %" },
-            { key: "bb_width_20", label: "BB Width %" },
-            { key: "volume_ratio_20", label: "Vol x20" },
-            { key: "yolo_pattern", label: "YOLO Pattern" },
-            { key: "yolo_confidence", label: "YOLO Conf" },
-            { key: "yolo_age_days", label: "YOLO Age (d)" },
-            { key: "yolo_snapshots_seen", label: "YOLO Seen" },
-            { key: "yolo_current_streak", label: "YOLO Streak" },
-            { key: "yolo_first_seen_asof", label: "YOLO First Seen" },
-            { key: "yolo_last_seen_asof", label: "YOLO Last Seen" },
-            { key: "candle_pattern", label: "Candle" },
-            { key: "candle_bias", label: "Candle Bias" },
+            { key: "setup_label", label: "Setup" },
+            { key: "bias_label", label: "Bias" },
+            { key: "yolo_context", label: "YOLO Context" },
+            { key: "level_event", label: "Level Event" },
+            { key: "observation_short", label: "What It Is" },
+            { key: "next_step_short", label: "Next Step" },
+            { key: "audit_notes", label: "Audit Notes" },
           ],
-          setupRows.slice(0, 25),
+          setupAuditRows,
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
           { sortable: true },
@@ -3275,12 +3942,13 @@
           .slice(0, 12)
           .map((r) => {
             const avg = Number(r.avg_pct_change || 0);
-            const width = Math.max(2, Math.round((Math.abs(avg) / maxAbs) * 100));
+            const width = Math.max(2, Math.round((Math.abs(avg) / maxAbs) * 50));
+            const side = avg >= 0 ? "positive" : "negative";
             const color = avg >= 0 ? "linear-gradient(90deg,#1f8f66,#38d39f)" : "linear-gradient(90deg,#cc5a5a,#ff6b6b)";
             return (
               `<div class="heat-row">` +
               `<div>${escHtml(r.sector || "Unknown")}</div>` +
-              `<div class="heat-track"><div class="heat-fill" style="width:${width}%; background:${color};"></div></div>` +
+              `<div class="heat-track"><div class="heat-fill ${side}" style="width:${width}%; background:${color};"></div></div>` +
               `<div style="text-align:right;">${escHtml((avg >= 0 ? "+" : "") + avg.toFixed(2) + "%")}</div>` +
               `</div>`
             );
@@ -3323,8 +3991,8 @@
         );
 
         const yoloPersistence = yoloBlock.persistence || {};
-        const persistDaily = ((yoloPersistence.daily || {}).rows || []).slice(0, 15);
-        const persistWeekly = ((yoloPersistence.weekly || {}).rows || []).slice(0, 15);
+        const persistDaily = ((yoloPersistence.daily || {}).rows || []).slice(0, 8);
+        const persistWeekly = ((yoloPersistence.weekly || {}).rows || []).slice(0, 8);
         const pDailyMeta = yoloPersistence.daily || {};
         const pWeeklyMeta = yoloPersistence.weekly || {};
         const dailyWindowText = Number(pDailyMeta.lookback_asof || 0) <= 1
@@ -3334,41 +4002,9 @@
           ? `Weekly window: 1 retained snapshot (latest ${pWeeklyMeta.latest_asof || "?"})`
           : `Weekly window: ${pWeeklyMeta.lookback_asof ?? "?"} as-ofs (latest ${pWeeklyMeta.latest_asof || "?"})`;
         $("reportYoloPersistenceSummary").textContent =
-          `${dailyWindowText} • ${weeklyWindowText}`;
-        renderSimpleTable(
-          "reportYoloPersistenceDailyTable",
-          [
-            { key: "ticker", label: "Ticker" },
-            { key: "pattern", label: "Pattern" },
-            { key: "streak", label: "Streak" },
-            { key: "seen_in_lookback", label: "Seen" },
-            { key: "coverage_pct", label: "Coverage %" },
-            { key: "latest_confidence", label: "Latest Conf" },
-            { key: "first_seen_asof", label: "First Seen" },
-            { key: "last_seen_asof", label: "Last Seen" },
-          ],
-          persistDaily,
-          true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
-          { sortable: true },
-        );
-        renderSimpleTable(
-          "reportYoloPersistenceWeeklyTable",
-          [
-            { key: "ticker", label: "Ticker" },
-            { key: "pattern", label: "Pattern" },
-            { key: "streak", label: "Streak" },
-            { key: "seen_in_lookback", label: "Seen" },
-            { key: "coverage_pct", label: "Coverage %" },
-            { key: "latest_confidence", label: "Latest Conf" },
-            { key: "first_seen_asof", label: "First Seen" },
-            { key: "last_seen_asof", label: "Last Seen" },
-          ],
-          persistWeekly,
-          true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
-          { sortable: true },
-        );
+          `${dailyWindowText} • ${weeklyWindowText} • Streak = consecutive retained snapshots. Seen = retained snapshots containing the pattern. Coverage = share of retained snapshots.`;
+        renderYoloPersistenceList("reportYoloPersistenceDailyTable", persistDaily);
+        renderYoloPersistenceList("reportYoloPersistenceWeeklyTable", persistWeekly);
         renderSimpleTable(
           "reportYoloLostTable",
           ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
@@ -3425,25 +4061,8 @@
               ).join("")
             : `<span style="color:var(--muted)">None</span>`;
 
-        $("report52wHigh").innerHTML = nearHigh.length
-          ? nearHigh.map(t =>
-              `<span style="display:inline-block; margin-right:12px; margin-bottom:2px;">` +
-              `<b style="cursor:pointer; color:var(--blue);" onclick="jumpToTicker('${t.ticker}')">${t.ticker}</b> ` +
-              `<span>$${t.close}</span> ` +
-              `<span style="color:var(--muted); font-size:0.75rem;">(${t.pct_from_high.toFixed(2)}% below $${t.high_52w})</span>` +
-              `</span>`
-            ).join("")
-          : `<span style="color:var(--muted)">None</span>`;
-
-        $("report52wLow").innerHTML = nearLow.length
-          ? nearLow.map(t =>
-              `<span style="display:inline-block; margin-right:12px; margin-bottom:2px;">` +
-              `<b style="cursor:pointer; color:var(--blue);" onclick="jumpToTicker('${t.ticker}')">${t.ticker}</b> ` +
-              `<span>$${t.close}</span> ` +
-              `<span style="color:var(--muted); font-size:0.75rem;">(${t.pct_from_low.toFixed(2)}% above $${t.low_52w})</span>` +
-              `</span>`
-            ).join("")
-          : `<span style="color:var(--muted)">None</span>`;
+        renderTickerChipList("report52wHigh", "report52wHighNote", nearHigh, "high");
+        renderTickerChipList("report52wLow", "report52wLowNote", nearLow, "low");
 
         // Top YOLO patterns at close
         renderSimpleTable("reportYoloTopTable",
@@ -3460,16 +4079,22 @@
             { key: "x1_date", label: "x1" },
             { key: "as_of_date", label: "As Of" },
           ],
-          signals.yolo_top_today || [],
+          (signals.yolo_top_today || []).slice(0, 12),
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
           { sortable: false });
+        $("reportYoloTopNote").textContent = (signals.yolo_top_today || []).length > 12
+          ? "Showing top 12 by confidence and recency. Use the chart for the full audit."
+          : `${(signals.yolo_top_today || []).length} rows shown.`;
 
         // Candle signals at close
         renderSimpleTable("reportCandleTable",
           ["ticker", "pattern", "bias", "confidence"],
-          signals.candle_patterns_today || [],
+          (signals.candle_patterns_today || []).slice(0, 16),
           false, null, { sortable: false });
+        $("reportCandleNote").textContent = (signals.candle_patterns_today || []).length > 16
+          ? "Showing latest 16 candle signals. Open the chart for the full sequence."
+          : `${(signals.candle_patterns_today || []).length} rows shown.`;
 
         renderSimpleTable("reportHistoryTable",
           ["file", "size_bytes", "modified_ts"],
