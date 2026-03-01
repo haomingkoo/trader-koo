@@ -59,6 +59,8 @@ DEFAULT_IOU = float(os.getenv("TRADER_KOO_YOLO_IOU", "0.45"))
 DEFAULT_IMGSZ = int(os.getenv("TRADER_KOO_YOLO_IMGSZ", "640"))
 DEFAULT_MAX_SECS_PER_TICKER = float(os.getenv("TRADER_KOO_YOLO_MAX_SECS_PER_TICKER", "180"))
 DEFAULT_MODEL_INIT_TIMEOUT_SEC = float(os.getenv("TRADER_KOO_YOLO_MODEL_INIT_TIMEOUT_SEC", "600"))
+DEFAULT_DAILY_KEEP_ASOFS = int(os.getenv("TRADER_KOO_YOLO_DAILY_KEEP_ASOFS", "90"))
+DEFAULT_WEEKLY_KEEP_ASOFS = int(os.getenv("TRADER_KOO_YOLO_WEEKLY_KEEP_ASOFS", "156"))
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -242,6 +244,44 @@ def save_detections(
              lookback_days, as_of_date),
         )
     conn.commit()
+
+
+def prune_yolo_snapshot_history(conn: sqlite3.Connection, *, timeframe: str, keep_asofs: int) -> dict[str, int]:
+    keep_n = max(2, int(keep_asofs))
+    rows = conn.execute(
+        """
+        SELECT DISTINCT as_of_date
+        FROM yolo_patterns
+        WHERE timeframe = ? AND as_of_date IS NOT NULL
+        ORDER BY as_of_date DESC
+        """,
+        (timeframe,),
+    ).fetchall()
+    asof_dates = [str(r[0]) for r in rows if r and r[0]]
+    stale_asofs = asof_dates[keep_n:]
+    if not stale_asofs:
+        return {"retained_asofs": len(asof_dates), "deleted_asofs": 0, "deleted_rows": 0}
+
+    placeholders = ",".join(["?"] * len(stale_asofs))
+    delete_params = [timeframe, *stale_asofs]
+    cur = conn.execute(
+        f"DELETE FROM yolo_patterns WHERE timeframe = ? AND as_of_date IN ({placeholders})",
+        delete_params,
+    )
+    event_rows_deleted = 0
+    if any(r[0] == "yolo_run_events" for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()):
+        event_cur = conn.execute(
+            f"DELETE FROM yolo_run_events WHERE timeframe = ? AND as_of_date IN ({placeholders})",
+            delete_params,
+        )
+        event_rows_deleted = int(event_cur.rowcount or 0)
+    conn.commit()
+    return {
+        "retained_asofs": min(len(asof_dates), keep_n),
+        "deleted_asofs": len(stale_asofs),
+        "deleted_rows": int(cur.rowcount or 0),
+        "deleted_event_rows": event_rows_deleted,
+    }
 
 
 # ── Chart rendering ──────────────────────────────────────────────────────────
@@ -690,6 +730,17 @@ def main() -> None:
             total_ok += ok
             total_failed += failed
             total_skipped += skipped
+            keep_asofs = DEFAULT_WEEKLY_KEEP_ASOFS if timeframe == "weekly" else DEFAULT_DAILY_KEEP_ASOFS
+            prune_info = prune_yolo_snapshot_history(conn, timeframe=timeframe, keep_asofs=keep_asofs)
+            LOG.info(
+                "[%s] retention keep_asofs=%d retained=%d pruned_asofs=%d pruned_rows=%d pruned_events=%d",
+                timeframe,
+                keep_asofs,
+                int(prune_info.get("retained_asofs") or 0),
+                int(prune_info.get("deleted_asofs") or 0),
+                int(prune_info.get("deleted_rows") or 0),
+                int(prune_info.get("deleted_event_rows") or 0),
+            )
 
     finally:
         conn.close()

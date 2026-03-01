@@ -2488,13 +2488,15 @@
             });
             if (labelCount < maxLabels) {
               const confPct = Number.isFinite(conf) ? `${(conf * 100).toFixed(0)}%` : "";
+              const streak = Number(p.current_streak);
+              const streakText = Number.isFinite(streak) && streak > 1 ? ` • ${Math.round(streak)}x` : "";
               const ageText = Number.isFinite(age)
                 ? (isStale ? ` • old ${Math.round(age)}d` : (age > 0 ? ` • ${Math.round(age)}d` : " • fresh"))
                 : "";
               const labelName = yoloLabel(p.pattern, isMobile);
               const text = isMobile
-                ? `${label}:${labelName} ${confPct}${ageText}`
-                : `[${label}] ${yoloLabel(p.pattern, false)} ${confPct}${ageText}`;
+                ? `${label}:${labelName} ${confPct}${streakText}${ageText}`
+                : `[${label}] ${yoloLabel(p.pattern, false)} ${confPct}${streakText}${ageText}`;
               const yTop = Math.max(y0, y1);
               annotations.push({
                 xref: "x",
@@ -2955,6 +2957,8 @@
             { key: "score", label: "Score" },
             { key: "setup_tier", label: "Tier" },
             { key: "signal_bias", label: "Bias" },
+            { key: "breakout_state", label: "Breakout" },
+            { key: "structure_state", label: "Structure" },
             { key: "observation", label: "Observation" },
             { key: "action", label: "Reasonable Action" },
             { key: "risk_note", label: "Risk" },
@@ -2965,9 +2969,14 @@
             { key: "atr_pct_14", label: "ATR %" },
             { key: "realized_vol_20", label: "RV20 %" },
             { key: "bb_width_20", label: "BB Width %" },
+            { key: "volume_ratio_20", label: "Vol x20" },
             { key: "yolo_pattern", label: "YOLO Pattern" },
             { key: "yolo_confidence", label: "YOLO Conf" },
             { key: "yolo_age_days", label: "YOLO Age (d)" },
+            { key: "yolo_snapshots_seen", label: "YOLO Seen" },
+            { key: "yolo_current_streak", label: "YOLO Streak" },
+            { key: "yolo_first_seen_asof", label: "YOLO First Seen" },
+            { key: "yolo_last_seen_asof", label: "YOLO Last Seen" },
             { key: "candle_pattern", label: "Candle" },
             { key: "candle_bias", label: "Candle Bias" },
           ],
@@ -3057,7 +3066,16 @@
           `${dailyWindowText} • ${weeklyWindowText}`;
         renderSimpleTable(
           "reportYoloPersistenceDailyTable",
-          ["ticker", "pattern", "streak", "seen_in_lookback", "coverage_pct", "latest_confidence"],
+          [
+            { key: "ticker", label: "Ticker" },
+            { key: "pattern", label: "Pattern" },
+            { key: "streak", label: "Streak" },
+            { key: "seen_in_lookback", label: "Seen" },
+            { key: "coverage_pct", label: "Coverage %" },
+            { key: "latest_confidence", label: "Latest Conf" },
+            { key: "first_seen_asof", label: "First Seen" },
+            { key: "last_seen_asof", label: "Last Seen" },
+          ],
           persistDaily,
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
@@ -3065,7 +3083,16 @@
         );
         renderSimpleTable(
           "reportYoloPersistenceWeeklyTable",
-          ["ticker", "pattern", "streak", "seen_in_lookback", "coverage_pct", "latest_confidence"],
+          [
+            { key: "ticker", label: "Ticker" },
+            { key: "pattern", label: "Pattern" },
+            { key: "streak", label: "Streak" },
+            { key: "seen_in_lookback", label: "Seen" },
+            { key: "coverage_pct", label: "Coverage %" },
+            { key: "latest_confidence", label: "Latest Conf" },
+            { key: "first_seen_asof", label: "First Seen" },
+            { key: "last_seen_asof", label: "Last Seen" },
+          ],
           persistWeekly,
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
@@ -3149,7 +3176,19 @@
 
         // Top YOLO patterns at close
         renderSimpleTable("reportYoloTopTable",
-          ["ticker", "timeframe", "pattern", "confidence", "age_days", "x0_date", "x1_date", "as_of_date"],
+          [
+            { key: "ticker", label: "Ticker" },
+            { key: "timeframe", label: "TF" },
+            { key: "pattern", label: "Pattern" },
+            { key: "confidence", label: "Conf" },
+            { key: "age_days", label: "Age (d)" },
+            { key: "current_streak", label: "Streak" },
+            { key: "first_seen_asof", label: "First Seen" },
+            { key: "last_seen_asof", label: "Last Seen" },
+            { key: "x0_date", label: "x0" },
+            { key: "x1_date", label: "x1" },
+            { key: "as_of_date", label: "As Of" },
+          ],
           signals.yolo_top_today || [],
           true,
           (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,

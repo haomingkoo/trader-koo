@@ -695,18 +695,108 @@ def get_latest_options_summary(conn: sqlite3.Connection, ticker: str) -> dict[st
 def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, Any]]:
     if not table_exists(conn, "yolo_patterns"):
         return []
-    rows = conn.execute(
+    ticker_key = str(ticker or "").upper().strip()
+    if not ticker_key:
+        return []
+
+    def _parse_iso_date(value: Any) -> dt.date | None:
+        text = str(value or "").strip()
+        if len(text) < 10:
+            return None
+        try:
+            return dt.date.fromisoformat(text[:10])
+        except Exception:
+            return None
+
+    def _match_tolerance_days(timeframe: str) -> int:
+        return 35 if str(timeframe or "").strip().lower() == "weekly" else 14
+
+    def _snapshot_matches(anchor: dict[str, Any], candidate: dict[str, Any]) -> bool:
+        if str(anchor.get("ticker") or "") != str(candidate.get("ticker") or ""):
+            return False
+        if str(anchor.get("timeframe") or "") != str(candidate.get("timeframe") or ""):
+            return False
+        if str(anchor.get("pattern") or "") != str(candidate.get("pattern") or ""):
+            return False
+        tolerance = _match_tolerance_days(str(anchor.get("timeframe") or ""))
+        anchor_x0 = _parse_iso_date(anchor.get("x0_date"))
+        anchor_x1 = _parse_iso_date(anchor.get("x1_date"))
+        cand_x0 = _parse_iso_date(candidate.get("x0_date"))
+        cand_x1 = _parse_iso_date(candidate.get("x1_date"))
+        if anchor_x0 is not None and cand_x0 is not None and abs((anchor_x0 - cand_x0).days) <= tolerance:
+            return True
+        if anchor_x1 is not None and cand_x1 is not None and abs((anchor_x1 - cand_x1).days) <= tolerance:
+            return True
+        return False
+
+    def _current_streak(seen_asofs: set[str], asof_dates_desc: list[str], latest_asof: str | None) -> int:
+        if not latest_asof:
+            return 0
+        streak = 0
+        started = False
+        for asof in asof_dates_desc:
+            if not started:
+                if asof != latest_asof:
+                    continue
+                started = True
+            if asof in seen_asofs:
+                streak += 1
+            else:
+                break
+        return streak
+
+    history_rows = conn.execute(
         """
-        SELECT timeframe, pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date, detected_ts
+        SELECT ticker, timeframe, pattern, x0_date, x1_date, as_of_date
         FROM yolo_patterns
         WHERE ticker = ?
-        ORDER BY timeframe, confidence DESC
+          AND as_of_date IS NOT NULL
+        ORDER BY as_of_date DESC
         """,
-        (ticker,),
+        (ticker_key,),
+    ).fetchall()
+    history_payload = [
+        {
+            "ticker": str(row["ticker"] or ""),
+            "timeframe": str(row["timeframe"] or ""),
+            "pattern": str(row["pattern"] or ""),
+            "x0_date": row["x0_date"],
+            "x1_date": row["x1_date"],
+            "as_of_date": row["as_of_date"],
+        }
+        for row in history_rows
+    ]
+    asof_dates_desc: dict[str, list[str]] = {"daily": [], "weekly": []}
+    for timeframe_key in ("daily", "weekly"):
+        dates = {
+            str(row.get("as_of_date") or "")
+            for row in history_payload
+            if str(row.get("timeframe") or "").strip().lower() == timeframe_key
+            and str(row.get("as_of_date") or "").strip()
+        }
+        asof_dates_desc[timeframe_key] = sorted(dates, reverse=True)
+
+    rows = conn.execute(
+        """
+        SELECT p.timeframe, p.pattern, p.confidence, p.x0_date, p.x1_date, p.y0, p.y1, p.lookback_days, p.as_of_date, p.detected_ts
+        FROM yolo_patterns p
+        JOIN (
+            SELECT timeframe, MAX(as_of_date) AS latest_asof
+            FROM yolo_patterns
+            WHERE ticker = ?
+            GROUP BY timeframe
+        ) cur
+          ON p.timeframe = cur.timeframe
+         AND p.as_of_date = cur.latest_asof
+        WHERE p.ticker = ?
+        ORDER BY p.timeframe, p.confidence DESC
+        """,
+        (ticker_key, ticker_key),
     ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
+        item["ticker"] = ticker_key
         age_days = None
         as_of_date = str(item.get("as_of_date") or "").strip()
         x1_date = str(item.get("x1_date") or "").strip()
@@ -718,6 +808,28 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
             except Exception:
                 age_days = None
         item["age_days"] = age_days
+        seen_asofs: set[str] = set()
+        timeframe_key = str(item.get("timeframe") or "").strip().lower()
+        for hist in history_payload:
+            if _snapshot_matches(item, hist):
+                hist_asof = str(hist.get("as_of_date") or "").strip()
+                if hist_asof:
+                    seen_asofs.add(hist_asof)
+        if seen_asofs:
+            seen_sorted = sorted(seen_asofs)
+            item["first_seen_asof"] = seen_sorted[0]
+            item["last_seen_asof"] = seen_sorted[-1]
+            item["snapshots_seen"] = len(seen_asofs)
+            item["current_streak"] = _current_streak(
+                seen_asofs,
+                asof_dates_desc.get(timeframe_key, []),
+                as_of_date or None,
+            )
+        else:
+            item["first_seen_asof"] = as_of_date or None
+            item["last_seen_asof"] = as_of_date or None
+            item["snapshots_seen"] = 1 if as_of_date else 0
+            item["current_streak"] = 1 if as_of_date else 0
         out.append(item)
     return out
 
