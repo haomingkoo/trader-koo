@@ -69,6 +69,11 @@ def build_report_email_bodies(
 
     primary_delta = weekly_delta if report_kind == "weekly" else daily_delta
     top_setup = setup_rows[0] if setup_rows else {}
+    setup_cluster = _setup_cluster(setup_rows)
+    cluster_summary = ", ".join(
+        f"{row.get('ticker')} {_fmt_num(row.get('score'))} ({row.get('setup_tier') or '-'})"
+        for row in setup_cluster[:3]
+    )
     top_gainer = movers_up[0] if movers_up else {}
     top_loser = movers_down[0] if movers_down else {}
     breadth_adv = breadth.get("pct_advancing")
@@ -107,10 +112,14 @@ def build_report_email_bodies(
         )
     if top_setup:
         text_lines.append(
-            "Top setup: "
-            f"{top_setup.get('ticker')} score {_fmt_num(top_setup.get('score'))} ({top_setup.get('setup_tier') or '-'})"
-            f" — {_setup_observation(top_setup)}"
-            f" | Action: {_setup_action(top_setup)}"
+            (
+                f"Top setup cluster: {cluster_summary}. "
+                if len(setup_cluster) > 1
+                else "Top setup: "
+            )
+            + f"Highest-rated: {top_setup.get('ticker')} score {_fmt_num(top_setup.get('score'))} ({top_setup.get('setup_tier') or '-'})"
+            + f" — {_setup_observation(top_setup)}"
+            + f" | Action: {_setup_action(top_setup)}"
         )
     if key_changes:
         text_lines += ["", "Tonight's key changes:"]
@@ -353,7 +362,11 @@ def build_report_email_bodies(
             <tr>
               <td style="width:58%;padding-right:10px;vertical-align:top;">
                 <div style="border:1px solid #e6ecf5;border-radius:18px;padding:18px;background:#ffffff;">
-                  <h3 style="margin:0 0 12px;font-size:17px;line-height:22px;color:#0f172a;">Actionable Setup Read</h3>
+                  <h3 style="margin:0 0 6px;font-size:17px;line-height:22px;color:#0f172a;">Actionable Setup Board</h3>
+                  <div style="margin:0 0 12px;font-size:13px;line-height:19px;color:#64748b;">
+                    Fresh active YOLO ranks first, then recent persistence, then older context only. Several names can be valid at once; the leader cluster highlights the closest current contenders.
+                    {f"<br /><strong>Leader cluster:</strong> {_esc(cluster_summary)}" if len(setup_cluster) > 1 else ""}
+                  </div>
                   <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                     <tr>
                       <th align="left" style="padding:0 0 10px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Ticker</th>
@@ -384,7 +397,7 @@ def build_report_email_bodies(
         <div style="padding:24px 28px 28px;">
           <div style="border:1px solid #e6ecf5;border-radius:18px;padding:18px;background:#f8fbff;">
             <div style="font-size:14px;line-height:22px;color:#334155;">
-              <strong>How to use this:</strong> Bullish does not mean buy immediately, and bearish does not mean short immediately. The higher-probability cases are where pattern, trend, and level location align.<br />
+              <strong>How to use this:</strong> Bullish does not mean buy immediately, and bearish does not mean short immediately. The higher-probability cases are where fresh pattern, trend, and level location align. Old YOLO patterns are context only unless current candles and levels re-confirm the idea.<br />
               <strong>Session context:</strong> {_esc(_session_context_line(session))}<br />
               <strong>Risk mode:</strong> {_esc(_risk_mode_line(risk_filters))}<br />
               <strong>Warnings:</strong> {_esc(", ".join(str(w) for w in warnings) if warnings else "none")}<br />
@@ -578,6 +591,21 @@ def _setup_action(row: dict[str, Any]) -> str:
     if action:
         return action
     return "Watch only until trend, pattern, and level location line up."
+
+
+def _setup_cluster(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    best = rows[0]
+    best_score = float(best.get("score") or 0.0)
+    best_tier = str(best.get("setup_tier") or "").strip().upper()
+    cluster = [best]
+    for row in rows[1:5]:
+        row_tier = str(row.get("setup_tier") or "").strip().upper()
+        row_score = float(row.get("score") or 0.0)
+        if row_tier == best_tier and (best_score - row_score) <= 3.0:
+            cluster.append(row)
+    return cluster
 
 
 def _fmt_signed_pct(value: Any) -> str:
