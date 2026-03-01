@@ -1017,10 +1017,16 @@ def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) ->
         return {}
 
     close_now = float(closes.iloc[-1])
+    prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else close_now
     high_now = float(highs.iloc[-1])
     low_now = float(lows.iloc[-1])
     ma20 = float(pd.to_numeric(model.get("ma20"), errors="coerce").iloc[-1]) if "ma20" in model.columns and pd.notna(model["ma20"].iloc[-1]) else None
     ma50 = float(pd.to_numeric(model.get("ma50"), errors="coerce").iloc[-1]) if "ma50" in model.columns and pd.notna(model["ma50"].iloc[-1]) else None
+    ma100 = float(pd.to_numeric(model.get("ma100"), errors="coerce").iloc[-1]) if "ma100" in model.columns and pd.notna(model["ma100"].iloc[-1]) else None
+    ma200 = float(pd.to_numeric(model.get("ma200"), errors="coerce").iloc[-1]) if "ma200" in model.columns and pd.notna(model["ma200"].iloc[-1]) else None
+    prev_ma20 = float(pd.to_numeric(model.get("ma20"), errors="coerce").iloc[-2]) if "ma20" in model.columns and len(model) >= 2 and pd.notna(model["ma20"].iloc[-2]) else None
+    prev_ma50 = float(pd.to_numeric(model.get("ma50"), errors="coerce").iloc[-2]) if "ma50" in model.columns and len(model) >= 2 and pd.notna(model["ma50"].iloc[-2]) else None
+    prev_ma200 = float(pd.to_numeric(model.get("ma200"), errors="coerce").iloc[-2]) if "ma200" in model.columns and len(model) >= 2 and pd.notna(model["ma200"].iloc[-2]) else None
     recent_high_20 = float(highs.tail(20).max()) if len(highs) >= 20 else None
     recent_low_20 = float(lows.tail(20).min()) if len(lows) >= 20 else None
     avg_volume_20 = float(volumes.tail(20).mean()) if len(volumes) >= 20 else None
@@ -1054,6 +1060,61 @@ def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) ->
     elif ma20 is not None and ma50 is not None and close_now < ma20 < ma50:
         trend_state = "downtrend"
 
+    ma_signal = None
+    if prev_ma20 is not None and prev_ma50 is not None and ma20 is not None and ma50 is not None:
+        if prev_ma20 >= prev_ma50 and ma20 < ma50:
+            ma_signal = "bearish_20_50_cross"
+        elif prev_ma20 <= prev_ma50 and ma20 > ma50:
+            ma_signal = "bullish_20_50_cross"
+        elif ma20 < ma50:
+            ma_signal = "20_below_50"
+        elif ma20 > ma50:
+            ma_signal = "20_above_50"
+
+    ma_major_signal = None
+    if prev_ma50 is not None and prev_ma200 is not None and ma50 is not None and ma200 is not None:
+        if prev_ma50 >= prev_ma200 and ma50 < ma200:
+            ma_major_signal = "death_cross"
+        elif prev_ma50 <= prev_ma200 and ma50 > ma200:
+            ma_major_signal = "golden_cross"
+        elif ma50 < ma200:
+            ma_major_signal = "50_below_200"
+        elif ma50 > ma200:
+            ma_major_signal = "50_above_200"
+
+    ma_reclaim_state = None
+    if prev_ma20 is not None and ma20 is not None:
+        if prev_close <= prev_ma20 and close_now > ma20:
+            ma_reclaim_state = "reclaimed_ma20"
+        elif prev_close >= prev_ma20 and close_now < ma20:
+            ma_reclaim_state = "lost_ma20"
+    if prev_ma50 is not None and ma50 is not None:
+        if prev_close <= prev_ma50 and close_now > ma50:
+            ma_reclaim_state = "reclaimed_ma50"
+        elif prev_close >= prev_ma50 and close_now < ma50:
+            ma_reclaim_state = "lost_ma50"
+
+    recent_gap_state = None
+    recent_gap_days = None
+    if len(model) >= 2:
+        gap_rows = model[["high", "low"]].copy()
+        gap_rows["high"] = pd.to_numeric(gap_rows["high"], errors="coerce")
+        gap_rows["low"] = pd.to_numeric(gap_rows["low"], errors="coerce")
+        start_idx = max(1, len(gap_rows) - 4)
+        for idx in range(len(gap_rows) - 1, start_idx - 1, -1):
+            prev_high = float(gap_rows.iloc[idx - 1]["high"])
+            prev_low = float(gap_rows.iloc[idx - 1]["low"])
+            bar_high = float(gap_rows.iloc[idx]["high"])
+            bar_low = float(gap_rows.iloc[idx]["low"])
+            if bar_low > prev_high:
+                recent_gap_state = "bull_gap"
+                recent_gap_days = len(gap_rows) - 1 - idx
+                break
+            if bar_high < prev_low:
+                recent_gap_state = "bear_gap"
+                recent_gap_days = len(gap_rows) - 1 - idx
+                break
+
     level_context = "mid_range"
     if isinstance(pct_from_20d_low, (int, float)) and float(pct_from_20d_low) <= 2.5:
         level_context = "at_support"
@@ -1081,6 +1142,7 @@ def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) ->
     pct_to_resistance = None
     range_position = None
     breakout_state = "none"
+    level_event = "none"
     structure_state = "normal"
 
     def _pick_level(side: str) -> dict[str, Any] | None:
@@ -1149,6 +1211,14 @@ def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) ->
             breakout_state = "breakout_down"
         elif low_now < szl and close_now >= szl and breakout_state == "none":
             breakout_state = "failed_breakdown_down"
+    if breakout_state == "breakout_up":
+        level_event = "resistance_breakout"
+    elif breakout_state == "breakout_down":
+        level_event = "support_breakdown"
+    elif breakout_state == "failed_breakout_up":
+        level_event = "resistance_reject"
+    elif breakout_state == "failed_breakdown_down":
+        level_event = "support_reclaim"
 
     if (
         isinstance(recent_range_pct_10, (int, float))
@@ -1201,6 +1271,8 @@ def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) ->
         "close": round(close_now, 2),
         "ma20": round(ma20, 2) if ma20 is not None else None,
         "ma50": round(ma50, 2) if ma50 is not None else None,
+        "ma100": round(ma100, 2) if ma100 is not None else None,
+        "ma200": round(ma200, 2) if ma200 is not None else None,
         "avg_volume_20": round(avg_volume_20, 2) if avg_volume_20 is not None else None,
         "volume_ratio_20": round(volume_ratio_20, 2) if volume_ratio_20 is not None else None,
         "pct_vs_ma20": round(pct_vs_ma20, 2) if pct_vs_ma20 is not None else None,
@@ -1210,10 +1282,16 @@ def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) ->
         "recent_range_pct_10": round(recent_range_pct_10, 2) if recent_range_pct_10 is not None else None,
         "recent_range_pct_20": round(recent_range_pct_20, 2) if recent_range_pct_20 is not None else None,
         "trend_state": trend_state,
+        "ma_signal": ma_signal,
+        "ma_major_signal": ma_major_signal,
+        "ma_reclaim_state": ma_reclaim_state,
         "level_context": level_context,
         "stretch_state": stretch_state,
         "breakout_state": breakout_state,
+        "level_event": level_event,
         "structure_state": structure_state,
+        "recent_gap_state": recent_gap_state,
+        "recent_gap_days": recent_gap_days,
         "support_level": support_level,
         "support_zone_low": support_zone_low,
         "support_zone_high": support_zone_high,

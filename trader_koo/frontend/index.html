@@ -2841,7 +2841,9 @@
             age_days: row.age_days,
             current_streak: row.current_streak,
             snapshots_seen: row.snapshots_seen,
-            first_seen_asof: row.first_seen_asof,
+            first_seen_asof: Number(row.snapshots_seen) <= 1 && Number(row.age_days) > 0 && row.first_seen_asof
+              ? `retained ${row.first_seen_asof}`
+              : row.first_seen_asof,
             last_seen_asof: row.last_seen_asof,
             confidence: row.confidence,
           })),

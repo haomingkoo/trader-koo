@@ -900,10 +900,16 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
         lows = [b[3] for b in bars]
         volumes = [b[5] for b in bars]
         close_now = closes[-1]
+        prev_close = closes[-2] if len(closes) >= 2 else close_now
         high_now = highs[-1]
         low_now = lows[-1]
         ma20 = sum(closes[-20:]) / 20.0 if len(closes) >= 20 else None
         ma50 = sum(closes[-50:]) / 50.0 if len(closes) >= 50 else None
+        ma100 = sum(closes[-100:]) / 100.0 if len(closes) >= 100 else None
+        ma200 = sum(closes[-200:]) / 200.0 if len(closes) >= 200 else None
+        prev_ma20 = sum(closes[-21:-1]) / 20.0 if len(closes) >= 21 else None
+        prev_ma50 = sum(closes[-51:-1]) / 50.0 if len(closes) >= 51 else None
+        prev_ma200 = sum(closes[-201:-1]) / 200.0 if len(closes) >= 201 else None
         recent_high_20 = max(highs[-20:]) if len(highs) >= 20 else None
         recent_low_20 = min(lows[-20:]) if len(lows) >= 20 else None
         recent_high_prev_20 = max(highs[-21:-1]) if len(highs) >= 21 else None
@@ -948,6 +954,68 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
         ):
             trend_state = "downtrend"
 
+        ma_signal = None
+        if (
+            prev_ma20 is not None
+            and prev_ma50 is not None
+            and ma20 is not None
+            and ma50 is not None
+        ):
+            if prev_ma20 >= prev_ma50 and ma20 < ma50:
+                ma_signal = "bearish_20_50_cross"
+            elif prev_ma20 <= prev_ma50 and ma20 > ma50:
+                ma_signal = "bullish_20_50_cross"
+            elif ma20 < ma50:
+                ma_signal = "20_below_50"
+            elif ma20 > ma50:
+                ma_signal = "20_above_50"
+
+        ma_major_signal = None
+        if (
+            prev_ma50 is not None
+            and prev_ma200 is not None
+            and ma50 is not None
+            and ma200 is not None
+        ):
+            if prev_ma50 >= prev_ma200 and ma50 < ma200:
+                ma_major_signal = "death_cross"
+            elif prev_ma50 <= prev_ma200 and ma50 > ma200:
+                ma_major_signal = "golden_cross"
+            elif ma50 < ma200:
+                ma_major_signal = "50_below_200"
+            elif ma50 > ma200:
+                ma_major_signal = "50_above_200"
+
+        ma_reclaim_state = None
+        if prev_ma20 is not None and ma20 is not None:
+            if prev_close <= prev_ma20 and close_now > ma20:
+                ma_reclaim_state = "reclaimed_ma20"
+            elif prev_close >= prev_ma20 and close_now < ma20:
+                ma_reclaim_state = "lost_ma20"
+        if prev_ma50 is not None and ma50 is not None:
+            if prev_close <= prev_ma50 and close_now > ma50:
+                ma_reclaim_state = "reclaimed_ma50"
+            elif prev_close >= prev_ma50 and close_now < ma50:
+                ma_reclaim_state = "lost_ma50"
+
+        recent_gap_state = None
+        recent_gap_days = None
+        if len(bars) >= 2:
+            start_idx = max(1, len(bars) - 4)
+            for idx in range(len(bars) - 1, start_idx - 1, -1):
+                prev_high = highs[idx - 1]
+                prev_low = lows[idx - 1]
+                bar_high = highs[idx]
+                bar_low = lows[idx]
+                if bar_low > prev_high:
+                    recent_gap_state = "bull_gap"
+                    recent_gap_days = len(bars) - 1 - idx
+                    break
+                if bar_high < prev_low:
+                    recent_gap_state = "bear_gap"
+                    recent_gap_days = len(bars) - 1 - idx
+                    break
+
         level_context = "mid_range"
         if isinstance(pct_from_20d_low, (int, float)) and pct_from_20d_low <= 2.5:
             level_context = "at_support"
@@ -975,6 +1043,7 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
         pct_to_resistance = None
         range_position = None
         breakout_state = "none"
+        level_event = "none"
         structure_state = "normal"
 
         try:
@@ -1075,6 +1144,14 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
                         breakout_state = "breakout_down"
                     elif low_now < szl and close_now >= szl and breakout_state == "none":
                         breakout_state = "failed_breakdown_down"
+                if breakout_state == "breakout_up":
+                    level_event = "resistance_breakout"
+                elif breakout_state == "breakout_down":
+                    level_event = "support_breakdown"
+                elif breakout_state == "failed_breakout_up":
+                    level_event = "resistance_reject"
+                elif breakout_state == "failed_breakdown_down":
+                    level_event = "support_reclaim"
         except Exception:
             pass
 
@@ -1112,6 +1189,8 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
             "close": round(close_now, 2),
             "ma20": round(ma20, 2) if ma20 is not None else None,
             "ma50": round(ma50, 2) if ma50 is not None else None,
+            "ma100": round(ma100, 2) if ma100 is not None else None,
+            "ma200": round(ma200, 2) if ma200 is not None else None,
             "avg_volume_20": round(avg_volume_20, 2) if avg_volume_20 is not None else None,
             "volume_ratio_20": round(volume_ratio_20, 2) if volume_ratio_20 is not None else None,
             "pct_vs_ma20": round(pct_vs_ma20, 2) if pct_vs_ma20 is not None else None,
@@ -1123,10 +1202,16 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
             "pct_from_20d_high": round(pct_from_20d_high, 2) if pct_from_20d_high is not None else None,
             "pct_from_20d_low": round(pct_from_20d_low, 2) if pct_from_20d_low is not None else None,
             "trend_state": trend_state,
+            "ma_signal": ma_signal,
+            "ma_major_signal": ma_major_signal,
+            "ma_reclaim_state": ma_reclaim_state,
             "level_context": level_context,
             "stretch_state": stretch_state,
             "breakout_state": breakout_state,
+            "level_event": level_event,
             "structure_state": structure_state,
+            "recent_gap_state": recent_gap_state,
+            "recent_gap_days": recent_gap_days,
             "support_level": support_level,
             "support_zone_low": support_zone_low,
             "support_zone_high": support_zone_high,
@@ -1274,7 +1359,13 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     level = str(row.get("level_context") or "mid_range")
     stretch = str(row.get("stretch_state") or "normal")
     breakout_state = str(row.get("breakout_state") or "none")
+    level_event = str(row.get("level_event") or "none")
     structure_state = str(row.get("structure_state") or "normal")
+    ma_signal = str(row.get("ma_signal") or "")
+    ma_major_signal = str(row.get("ma_major_signal") or "")
+    ma_reclaim_state = str(row.get("ma_reclaim_state") or "")
+    recent_gap_state = str(row.get("recent_gap_state") or "")
+    recent_gap_days = row.get("recent_gap_days")
     pct_change = float(row.get("pct_change") or 0.0)
     yolo_conf = float(row.get("yolo_confidence") or 0.0)
     candle_conf = float(row.get("candle_confidence") or 0.0)
@@ -1302,6 +1393,20 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
 
     yolo_age_factor = _yolo_age_factor(yolo_age_days, yolo_timeframe)
     yolo_recency = _yolo_recency_label(yolo_age_days, yolo_timeframe)
+    fresh_bear_gap = recent_gap_state == "bear_gap" and isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2
+    fresh_bull_gap = recent_gap_state == "bull_gap" and isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2
+    below_short_mas = bool(
+        isinstance(row.get("pct_vs_ma20"), (int, float))
+        and isinstance(row.get("pct_vs_ma50"), (int, float))
+        and float(row.get("pct_vs_ma20")) < 0.0
+        and float(row.get("pct_vs_ma50")) < 0.0
+    )
+    above_short_mas = bool(
+        isinstance(row.get("pct_vs_ma20"), (int, float))
+        and isinstance(row.get("pct_vs_ma50"), (int, float))
+        and float(row.get("pct_vs_ma20")) > 0.0
+        and float(row.get("pct_vs_ma50")) > 0.0
+    )
 
     if valuation_bias == "bullish":
         bull_score += 10.0 + (float(fund.get("long_points") or 0) * 2.0)
@@ -1351,6 +1456,97 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         bear_score += 4.0
         confirmations_bear += 1
         contradictions_bull += 1
+
+    if level_event == "resistance_breakout":
+        bull_score += 8.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif level_event == "support_reclaim":
+        bull_score += 6.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif level_event == "support_breakdown":
+        bear_score += 8.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+    elif level_event == "resistance_reject":
+        bear_score += 6.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+
+    if ma_reclaim_state == "reclaimed_ma20":
+        bull_score += 4.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif ma_reclaim_state == "reclaimed_ma50":
+        bull_score += 6.0
+        confirmations_bull += 1
+        contradictions_bear += 1
+    elif ma_reclaim_state == "lost_ma20":
+        bear_score += 4.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+    elif ma_reclaim_state == "lost_ma50":
+        bear_score += 6.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+
+    if recent_gap_state == "bull_gap":
+        if fresh_bull_gap:
+            bull_score += 6.0
+            confirmations_bull += 1
+            contradictions_bear += 1
+        else:
+            bull_score += 2.0
+    elif recent_gap_state == "bear_gap":
+        if fresh_bear_gap:
+            bear_score += 6.0
+            confirmations_bear += 1
+            contradictions_bull += 1
+        else:
+            bear_score += 2.0
+
+    if fresh_bear_gap:
+        bear_score += 4.0
+        contradictions_bull += 1
+        if below_short_mas:
+            bear_score += 6.0
+            contradictions_bull += 1
+            bull_score -= 3.0
+        if isinstance(pct_change, (int, float)) and float(pct_change) <= -3.0:
+            bear_score += 4.0
+            confirmations_bear += 1
+        if ma_signal == "bearish_20_50_cross":
+            bear_score += 4.0
+            confirmations_bear += 1
+        if level_event == "support_breakdown":
+            bear_score += 4.0
+        if breakout_state == "failed_breakdown_down":
+            bull_score += 2.0
+    elif fresh_bull_gap:
+        bull_score += 4.0
+        contradictions_bear += 1
+        if above_short_mas:
+            bull_score += 6.0
+            contradictions_bear += 1
+            bear_score -= 3.0
+        if isinstance(pct_change, (int, float)) and float(pct_change) >= 3.0:
+            bull_score += 4.0
+            confirmations_bull += 1
+        if ma_signal == "bullish_20_50_cross":
+            bull_score += 4.0
+            confirmations_bull += 1
+        if level_event == "resistance_breakout":
+            bull_score += 4.0
+
+    if ma_major_signal == "death_cross":
+        bear_score += 5.0
+        confirmations_bear += 1
+        contradictions_bull += 1
+    elif ma_major_signal == "golden_cross":
+        bull_score += 5.0
+        confirmations_bull += 1
+        contradictions_bear += 1
 
     if breakout_state == "breakout_up":
         bull_score += 8.0
@@ -1408,6 +1604,21 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         bear_score -= 5.0
         contradictions_bear += 1
         bull_score += 2.0
+
+    pct_vs_ma20 = row.get("pct_vs_ma20")
+    if isinstance(pct_vs_ma20, (int, float)):
+        if float(pct_vs_ma20) <= -3.0:
+            bear_score += 3.0
+            contradictions_bull += 1
+        elif float(pct_vs_ma20) >= 3.0:
+            bull_score += 3.0
+            contradictions_bear += 1
+    pct_vs_ma50 = row.get("pct_vs_ma50")
+    if isinstance(pct_vs_ma50, (int, float)):
+        if float(pct_vs_ma50) <= -3.0:
+            bear_score += 2.0
+        elif float(pct_vs_ma50) >= 3.0:
+            bull_score += 2.0
 
     rv20 = row.get("realized_vol_20")
     atr = row.get("atr_pct_14")
@@ -1488,6 +1699,20 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
             contradictions += 1
     if yolo_recency == "stale" and yolo_bias in {"bullish", "bearish"}:
         score -= 3.0
+    if (
+        valuation_bias == "bullish"
+        and fresh_bear_gap
+        and candle_bias != "bullish"
+    ):
+        score -= 6.0
+        contradictions += 1
+    if (
+        valuation_bias == "bearish"
+        and fresh_bull_gap
+        and candle_bias != "bearish"
+    ):
+        score -= 6.0
+        contradictions += 1
 
     score -= contradictions * 5.0
     if confirmations == 0:
@@ -1528,10 +1753,16 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     bias = str(row.get("signal_bias") or "neutral")
     family = str(row.get("setup_family") or "neutral_watch")
     trend = str(row.get("trend_state") or "mixed")
+    ma_signal = str(row.get("ma_signal") or "")
+    ma_major_signal = str(row.get("ma_major_signal") or "")
+    ma_reclaim_state = str(row.get("ma_reclaim_state") or "")
     level = str(row.get("level_context") or "mid_range")
+    level_event = str(row.get("level_event") or "none")
     stretch = str(row.get("stretch_state") or "normal")
     breakout_state = str(row.get("breakout_state") or "none")
     structure_state = str(row.get("structure_state") or "normal")
+    recent_gap_state = str(row.get("recent_gap_state") or "")
+    recent_gap_days = row.get("recent_gap_days")
     candle_bias = str(row.get("candle_bias") or "neutral")
     valuation_bias = str(row.get("valuation_bias") or "neutral")
     valuation_notes = str(row.get("valuation_notes") or "").strip()
@@ -1582,12 +1813,67 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         "bearish_watch": "bearish watchlist candidate",
         "neutral_watch": "mixed / unconfirmed candidate",
     }.get(family, "mixed / unconfirmed candidate")
+    family_short_label = {
+        "bullish_reversal": "Bullish reversal",
+        "bullish_continuation": "Bullish continuation",
+        "bullish_watch": "Bullish watch",
+        "bearish_reversal": "Bearish reversal",
+        "bearish_continuation": "Bearish continuation",
+        "bearish_watch": "Bearish watch",
+        "neutral_watch": "Neutral watch",
+    }.get(family, "Neutral watch")
+    bias_short_label = {
+        "bullish": "bullish bias",
+        "bearish": "bearish bias",
+        "neutral": "neutral bias",
+    }.get(bias, "neutral bias")
+    trend_short_label = {
+        "uptrend": "uptrend",
+        "downtrend": "downtrend",
+        "mixed": "mixed trend",
+    }.get(trend, "mixed trend")
+    ma_signal_label = {
+        "bearish_20_50_cross": "recent bearish 20/50 cross",
+        "bullish_20_50_cross": "recent bullish 20/50 cross",
+        "20_below_50": "20 below 50",
+        "20_above_50": "20 above 50",
+    }.get(ma_signal)
+    ma_major_signal_label = {
+        "death_cross": "classic death cross (50 below 200)",
+        "golden_cross": "classic golden cross (50 above 200)",
+        "50_below_200": "50 below 200",
+        "50_above_200": "50 above 200",
+    }.get(ma_major_signal)
+    ma_reclaim_label = {
+        "reclaimed_ma20": "reclaimed the 20-day average",
+        "reclaimed_ma50": "reclaimed the 50-day average",
+        "lost_ma20": "lost the 20-day average",
+        "lost_ma50": "lost the 50-day average",
+    }.get(ma_reclaim_state)
 
     observation_parts: list[str] = []
     observation_parts.append(family_label)
     if valuation_notes:
         observation_parts.append(valuation_notes)
-    if breakout_state == "breakout_up":
+    if ma_major_signal == "death_cross":
+        observation_parts.append("classic 50/200 death cross is in place")
+    elif ma_major_signal == "golden_cross":
+        observation_parts.append("classic 50/200 golden cross is in place")
+    elif ma_signal == "bearish_20_50_cross":
+        observation_parts.append("recent bearish 20/50 crossover")
+    elif ma_signal == "bullish_20_50_cross":
+        observation_parts.append("recent bullish 20/50 crossover")
+    if ma_reclaim_label:
+        observation_parts.append(ma_reclaim_label)
+    if level_event == "resistance_breakout":
+        observation_parts.append("resistance got blown through")
+    elif level_event == "support_breakdown":
+        observation_parts.append("support got blown through")
+    elif level_event == "resistance_reject":
+        observation_parts.append("price rejected at resistance")
+    elif level_event == "support_reclaim":
+        observation_parts.append("price reclaimed broken support")
+    elif breakout_state == "breakout_up":
         observation_parts.append("price is already through resistance")
     elif breakout_state == "breakout_down":
         observation_parts.append("price is already below support")
@@ -1605,6 +1891,16 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         observation_parts.append("move is becoming parabolic / extended")
     elif structure_state == "parabolic_down":
         observation_parts.append("selloff is becoming climactic / stretched")
+    if recent_gap_state == "bear_gap":
+        if isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2:
+            observation_parts.append("fresh bearish gap is still influencing price")
+        else:
+            observation_parts.append("older bearish gap is still overhead")
+    elif recent_gap_state == "bull_gap":
+        if isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2:
+            observation_parts.append("fresh bullish gap is supporting the move")
+        else:
+            observation_parts.append("older bullish gap remains in play")
     if pattern:
         if yolo_recency == "fresh":
             observation_parts.append(f"fresh YOLO: {pattern}")
@@ -1666,6 +1962,9 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         elif structure_state == "tight_consolidation_high":
             actionability = "conditional"
             action = "Compression under resistance. Higher-probability entry is a decisive close through the level or a clean retest after the break."
+        if recent_gap_state == "bear_gap" and isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2:
+            actionability = "wait"
+            action = "Recent bearish gap is still in control. Wait for price to repair the gap or reclaim short-term structure before treating this as a long."
         if stretch == "extended_up" or large_day:
             actionability = "wait"
             action = "Bullish idea, but do not chase strength. Prefer a pullback or breakout retest."
@@ -1703,6 +2002,9 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         elif structure_state == "tight_consolidation_low":
             actionability = "conditional"
             action = "Compression above support. Higher-probability short only comes if support gives way with follow-through."
+        if recent_gap_state == "bull_gap" and isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2:
+            actionability = "wait"
+            action = "Recent bullish gap is still defending the move. Wait for the gap to fail before leaning bearish."
         if stretch == "extended_down" or large_day:
             actionability = "wait"
             action = "Avoid chasing the flush. Better setup is a failed bounce or a clean support break."
@@ -1757,6 +2059,10 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         risk_notes.append("stale YOLO context")
     elif aging_yolo and pattern:
         risk_notes.append("older YOLO context")
+    if ma_major_signal == "death_cross":
+        risk_notes.append("death cross regime")
+    elif ma_signal == "bearish_20_50_cross":
+        risk_notes.append("bearish 20/50 crossover")
 
     if valuation_bias != "neutral" and valuation_bias != bias:
         observation_parts.append("valuation does not fully agree with the direction")
@@ -1773,10 +2079,25 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     if isinstance(yolo_age_days, (int, float)) and pattern:
         level_bits.append(f"YOLO age {int(float(yolo_age_days))}d")
     if isinstance(yolo_snapshots_seen, int) and yolo_snapshots_seen > 0 and yolo_first_seen_asof:
-        if isinstance(yolo_current_streak, int) and yolo_current_streak > 1:
+        if (
+            isinstance(yolo_age_days, (int, float))
+            and int(float(yolo_age_days)) > 0
+            and int(yolo_snapshots_seen) <= 1
+        ):
+            level_bits.append(f"retained history starts {yolo_first_seen_asof}")
+        elif isinstance(yolo_current_streak, int) and yolo_current_streak > 1:
             level_bits.append(f"YOLO {yolo_current_streak}x since {yolo_first_seen_asof}")
         else:
             level_bits.append(f"YOLO first seen {yolo_first_seen_asof}")
+    if ma_signal_label:
+        level_bits.append(f"MA {ma_signal_label}")
+    if ma_major_signal_label:
+        level_bits.append(f"MA {ma_major_signal_label}")
+    if ma_reclaim_label:
+        level_bits.append(ma_reclaim_label)
+    if recent_gap_state:
+        recent_gap_label = "fresh" if isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2 else "older"
+        level_bits.append(f"{recent_gap_label} {recent_gap_state.replace('_', ' ')}")
     if breakout_state != "none":
         level_bits.append(breakout_state.replace("_", " "))
     if structure_state != "normal":
@@ -1784,6 +2105,14 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     if isinstance(volume_ratio_20, (int, float)):
         level_bits.append(f"vol {float(volume_ratio_20):.2f}x")
     level_suffix = f" | {' / '.join(level_bits)}" if level_bits else ""
+    if near_support and near_resistance:
+        location_short = "between key levels"
+    elif near_support:
+        location_short = "near support"
+    elif near_resistance:
+        location_short = "near resistance"
+    else:
+        location_short = "mid-range"
     return {
         "signal_bias": bias,
         "observation": observation,
@@ -1791,8 +2120,8 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         "action": action,
         "risk_note": ", ".join(risk_notes[:3]) if risk_notes else "none",
         "technical_read": (
-            f"{family} | {bias} | {trend} | "
-            f"{'support' if near_support else ('resistance' if near_resistance else 'mid-range')} | "
+            f"{family_short_label} | {bias_short_label} | {trend_short_label} | "
+            f"{location_short} | "
             f"vs MA20 {_fmt_pct_short(pct_vs_ma20)}{level_suffix}"
         ),
     }
