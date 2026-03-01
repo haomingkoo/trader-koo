@@ -2215,12 +2215,29 @@ def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any
     setup_rows = signals.get("setup_quality_top") or []
     if setup_rows:
         best = setup_rows[0]
+        best_score = float(best.get("score") or 0.0)
+        best_tier = str(best.get("setup_tier") or "").strip().upper()
+        setup_cluster: list[dict[str, Any]] = [best]
+        for row in setup_rows[1:5]:
+            row_tier = str(row.get("setup_tier") or "").strip().upper()
+            row_score = float(row.get("score") or 0.0)
+            if row_tier == best_tier and (best_score - row_score) <= 3.0:
+                setup_cluster.append(row)
+        cluster_label = ", ".join(
+            f"{row.get('ticker')} {row.get('score')} ({row.get('setup_tier')})"
+            for row in setup_cluster[:3]
+        )
         changes.append(
             {
                 "slug": "setup",
-                "title": "Top Setup Candidate",
+                "title": "Top Setup Cluster" if len(setup_cluster) > 1 else "Top Setup Candidate",
                 "detail": (
-                    f"{best.get('ticker')} scored {best.get('score')} ({best.get('setup_tier')}) "
+                    (
+                        f"Leaders: {cluster_label}. "
+                        if len(setup_cluster) > 1
+                        else ""
+                    )
+                    + f"Highest-rated: {best.get('ticker')} scored {best.get('score')} ({best.get('setup_tier')}) "
                     f"with move {best.get('pct_change')}%, discount {best.get('discount_pct')}%, "
                     f"PEG {best.get('peg')}, ATR {best.get('atr_pct_14') if best.get('atr_pct_14') is not None else '-'}%. "
                     f"Read: {best.get('observation') or 'no technical read yet'} "

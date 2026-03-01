@@ -1348,10 +1348,19 @@
         <h3>Daily Report Read Order</h3>
         <ol class="guide-list">
           <li><b>Tonight's 5 Key Changes</b>: one-screen summary of what materially changed.</li>
-          <li><b>Confluence Score</b>: start in compact view, then open <b>More Metrics</b> only when you need to audit volatility and aging inputs.</li>
+          <li><b>Confluence Score</b>: start in compact view, then open <b>More Metrics</b> only when you need to audit volatility and aging inputs. The top line is the current leader or leader cluster, not the only tradable name.</li>
           <li><b>Sector Heatmap</b>: identify leadership/laggards and rotation.</li>
           <li><b>YOLO Changes vs Previous Run</b>: actionable delta, not raw count noise.</li>
           <li><b>Large Moves + 52-week Extremes</b>: momentum continuation or exhaustion candidates.</li>
+        </ol>
+
+        <h3>How Confluence Score Is Built</h3>
+        <ol class="guide-list">
+          <li><b>Step 1: classify the setup family.</b> The report first asks what the chart is trying to do now: bullish reversal, bullish continuation, bearish reversal, bearish continuation, or neutral watch.</li>
+          <li><b>Step 2: weight fresh information first.</b> The latest active YOLO closest to the most recent close matters most. Recent persistent YOLO matters next. Older YOLO is downgraded to context, not treated as a fresh trigger.</li>
+          <li><b>Step 3: look for confirmation.</b> Candlestick confirmation, trend state, MA reclaims/crosses, support/resistance location, gaps, breakouts/breakdowns, stretch, and volume all raise or reduce conviction.</li>
+          <li><b>Step 4: use valuation as context, not as direction.</b> Discount and PEG can improve or weaken the case, but cheap alone does not make a bullish setup and expensive alone does not make a bearish one.</li>
+          <li><b>Step 5: assign the tier.</b> <b>A/B</b> requires aligned evidence. <b>C/D</b> means weaker alignment, stale context, or missing confirmation. Several names can be valid at the same time; use the chart to decide which one has the cleanest current tape.</li>
         </ol>
 
         <h3>Chart + Levels Workflow</h3>
@@ -1359,6 +1368,7 @@
           <li>Load ticker from report or search box.</li>
           <li>Mark location versus <b>primary/secondary support/resistance</b>.</li>
           <li>Check <b>open gaps</b> and <b>trendlines</b> for context.</li>
+          <li>Use <b>YOLO Audit</b> to see whether the latest pattern is fresh, recent and persisting, or just stale context.</li>
           <li>Enable <b>Rule/Hybrid Lines</b> and <b>YOLO Patterns</b> to compare machine + rule signals.</li>
           <li>Turn on <b>Bollinger Bands</b> if you want to gauge stretch/squeeze conditions.</li>
           <li>Decide only when multiple signals agree (structure + momentum + valuation).</li>
@@ -1366,11 +1376,11 @@
 
         <h3>Chart Toggles (How to Use)</h3>
         <ul class="guide-list">
-          <li><b>Show Trendlines</b>: reveal support/resistance line geometry from recent pivots.</li>
-          <li><b>Show Patterns</b>: display top pattern overlays detected by rule/hybrid logic.</li>
-          <li><b>Rule/Hybrid Lines</b>: keep this on for primary pattern structure.</li>
+          <li><b>Trendlines</b>: reveal support/resistance line geometry from recent pivots.</li>
+          <li><b>YOLO Boxes</b>: draw the latest active YOLO box on the chart. This is current-context only, not full history.</li>
+          <li><b>Rule/Hybrid Lines</b>: show rule-based structure when available. If the toggle says <b>(none)</b>, there is no usable overlay for that ticker/timeframe.</li>
           <li><b>Bollinger Bands</b>: optional volatility envelope (20, 2) around price.</li>
-          <li><b>YOLO Patterns</b>: AI-detected pattern windows (daily + weekly labels).</li>
+          <li><b>YOLO Patterns</b>: AI-detected pattern labels. Always read the age and audit table before treating one as actionable.</li>
           <li><b>Bars D/W</b>: switch between daily and weekly candles for timeframe alignment.</li>
         </ul>
 
@@ -1381,6 +1391,7 @@
             <li>Computer-vision detections on candlestick images (daily/weekly timeframe).</li>
             <li><b>x0_date/x1_date</b> define the detected pattern window.</li>
             <li><b>age_days</b> shows how old the pattern end-date is relative to run date.</li>
+            <li><b>Fresh</b> YOLO can contribute to actionability. <b>Recent persistent</b> YOLO is useful secondary evidence. <b>Stale</b> YOLO is context only.</li>
             <li>Use <b>YOLO Changes</b> to identify truly new or invalidated patterns.</li>
           </ul>
         </details>
