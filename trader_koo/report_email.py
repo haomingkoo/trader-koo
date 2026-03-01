@@ -70,10 +70,12 @@ def build_report_email_bodies(
     primary_delta = weekly_delta if report_kind == "weekly" else daily_delta
     top_setup = setup_rows[0] if setup_rows else {}
     setup_cluster = _setup_cluster(setup_rows)
+    cluster_family = str(top_setup.get("setup_family") or "").replace("_", " ").strip()
     cluster_summary = ", ".join(
         f"{row.get('ticker')} {_fmt_num(row.get('score'))} ({row.get('setup_tier') or '-'})"
         for row in setup_cluster[:3]
     )
+    setup_sections = _setup_bucket_sections(setup_rows)
     top_gainer = movers_up[0] if movers_up else {}
     top_loser = movers_down[0] if movers_down else {}
     breadth_adv = breadth.get("pct_advancing")
@@ -114,12 +116,21 @@ def build_report_email_bodies(
         text_lines.append(
             (
                 f"Top setup cluster: {cluster_summary}. "
+                + (f"Shared setup family: {cluster_family}. " if len(setup_cluster) > 1 and cluster_family else "")
                 if len(setup_cluster) > 1
                 else "Top setup: "
             )
             + f"Highest-rated: {top_setup.get('ticker')} score {_fmt_num(top_setup.get('score'))} ({top_setup.get('setup_tier') or '-'})"
             + f" — {_setup_observation(top_setup)}"
             + f" | Action: {_setup_action(top_setup)}"
+        )
+    for title, _, bucket_rows in setup_sections:
+        text_lines.append(
+            f"{title}: "
+            + ", ".join(
+                f"{row.get('ticker')} {_fmt_num(row.get('score'))} ({row.get('setup_tier') or '-'})"
+                for row in bucket_rows[:4]
+            )
         )
     if key_changes:
         text_lines += ["", "Tonight's key changes:"]
@@ -233,20 +244,30 @@ def build_report_email_bodies(
             preview_rows_html.append("<tr>" + "".join(cards_out[idx:idx + 2]) + "</tr>")
         preview_cards_html = "".join(preview_rows_html)
 
-    setup_table_rows = []
-    for row in setup_rows[:6]:
-        setup_table_rows.append(
-            "<tr>"
-            f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;\">{_esc(row.get('ticker'))}</td>"
-            f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;\">{_esc(_fmt_num(row.get('score')))}</td>"
-            f"<td style=\"padding:10px 0 10px 12px;border-bottom:1px solid #eef2f7;color:#334155;\">"
-            f"<div><strong>Read:</strong> {_esc(_setup_observation(row))}</div>"
-            f"<div style=\"margin-top:4px;color:#475569;\"><strong>Action:</strong> {_esc(_setup_action(row))}</div>"
-            f"</td>"
-            "</tr>"
+    setup_section_blocks = []
+    for title, desc, bucket_rows in setup_sections:
+        bucket_rows_html = []
+        for row in bucket_rows:
+            bucket_rows_html.append(
+                "<tr>"
+                f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;width:70px;vertical-align:top;\">{_esc(row.get('ticker'))}</td>"
+                f"<td style=\"padding:10px 0;border-bottom:1px solid #eef2f7;text-align:right;color:#0f172a;width:60px;vertical-align:top;\">{_esc(_fmt_num(row.get('score')))}</td>"
+                f"<td style=\"padding:10px 0 10px 12px;border-bottom:1px solid #eef2f7;color:#334155;vertical-align:top;\">"
+                f"<div><strong>Read:</strong> {_esc(_setup_observation(row))}</div>"
+                f"<div style=\"margin-top:4px;color:#475569;\"><strong>Action:</strong> {_esc(_setup_action(row))}</div>"
+                f"</td>"
+                "</tr>"
+            )
+        setup_section_blocks.append(
+            "<div style=\"margin-top:16px;border:1px solid #eef2f7;border-radius:16px;padding:16px;background:#f8fbff;\">"
+            f"<div style=\"font-size:14px;line-height:20px;font-weight:800;color:#0f172a;\">{_esc(title)}</div>"
+            f"<div style=\"margin-top:4px;font-size:12px;line-height:18px;color:#64748b;\">{_esc(desc)}</div>"
+            "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:10px;\">"
+            + "".join(bucket_rows_html)
+            + "</table></div>"
         )
-    setup_rows_html = "".join(setup_table_rows) or (
-        "<tr><td colspan=\"3\" style=\"padding:10px 0;color:#6b7280;\">No setup candidates</td></tr>"
+    setup_rows_html = "".join(setup_section_blocks) or (
+        "<div style=\"margin-top:16px;font-size:13px;line-height:19px;color:#6b7280;\">No setup candidates.</div>"
     )
 
     sector_table_rows = []
@@ -366,15 +387,9 @@ def build_report_email_bodies(
                   <div style="margin:0 0 12px;font-size:13px;line-height:19px;color:#64748b;">
                     Fresh active YOLO ranks first, then recent persistence, then older context only. Several names can be valid at once; the leader cluster highlights the closest current contenders.
                     {f"<br /><strong>Leader cluster:</strong> {_esc(cluster_summary)}" if len(setup_cluster) > 1 else ""}
+                    {f"<br /><strong>Shared setup family:</strong> {_esc(cluster_family)}" if len(setup_cluster) > 1 and cluster_family else ""}
                   </div>
-                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                    <tr>
-                      <th align="left" style="padding:0 0 10px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Ticker</th>
-                      <th align="right" style="padding:0 0 10px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Score</th>
-                      <th align="left" style="padding:0 0 10px 12px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Observation / Action</th>
-                    </tr>
-                    {setup_rows_html}
-                  </table>
+                  {setup_rows_html}
                 </div>
               </td>
               <td style="width:42%;padding-left:10px;vertical-align:top;">
@@ -599,13 +614,91 @@ def _setup_cluster(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     best = rows[0]
     best_score = float(best.get("score") or 0.0)
     best_tier = str(best.get("setup_tier") or "").strip().upper()
+    best_family = str(best.get("setup_family") or "").strip().lower()
     cluster = [best]
-    for row in rows[1:5]:
+    for row in rows[1:8]:
         row_tier = str(row.get("setup_tier") or "").strip().upper()
+        row_family = str(row.get("setup_family") or "").strip().lower()
         row_score = float(row.get("score") or 0.0)
-        if row_tier == best_tier and (best_score - row_score) <= 3.0:
-            cluster.append(row)
+        if row_tier != best_tier:
+            continue
+        if best_family and row_family != best_family:
+            continue
+        if (best_score - row_score) > 3.0:
+            continue
+        cluster.append(row)
     return cluster
+
+
+def _setup_bucket_sections(rows: list[dict[str, Any]]) -> list[tuple[str, str, list[dict[str, Any]]]]:
+    if not rows:
+        return []
+    used: set[str] = set()
+
+    def _row_key(row: dict[str, Any]) -> str:
+        return str(row.get("ticker") or "").strip().upper()
+
+    def _take(predicate, limit: int = 4) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        for row in rows:
+            key = _row_key(row)
+            if not key or key in used:
+                continue
+            if not predicate(row):
+                continue
+            used.add(key)
+            selected.append(row)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    def _recency(row: dict[str, Any]) -> str:
+        return str(row.get("yolo_recency") or "").strip().lower()
+
+    def _seen(row: dict[str, Any]) -> int:
+        try:
+            return int(row.get("yolo_snapshots_seen") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _streak(row: dict[str, Any]) -> int:
+        try:
+            return int(row.get("yolo_current_streak") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    fresh_rows = _take(lambda row: _recency(row) == "fresh")
+    persistent_rows = _take(
+        lambda row: _recency(row) == "recent" and max(_seen(row), _streak(row)) >= 2
+    )
+    stale_rows = _take(lambda row: _recency(row) in {"aging", "stale"})
+
+    sections: list[tuple[str, str, list[dict[str, Any]]]] = []
+    if fresh_rows:
+        sections.append(
+            (
+                "Fresh Setups",
+                "Most actionable first. These have the freshest active YOLO context closest to the latest close.",
+                fresh_rows,
+            )
+        )
+    if persistent_rows:
+        sections.append(
+            (
+                "Recent Persistent Setups",
+                "Secondary priority. These are still recent and have repeated across retained snapshots.",
+                persistent_rows,
+            )
+        )
+    if stale_rows:
+        sections.append(
+            (
+                "Stale-Context Watchlist",
+                "Context only. Useful for awareness, but not a fresh trigger unless current candles and levels reconfirm the idea.",
+                stale_rows,
+            )
+        )
+    return sections
 
 
 def _fmt_signed_pct(value: Any) -> str:

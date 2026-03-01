@@ -2127,6 +2127,28 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _setup_cluster_rows(rows: list[dict[str, Any]], *, score_window: float = 3.0, scan_limit: int = 8) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    best = rows[0]
+    best_score = float(best.get("score") or 0.0)
+    best_tier = str(best.get("setup_tier") or "").strip().upper()
+    best_family = str(best.get("setup_family") or "").strip().lower()
+    cluster: list[dict[str, Any]] = [best]
+    for row in rows[1:scan_limit]:
+        row_tier = str(row.get("setup_tier") or "").strip().upper()
+        row_family = str(row.get("setup_family") or "").strip().lower()
+        row_score = float(row.get("score") or 0.0)
+        if row_tier != best_tier:
+            continue
+        if best_family and row_family != best_family:
+            continue
+        if (best_score - row_score) > score_window:
+            continue
+        cluster.append(row)
+    return cluster
+
+
 def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any]) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
 
@@ -2215,14 +2237,8 @@ def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any
     setup_rows = signals.get("setup_quality_top") or []
     if setup_rows:
         best = setup_rows[0]
-        best_score = float(best.get("score") or 0.0)
-        best_tier = str(best.get("setup_tier") or "").strip().upper()
-        setup_cluster: list[dict[str, Any]] = [best]
-        for row in setup_rows[1:5]:
-            row_tier = str(row.get("setup_tier") or "").strip().upper()
-            row_score = float(row.get("score") or 0.0)
-            if row_tier == best_tier and (best_score - row_score) <= 3.0:
-                setup_cluster.append(row)
+        setup_cluster = _setup_cluster_rows(setup_rows)
+        cluster_family = str(best.get("setup_family") or "").replace("_", " ").strip()
         cluster_label = ", ".join(
             f"{row.get('ticker')} {row.get('score')} ({row.get('setup_tier')})"
             for row in setup_cluster[:3]
@@ -2234,6 +2250,7 @@ def build_tonight_key_changes(signals: dict[str, Any], yolo_delta: dict[str, Any
                 "detail": (
                     (
                         f"Leaders: {cluster_label}. "
+                        + (f"Shared setup family: {cluster_family}. " if cluster_family else "")
                         if len(setup_cluster) > 1
                         else ""
                     )
