@@ -77,6 +77,15 @@ def _as_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _clean_optional_url(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw or raw == "*":
+        return None
+    if raw.startswith(("http://", "https://")):
+        return raw.rstrip("/")
+    return raw
+
+
 def _resolve_log_dir() -> Path:
     requested = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
     try:
@@ -108,6 +117,10 @@ ADMIN_AUTH_WINDOW_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_WINDOW_SEC"
 ADMIN_AUTH_MAX_FAILS = max(3, int(os.getenv("TRADER_KOO_ADMIN_AUTH_MAX_FAILS", "20")))
 ADMIN_AUTH_BLOCK_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_BLOCK_SEC", "600")))
 EXPOSE_STATUS_INTERNAL = _as_bool(os.getenv("TRADER_KOO_EXPOSE_STATUS_INTERNAL", "0"))
+CONTROL_CENTER_CONTRACT_VERSION = "2026-03-01"
+STATUS_BASE_URL = _clean_optional_url(os.getenv("TRADER_KOO_BASE_URL"))
+STATUS_APP_URL = _clean_optional_url(os.getenv("TRADER_KOO_APP_URL")) or _clean_optional_url(os.getenv("TRADER_KOO_ALLOWED_ORIGIN"))
+STATUS_REPO_URL = _clean_optional_url(os.getenv("TRADER_KOO_REPO_URL"))
 _STATUS_CACHE_LOCK = threading.Lock()
 _STATUS_CACHE_AT: dt.datetime | None = None
 _STATUS_CACHE_PAYLOAD: dict[str, Any] | None = None
@@ -2591,13 +2604,16 @@ _yolo_seed_thread: threading.Thread | None = None
 def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
     """Trigger full YOLO seed for all tickers in background (no --only-new)."""
     global _yolo_seed_thread
+    timeframe_norm = str(timeframe or "both").strip().lower() or "both"
+    if timeframe_norm not in {"daily", "weekly", "both"}:
+        raise HTTPException(status_code=400, detail="Invalid timeframe. Use one of: daily, weekly, both")
     if _yolo_seed_thread and _yolo_seed_thread.is_alive():
         return {"ok": False, "message": "Seed already running — wait for it to finish"}
     script = Path(__file__).resolve().parents[1] / "scripts" / "run_yolo_patterns.py"
     cmd = [
         sys.executable, str(script),
         "--db-path", str(DB_PATH),
-        "--timeframe", timeframe,
+        "--timeframe", timeframe_norm,
         "--lookback-days", "180",
         "--weekly-lookback-days", "730",
         "--sleep", "0.05",
@@ -2610,7 +2626,8 @@ def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
     _yolo_seed_thread.start()
     return {
         "ok": True,
-        "message": f"YOLO seed started (timeframe={timeframe}) — tail /data/logs/yolo_patterns.log or check Railway logs",
+        "message": f"YOLO seed started (timeframe={timeframe_norm}) — tail /data/logs/yolo_patterns.log or check Railway logs",
+        "timeframe": timeframe_norm,
     }
 
 
@@ -3342,6 +3359,30 @@ def status() -> dict[str, Any]:
         if resume_candidate:
             warnings.append("post-ingest yolo/report recovery recommended")
 
+        activity = {
+            "tracked_tickers": counts["tracked_tickers"] if counts else 0,
+            "tickers_processed": int((latest_run or {}).get("tickers_processed") or 0),
+            "tickers_total": int((latest_run or {}).get("tickers_total") or 0),
+            "tickers_ok": int((latest_run or {}).get("tickers_ok") or 0),
+            "tickers_failed": int((latest_run or {}).get("tickers_failed") or 0),
+            "price_rows": counts["price_rows"] if counts else 0,
+            "fundamentals_rows": counts["fundamentals_rows"] if counts else 0,
+            "options_rows": counts["options_rows"] if counts else 0,
+        }
+        service_meta = {
+            "service": "trader_koo-api",
+            "contract": "control-center-v1",
+            "contract_version": CONTROL_CENTER_CONTRACT_VERSION,
+            "auth_header": "X-API-Key",
+            "admin_auth_configured": bool(API_KEY),
+        }
+        if STATUS_BASE_URL:
+            service_meta["base_url"] = STATUS_BASE_URL
+        if STATUS_APP_URL:
+            service_meta["app_url"] = STATUS_APP_URL
+        if STATUS_REPO_URL:
+            service_meta["repo_url"] = STATUS_REPO_URL
+
         payload = {
             **base,
             "ok": len(warnings) == 0,
@@ -3349,6 +3390,7 @@ def status() -> dict[str, Any]:
             "latest_run": latest_run,
             "pipeline_active": pipeline_active,
             "pipeline_stage": pipeline_stage,
+            "service_meta": service_meta,
             "pipeline": {
                 "active": pipeline_active,
                 "stage": pipeline_stage,
@@ -3378,6 +3420,7 @@ def status() -> dict[str, Any]:
                 "fundamentals_rows": counts["fundamentals_rows"] if counts else 0,
                 "options_rows": counts["options_rows"] if counts else 0,
             },
+            "activity": activity,
             "latest_data": {
                 "price_date": latest_price_date,
                 "fund_snapshot": latest_fund_snapshot,

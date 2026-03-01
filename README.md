@@ -121,12 +121,60 @@ When `TRADER_KOO_API_KEY` is set, admin routes under `/api/admin/*` require `X-A
 | GET | `/api/dashboard/{ticker}` | Full chart payload (OHLCV + all layers) |
 | GET | `/api/opportunities` | Valuation screening across all tickers |
 | GET | `/api/yolo/{ticker}` | YOLO pattern detections for one ticker |
+| GET | `/api/admin/pipeline-status` | Current pipeline stage, completion markers, stale-run detection |
+| GET | `/api/admin/logs?name=cron&lines=80` | Tail a known service log (`cron`, `update_market_db`, `yolo`, `api`) |
 | POST | `/api/admin/trigger-update` | Manually trigger the daily data refresh |
 | POST | `/api/admin/run-yolo-seed` | Trigger full YOLO seed (background thread) |
 | GET | `/api/admin/yolo-status` | YOLO thread state + DB summary + log tail |
 | GET | `/api/admin/yolo-events` | Persisted per-ticker YOLO outcomes (ok/skipped/timeout/failed + reason) |
 | GET | `/api/admin/daily-report` | Latest daily run report + report history |
 | POST | `/api/admin/email-latest-report` | Email latest report (SMTP; optional `?to=you@example.com`) |
+
+---
+
+## Standalone control-center contract
+
+`trader_koo` is intended to be queried by a separate control-center service, not to embed one.
+
+Public read endpoints:
+
+- `GET /api/health`
+- `GET /api/status`
+
+Admin endpoints protected by `X-API-Key`:
+
+- `GET /api/admin/pipeline-status`
+- `GET /api/admin/daily-report`
+- `GET /api/admin/logs?name=cron&lines=80`
+- `POST /api/admin/trigger-update?mode=full|yolo|report`
+- `POST /api/admin/run-yolo-seed?timeframe=both`
+
+`/api/status` exposes the summary fields the control center should read first:
+
+- `ok`
+- `latest_run.status`
+- `latest_run.finished_ts`
+- `pipeline_stage`
+- `freshness.price_age_days`
+- `activity.tickers_processed`
+- `activity.tickers_total`
+- `activity.tracked_tickers`
+
+It also includes `service_meta` for external inventory wiring:
+
+- `service_meta.contract`
+- `service_meta.contract_version`
+- `service_meta.auth_header`
+- `service_meta.base_url` when `TRADER_KOO_BASE_URL` is set
+- `service_meta.app_url` when `TRADER_KOO_APP_URL` is set
+- `service_meta.repo_url` when `TRADER_KOO_REPO_URL` is set
+
+Shared secret model:
+
+- `trader_koo` validates `X-API-Key` with `TRADER_KOO_API_KEY`
+- `koo-control-center` should use the same secret value in its `TRADER_KOO_API_KEY`
+
+There is no real `/api/admin/cost` endpoint yet. Until you add one, the control center should use health, freshness, and activity trends instead of spend charts.
 
 ---
 
@@ -144,11 +192,15 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | `TRADER_KOO_LOG_LEVEL` | `INFO` (default) or `DEBUG` |
 | `TRADER_KOO_REPORT_DIR` | Report directory, e.g. `/data/reports` |
 | `TRADER_KOO_ALLOWED_ORIGIN` | Your Railway app URL (CORS) |
+| `TRADER_KOO_BASE_URL` | Optional canonical base URL exposed in `/api/status` for control-center discovery |
+| `TRADER_KOO_APP_URL` | Optional human-facing app URL exposed in `/api/status`; also used for report email links |
+| `TRADER_KOO_REPO_URL` | Optional repo URL exposed in `/api/status` for external inventory wiring |
 | `TRADER_KOO_INGEST_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout in ingest (default `120`) |
 | `TRADER_KOO_PRICE_TIMEOUT_SEC` | yfinance HTTP timeout in seconds (default `25`) |
 | `TRADER_KOO_PRICE_RETRY_ATTEMPTS` | yfinance retry attempts per ticker (default `3`) |
 | `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout for YOLO (default `180`) |
 | `TRADER_KOO_PIPELINE_STALE_SEC` | Max age for pipeline stage log line before status auto-resets to idle (default `1200`) |
+| `TRADER_KOO_ALPHA_VANTAGE_KEY` | Optional Alpha Vantage key for the earnings calendar feed |
 | `TRADER_KOO_SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) |
 | `TRADER_KOO_SMTP_PORT` | SMTP port (e.g. `587` for STARTTLS, `465` for SSL) |
 | `TRADER_KOO_SMTP_SECURITY` | `starttls` (default), `ssl`, or `none` |

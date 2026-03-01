@@ -23,4 +23,5 @@ trader_koo/data/cv/windows/
 # Env
 .env
 .env.*
+!.env.example
 *.pt
