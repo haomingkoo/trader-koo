@@ -51,6 +51,12 @@ from trader_koo.report_email import (
     build_report_email_subject,
     report_email_app_url,
 )
+from trader_koo.scripts.generate_daily_report import (
+    _describe_setup as _report_describe_setup,
+    _score_setup_from_confluence as _report_score_setup_from_confluence,
+    _yolo_age_factor as _report_yolo_age_factor,
+    _yolo_recency_label as _report_yolo_recency_label,
+)
 from trader_koo.structure.gaps import GapConfig, detect_gaps, select_gaps_for_display
 from trader_koo.structure.hybrid_patterns import HybridPatternConfig, score_hybrid_patterns
 from trader_koo.structure.levels import LevelConfig, add_fallback_levels, build_levels_from_pivots, select_target_levels
@@ -692,58 +698,95 @@ def get_latest_options_summary(conn: sqlite3.Connection, ticker: str) -> dict[st
     }
 
 
+def _parse_iso_date(value: Any) -> dt.date | None:
+    text = str(value or "").strip()
+    if len(text) < 10:
+        return None
+    try:
+        return dt.date.fromisoformat(text[:10])
+    except Exception:
+        return None
+
+
+def _yolo_match_tolerance_days(timeframe: str) -> int:
+    return 35 if str(timeframe or "").strip().lower() == "weekly" else 14
+
+
+def _yolo_snapshot_matches(anchor: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    if str(anchor.get("ticker") or "") != str(candidate.get("ticker") or ""):
+        return False
+    if str(anchor.get("timeframe") or "") != str(candidate.get("timeframe") or ""):
+        return False
+    if str(anchor.get("pattern") or "") != str(candidate.get("pattern") or ""):
+        return False
+    tolerance = _yolo_match_tolerance_days(str(anchor.get("timeframe") or ""))
+    anchor_x0 = _parse_iso_date(anchor.get("x0_date"))
+    anchor_x1 = _parse_iso_date(anchor.get("x1_date"))
+    cand_x0 = _parse_iso_date(candidate.get("x0_date"))
+    cand_x1 = _parse_iso_date(candidate.get("x1_date"))
+    if anchor_x0 is not None and cand_x0 is not None and abs((anchor_x0 - cand_x0).days) <= tolerance:
+        return True
+    if anchor_x1 is not None and cand_x1 is not None and abs((anchor_x1 - cand_x1).days) <= tolerance:
+        return True
+    return False
+
+
+def _yolo_streak_for_asofs(seen_asofs: set[str], asof_dates_desc: list[str], latest_asof: str | None) -> int:
+    if not latest_asof:
+        return 0
+    streak = 0
+    started = False
+    for asof in asof_dates_desc:
+        if not started:
+            if asof != latest_asof:
+                continue
+            started = True
+        if asof in seen_asofs:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _yolo_priority_score(item: dict[str, Any], *, active_now: bool) -> float:
+    age_factor = float(_report_yolo_age_factor(item.get("age_days"), item.get("timeframe")) or 0.0)
+    streak = min(6, int(item.get("current_streak") or 0))
+    confidence = float(item.get("confidence") or 0.0)
+    timeframe_bonus = 3.0 if str(item.get("timeframe") or "").strip().lower() == "daily" else 0.0
+    active_bonus = 8.0 if active_now else 0.0
+    return round((age_factor * 100.0) + (streak * 6.0) + (confidence * 10.0) + timeframe_bonus + active_bonus, 1)
+
+
+def _yolo_signal_role(item: dict[str, Any], *, active_now: bool) -> str:
+    age_factor = float(_report_yolo_age_factor(item.get("age_days"), item.get("timeframe")) or 0.0)
+    streak = int(item.get("current_streak") or 0)
+    if not active_now:
+        return "historical_context"
+    if age_factor >= 0.8 and (streak >= 2 or float(item.get("confidence") or 0.0) >= 0.6):
+        return "primary"
+    if age_factor >= 0.5 or streak >= 2:
+        return "secondary"
+    if age_factor > 0.0:
+        return "recent_context"
+    return "stale_context"
+
+
+def _yolo_role_rank(role: str) -> int:
+    return {
+        "primary": 4,
+        "secondary": 3,
+        "recent_context": 2,
+        "stale_context": 1,
+        "historical_context": 0,
+    }.get(str(role or ""), 0)
+
+
 def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, Any]]:
     if not table_exists(conn, "yolo_patterns"):
         return []
     ticker_key = str(ticker or "").upper().strip()
     if not ticker_key:
         return []
-
-    def _parse_iso_date(value: Any) -> dt.date | None:
-        text = str(value or "").strip()
-        if len(text) < 10:
-            return None
-        try:
-            return dt.date.fromisoformat(text[:10])
-        except Exception:
-            return None
-
-    def _match_tolerance_days(timeframe: str) -> int:
-        return 35 if str(timeframe or "").strip().lower() == "weekly" else 14
-
-    def _snapshot_matches(anchor: dict[str, Any], candidate: dict[str, Any]) -> bool:
-        if str(anchor.get("ticker") or "") != str(candidate.get("ticker") or ""):
-            return False
-        if str(anchor.get("timeframe") or "") != str(candidate.get("timeframe") or ""):
-            return False
-        if str(anchor.get("pattern") or "") != str(candidate.get("pattern") or ""):
-            return False
-        tolerance = _match_tolerance_days(str(anchor.get("timeframe") or ""))
-        anchor_x0 = _parse_iso_date(anchor.get("x0_date"))
-        anchor_x1 = _parse_iso_date(anchor.get("x1_date"))
-        cand_x0 = _parse_iso_date(candidate.get("x0_date"))
-        cand_x1 = _parse_iso_date(candidate.get("x1_date"))
-        if anchor_x0 is not None and cand_x0 is not None and abs((anchor_x0 - cand_x0).days) <= tolerance:
-            return True
-        if anchor_x1 is not None and cand_x1 is not None and abs((anchor_x1 - cand_x1).days) <= tolerance:
-            return True
-        return False
-
-    def _current_streak(seen_asofs: set[str], asof_dates_desc: list[str], latest_asof: str | None) -> int:
-        if not latest_asof:
-            return 0
-        streak = 0
-        started = False
-        for asof in asof_dates_desc:
-            if not started:
-                if asof != latest_asof:
-                    continue
-                started = True
-            if asof in seen_asofs:
-                streak += 1
-            else:
-                break
-        return streak
 
     history_rows = conn.execute(
         """
@@ -811,7 +854,7 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
         seen_asofs: set[str] = set()
         timeframe_key = str(item.get("timeframe") or "").strip().lower()
         for hist in history_payload:
-            if _snapshot_matches(item, hist):
+            if _yolo_snapshot_matches(item, hist):
                 hist_asof = str(hist.get("as_of_date") or "").strip()
                 if hist_asof:
                     seen_asofs.add(hist_asof)
@@ -820,7 +863,7 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
             item["first_seen_asof"] = seen_sorted[0]
             item["last_seen_asof"] = seen_sorted[-1]
             item["snapshots_seen"] = len(seen_asofs)
-            item["current_streak"] = _current_streak(
+            item["current_streak"] = _yolo_streak_for_asofs(
                 seen_asofs,
                 asof_dates_desc.get(timeframe_key, []),
                 as_of_date or None,
@@ -830,8 +873,489 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
             item["last_seen_asof"] = as_of_date or None
             item["snapshots_seen"] = 1 if as_of_date else 0
             item["current_streak"] = 1 if as_of_date else 0
+        item["yolo_recency"] = _report_yolo_recency_label(age_days, timeframe_key)
+        item["signal_role"] = _yolo_signal_role(item, active_now=True)
+        item["priority_score"] = _yolo_priority_score(item, active_now=True)
         out.append(item)
+    out.sort(
+        key=lambda item: (
+            _yolo_role_rank(str(item.get("signal_role") or "")),
+            float(item.get("priority_score") or 0.0),
+            int(item.get("current_streak") or 0),
+            float(item.get("confidence") or 0.0),
+        ),
+        reverse=True,
+    )
     return out
+
+
+def get_yolo_audit(conn: sqlite3.Connection, ticker: str, limit: int = 12) -> list[dict[str, Any]]:
+    if not table_exists(conn, "yolo_patterns"):
+        return []
+    ticker_key = str(ticker or "").upper().strip()
+    if not ticker_key:
+        return []
+
+    rows = conn.execute(
+        """
+        SELECT ticker, timeframe, pattern, confidence, x0_date, x1_date, as_of_date, detected_ts
+        FROM yolo_patterns
+        WHERE ticker = ?
+          AND as_of_date IS NOT NULL
+        ORDER BY timeframe, as_of_date DESC, confidence DESC
+        """,
+        (ticker_key,),
+    ).fetchall()
+    if not rows:
+        return []
+
+    history_payload = [dict(row) for row in rows]
+    asof_dates_desc: dict[str, list[str]] = {"daily": [], "weekly": []}
+    latest_asof_by_timeframe: dict[str, str | None] = {"daily": None, "weekly": None}
+    for timeframe_key in ("daily", "weekly"):
+        dates = {
+            str(row.get("as_of_date") or "")
+            for row in history_payload
+            if str(row.get("timeframe") or "").strip().lower() == timeframe_key
+            and str(row.get("as_of_date") or "").strip()
+        }
+        ordered_dates = sorted(dates, reverse=True)
+        asof_dates_desc[timeframe_key] = ordered_dates
+        latest_asof_by_timeframe[timeframe_key] = ordered_dates[0] if ordered_dates else None
+
+    groups: list[dict[str, Any]] = []
+    for row in history_payload:
+        matched = None
+        for group in groups:
+            if str(group.get("timeframe") or "") != str(row.get("timeframe") or ""):
+                continue
+            if str(group.get("pattern") or "") != str(row.get("pattern") or ""):
+                continue
+            if _yolo_snapshot_matches(group["anchor"], row):
+                matched = group
+                break
+        if matched is None:
+            groups.append(
+                {
+                    "timeframe": str(row.get("timeframe") or ""),
+                    "pattern": str(row.get("pattern") or ""),
+                    "anchor": row,
+                    "rows": [row],
+                }
+            )
+        else:
+            matched["rows"].append(row)
+
+    audit_rows: list[dict[str, Any]] = []
+    for group in groups:
+        grouped_rows = list(group.get("rows") or [])
+        if not grouped_rows:
+            continue
+        grouped_rows.sort(
+            key=lambda item: (
+                str(item.get("as_of_date") or ""),
+                float(item.get("confidence") or 0.0),
+            ),
+            reverse=True,
+        )
+        latest = grouped_rows[0]
+        timeframe_key = str(latest.get("timeframe") or "").strip().lower()
+        seen_asofs = {
+            str(item.get("as_of_date") or "").strip()
+            for item in grouped_rows
+            if str(item.get("as_of_date") or "").strip()
+        }
+        seen_sorted = sorted(seen_asofs)
+        first_seen = seen_sorted[0] if seen_sorted else None
+        last_seen = seen_sorted[-1] if seen_sorted else None
+        age_days = None
+        if last_seen and str(latest.get("x1_date") or "").strip():
+            last_seen_dt = _parse_iso_date(last_seen)
+            x1_dt = _parse_iso_date(latest.get("x1_date"))
+            if last_seen_dt is not None and x1_dt is not None:
+                age_days = max(0, (last_seen_dt - x1_dt).days)
+        active_now = bool(last_seen and last_seen == latest_asof_by_timeframe.get(timeframe_key))
+        streak = _yolo_streak_for_asofs(seen_asofs, asof_dates_desc.get(timeframe_key, []), last_seen)
+        audit_item = {
+            "ticker": ticker_key,
+            "timeframe": latest.get("timeframe"),
+            "pattern": latest.get("pattern"),
+            "confidence": round(float(latest.get("confidence") or 0.0), 3),
+            "x0_date": latest.get("x0_date"),
+            "x1_date": latest.get("x1_date"),
+            "age_days": age_days,
+            "yolo_recency": _report_yolo_recency_label(age_days, timeframe_key),
+            "first_seen_asof": first_seen,
+            "last_seen_asof": last_seen,
+            "snapshots_seen": len(seen_asofs),
+            "current_streak": streak,
+            "active_now": active_now,
+        }
+        audit_item["signal_role"] = _yolo_signal_role(audit_item, active_now=active_now)
+        audit_item["priority_score"] = _yolo_priority_score(audit_item, active_now=active_now)
+        audit_rows.append(audit_item)
+
+    audit_rows.sort(
+        key=lambda item: (
+            1 if bool(item.get("active_now")) else 0,
+            _yolo_role_rank(str(item.get("signal_role") or "")),
+            float(item.get("priority_score") or 0.0),
+            str(item.get("last_seen_asof") or ""),
+            float(item.get("confidence") or 0.0),
+        ),
+        reverse=True,
+    )
+    return audit_rows[: max(1, int(limit))]
+
+
+def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) -> dict[str, Any]:
+    closes = pd.to_numeric(model.get("close"), errors="coerce")
+    highs = pd.to_numeric(model.get("high"), errors="coerce")
+    lows = pd.to_numeric(model.get("low"), errors="coerce")
+    volumes = pd.to_numeric(model.get("volume"), errors="coerce").fillna(0.0)
+    if closes.empty:
+        return {}
+
+    close_now = float(closes.iloc[-1])
+    high_now = float(highs.iloc[-1])
+    low_now = float(lows.iloc[-1])
+    ma20 = float(pd.to_numeric(model.get("ma20"), errors="coerce").iloc[-1]) if "ma20" in model.columns and pd.notna(model["ma20"].iloc[-1]) else None
+    ma50 = float(pd.to_numeric(model.get("ma50"), errors="coerce").iloc[-1]) if "ma50" in model.columns and pd.notna(model["ma50"].iloc[-1]) else None
+    recent_high_20 = float(highs.tail(20).max()) if len(highs) >= 20 else None
+    recent_low_20 = float(lows.tail(20).min()) if len(lows) >= 20 else None
+    avg_volume_20 = float(volumes.tail(20).mean()) if len(volumes) >= 20 else None
+    volume_ratio_20 = (float(volumes.iloc[-1]) / avg_volume_20) if avg_volume_20 and avg_volume_20 > 0 else None
+    pct_vs_ma20 = ((close_now / ma20) - 1.0) * 100.0 if ma20 and ma20 > 0 else None
+    pct_vs_ma50 = ((close_now / ma50) - 1.0) * 100.0 if ma50 and ma50 > 0 else None
+    pct_from_20d_high = (
+        ((recent_high_20 - close_now) / recent_high_20) * 100.0
+        if recent_high_20 and recent_high_20 > 0
+        else None
+    )
+    pct_from_20d_low = (
+        ((close_now - recent_low_20) / recent_low_20) * 100.0
+        if recent_low_20 and recent_low_20 > 0
+        else None
+    )
+    recent_range_pct_10 = (
+        ((float(highs.tail(10).max()) - float(lows.tail(10).min())) / close_now) * 100.0
+        if len(highs) >= 10 and close_now > 0
+        else None
+    )
+    recent_range_pct_20 = (
+        ((float(highs.tail(20).max()) - float(lows.tail(20).min())) / close_now) * 100.0
+        if len(highs) >= 20 and close_now > 0
+        else None
+    )
+
+    trend_state = "mixed"
+    if ma20 is not None and ma50 is not None and close_now > ma20 > ma50:
+        trend_state = "uptrend"
+    elif ma20 is not None and ma50 is not None and close_now < ma20 < ma50:
+        trend_state = "downtrend"
+
+    level_context = "mid_range"
+    if isinstance(pct_from_20d_low, (int, float)) and float(pct_from_20d_low) <= 2.5:
+        level_context = "at_support"
+    elif isinstance(pct_from_20d_high, (int, float)) and float(pct_from_20d_high) <= 2.5:
+        level_context = "at_resistance"
+
+    stretch_state = "normal"
+    if isinstance(pct_vs_ma20, (int, float)):
+        if float(pct_vs_ma20) >= 8.0:
+            stretch_state = "extended_up"
+        elif float(pct_vs_ma20) <= -8.0:
+            stretch_state = "extended_down"
+
+    support_level = None
+    support_zone_low = None
+    support_zone_high = None
+    support_tier = None
+    support_touches = None
+    resistance_level = None
+    resistance_zone_low = None
+    resistance_zone_high = None
+    resistance_tier = None
+    resistance_touches = None
+    pct_to_support = None
+    pct_to_resistance = None
+    range_position = None
+    breakout_state = "none"
+    structure_state = "normal"
+
+    def _pick_level(side: str) -> dict[str, Any] | None:
+        if levels is None or levels.empty:
+            return None
+        pool = levels[levels["type"] == side].copy()
+        if pool.empty:
+            return None
+        if side == "support":
+            preferred = pool[pool["level"] <= close_now].sort_values("level", ascending=False)
+        else:
+            preferred = pool[pool["level"] >= close_now].sort_values("level", ascending=True)
+        if preferred.empty:
+            preferred = pool.sort_values(["dist", "touches", "recency_score"], ascending=[True, False, False])
+        return preferred.iloc[0].to_dict() if not preferred.empty else None
+
+    support = _pick_level("support")
+    resistance = _pick_level("resistance")
+    if support:
+        support_level = round(float(support.get("level") or 0.0), 2)
+        support_zone_low = round(float(support.get("zone_low") or 0.0), 2)
+        support_zone_high = round(float(support.get("zone_high") or 0.0), 2)
+        support_tier = str(support.get("tier") or "")
+        support_touches = int(support.get("touches") or 0)
+        if support_level > 0:
+            pct_to_support = round(((close_now - support_level) / support_level) * 100.0, 2)
+    if resistance:
+        resistance_level = round(float(resistance.get("level") or 0.0), 2)
+        resistance_zone_low = round(float(resistance.get("zone_low") or 0.0), 2)
+        resistance_zone_high = round(float(resistance.get("zone_high") or 0.0), 2)
+        resistance_tier = str(resistance.get("tier") or "")
+        resistance_touches = int(resistance.get("touches") or 0)
+        if resistance_level > 0:
+            pct_to_resistance = round(((resistance_level - close_now) / resistance_level) * 100.0, 2)
+    if (
+        isinstance(support_level, (int, float))
+        and isinstance(resistance_level, (int, float))
+        and resistance_level > support_level
+    ):
+        range_position = round((close_now - support_level) / max(resistance_level - support_level, 0.01), 3)
+    if isinstance(support_zone_low, (int, float)) and close_now < float(support_zone_low):
+        level_context = "below_support"
+    elif isinstance(resistance_zone_high, (int, float)) and close_now > float(resistance_zone_high):
+        level_context = "above_resistance"
+    elif isinstance(support_zone_high, (int, float)) and close_now <= float(support_zone_high):
+        level_context = "at_support"
+    elif isinstance(resistance_zone_low, (int, float)) and close_now >= float(resistance_zone_low):
+        level_context = "at_resistance"
+    elif isinstance(range_position, (int, float)):
+        if float(range_position) <= 0.35:
+            level_context = "closer_support"
+        elif float(range_position) >= 0.65:
+            level_context = "closer_resistance"
+        else:
+            level_context = "mid_range"
+
+    if isinstance(resistance_zone_high, (int, float)):
+        rzh = float(resistance_zone_high)
+        if close_now > rzh:
+            breakout_state = "breakout_up"
+        elif high_now > rzh and close_now <= rzh:
+            breakout_state = "failed_breakout_up"
+    if isinstance(support_zone_low, (int, float)):
+        szl = float(support_zone_low)
+        if close_now < szl:
+            breakout_state = "breakout_down"
+        elif low_now < szl and close_now >= szl and breakout_state == "none":
+            breakout_state = "failed_breakdown_down"
+
+    if (
+        isinstance(recent_range_pct_10, (int, float))
+        and isinstance(recent_range_pct_20, (int, float))
+        and float(recent_range_pct_10) <= 7.0
+        and float(recent_range_pct_20) <= 12.0
+    ):
+        if (
+            (isinstance(range_position, (int, float)) and float(range_position) >= 0.58)
+            or (isinstance(resistance_touches, int) and resistance_touches >= 2)
+        ):
+            structure_state = "tight_consolidation_high"
+        elif (
+            (isinstance(range_position, (int, float)) and float(range_position) <= 0.42)
+            or (isinstance(support_touches, int) and support_touches >= 2)
+        ):
+            structure_state = "tight_consolidation_low"
+        else:
+            structure_state = "tight_consolidation_mid"
+
+    if isinstance(pct_vs_ma20, (int, float)) and trend_state == "uptrend" and float(pct_vs_ma20) >= 7.5:
+        if breakout_state == "breakout_up" or (
+            isinstance(pct_from_20d_high, (int, float)) and float(pct_from_20d_high) <= 1.5
+        ):
+            structure_state = "parabolic_up"
+    elif isinstance(pct_vs_ma20, (int, float)) and trend_state == "downtrend" and float(pct_vs_ma20) <= -7.5:
+        if breakout_state == "breakout_down" or (
+            isinstance(pct_from_20d_low, (int, float)) and float(pct_from_20d_low) <= 1.5
+        ):
+            structure_state = "parabolic_down"
+
+    returns = closes.pct_change().dropna().tail(20)
+    realized_vol_20 = None
+    if len(returns) >= 5:
+        rv = float(returns.std(ddof=0) * (252.0 ** 0.5) * 100.0)
+        realized_vol_20 = round(rv, 2) if rv > 0 else None
+    bb_width_20 = None
+    if len(closes) >= 20:
+        win = closes.tail(20)
+        mean_20 = float(win.mean())
+        sd_20 = float(win.std(ddof=0))
+        if mean_20 > 0 and sd_20 >= 0:
+            bb_width_20 = round(((4.0 * sd_20) / mean_20) * 100.0, 2)
+
+    atr_pct_14 = None
+    if "atr_pct" in model.columns and pd.notna(model["atr_pct"].iloc[-1]):
+        atr_pct_14 = round(float(model["atr_pct"].iloc[-1]), 2)
+
+    return {
+        "close": round(close_now, 2),
+        "ma20": round(ma20, 2) if ma20 is not None else None,
+        "ma50": round(ma50, 2) if ma50 is not None else None,
+        "avg_volume_20": round(avg_volume_20, 2) if avg_volume_20 is not None else None,
+        "volume_ratio_20": round(volume_ratio_20, 2) if volume_ratio_20 is not None else None,
+        "pct_vs_ma20": round(pct_vs_ma20, 2) if pct_vs_ma20 is not None else None,
+        "pct_vs_ma50": round(pct_vs_ma50, 2) if pct_vs_ma50 is not None else None,
+        "pct_from_20d_high": round(pct_from_20d_high, 2) if pct_from_20d_high is not None else None,
+        "pct_from_20d_low": round(pct_from_20d_low, 2) if pct_from_20d_low is not None else None,
+        "recent_range_pct_10": round(recent_range_pct_10, 2) if recent_range_pct_10 is not None else None,
+        "recent_range_pct_20": round(recent_range_pct_20, 2) if recent_range_pct_20 is not None else None,
+        "trend_state": trend_state,
+        "level_context": level_context,
+        "stretch_state": stretch_state,
+        "breakout_state": breakout_state,
+        "structure_state": structure_state,
+        "support_level": support_level,
+        "support_zone_low": support_zone_low,
+        "support_zone_high": support_zone_high,
+        "support_tier": support_tier,
+        "support_touches": support_touches,
+        "resistance_level": resistance_level,
+        "resistance_zone_low": resistance_zone_low,
+        "resistance_zone_high": resistance_zone_high,
+        "resistance_tier": resistance_tier,
+        "resistance_touches": resistance_touches,
+        "pct_to_support": pct_to_support,
+        "pct_to_resistance": pct_to_resistance,
+        "range_position": range_position,
+        "atr_pct_14": atr_pct_14,
+        "realized_vol_20": realized_vol_20,
+        "bb_width_20": bb_width_20,
+    }
+
+
+def _pick_chart_candle_signal(candle_patterns: pd.DataFrame, asof_date: str) -> dict[str, Any]:
+    if candle_patterns is None or candle_patterns.empty or not asof_date:
+        return {}
+    rows = candle_patterns.copy()
+    rows["date"] = pd.to_datetime(rows["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    latest = rows[rows["date"] == asof_date].copy()
+    if latest.empty:
+        return {}
+    latest["confidence"] = pd.to_numeric(latest.get("confidence"), errors="coerce").fillna(0.0)
+    latest = latest.sort_values("confidence", ascending=False)
+    top = latest.iloc[0].to_dict()
+    return {
+        "candle_pattern": top.get("pattern"),
+        "candle_bias": top.get("bias") or "neutral",
+        "candle_confidence": round(float(top.get("confidence") or 0.0), 2) if top.get("confidence") is not None else None,
+    }
+
+
+def _build_chart_commentary_payload(
+    *,
+    ticker: str,
+    fund: dict[str, Any],
+    model: pd.DataFrame,
+    levels: pd.DataFrame,
+    candle_patterns: pd.DataFrame,
+    yolo_patterns: list[dict[str, Any]],
+    yolo_audit: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if model.empty:
+        return {}
+    asof_date = str(pd.to_datetime(model["date"].iloc[-1], errors="coerce").strftime("%Y-%m-%d"))
+    close_now = float(pd.to_numeric(model["close"], errors="coerce").iloc[-1])
+    prev_close = float(pd.to_numeric(model["close"], errors="coerce").iloc[-2]) if len(model) >= 2 else close_now
+    pct_change = (((close_now - prev_close) / prev_close) * 100.0) if prev_close > 0 else 0.0
+    tech = _build_chart_technical_context(model, levels)
+    candle = _pick_chart_candle_signal(candle_patterns, asof_date)
+    primary_yolo = yolo_patterns[0] if yolo_patterns else None
+    raw_json = None
+    sector = "Unknown"
+    industry = None
+    if fund.get("raw_json"):
+        try:
+            raw_json = json.loads(str(fund.get("raw_json") or ""))
+        except Exception:
+            raw_json = None
+    if isinstance(raw_json, dict):
+        sector = str(raw_json.get("Sector") or raw_json.get("sector") or "Unknown").strip() or "Unknown"
+        industry = str(raw_json.get("Industry") or raw_json.get("industry") or "").strip() or None
+
+    row: dict[str, Any] = {
+        "ticker": ticker,
+        "score": 0.0,
+        "confluence_score": 0.0,
+        "setup_tier": "D",
+        "sector": sector,
+        "industry": industry,
+        "pct_change": round(pct_change, 2),
+        "discount_pct": fund.get("discount_pct"),
+        "peg": fund.get("peg"),
+        "near_52w_high": False,
+        "near_52w_low": False,
+        "yolo_pattern": primary_yolo.get("pattern") if primary_yolo else None,
+        "yolo_confidence": primary_yolo.get("confidence") if primary_yolo else None,
+        "yolo_age_days": primary_yolo.get("age_days") if primary_yolo else None,
+        "yolo_timeframe": primary_yolo.get("timeframe") if primary_yolo else None,
+        "yolo_first_seen_asof": primary_yolo.get("first_seen_asof") if primary_yolo else None,
+        "yolo_last_seen_asof": primary_yolo.get("last_seen_asof") if primary_yolo else None,
+        "yolo_snapshots_seen": primary_yolo.get("snapshots_seen") if primary_yolo else None,
+        "yolo_current_streak": primary_yolo.get("current_streak") if primary_yolo else None,
+        "yolo_signal_role": primary_yolo.get("signal_role") if primary_yolo else None,
+        "candle_pattern": candle.get("candle_pattern"),
+        "candle_bias": candle.get("candle_bias") or "neutral",
+        "candle_confidence": candle.get("candle_confidence"),
+    }
+    row.update(tech)
+    row.update(_report_score_setup_from_confluence(row))
+    row.update(_report_describe_setup(row))
+
+    primary_audit = yolo_audit[0] if yolo_audit else None
+    current_active = [item for item in yolo_audit if bool(item.get("active_now"))]
+    fresh_active = [item for item in current_active if str(item.get("signal_role") or "") in {"primary", "secondary"}]
+    commentary_summary = {
+        "latest_actionable_yolo": primary_yolo,
+        "recent_persisting_yolo": fresh_active[:3],
+        "historical_yolo_context": [item for item in yolo_audit if not bool(item.get("active_now"))][:3],
+        "primary_audit_row": primary_audit,
+    }
+    return {
+        "ticker": ticker,
+        "asof": asof_date,
+        "score": row.get("score"),
+        "setup_tier": row.get("setup_tier"),
+        "signal_bias": row.get("signal_bias"),
+        "setup_family": row.get("setup_family"),
+        "observation": row.get("observation"),
+        "actionability": row.get("actionability"),
+        "action": row.get("action"),
+        "risk_note": row.get("risk_note"),
+        "technical_read": row.get("technical_read"),
+        "primary_yolo_role": primary_yolo.get("signal_role") if primary_yolo else "none",
+        "primary_yolo_recency": primary_yolo.get("yolo_recency") if primary_yolo else "none",
+        "commentary_context": {
+            "ticker": ticker,
+            "asof": asof_date,
+            "sector": sector,
+            "industry": industry,
+            "latest_close": close_now,
+            "pct_change": round(pct_change, 2),
+            "fundamentals": {
+                "discount_pct": fund.get("discount_pct"),
+                "peg": fund.get("peg"),
+            },
+            "technical": tech,
+            "candle": candle,
+            "yolo": commentary_summary,
+        },
+        "llm_ready_prompt": (
+            "Summarize the chart in plain English using the freshest active YOLO pattern first, "
+            "then recent persistent YOLO context, then any stale historical context. "
+            "Explain trend, level location, candle confirmation, breakout/compression state, "
+            "and whether the setup is actionable now or only on confirmation."
+        ),
+    }
 
 
 def _tail_text_file(path: Path, lines: int = 60, max_bytes: int = 64_000) -> list[str]:
@@ -1817,6 +2341,17 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
         forward_days=120,
         max_markers=3,
     )
+    yolo_patterns = get_yolo_patterns(conn, ticker)
+    yolo_audit = get_yolo_audit(conn, ticker, limit=14)
+    chart_commentary = _build_chart_commentary_payload(
+        ticker=ticker,
+        fund=fund,
+        model=model,
+        levels=levels,
+        candle_patterns=candle_patterns,
+        yolo_patterns=yolo_patterns,
+        yolo_audit=yolo_audit,
+    )
 
     return {
         "ticker": ticker,
@@ -1833,7 +2368,9 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
         "cv_proxy_patterns": _serialize_df(cv_proxy_patterns),
         "hybrid_cv_compare": _serialize_df(hybrid_cv_compare),
         "pattern_overlays": _serialize_df(pattern_overlays),
-        "yolo_patterns": get_yolo_patterns(conn, ticker),
+        "yolo_patterns": yolo_patterns,
+        "yolo_audit": yolo_audit,
+        "chart_commentary": chart_commentary,
         "earnings_markers": earnings_markers,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
