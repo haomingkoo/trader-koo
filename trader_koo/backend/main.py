@@ -86,6 +86,14 @@ def _clean_optional_url(value: Any) -> str | None:
     return raw
 
 
+def _first_env(names: list[str]) -> str | None:
+    for name in names:
+        value = str(os.getenv(name, "") or "").strip()
+        if value:
+            return value
+    return None
+
+
 def _resolve_log_dir() -> Path:
     requested = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
     try:
@@ -118,9 +126,13 @@ ADMIN_AUTH_MAX_FAILS = max(3, int(os.getenv("TRADER_KOO_ADMIN_AUTH_MAX_FAILS", "
 ADMIN_AUTH_BLOCK_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_BLOCK_SEC", "600")))
 EXPOSE_STATUS_INTERNAL = _as_bool(os.getenv("TRADER_KOO_EXPOSE_STATUS_INTERNAL", "0"))
 CONTROL_CENTER_CONTRACT_VERSION = "2026-03-01"
+APP_VERSION = str(os.getenv("TRADER_KOO_APP_VERSION", "0.2.0") or "0.2.0").strip() or "0.2.0"
 STATUS_BASE_URL = _clean_optional_url(os.getenv("TRADER_KOO_BASE_URL"))
 STATUS_APP_URL = _clean_optional_url(os.getenv("TRADER_KOO_APP_URL")) or _clean_optional_url(os.getenv("TRADER_KOO_ALLOWED_ORIGIN"))
 STATUS_REPO_URL = _clean_optional_url(os.getenv("TRADER_KOO_REPO_URL"))
+STATUS_GIT_SHA = _first_env(["TRADER_KOO_GIT_SHA", "RAILWAY_GIT_COMMIT_SHA", "GIT_SHA", "COMMIT_SHA", "SOURCE_VERSION"])
+STATUS_DEPLOYED_TS = _first_env(["TRADER_KOO_DEPLOYED_TS", "TRADER_KOO_DEPLOYED_AT", "DEPLOYED_TS", "DEPLOYED_AT"])
+STATUS_DEPLOYMENT_ID = _first_env(["TRADER_KOO_DEPLOYMENT_ID", "RAILWAY_DEPLOYMENT_ID", "DEPLOYMENT_ID"])
 _STATUS_CACHE_LOCK = threading.Lock()
 _STATUS_CACHE_AT: dt.datetime | None = None
 _STATUS_CACHE_PAYLOAD: dict[str, Any] | None = None
@@ -134,6 +146,39 @@ except Exception:
 MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
 ANALYTICS_ENABLED = _as_bool(os.getenv("TRADER_KOO_ANALYTICS_ENABLED", "1"))
 ANALYTICS_MAX_SESSION_AGE_DAYS = max(7, int(os.getenv("TRADER_KOO_ANALYTICS_MAX_SESSION_AGE_DAYS", "180")))
+CONTROL_CENTER_ACTIONS = [
+    {
+        "id": "run-full-update",
+        "label": "Run Full Update",
+        "description": "Ingest, YOLO refresh, and report generation.",
+        "method": "POST",
+        "path": "/api/admin/trigger-update?mode=full",
+        "confirm_text": "Queue the full nightly pipeline now?",
+    },
+    {
+        "id": "run-yolo-refresh",
+        "label": "Run YOLO + Report",
+        "description": "Skip ingest and rerun YOLO plus report generation.",
+        "method": "POST",
+        "path": "/api/admin/trigger-update?mode=yolo",
+        "confirm_text": "Queue YOLO plus report now?",
+    },
+    {
+        "id": "run-report-only",
+        "label": "Rebuild Report",
+        "description": "Generate the latest report without new ingest.",
+        "method": "POST",
+        "path": "/api/admin/trigger-update?mode=report",
+    },
+    {
+        "id": "run-yolo-seed",
+        "label": "Run YOLO Seed",
+        "description": "Full backfill pattern scan across tracked tickers.",
+        "method": "POST",
+        "path": "/api/admin/run-yolo-seed?timeframe=both",
+        "confirm_text": "Start the full YOLO seed run?",
+    },
+]
 LOG = logging.getLogger("trader_koo.api")
 ROOT_LOGGER = logging.getLogger()
 log_level = os.getenv("TRADER_KOO_LOG_LEVEL", "INFO").upper()
@@ -926,6 +971,26 @@ def _usage_summary(conn: sqlite3.Connection, days: int = 7, limit: int = 10) -> 
             (cutoff, limit),
         ).fetchall()
     ]
+    top_paths = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT
+                path,
+                COUNT(*) AS sessions,
+                COUNT(DISTINCT visitor_id) AS visitors,
+                COALESCE(SUM(page_views_total), 0) AS page_views_total,
+                COALESCE(SUM(chart_loads), 0) AS chart_loads_total
+            FROM ui_usage_sessions
+            WHERE COALESCE(last_seen_ts, started_ts, created_ts) >= ?
+              AND path IS NOT NULL AND path != ''
+            GROUP BY path
+            ORDER BY page_views_total DESC, sessions DESC, path ASC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+    ]
     recent_sessions = [
         dict(row)
         for row in conn.execute(
@@ -967,6 +1032,28 @@ def _usage_summary(conn: sqlite3.Connection, days: int = 7, limit: int = 10) -> 
                 "active_hours_total": round(float(row.get("active_ms_total") or 0) / 3_600_000.0, 2),
             }
             for row in top_tickers
+        ],
+        "top_paths": [
+            {
+                **row,
+                "path": str(row.get("path") or ""),
+                "sessions": int(row.get("sessions") or 0),
+                "visitors": int(row.get("visitors") or 0),
+                "page_views_total": int(row.get("page_views_total") or 0),
+                "chart_loads_total": int(row.get("chart_loads_total") or 0),
+            }
+            for row in top_paths
+        ],
+        "top_pages": [
+            {
+                **row,
+                "path": str(row.get("path") or ""),
+                "sessions": int(row.get("sessions") or 0),
+                "visitors": int(row.get("visitors") or 0),
+                "page_views_total": int(row.get("page_views_total") or 0),
+                "chart_loads_total": int(row.get("chart_loads_total") or 0),
+            }
+            for row in top_paths
         ],
         "daily": [
             {
@@ -3665,6 +3752,8 @@ def status() -> dict[str, Any]:
 
         run_row = None
         ticker_status_count = None
+        last_failed_run = None
+        failed_runs_7d = 0
         if table_exists(conn, "ingest_runs"):
             run_row = conn.execute(
                 """
@@ -3675,12 +3764,32 @@ def status() -> dict[str, Any]:
                 LIMIT 1
                 """
             ).fetchone()
+            ts_row = None
             if run_row and table_exists(conn, "ingest_ticker_status"):
                 ts_row = conn.execute(
                     "SELECT COUNT(*) AS c FROM ingest_ticker_status WHERE run_id = ?",
                     (run_row["run_id"],),
                 ).fetchone()
-                ticker_status_count = int(ts_row["c"]) if ts_row else 0
+            ticker_status_count = int(ts_row["c"]) if ts_row else 0
+            failed_cutoff = (now - dt.timedelta(days=7)).replace(microsecond=0).isoformat()
+            failed_row = conn.execute(
+                """
+                SELECT COUNT(*) AS failed_runs_7d
+                FROM ingest_runs
+                WHERE status = 'failed' AND COALESCE(finished_ts, started_ts) >= ?
+                """,
+                (failed_cutoff,),
+            ).fetchone()
+            failed_runs_7d = int(failed_row["failed_runs_7d"] or 0) if failed_row is not None else 0
+            last_failed_run = conn.execute(
+                """
+                SELECT run_id, started_ts, finished_ts, status, error_message
+                FROM ingest_runs
+                WHERE status = 'failed'
+                ORDER BY COALESCE(finished_ts, started_ts) DESC
+                LIMIT 1
+                """
+            ).fetchone()
 
         latest_price_date = counts["latest_price_date"] if counts else None
         latest_fund_snapshot = counts["latest_fund_snapshot"] if counts else None
@@ -3705,6 +3814,15 @@ def status() -> dict[str, Any]:
             elif latest_run.get("status") in {"ok", "failed"}:
                 completed = int(latest_run.get("tickers_ok") or 0) + int(latest_run.get("tickers_failed") or 0)
                 latest_run["tickers_processed"] = completed or int(latest_run.get("tickers_total") or 0)
+        latest_failed = dict(last_failed_run) if last_failed_run is not None else None
+        latest_error_message = None
+        latest_error_ts = None
+        if latest_run and latest_run.get("status") == "failed":
+            latest_error_message = str(latest_run.get("error_message") or "").strip() or None
+            latest_error_ts = latest_run.get("finished_ts") or latest_run.get("started_ts")
+        if latest_error_message is None and latest_failed:
+            latest_error_message = str(latest_failed.get("error_message") or "").strip() or None
+            latest_error_ts = latest_failed.get("finished_ts") or latest_failed.get("started_ts")
 
         pipeline_snap = _pipeline_status_snapshot(log_lines=60)
         resume_candidate = _post_ingest_resume_candidate(
@@ -3738,8 +3856,11 @@ def status() -> dict[str, Any]:
             "service": "trader_koo-api",
             "contract": "control-center-v1",
             "contract_version": CONTROL_CENTER_CONTRACT_VERSION,
+            "version": APP_VERSION,
             "auth_header": "X-API-Key",
             "admin_auth_configured": bool(API_KEY),
+            "runtime_started_ts": PROCESS_START_UTC.replace(microsecond=0).isoformat(),
+            "actions": CONTROL_CENTER_ACTIONS,
         }
         if STATUS_BASE_URL:
             service_meta["base_url"] = STATUS_BASE_URL
@@ -3747,15 +3868,28 @@ def status() -> dict[str, Any]:
             service_meta["app_url"] = STATUS_APP_URL
         if STATUS_REPO_URL:
             service_meta["repo_url"] = STATUS_REPO_URL
+        if STATUS_GIT_SHA:
+            service_meta["git_sha"] = STATUS_GIT_SHA
+        if STATUS_DEPLOYED_TS:
+            service_meta["deployed_ts"] = STATUS_DEPLOYED_TS
+        if STATUS_DEPLOYMENT_ID:
+            service_meta["deployment_id"] = STATUS_DEPLOYMENT_ID
 
         payload = {
             **base,
             "ok": len(warnings) == 0,
             "warnings": warnings,
+            "warning_count": len(warnings),
             "latest_run": latest_run,
             "pipeline_active": pipeline_active,
             "pipeline_stage": pipeline_stage,
             "service_meta": service_meta,
+            "errors": {
+                "failed_runs_7d": failed_runs_7d,
+                "latest_error_message": latest_error_message,
+                "latest_error_ts": latest_error_ts,
+                "latest_failed_run": latest_failed,
+            },
             "pipeline": {
                 "active": pipeline_active,
                 "stage": pipeline_stage,
