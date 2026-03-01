@@ -493,6 +493,34 @@
       font-size: 0.78rem;
       line-height: 1.5;
     }
+    .chart-commentary-panel {
+      margin: 10px 0 14px;
+      padding: 12px;
+    }
+    .chart-commentary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .chart-commentary-block {
+      border: 1px solid rgba(142, 160, 189, 0.14);
+      border-radius: 12px;
+      background: rgba(11, 15, 22, 0.42);
+      padding: 12px;
+      min-width: 0;
+    }
+    .chart-commentary-copy {
+      color: var(--text);
+      font-size: 0.82rem;
+      line-height: 1.58;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .chart-commentary-copy strong {
+      color: var(--text);
+      font-weight: 800;
+    }
     .report-watch-wrap {
       display: flex;
       gap: 8px;
@@ -1039,6 +1067,28 @@
           <div class="card"><div class="label">Put/Call OI</div><div id="c-pcr" class="value">-</div></div>
         </div>
 
+        <div class="panel chart-commentary-panel">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+            <div class="label">Chart Commentary</div>
+            <div id="chartCommentaryStatus" class="report-inline-note">Rule-based read of the current chart. Fresh active YOLO comes first, then persistence, then older context.</div>
+          </div>
+          <div id="chartCommentaryBadges" class="earnings-badges"></div>
+          <div class="chart-commentary-grid">
+            <div class="chart-commentary-block">
+              <div class="label">Observation</div>
+              <div id="chartObservation" class="chart-commentary-copy">Load a ticker to generate commentary.</div>
+            </div>
+            <div class="chart-commentary-block">
+              <div class="label">Reasonable Action</div>
+              <div id="chartAction" class="chart-commentary-copy">The chart read will explain whether the setup is actionable now or only on confirmation.</div>
+            </div>
+            <div class="chart-commentary-block">
+              <div class="label">Technical Read</div>
+              <div id="chartTechnicalRead" class="chart-commentary-copy">Fresh YOLO, candle confirmation, level location, and trend state are combined here.</div>
+            </div>
+          </div>
+        </div>
+
         <div id="chart"></div>
       </div>
 
@@ -1072,8 +1122,9 @@
           <table id="candlesTable"></table>
         </div>
         <div class="panel">
-          <div class="label">YOLO AI Patterns</div>
-          <table id="yoloPatternsTable"></table>
+          <div class="label">YOLO Audit</div>
+          <div class="report-inline-note" style="margin-bottom:8px;">The latest active YOLO closest to the most recent close ranks first. Older detections stay here as weaker context with first/last-seen dates and streaks.</div>
+          <table id="yoloAuditTable"></table>
         </div>
       </div>
     </section>
@@ -1523,6 +1574,7 @@
 
     function formatTableValue(col, raw) {
       if (raw === null || raw === undefined || raw === "") return "-";
+      if (typeof raw === "boolean") return raw ? "yes" : "no";
       if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
       const n = Number(raw);
       if (!Number.isFinite(n)) return String(raw);
@@ -1558,6 +1610,40 @@
         <div class="op-help-grid">
           ${rows.map(([k, v]) => `<div class="op-help-key">${escHtml(k)}</div><div class="op-help-val">${escHtml(v)}</div>`).join("")}
         </div>
+      `;
+    }
+
+    function formatSignalRole(value) {
+      const raw = String(value || "").trim().toLowerCase();
+      if (raw === "primary") return "Primary";
+      if (raw === "secondary") return "Secondary";
+      if (raw === "recent_context") return "Recent Context";
+      if (raw === "stale_context") return "Stale Context";
+      if (raw === "historical_context") return "Historical Context";
+      return value || "—";
+    }
+
+    function renderChartCommentary(payload) {
+      const data = payload && payload.chart_commentary ? payload.chart_commentary : {};
+      const badges = [];
+      if (data.setup_tier) badges.push(`<span class="earnings-badge">${escHtml(`Tier ${data.setup_tier}`)}</span>`);
+      if (data.signal_bias) badges.push(`<span class="earnings-badge ${earningsToneClass(data.signal_bias)}">${escHtml(String(data.signal_bias).toUpperCase())}</span>`);
+      if (data.actionability) badges.push(`<span class="earnings-badge">${escHtml(String(data.actionability).replaceAll("_", " ").toUpperCase())}</span>`);
+      if (data.primary_yolo_role && data.primary_yolo_role !== "none") badges.push(`<span class="earnings-badge">${escHtml(`YOLO ${formatSignalRole(data.primary_yolo_role)}`)}</span>`);
+      if (data.primary_yolo_recency && data.primary_yolo_recency !== "none") badges.push(`<span class="earnings-badge">${escHtml(String(data.primary_yolo_recency).toUpperCase())}</span>`);
+      $("chartCommentaryBadges").innerHTML = badges.join("");
+      $("chartCommentaryStatus").textContent = data.asof
+        ? `Rule-based read asof ${data.asof}. Fresh active YOLO is weighted first, then persistence, then older context.`
+        : "Rule-based read of the current chart. Fresh active YOLO comes first, then persistence, then older context.";
+      $("chartObservation").innerHTML = data.observation
+        ? escHtml(data.observation)
+        : "Load a ticker to generate commentary.";
+      $("chartAction").innerHTML = `
+        <strong>Action:</strong> ${escHtml(data.action || "The chart read will explain whether the setup is actionable now or only on confirmation.")}<br />
+        <strong>Risk:</strong> ${escHtml(data.risk_note || "none")}
+      `;
+      $("chartTechnicalRead").innerHTML = `
+        <strong>Read:</strong> ${escHtml(data.technical_read || "Fresh YOLO, candle confirmation, level location, and trend state are combined here.")}
       `;
     }
 
@@ -2708,6 +2794,7 @@
         const payload = await resp.json();
         syncChartToggleState(payload);
         fillCards(payload);
+        renderChartCommentary(payload);
         renderChart(payload);
         renderSimpleTable("levelsTable", ["type", "level", "zone_low", "zone_high", "tier", "touches", "last_touch_date"], payload.levels || [], false, null, { sortable: true });
         renderSimpleTable("gapsTable", ["date", "type", "gap_low", "gap_high"], payload.gaps || [], false, null, { sortable: true });
@@ -2730,12 +2817,44 @@
           { sortable: true }
         );
         renderSimpleTable("candlesTable", ["date", "pattern", "bias", "confidence", "explanation"], payload.candlestick_patterns || [], false, null, { sortable: true });
-        renderSimpleTable("yoloPatternsTable", ["timeframe", "pattern", "confidence", "x0_date", "x1_date", "y0", "y1", "as_of_date"], payload.yolo_patterns || [], false, null, { sortable: true });
+        renderSimpleTable(
+          "yoloAuditTable",
+          [
+            { key: "timeframe", label: "Timeframe" },
+            { key: "pattern", label: "Pattern" },
+            { key: "signal_role", label: "Role" },
+            { key: "active_now", label: "Active" },
+            { key: "yolo_recency", label: "Recency" },
+            { key: "age_days", label: "Age (d)" },
+            { key: "current_streak", label: "Streak" },
+            { key: "snapshots_seen", label: "Seen" },
+            { key: "first_seen_asof", label: "First Seen" },
+            { key: "last_seen_asof", label: "Last Seen" },
+            { key: "confidence", label: "Conf." },
+          ],
+          (payload.yolo_audit || []).map((row) => ({
+            timeframe: row.timeframe,
+            pattern: row.pattern,
+            signal_role: formatSignalRole(row.signal_role),
+            active_now: !!row.active_now,
+            yolo_recency: row.yolo_recency ? String(row.yolo_recency).replaceAll("_", " ") : "-",
+            age_days: row.age_days,
+            current_streak: row.current_streak,
+            snapshots_seen: row.snapshots_seen,
+            first_seen_asof: row.first_seen_asof,
+            last_seen_asof: row.last_seen_asof,
+            confidence: row.confidence,
+          })),
+          false,
+          null,
+          { sortable: true }
+        );
         $("chartStatus").textContent = `asof ${payload.asof || "-"} • ${ticker}`;
         setGlobalStatus(`Done (${ticker})`);
       } catch (err) {
         console.error(err);
         $("chartStatus").textContent = `Failed: ${err.message}`;
+        renderChartCommentary({});
         setGlobalStatus(`Failed (${ticker})`);
       } finally {
         btn.disabled = false;
