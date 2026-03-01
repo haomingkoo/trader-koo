@@ -1451,6 +1451,9 @@
     const tabEarnings = $("tabEarnings");
     const API_BASE_STORAGE_KEY = "trader_koo_api_base";
     const WATCHLIST_STORAGE_KEY = "trader_koo_watchlist";
+    const USAGE_VISITOR_KEY = "trader_koo_usage_visitor";
+    const USAGE_SESSION_KEY = "trader_koo_usage_session";
+    const USAGE_HEARTBEAT_MS = 30000;
     const TABLE_STATE = {};
     const DEFAULT_MONTHS = 3;
     let LAST_CHART_PAYLOAD = null;
@@ -1461,10 +1464,144 @@
     let LAST_EARNINGS_ROWS = [];
     let LAST_EARNINGS_LOOKUP = {};
     let LAST_EARNINGS_SELECTED = "";
+    let USAGE_STATE = null;
+    let USAGE_TIMER = null;
 
     function fmt(v, d = 2) {
       if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
       return Number(v).toFixed(d);
+    }
+
+    function makeClientId(prefix) {
+      if (window.crypto?.randomUUID) return `${prefix}_${window.crypto.randomUUID()}`;
+      return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    function getStoredClientId(storage, key, prefix) {
+      try {
+        const existing = storage.getItem(key);
+        if (existing) return existing;
+        const created = makeClientId(prefix);
+        storage.setItem(key, created);
+        return created;
+      } catch (err) {
+        return makeClientId(prefix);
+      }
+    }
+
+    function getUsageState() {
+      if (USAGE_STATE) return USAGE_STATE;
+      USAGE_STATE = {
+        visitorId: getStoredClientId(window.localStorage, USAGE_VISITOR_KEY, "v"),
+        sessionId: getStoredClientId(window.sessionStorage, USAGE_SESSION_KEY, "s"),
+        startedTs: new Date().toISOString(),
+        activeMs: 0,
+        pageViewsTotal: 0,
+        guideViews: 0,
+        reportViews: 0,
+        earningsViews: 0,
+        chartViews: 0,
+        opportunitiesViews: 0,
+        chartLoads: 0,
+        lastTab: "",
+        lastTicker: "",
+        lastSentMs: 0,
+        visibilityAnchor: document.visibilityState === "visible" ? Date.now() : null,
+      };
+      return USAGE_STATE;
+    }
+
+    function touchUsageActive(state) {
+      if (!state || state.visibilityAnchor === null) return;
+      const now = Date.now();
+      state.activeMs += Math.max(0, now - state.visibilityAnchor);
+      state.visibilityAnchor = now;
+    }
+
+    function buildUsagePayload() {
+      const state = getUsageState();
+      touchUsageActive(state);
+      return {
+        session_id: state.sessionId,
+        visitor_id: state.visitorId,
+        started_ts: state.startedTs,
+        active_ms: Math.round(state.activeMs),
+        page_views_total: state.pageViewsTotal,
+        guide_views: state.guideViews,
+        report_views: state.reportViews,
+        earnings_views: state.earningsViews,
+        chart_views: state.chartViews,
+        opportunities_views: state.opportunitiesViews,
+        chart_loads: state.chartLoads,
+        last_tab: state.lastTab,
+        last_ticker: state.lastTicker || normalizeTickerSymbol($("ticker")?.value || ""),
+        market: "",
+        path: window.location.pathname || "/",
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+      };
+    }
+
+    async function flushUsage(force = false, keepalive = false) {
+      const state = getUsageState();
+      const base = getApiBase();
+      if (!base) return;
+      const now = Date.now();
+      if (!force && now - state.lastSentMs < 5000) return;
+      state.lastSentMs = now;
+      const payload = buildUsagePayload();
+      try {
+        await fetch(`${base}/api/usage/session`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          keepalive,
+        });
+      } catch (err) {
+        console.debug("usage heartbeat failed", err);
+      }
+    }
+
+    function markUsageTabView(which) {
+      const state = getUsageState();
+      if (state.lastTab === which) return;
+      state.lastTab = which;
+      state.pageViewsTotal += 1;
+      if (which === "guide") state.guideViews += 1;
+      if (which === "report") state.reportViews += 1;
+      if (which === "earnings") state.earningsViews += 1;
+      if (which === "chart") state.chartViews += 1;
+      if (which === "op") state.opportunitiesViews += 1;
+      void flushUsage();
+    }
+
+    function markUsageChartLoad(ticker) {
+      const state = getUsageState();
+      state.chartLoads += 1;
+      state.lastTab = "chart";
+      state.lastTicker = normalizeTickerSymbol(ticker);
+      void flushUsage();
+    }
+
+    function startUsageHeartbeat() {
+      getUsageState();
+      if (USAGE_TIMER !== null) return;
+      USAGE_TIMER = window.setInterval(() => {
+        if (document.visibilityState !== "visible") return;
+        void flushUsage();
+      }, USAGE_HEARTBEAT_MS);
+    }
+
+    function handleUsageVisibilityChange() {
+      const state = getUsageState();
+      if (document.visibilityState === "visible") {
+        state.visibilityAnchor = Date.now();
+        void flushUsage();
+        return;
+      }
+      touchUsageActive(state);
+      state.visibilityAnchor = null;
+      void flushUsage(true, true);
     }
 
     function escHtml(v) {
@@ -1800,6 +1937,7 @@
         if (k === which) { btn.classList.add("active"); sec.classList.remove("hidden"); }
         else             { btn.classList.remove("active"); sec.classList.add("hidden"); }
       }
+      markUsageTabView(which);
       if (which === "report") loadReport();
       if (which === "earnings") loadEarnings();
     }
@@ -2864,6 +3002,7 @@
         );
         $("chartStatus").textContent = `asof ${payload.asof || "-"} • ${ticker}`;
         setGlobalStatus(`Done (${ticker})`);
+        markUsageChartLoad(ticker);
       } catch (err) {
         console.error(err);
         $("chartStatus").textContent = `Failed: ${err.message}`;
@@ -3498,6 +3637,7 @@
 
     (async () => {
       await initApiBase();
+      startUsageHeartbeat();
       setReportSetupMode(false);
       setEarningsViewMode("calendar");
       activateTab("guide");
@@ -3506,7 +3646,14 @@
       await loadOpportunities();
       setInterval(refreshServiceStatus, 120000);
       document.addEventListener("visibilitychange", () => {
+        handleUsageVisibilityChange();
         if (document.visibilityState === "visible") refreshServiceStatus();
+      });
+      window.addEventListener("pagehide", () => {
+        const state = getUsageState();
+        touchUsageActive(state);
+        state.visibilityAnchor = null;
+        void flushUsage(true, true);
       });
     })();
   </script>

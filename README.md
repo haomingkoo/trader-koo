@@ -128,6 +128,7 @@ When `TRADER_KOO_API_KEY` is set, admin routes under `/api/admin/*` require `X-A
 | GET | `/api/admin/yolo-status` | YOLO thread state + DB summary + log tail |
 | GET | `/api/admin/yolo-events` | Persisted per-ticker YOLO outcomes (ok/skipped/timeout/failed + reason) |
 | GET | `/api/admin/daily-report` | Latest daily run report + report history |
+| GET | `/api/admin/usage-summary` | First-party session rollup for control-center analytics |
 | POST | `/api/admin/email-latest-report` | Email latest report (SMTP; optional `?to=you@example.com`) |
 
 ---
@@ -145,9 +146,15 @@ Admin endpoints protected by `X-API-Key`:
 
 - `GET /api/admin/pipeline-status`
 - `GET /api/admin/daily-report`
+- `GET /api/admin/usage-summary`
 - `GET /api/admin/logs?name=cron&lines=80`
 - `POST /api/admin/trigger-update?mode=full|yolo|report`
 - `POST /api/admin/run-yolo-seed?timeframe=both`
+
+Usage analytics collection stays inside `trader_koo`, but any UI can live in the external control center:
+
+- public write endpoint: `POST /api/usage/session`
+- admin rollup endpoint: `GET /api/admin/usage-summary`
 
 `/api/status` exposes the summary fields the control center should read first:
 
@@ -201,6 +208,8 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout for YOLO (default `180`) |
 | `TRADER_KOO_PIPELINE_STALE_SEC` | Max age for pipeline stage log line before status auto-resets to idle (default `1200`) |
 | `TRADER_KOO_ALPHA_VANTAGE_KEY` | Optional Alpha Vantage key for the earnings calendar feed |
+| `TRADER_KOO_ANALYTICS_ENABLED` | Enable first-party usage/session tracking for control-center rollups (default `1`) |
+| `TRADER_KOO_ANALYTICS_MAX_SESSION_AGE_DAYS` | Prune stored session records older than this many days (default `180`) |
 | `TRADER_KOO_SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) |
 | `TRADER_KOO_SMTP_PORT` | SMTP port (e.g. `587` for STARTTLS, `465` for SSL) |
 | `TRADER_KOO_SMTP_SECURITY` | `starttls` (default), `ssl`, or `none` |

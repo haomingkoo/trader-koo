@@ -132,6 +132,8 @@ try:
 except Exception:
     MARKET_TZ = dt.timezone.utc
 MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
+ANALYTICS_ENABLED = _as_bool(os.getenv("TRADER_KOO_ANALYTICS_ENABLED", "1"))
+ANALYTICS_MAX_SESSION_AGE_DAYS = max(7, int(os.getenv("TRADER_KOO_ANALYTICS_MAX_SESSION_AGE_DAYS", "180")))
 LOG = logging.getLogger("trader_koo.api")
 ROOT_LOGGER = logging.getLogger()
 log_level = os.getenv("TRADER_KOO_LOG_LEVEL", "INFO").upper()
@@ -458,6 +460,8 @@ _scheduler.add_job(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    ensure_analytics_schema()
+    prune_analytics_sessions()
     reconcile = _reconcile_stale_running_runs()
     if reconcile.get("reconciled"):
         LOG.warning(
@@ -653,12 +657,336 @@ def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return row is not None
 
 
+def ensure_analytics_schema() -> None:
+    if not DB_PATH.exists():
+        return
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ui_usage_sessions (
+                session_id TEXT PRIMARY KEY,
+                visitor_id TEXT NOT NULL,
+                started_ts TEXT,
+                last_seen_ts TEXT,
+                active_ms INTEGER NOT NULL DEFAULT 0,
+                page_views_total INTEGER NOT NULL DEFAULT 0,
+                guide_views INTEGER NOT NULL DEFAULT 0,
+                report_views INTEGER NOT NULL DEFAULT 0,
+                earnings_views INTEGER NOT NULL DEFAULT 0,
+                chart_views INTEGER NOT NULL DEFAULT 0,
+                opportunities_views INTEGER NOT NULL DEFAULT 0,
+                chart_loads INTEGER NOT NULL DEFAULT 0,
+                last_tab TEXT,
+                last_ticker TEXT,
+                market TEXT,
+                path TEXT,
+                tz TEXT,
+                created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ui_usage_sessions_visitor ON ui_usage_sessions(visitor_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ui_usage_sessions_last_seen ON ui_usage_sessions(last_seen_ts)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ui_usage_sessions_last_ticker ON ui_usage_sessions(last_ticker)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def prune_analytics_sessions() -> None:
+    if not DB_PATH.exists():
+        return
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=ANALYTICS_MAX_SESSION_AGE_DAYS)).isoformat()
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.execute(
+            "DELETE FROM ui_usage_sessions WHERE COALESCE(last_seen_ts, started_ts, created_ts) < ?",
+            (cutoff,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_conn() -> sqlite3.Connection:
     if not DB_PATH.exists():
         raise HTTPException(status_code=500, detail=f"DB not found at {DB_PATH}")
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _utc_now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def _clamp_int(value: Any, *, minimum: int = 0, maximum: int | None = None) -> int:
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return minimum
+    parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
+
+
+def _clean_session_text(value: Any, *, max_len: int = 120) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text[:max_len]
+
+
+def _upsert_usage_session(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
+    if not table_exists(conn, "ui_usage_sessions"):
+        ensure_analytics_schema()
+    session_id = _clean_session_text(payload.get("session_id"), max_len=64)
+    visitor_id = _clean_session_text(payload.get("visitor_id"), max_len=64)
+    if not session_id or not visitor_id:
+        raise HTTPException(status_code=400, detail="session_id and visitor_id are required")
+    started_ts = _clean_session_text(payload.get("started_ts"), max_len=40) or _utc_now_iso()
+    last_seen_ts = _clean_session_text(payload.get("last_seen_ts"), max_len=40) or _utc_now_iso()
+    active_ms = _clamp_int(payload.get("active_ms"), maximum=31_536_000_000)
+    page_views_total = _clamp_int(payload.get("page_views_total"), maximum=1_000_000)
+    guide_views = _clamp_int(payload.get("guide_views"), maximum=1_000_000)
+    report_views = _clamp_int(payload.get("report_views"), maximum=1_000_000)
+    earnings_views = _clamp_int(payload.get("earnings_views"), maximum=1_000_000)
+    chart_views = _clamp_int(payload.get("chart_views"), maximum=1_000_000)
+    opportunities_views = _clamp_int(payload.get("opportunities_views"), maximum=1_000_000)
+    chart_loads = _clamp_int(payload.get("chart_loads"), maximum=1_000_000)
+    last_tab = _clean_session_text(payload.get("last_tab"), max_len=32)
+    last_ticker = _clean_session_text(payload.get("last_ticker"), max_len=24)
+    market = _clean_session_text(payload.get("market"), max_len=24)
+    path = _clean_session_text(payload.get("path"), max_len=200)
+    tz = _clean_session_text(payload.get("tz"), max_len=64)
+
+    conn.execute(
+        """
+        INSERT INTO ui_usage_sessions (
+            session_id,
+            visitor_id,
+            started_ts,
+            last_seen_ts,
+            active_ms,
+            page_views_total,
+            guide_views,
+            report_views,
+            earnings_views,
+            chart_views,
+            opportunities_views,
+            chart_loads,
+            last_tab,
+            last_ticker,
+            market,
+            path,
+            tz,
+            created_ts,
+            updated_ts
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+            visitor_id = excluded.visitor_id,
+            started_ts = COALESCE(ui_usage_sessions.started_ts, excluded.started_ts),
+            last_seen_ts = excluded.last_seen_ts,
+            active_ms = MAX(ui_usage_sessions.active_ms, excluded.active_ms),
+            page_views_total = MAX(ui_usage_sessions.page_views_total, excluded.page_views_total),
+            guide_views = MAX(ui_usage_sessions.guide_views, excluded.guide_views),
+            report_views = MAX(ui_usage_sessions.report_views, excluded.report_views),
+            earnings_views = MAX(ui_usage_sessions.earnings_views, excluded.earnings_views),
+            chart_views = MAX(ui_usage_sessions.chart_views, excluded.chart_views),
+            opportunities_views = MAX(ui_usage_sessions.opportunities_views, excluded.opportunities_views),
+            chart_loads = MAX(ui_usage_sessions.chart_loads, excluded.chart_loads),
+            last_tab = COALESCE(excluded.last_tab, ui_usage_sessions.last_tab),
+            last_ticker = COALESCE(excluded.last_ticker, ui_usage_sessions.last_ticker),
+            market = COALESCE(excluded.market, ui_usage_sessions.market),
+            path = COALESCE(excluded.path, ui_usage_sessions.path),
+            tz = COALESCE(excluded.tz, ui_usage_sessions.tz),
+            updated_ts = excluded.updated_ts
+        """,
+        (
+            session_id,
+            visitor_id,
+            started_ts,
+            last_seen_ts,
+            active_ms,
+            page_views_total,
+            guide_views,
+            report_views,
+            earnings_views,
+            chart_views,
+            opportunities_views,
+            chart_loads,
+            last_tab,
+            last_ticker,
+            market,
+            path,
+            tz,
+            _utc_now_iso(),
+            _utc_now_iso(),
+        ),
+    )
+    conn.commit()
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "visitor_id": visitor_id,
+        "active_ms": active_ms,
+        "page_views_total": page_views_total,
+        "chart_loads": chart_loads,
+    }
+
+
+def _usage_summary(conn: sqlite3.Connection, days: int = 7, limit: int = 10) -> dict[str, Any]:
+    days = max(1, min(365, int(days)))
+    limit = max(1, min(100, int(limit)))
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat()
+    totals = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS sessions,
+            COUNT(DISTINCT visitor_id) AS visitors,
+            COALESCE(SUM(active_ms), 0) AS active_ms_total,
+            COALESCE(AVG(active_ms), 0) AS active_ms_avg,
+            COALESCE(SUM(page_views_total), 0) AS page_views_total,
+            COALESCE(SUM(chart_loads), 0) AS chart_loads_total
+        FROM ui_usage_sessions
+        WHERE COALESCE(last_seen_ts, started_ts, created_ts) >= ?
+        """,
+        (cutoff,),
+    ).fetchone()
+    daily_rows = conn.execute(
+        """
+        SELECT
+            substr(COALESCE(last_seen_ts, started_ts, created_ts), 1, 10) AS day,
+            COUNT(*) AS sessions,
+            COUNT(DISTINCT visitor_id) AS visitors,
+            COALESCE(SUM(active_ms), 0) AS active_ms_total,
+            COALESCE(SUM(page_views_total), 0) AS page_views_total,
+            COALESCE(SUM(chart_loads), 0) AS chart_loads_total
+        FROM ui_usage_sessions
+        WHERE COALESCE(last_seen_ts, started_ts, created_ts) >= ?
+        GROUP BY day
+        ORDER BY day DESC
+        LIMIT ?
+        """,
+        (cutoff, limit),
+    ).fetchall()
+    tab_totals = []
+    tab_columns = {
+        "guide": "guide_views",
+        "report": "report_views",
+        "earnings": "earnings_views",
+        "chart": "chart_views",
+        "opportunities": "opportunities_views",
+    }
+    for tab, column in tab_columns.items():
+        row = conn.execute(
+            f"""
+            SELECT
+                COALESCE(SUM({column}), 0) AS views,
+                COUNT(CASE WHEN {column} > 0 THEN 1 END) AS sessions
+            FROM ui_usage_sessions
+            WHERE COALESCE(last_seen_ts, started_ts, created_ts) >= ?
+            """,
+            (cutoff,),
+        ).fetchone()
+        tab_totals.append(
+            {
+                "tab": tab,
+                "views": int(row["views"] or 0),
+                "sessions": int(row["sessions"] or 0),
+            }
+        )
+    tab_totals.sort(key=lambda row: (-row["views"], row["tab"]))
+    top_tickers = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT
+                last_ticker AS ticker,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(chart_loads), 0) AS chart_loads,
+                COALESCE(SUM(active_ms), 0) AS active_ms_total
+            FROM ui_usage_sessions
+            WHERE COALESCE(last_seen_ts, started_ts, created_ts) >= ?
+              AND last_ticker IS NOT NULL AND last_ticker != ''
+            GROUP BY last_ticker
+            ORDER BY chart_loads DESC, sessions DESC, ticker ASC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+    ]
+    recent_sessions = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT
+                session_id,
+                visitor_id,
+                started_ts,
+                last_seen_ts,
+                active_ms,
+                page_views_total,
+                chart_loads,
+                last_tab,
+                last_ticker
+            FROM ui_usage_sessions
+            WHERE COALESCE(last_seen_ts, started_ts, created_ts) >= ?
+            ORDER BY COALESCE(last_seen_ts, started_ts, created_ts) DESC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+    ]
+    return {
+        "ok": True,
+        "days": days,
+        "cutoff_ts": cutoff,
+        "totals": {
+            "sessions": int(totals["sessions"] or 0),
+            "visitors": int(totals["visitors"] or 0),
+            "active_hours_total": round(float(totals["active_ms_total"] or 0) / 3_600_000.0, 2),
+            "avg_active_min_per_session": round(float(totals["active_ms_avg"] or 0) / 60_000.0, 2),
+            "page_views_total": int(totals["page_views_total"] or 0),
+            "chart_loads_total": int(totals["chart_loads_total"] or 0),
+        },
+        "top_tabs": tab_totals[:limit],
+        "top_tickers": [
+            {
+                **row,
+                "active_hours_total": round(float(row.get("active_ms_total") or 0) / 3_600_000.0, 2),
+            }
+            for row in top_tickers
+        ],
+        "daily": [
+            {
+                "day": row["day"],
+                "sessions": int(row["sessions"] or 0),
+                "visitors": int(row["visitors"] or 0),
+                "active_hours_total": round(float(row["active_ms_total"] or 0) / 3_600_000.0, 2),
+                "page_views_total": int(row["page_views_total"] or 0),
+                "chart_loads_total": int(row["chart_loads_total"] or 0),
+            }
+            for row in daily_rows
+        ],
+        "recent_sessions": [
+            {
+                **row,
+                "active_min": round(float(row.get("active_ms") or 0) / 60_000.0, 2),
+            }
+            for row in recent_sessions
+        ],
+    }
 
 
 def get_latest_fundamentals(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
@@ -2534,6 +2862,27 @@ def health() -> dict[str, Any]:
     return payload
 
 
+@app.post("/api/usage/session", include_in_schema=False)
+async def usage_session(request: Request) -> dict[str, Any]:
+    if not ANALYTICS_ENABLED:
+        return {"ok": True, "analytics_enabled": False}
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid analytics payload: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Analytics payload must be an object")
+    conn = get_conn()
+    try:
+        result = _upsert_usage_session(conn, payload)
+    finally:
+        conn.close()
+    return {
+        **result,
+        "analytics_enabled": True,
+    }
+
+
 @app.post("/api/admin/trigger-update")
 def trigger_update(mode: str = Query(default="full")) -> dict[str, Any]:
     """
@@ -2889,6 +3238,22 @@ def report_stability(limit: int = Query(default=60, ge=1, le=365)) -> dict[str, 
         "missing_examples": missing_examples,
         "rows": rows,
     }
+
+
+@app.get("/api/admin/usage-summary")
+def usage_summary(
+    days: int = Query(default=7, ge=1, le=365),
+    limit: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
+    if not ANALYTICS_ENABLED:
+        return {"ok": True, "analytics_enabled": False, "detail": "Analytics collection is disabled."}
+    conn = get_conn()
+    try:
+        summary = _usage_summary(conn, days=days, limit=limit)
+    finally:
+        conn.close()
+    summary["analytics_enabled"] = True
+    return summary
 
 
 @app.get("/api/admin/pipeline-status")
