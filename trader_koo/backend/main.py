@@ -535,6 +535,7 @@ _scheduler.add_job(
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_analytics_schema()
+    ensure_feedback_schema()
     prune_analytics_sessions()
     ensure_subscriber_schema(DB_PATH)
     reconcile = _reconcile_stale_running_runs()
@@ -776,6 +777,50 @@ def ensure_analytics_schema() -> None:
         conn.close()
 
 
+def ensure_feedback_schema() -> None:
+    if not DB_PATH.exists():
+        return
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS setup_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ticker TEXT NOT NULL,
+                asof TEXT,
+                verdict TEXT NOT NULL CHECK (verdict IN ('good', 'bad', 'neutral')),
+                source_surface TEXT,
+                note TEXT,
+                setup_tier TEXT,
+                setup_score REAL,
+                setup_family TEXT,
+                signal_bias TEXT,
+                actionability TEXT,
+                yolo_role TEXT,
+                yolo_recency TEXT,
+                visitor_id TEXT,
+                session_id TEXT,
+                client_ip TEXT,
+                user_agent TEXT,
+                context_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_setup_feedback_created ON setup_feedback(created_ts)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_setup_feedback_ticker ON setup_feedback(ticker)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_setup_feedback_verdict ON setup_feedback(verdict)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def prune_analytics_sessions() -> None:
     if not DB_PATH.exists():
         return
@@ -815,6 +860,13 @@ def _clamp_int(value: Any, *, minimum: int = 0, maximum: int | None = None) -> i
 
 
 def _clean_session_text(value: Any, *, max_len: int = 120) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text[:max_len]
+
+
+def _clean_feedback_text(value: Any, *, max_len: int = 400) -> str | None:
     text = str(value or "").strip()
     if not text:
         return None
@@ -1106,6 +1158,117 @@ def _usage_summary(conn: sqlite3.Connection, days: int = 7, limit: int = 10) -> 
     }
 
 
+def _record_setup_feedback(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
+    if not table_exists(conn, "setup_feedback"):
+        ensure_feedback_schema()
+    verdict = str(payload.get("verdict") or "").strip().lower()
+    if verdict not in {"good", "bad", "neutral"}:
+        raise HTTPException(status_code=400, detail="verdict must be one of: good, bad, neutral")
+    ticker = str(payload.get("ticker") or "").strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    if len(ticker) > 16:
+        raise HTTPException(status_code=400, detail="ticker is too long")
+    context_json = payload.get("context_json")
+    context_text = None
+    if isinstance(context_json, (dict, list)):
+        try:
+            context_text = json.dumps(context_json, ensure_ascii=True)[:2000]
+        except Exception:
+            context_text = None
+    elif context_json is not None:
+        context_text = _clean_feedback_text(context_json, max_len=2000)
+
+    row = {
+        "ticker": ticker,
+        "asof": _clean_feedback_text(payload.get("asof"), max_len=24),
+        "verdict": verdict,
+        "source_surface": _clean_feedback_text(payload.get("source_surface"), max_len=32),
+        "note": _clean_feedback_text(payload.get("note"), max_len=800),
+        "setup_tier": _clean_feedback_text(payload.get("setup_tier"), max_len=4),
+        "setup_score": float(payload.get("setup_score")) if payload.get("setup_score") not in (None, "") else None,
+        "setup_family": _clean_feedback_text(payload.get("setup_family"), max_len=48),
+        "signal_bias": _clean_feedback_text(payload.get("signal_bias"), max_len=24),
+        "actionability": _clean_feedback_text(payload.get("actionability"), max_len=24),
+        "yolo_role": _clean_feedback_text(payload.get("yolo_role"), max_len=32),
+        "yolo_recency": _clean_feedback_text(payload.get("yolo_recency"), max_len=32),
+        "visitor_id": _clean_feedback_text(payload.get("visitor_id"), max_len=64),
+        "session_id": _clean_feedback_text(payload.get("session_id"), max_len=64),
+        "client_ip": _clean_feedback_text(payload.get("client_ip"), max_len=96),
+        "user_agent": _clean_feedback_text(payload.get("user_agent"), max_len=300),
+        "context_json": context_text,
+    }
+    conn.execute(
+        """
+        INSERT INTO setup_feedback (
+            ticker, asof, verdict, source_surface, note,
+            setup_tier, setup_score, setup_family, signal_bias, actionability,
+            yolo_role, yolo_recency, visitor_id, session_id, client_ip, user_agent, context_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            row["ticker"],
+            row["asof"],
+            row["verdict"],
+            row["source_surface"],
+            row["note"],
+            row["setup_tier"],
+            row["setup_score"],
+            row["setup_family"],
+            row["signal_bias"],
+            row["actionability"],
+            row["yolo_role"],
+            row["yolo_recency"],
+            row["visitor_id"],
+            row["session_id"],
+            row["client_ip"],
+            row["user_agent"],
+            row["context_json"],
+        ),
+    )
+    conn.commit()
+    return {"ok": True, "ticker": row["ticker"], "verdict": verdict}
+
+
+def _feedback_summary(conn: sqlite3.Connection, days: int = 30) -> dict[str, Any]:
+    if not table_exists(conn, "setup_feedback"):
+        return {
+            "days": days,
+            "total": 0,
+            "good": 0,
+            "bad": 0,
+            "neutral": 0,
+            "good_rate_pct": None,
+        }
+    days = max(1, min(365, int(days)))
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat()
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN verdict='good' THEN 1 ELSE 0 END) AS good,
+            SUM(CASE WHEN verdict='bad' THEN 1 ELSE 0 END) AS bad,
+            SUM(CASE WHEN verdict='neutral' THEN 1 ELSE 0 END) AS neutral
+        FROM setup_feedback
+        WHERE created_ts >= ?
+        """,
+        (cutoff,),
+    ).fetchone()
+    total = int(row["total"] or 0) if row else 0
+    good = int(row["good"] or 0) if row else 0
+    bad = int(row["bad"] or 0) if row else 0
+    neutral = int(row["neutral"] or 0) if row else 0
+    return {
+        "days": days,
+        "total": total,
+        "good": good,
+        "bad": bad,
+        "neutral": neutral,
+        "good_rate_pct": round((good * 100.0) / total, 2) if total else None,
+    }
+
+
 def get_latest_fundamentals(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
     row = conn.execute(
         """
@@ -1370,6 +1533,15 @@ def get_yolo_audit(conn: sqlite3.Connection, ticker: str, limit: int = 12) -> li
     history_payload = [dict(row) for row in rows]
     asof_dates_desc: dict[str, list[str]] = {"daily": [], "weekly": []}
     latest_asof_by_timeframe: dict[str, str | None] = {"daily": None, "weekly": None}
+    latest_price_date = None
+    if table_exists(conn, "price_daily"):
+        latest_price_row = conn.execute(
+            "SELECT MAX(date) AS latest_date FROM price_daily WHERE ticker = ?",
+            (ticker_key,),
+        ).fetchone()
+        latest_price_date = str(latest_price_row["latest_date"] or "").strip() if latest_price_row else None
+        if latest_price_date == "":
+            latest_price_date = None
     for timeframe_key in ("daily", "weekly"):
         dates = {
             str(row.get("as_of_date") or "")
@@ -1434,6 +1606,37 @@ def get_yolo_audit(conn: sqlite3.Connection, ticker: str, limit: int = 12) -> li
                 age_days = max(0, (last_seen_dt - x1_dt).days)
         active_now = bool(last_seen and last_seen == latest_asof_by_timeframe.get(timeframe_key))
         streak = _yolo_streak_for_asofs(seen_asofs, asof_dates_desc.get(timeframe_key, []), last_seen)
+        confidence_by_asof: dict[str, float] = {}
+        for item in grouped_rows:
+            asof_key = str(item.get("as_of_date") or "").strip()
+            if not asof_key:
+                continue
+            conf = float(item.get("confidence") or 0.0)
+            confidence_by_asof[asof_key] = max(conf, float(confidence_by_asof.get(asof_key) or 0.0))
+        ordered_conf = sorted(confidence_by_asof.items(), key=lambda row: row[0], reverse=True)
+        latest_conf = ordered_conf[0][1] if ordered_conf else float(latest.get("confidence") or 0.0)
+        previous_conf = ordered_conf[1][1] if len(ordered_conf) >= 2 else None
+        confidence_delta = round(float(latest_conf - previous_conf), 3) if previous_conf is not None else None
+        if active_now:
+            if previous_conf is None:
+                confirmation_trend = "new"
+            elif confidence_delta is not None and confidence_delta >= 0.05:
+                confirmation_trend = "strengthening"
+            elif confidence_delta is not None and confidence_delta <= -0.05:
+                confirmation_trend = "weakening"
+            else:
+                confirmation_trend = "persisting"
+        else:
+            confirmation_trend = "inactive"
+        includes_latest_close = bool(active_now and latest_price_date and last_seen and last_seen == latest_price_date)
+        if includes_latest_close:
+            lifecycle_state = "includes_latest_close"
+        elif active_now:
+            lifecycle_state = "active_context"
+        elif latest_price_date and last_seen and str(last_seen) < str(latest_price_date):
+            lifecycle_state = "no_longer_active"
+        else:
+            lifecycle_state = "historical_context"
         audit_item = {
             "ticker": ticker_key,
             "timeframe": latest.get("timeframe"),
@@ -1448,6 +1651,12 @@ def get_yolo_audit(conn: sqlite3.Connection, ticker: str, limit: int = 12) -> li
             "snapshots_seen": len(seen_asofs),
             "current_streak": streak,
             "active_now": active_now,
+            "latest_price_date": latest_price_date,
+            "latest_close_in_pattern": includes_latest_close,
+            "previous_confidence": round(float(previous_conf), 3) if previous_conf is not None else None,
+            "confidence_delta": confidence_delta,
+            "confirmation_trend": confirmation_trend,
+            "lifecycle_state": lifecycle_state,
         }
         audit_item["signal_role"] = _yolo_signal_role(audit_item, active_now=active_now)
         audit_item["priority_score"] = _yolo_priority_score(audit_item, active_now=active_now)
@@ -1796,6 +2005,7 @@ def _build_chart_commentary_payload(
     candle_patterns: pd.DataFrame,
     yolo_patterns: list[dict[str, Any]],
     yolo_audit: list[dict[str, Any]],
+    setup_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if model.empty:
         return {}
@@ -1846,11 +2056,66 @@ def _build_chart_commentary_payload(
     row.update(tech)
     row.update(_report_score_setup_from_confluence(row))
     row.update(_report_describe_setup(row))
+    baseline_narrative = {
+        "observation": row.get("observation"),
+        "action": row.get("action"),
+        "risk_note": row.get("risk_note"),
+        "technical_read": row.get("technical_read"),
+    }
+    prompt_instruction = (
+        "Summarize the chart in plain English using the freshest active YOLO pattern first, "
+        "then recent persistent YOLO context, then any stale historical context. "
+        "Explain trend, level location, candle confirmation, breakout/compression state, "
+        "and whether the setup is actionable now or only on confirmation."
+    )
+    llm_meta: dict[str, Any] = {}
+    try:
+        llm_meta = llm_status()
+    except Exception:
+        llm_meta = {}
     row["narrative_source"] = "rule"
-    llm_overrides = maybe_rewrite_setup_copy(row, source="chart_commentary")
-    if llm_overrides:
-        row.update(llm_overrides)
-        row["narrative_source"] = "llm"
+    if isinstance(setup_override, dict) and setup_override:
+        for key in (
+            "score",
+            "confluence_score",
+            "setup_tier",
+            "setup_family",
+            "signal_bias",
+            "actionability",
+            "action",
+            "risk_note",
+            "observation",
+            "technical_read",
+            "yolo_pattern",
+            "yolo_confidence",
+            "yolo_age_days",
+            "yolo_timeframe",
+            "yolo_first_seen_asof",
+            "yolo_last_seen_asof",
+            "yolo_snapshots_seen",
+            "yolo_current_streak",
+            "yolo_signal_role",
+            "yolo_role",
+            "yolo_recency",
+            "yolo_confirmation_trend",
+            "yolo_lifecycle_state",
+            "yolo_latest_close_in_pattern",
+            "breakout_state",
+        ):
+            if key in setup_override and setup_override.get(key) is not None:
+                row[key] = setup_override.get(key)
+        row["narrative_source"] = "report_snapshot"
+    else:
+        llm_overrides = maybe_rewrite_setup_copy(row, source="chart_commentary")
+        if llm_overrides:
+            row.update(llm_overrides)
+            row["narrative_source"] = "llm"
+    final_narrative = {
+        "observation": row.get("observation"),
+        "action": row.get("action"),
+        "risk_note": row.get("risk_note"),
+        "technical_read": row.get("technical_read"),
+    }
 
     primary_audit = yolo_audit[0] if yolo_audit else None
     current_active = [item for item in yolo_audit if bool(item.get("active_now"))]
@@ -1860,6 +2125,67 @@ def _build_chart_commentary_payload(
         "recent_persisting_yolo": fresh_active[:3],
         "historical_yolo_context": [item for item in yolo_audit if not bool(item.get("active_now"))][:3],
         "primary_audit_row": primary_audit,
+    }
+    yolo_role = (
+        row.get("yolo_role")
+        or row.get("yolo_signal_role")
+        or (primary_audit.get("signal_role") if isinstance(primary_audit, dict) else None)
+        or (primary_yolo.get("signal_role") if primary_yolo else None)
+        or "none"
+    )
+    yolo_recency = (
+        row.get("yolo_recency")
+        or (primary_audit.get("yolo_recency") if isinstance(primary_audit, dict) else None)
+        or (primary_yolo.get("yolo_recency") if primary_yolo else None)
+        or "none"
+    )
+    yolo_confirmation_trend = (
+        row.get("yolo_confirmation_trend")
+        or (primary_audit.get("confirmation_trend") if isinstance(primary_audit, dict) else None)
+        or "unknown"
+    )
+    yolo_lifecycle_state = (
+        row.get("yolo_lifecycle_state")
+        or (primary_audit.get("lifecycle_state") if isinstance(primary_audit, dict) else None)
+        or "unknown"
+    )
+    yolo_latest_close_in_pattern = row.get("yolo_latest_close_in_pattern")
+    if yolo_latest_close_in_pattern is None and isinstance(primary_audit, dict):
+        yolo_latest_close_in_pattern = primary_audit.get("latest_close_in_pattern")
+    llm_trace = {
+        "narrative_source": row.get("narrative_source"),
+        "baseline": baseline_narrative,
+        "final": final_narrative,
+        "changed_fields": {
+            "observation": baseline_narrative.get("observation") != final_narrative.get("observation"),
+            "action": baseline_narrative.get("action") != final_narrative.get("action"),
+            "risk_note": baseline_narrative.get("risk_note") != final_narrative.get("risk_note"),
+            "technical_read": baseline_narrative.get("technical_read") != final_narrative.get("technical_read"),
+        },
+        "llm_status": {
+            "enabled": bool(llm_meta.get("enabled")),
+            "ready": bool(llm_meta.get("ready")),
+            "runtime_disabled": bool(llm_meta.get("runtime_disabled")),
+            "runtime_disabled_remaining_sec": llm_meta.get("runtime_disabled_remaining_sec"),
+            "provider": llm_meta.get("provider"),
+            "temperature": llm_meta.get("temperature"),
+            "max_tokens": llm_meta.get("max_tokens"),
+            "timeout_sec": llm_meta.get("timeout_sec"),
+            "api_version": llm_meta.get("api_version"),
+        },
+        "rewrite_instruction": prompt_instruction,
+        "input_facts": {
+            "setup_family": row.get("setup_family"),
+            "signal_bias": row.get("signal_bias"),
+            "trend_state": row.get("trend_state"),
+            "level_context": row.get("level_context"),
+            "breakout_state": row.get("breakout_state"),
+            "structure_state": row.get("structure_state"),
+            "candle_bias": row.get("candle_bias"),
+            "yolo_pattern": row.get("yolo_pattern"),
+            "yolo_recency": row.get("yolo_recency"),
+            "yolo_age_days": row.get("yolo_age_days"),
+        },
     }
     return {
         "ticker": ticker,
@@ -1874,8 +2200,11 @@ def _build_chart_commentary_payload(
         "risk_note": row.get("risk_note"),
         "technical_read": row.get("technical_read"),
         "narrative_source": row.get("narrative_source"),
-        "primary_yolo_role": primary_yolo.get("signal_role") if primary_yolo else "none",
-        "primary_yolo_recency": primary_yolo.get("yolo_recency") if primary_yolo else "none",
+        "primary_yolo_role": yolo_role,
+        "primary_yolo_recency": yolo_recency,
+        "primary_yolo_confirmation_trend": yolo_confirmation_trend,
+        "primary_yolo_lifecycle_state": yolo_lifecycle_state,
+        "primary_yolo_latest_close_in_pattern": bool(yolo_latest_close_in_pattern) if yolo_latest_close_in_pattern is not None else None,
         "commentary_context": {
             "ticker": ticker,
             "asof": asof_date,
@@ -1891,12 +2220,8 @@ def _build_chart_commentary_payload(
             "candle": candle,
             "yolo": commentary_summary,
         },
-        "llm_ready_prompt": (
-            "Summarize the chart in plain English using the freshest active YOLO pattern first, "
-            "then recent persistent YOLO context, then any stale historical context. "
-            "Explain trend, level location, candle confirmation, breakout/compression state, "
-            "and whether the setup is actionable now or only on confirmation."
-        ),
+        "llm_ready_prompt": prompt_instruction,
+        "narrative_trace": llm_trace,
     }
 
 
@@ -1939,6 +2264,31 @@ def _latest_daily_report_json(report_dir: Path) -> tuple[Path | None, dict[str, 
         if payload is not None:
             return p, payload
     return None, None
+
+
+def _extract_report_setup_rows(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    signals = payload.get("signals")
+    if not isinstance(signals, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for key in ("setup_quality_top", "setup_quality_all", "setup_quality"):
+        rows = signals.get(key)
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict):
+                    out.append(row)
+    return out
+
+
+def _latest_report_setup_for_ticker(report_dir: Path, ticker: str) -> dict[str, Any] | None:
+    _, payload = _latest_daily_report_json(report_dir)
+    target = str(ticker or "").strip().upper()
+    for row in _extract_report_setup_rows(payload):
+        if str(row.get("ticker") or "").strip().upper() == target:
+            return dict(row)
+    return None
 
 
 def _daily_report_history(report_dir: Path, limit: int = 20) -> list[dict[str, Any]]:
@@ -2958,6 +3308,7 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
     )
     yolo_patterns = get_yolo_patterns(conn, ticker)
     yolo_audit = get_yolo_audit(conn, ticker, limit=14)
+    setup_override = _latest_report_setup_for_ticker(REPORT_DIR, ticker)
     chart_commentary = _build_chart_commentary_payload(
         ticker=ticker,
         fund=fund,
@@ -2966,6 +3317,7 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
         candle_patterns=candle_patterns,
         yolo_patterns=yolo_patterns,
         yolo_audit=yolo_audit,
+        setup_override=setup_override,
     )
 
     return {

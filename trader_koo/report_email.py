@@ -6,11 +6,11 @@ from typing import Any
 
 from trader_koo.email_chart_preview import build_chart_preview_url, chart_preview_enabled
 
-EMAIL_CATALYST_DAY_LIMIT = 3
-EMAIL_CATALYST_ROWS_PER_SESSION = 2
-EMAIL_SETUP_ROWS_PER_BUCKET = 2
-EMAIL_SETUP_OBS_MAX_CHARS = 96
-EMAIL_SETUP_ACTION_MAX_CHARS = 84
+EMAIL_CATALYST_DAY_LIMIT = 2
+EMAIL_CATALYST_ROWS_PER_SESSION = 1
+EMAIL_SETUP_ROWS_PER_BUCKET = 1
+EMAIL_SETUP_OBS_MAX_CHARS = 72
+EMAIL_SETUP_ACTION_MAX_CHARS = 64
 EMAIL_PREVIEW_CHART_LIMIT = 2
 
 
@@ -171,7 +171,7 @@ def build_report_email_bodies(
             "<td style=\"padding:8px;vertical-align:top;width:33.33%;\">"
             "<div style=\"border:1px solid #e6ecf5;border-radius:14px;padding:14px 14px 12px;background:#f8fbff;\">"
             f"<div style=\"font-size:11px;line-height:16px;text-transform:uppercase;letter-spacing:0.08em;color:#5f6b7a;\">{_esc(title)}</div>"
-            f"<div style=\"margin-top:6px;font-size:26px;line-height:30px;font-weight:700;color:#0f172a;\">{_esc(value)}</div>"
+            f"<div style=\"margin-top:6px;font-size:22px;line-height:26px;font-weight:700;color:#0f172a;white-space:nowrap;word-break:keep-all;\">{_esc(value)}</div>"
             f"<div style=\"margin-top:4px;font-size:12px;line-height:18px;color:#6b7280;\">{_esc(note)}</div>"
             "</div>"
             "</td>"
@@ -188,7 +188,7 @@ def build_report_email_bodies(
             f"<strong>{_esc(item.get('title', 'Change'))}.</strong> {_esc(item.get('detail', '-'))}"
             "</li>"
         )
-        for item in key_changes[:4]
+        for item in key_changes[:3]
     ) or "<li style=\"margin:0;\">No material change summary was generated for this run.</li>"
 
     def _mover_rows(rows: list[dict[str, Any]], near_key: str) -> str:
@@ -340,7 +340,7 @@ def build_report_email_bodies(
     html_body = f"""\
 <!doctype html>
 <html>
-  <body style="margin:0;padding:0;background:#eef3f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <body style="margin:0;padding:0;background:#eef3f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
     <div style="max-width:760px;margin:0 auto;padding:24px 12px;">
       <div style="background:#ffffff;border:1px solid #dde7f0;border-radius:22px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,0.08);">
         <div style="padding:28px 28px 22px;background:linear-gradient(135deg,#0f172a 0%,#102a56 100%);color:#ffffff;">
