@@ -25,3 +25,6 @@ trader_koo/data/cv/windows/
 .env.*
 !.env.example
 *.pt
+
+# Local planning artifacts (not for git)
+planning/
