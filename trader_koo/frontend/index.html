@@ -579,6 +579,20 @@
       line-height: 1.5;
       font-family: 'Inter', sans-serif;
     }
+    .report-mini-list {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 8px;
+      color: var(--text);
+      font-size: 0.76rem;
+      line-height: 1.45;
+      font-family: 'Inter', sans-serif;
+    }
+    .report-mini-list li {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
     .chart-commentary-panel {
       margin: 10px 0 14px;
       padding: 12px;
@@ -768,6 +782,45 @@
     .setup-compact-copy strong {
       color: var(--text);
       font-weight: 800;
+    }
+    .chart-feedback-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0 10px;
+    }
+    .chart-feedback-label {
+      font-size: 0.74rem;
+      color: var(--muted);
+      font-family: 'Inter', sans-serif;
+    }
+    .chart-feedback-btn {
+      width: auto;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(142, 160, 189, 0.24);
+      background: rgba(142, 160, 189, 0.08);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.7rem;
+      font-weight: 700;
+      font-family: 'Inter', sans-serif;
+    }
+    .chart-feedback-btn:hover:not([disabled]) {
+      border-color: var(--blue);
+      background: rgba(106, 169, 255, 0.14);
+    }
+    .chart-feedback-btn[disabled] {
+      opacity: 0.65;
+      cursor: wait;
+    }
+    .chart-feedback-status {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-family: 'Inter', sans-serif;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .report-chip-list {
       display: grid;
@@ -1605,6 +1658,13 @@
             <div id="chartCommentaryStatus" class="report-inline-note">Load a ticker to generate commentary.</div>
           </div>
           <div id="chartCommentaryBadges" class="earnings-badges"></div>
+          <div class="chart-feedback-row">
+            <span class="chart-feedback-label">Feedback:</span>
+            <button id="chartFeedbackGoodBtn" class="chart-feedback-btn" type="button">Makes Sense</button>
+            <button id="chartFeedbackNeutralBtn" class="chart-feedback-btn" type="button">Unclear</button>
+            <button id="chartFeedbackBadBtn" class="chart-feedback-btn" type="button">Disagree</button>
+            <span id="chartFeedbackStatus" class="chart-feedback-status">Help improve narrative quality for this ticker.</span>
+          </div>
           <div id="chartNarrativeTrace" class="report-inline-note" style="margin:8px 0 10px;">Load a ticker to inspect narrative generation trace.</div>
           <div class="chart-commentary-grid">
             <div class="chart-commentary-block">
@@ -1707,6 +1767,32 @@
           <div class="report-inline-note" style="margin-bottom:8px;">Advanced view adds labeled audit fields so you can see why a name ranked where it did without reading one giant sentence.</div>
           <div id="reportSetupQualityCards" class="mobile-detail-list"></div>
           <table id="reportSetupQualityTable"></table>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Setup Evaluation (Backtest)</div>
+        <div id="reportSetupEvalSummary" class="report-inline-note">No setup evaluation data yet.</div>
+        <div id="reportSetupEvalCards" class="cards" style="margin:10px 0;"></div>
+        <div class="report-split-grid" style="margin-bottom:10px;">
+          <div class="report-split-panel">
+            <div style="font-size:0.72rem; color:var(--muted); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">BY VALIDITY WINDOW</div>
+            <table id="reportSetupEvalValidityTable"></table>
+          </div>
+          <div class="report-split-panel">
+            <div style="font-size:0.72rem; color:var(--muted); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">IMPROVEMENT ACTIONS</div>
+            <ul id="reportSetupEvalActions" class="report-mini-list"></ul>
+          </div>
+        </div>
+        <div class="report-split-grid">
+          <div class="report-split-panel">
+            <div style="font-size:0.72rem; color:var(--green); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">MOST RELIABLE LONG FAMILIES</div>
+            <table id="reportSetupEvalLongTable"></table>
+          </div>
+          <div class="report-split-panel">
+            <div style="font-size:0.72rem; color:var(--red); font-weight:600; margin-bottom:6px; letter-spacing:.05em;">MOST RELIABLE SHORT FAMILIES</div>
+            <table id="reportSetupEvalShortTable"></table>
+          </div>
         </div>
       </div>
 
@@ -1996,14 +2082,17 @@
     const TABLE_STATE = {};
     const DEFAULT_MONTHS = 3;
     let LAST_CHART_PAYLOAD = null;
+    let LAST_REPORT_GENERATED_TS = null;
     let LAST_REPORT_SETUP_ROWS = [];
     let REPORT_SETUP_SHOW_MORE = false;
     let REPORT_RETURN_STATE = null;
+    let CHART_SOURCE_CONTEXT = "live"; // "live" | "report_snapshot"
     let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
     let EARNINGS_VIEW_MODE = "calendar";
     let LAST_EARNINGS_ROWS = [];
     let LAST_EARNINGS_LOOKUP = {};
     let LAST_EARNINGS_SELECTED = "";
+    let LAST_CHART_COMMENTARY = null;
     let USAGE_STATE = null;
     let USAGE_TIMER = null;
 
@@ -2298,11 +2387,12 @@
     function shortenCopy(value, maxChars = 168) {
       const text = sanitizeSnippetTail(value);
       if (!text) return "-";
-      if (text.length <= maxChars) return text;
+      const cap = Number(maxChars || 0);
+      if (!Number.isFinite(cap) || cap <= 0 || text.length <= cap) return text;
       const clipped = text.slice(0, maxChars);
       const cut = clipped.lastIndexOf(" ");
       const base = (cut > 40 ? clipped.slice(0, cut) : clipped).trim();
-      return `${base}...`;
+      return sanitizeSnippetTail(base);
     }
 
     function setReportReturnContext() {
@@ -2310,6 +2400,7 @@
         tab: "report",
         scrollY: window.scrollY,
         setupModeMore: !!REPORT_SETUP_SHOW_MORE,
+        reportGeneratedTs: LAST_REPORT_GENERATED_TS || null,
       };
       const wrap = $("chartReturnWrap");
       if (wrap) wrap.classList.remove("hidden");
@@ -2322,19 +2413,23 @@
     }
 
     function restoreReportFromChart() {
-      activateTab("report");
-      if (REPORT_RETURN_STATE) {
-        setReportSetupMode(!!REPORT_RETURN_STATE.setupModeMore);
-        const y = Number(REPORT_RETURN_STATE.scrollY || 0);
+      const saved = REPORT_RETURN_STATE ? { ...REPORT_RETURN_STATE } : null;
+      activateTab("report", { skipReportReload: true });
+      if (saved) {
+        LAST_REPORT_GENERATED_TS = saved.reportGeneratedTs || LAST_REPORT_GENERATED_TS;
+        setReportSetupMode(!!saved.setupModeMore);
+        const y = Number(saved.scrollY || 0);
         window.requestAnimationFrame(() => window.scrollTo({ top: y, behavior: "auto" }));
       }
+      clearReportReturnContext();
     }
 
     function loadTickerFromReport(ticker) {
       const symbol = normalizeTickerSymbol(ticker);
       if (!symbol) return;
       setReportReturnContext();
-      loadTickerQuick(symbol);
+      CHART_SOURCE_CONTEXT = LAST_REPORT_GENERATED_TS ? "report_snapshot" : "live";
+      loadTickerQuick(symbol, { reportGeneratedTs: LAST_REPORT_GENERATED_TS });
     }
 
     function buildCompactSetupRows(rows) {
@@ -2346,8 +2441,8 @@
         signal_bias_label: titleCaseWords(row.signal_bias || "neutral"),
         actionability_label: humanizeActionability(row.actionability),
         context_label: humanizeSetupContext(row),
-        observation_short: shortenCopy(row.observation || buildSetupReason(row), 120),
-        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 110),
+        observation_short: sanitizeSnippetTail(row.observation || buildSetupReason(row)),
+        action_short: sanitizeSnippetTail(row.action || "Watch only until the setup confirms."),
       }));
     }
 
@@ -2360,9 +2455,9 @@
         bias_label: titleCaseWords(row.signal_bias || "neutral"),
         yolo_context: humanizeSetupContext(row),
         level_event: humanizeBreakoutState(row.breakout_state),
-        observation_short: shortenCopy(row.observation || buildSetupReason(row), 140),
-        next_step_short: shortenCopy(row.action || "Watch only until the setup confirms.", 120),
-        audit_notes: shortenCopy(humanizeTechnicalRead(row.technical_read, row), 110),
+        observation_short: sanitizeSnippetTail(row.observation || buildSetupReason(row)),
+        next_step_short: sanitizeSnippetTail(row.action || "Watch only until the setup confirms."),
+        audit_notes: sanitizeSnippetTail(humanizeTechnicalRead(row.technical_read, row)),
         signal_bias: row.signal_bias,
       }));
     }
@@ -2626,8 +2721,94 @@
       return (filtered.length ? filtered : parts).join(" | ");
     }
 
+    function setChartFeedbackBusy(isBusy) {
+      ["chartFeedbackGoodBtn", "chartFeedbackNeutralBtn", "chartFeedbackBadBtn"].forEach((id) => {
+        const btn = $(id);
+        if (btn) btn.disabled = !!isBusy;
+      });
+    }
+
+    function setChartFeedbackStatus(message, tone = "muted") {
+      const el = $("chartFeedbackStatus");
+      if (!el) return;
+      const text = String(message || "").trim();
+      el.textContent = text || "Help improve narrative quality for this ticker.";
+      if (tone === "ok") {
+        el.style.color = "#38d39f";
+      } else if (tone === "warn") {
+        el.style.color = "#f8c24e";
+      } else if (tone === "bad") {
+        el.style.color = "#ff9a9a";
+      } else {
+        el.style.color = "var(--muted)";
+      }
+    }
+
+    async function submitChartFeedback(verdict) {
+      const base = getApiBase();
+      if (!base) return;
+      const validVerdict = String(verdict || "").trim().toLowerCase();
+      if (!["good", "neutral", "bad"].includes(validVerdict)) return;
+      const ticker = normalizeTickerSymbol($("ticker")?.value || LAST_CHART_PAYLOAD?.ticker || "");
+      if (!ticker) {
+        setChartFeedbackStatus("Load a ticker before sending feedback.", "warn");
+        return;
+      }
+      const data = LAST_CHART_COMMENTARY || {};
+      setChartFeedbackBusy(true);
+      setChartFeedbackStatus("Saving feedback...", "muted");
+      try {
+        const state = getUsageState();
+        const payload = {
+          verdict: validVerdict,
+          ticker,
+          asof: data.asof || LAST_CHART_PAYLOAD?.asof || null,
+          source_surface: "chart_commentary",
+          setup_tier: data.setup_tier || null,
+          setup_score: data.setup_score ?? null,
+          setup_family: data.setup_family || null,
+          signal_bias: data.signal_bias || null,
+          actionability: data.actionability || null,
+          yolo_role: data.primary_yolo_role || null,
+          yolo_recency: data.primary_yolo_recency || null,
+          visitor_id: state.visitorId,
+          session_id: state.sessionId,
+          context_json: {
+            observation: data.observation || null,
+            action: data.action || null,
+            technical_read: data.technical_read || null,
+            risk_note: data.risk_note || null,
+            narrative_source: data.narrative_source || null,
+          },
+        };
+        const resp = await fetch(`${base}/api/feedback/setup`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const out = await resp.json().catch(() => ({}));
+        if (!resp.ok || !out.ok) {
+          throw new Error(out.detail || out.error || `HTTP ${resp.status}`);
+        }
+        const verdictLabel = validVerdict === "good" ? "makes sense" : (validVerdict === "neutral" ? "unclear" : "disagree");
+        const total = out.summary && Number.isFinite(Number(out.summary.total)) ? Number(out.summary.total) : null;
+        setChartFeedbackStatus(
+          total != null
+            ? `Saved (${verdictLabel}). Recent feedback count: ${total}.`
+            : `Saved (${verdictLabel}).`,
+          "ok",
+        );
+      } catch (err) {
+        setChartFeedbackStatus(`Feedback not saved: ${err.message}`, "bad");
+      } finally {
+        setChartFeedbackBusy(false);
+      }
+    }
+
     function renderChartCommentary(payload) {
       const data = payload && payload.chart_commentary ? payload.chart_commentary : {};
+      LAST_CHART_COMMENTARY = data;
       const badges = [];
       if (data.setup_tier) badges.push(`<span class="earnings-badge">${escHtml(`Tier ${data.setup_tier}`)}</span>`);
       if (data.signal_bias) badges.push(`<span class="earnings-badge ${earningsToneClass(data.signal_bias)}">${escHtml(String(data.signal_bias).toUpperCase())}</span>`);
@@ -2651,6 +2832,7 @@
       $("chartTechnicalRead").innerHTML = `
         <strong>Technical Context:</strong> ${escHtml(humanizeTechnicalRead(data.technical_read, data))}
       `;
+      setChartFeedbackStatus("Help improve narrative quality for this ticker.", "muted");
       const traceEl = $("chartNarrativeTrace");
       if (!traceEl) return;
       const trace = data.narrative_trace && typeof data.narrative_trace === "object" ? data.narrative_trace : {};
@@ -2822,7 +3004,8 @@
       }
     }
 
-    function activateTab(which) {
+    function activateTab(which, opts = {}) {
+      const skipReportReload = !!opts.skipReportReload;
       const all = {
         op: [tabOpBtn, tabOp],
         chart: [tabChartBtn, tabChart],
@@ -2835,7 +3018,7 @@
         else             { btn.classList.remove("active"); sec.classList.add("hidden"); }
       }
       markUsageTabView(which);
-      if (which === "report") loadReport();
+      if (which === "report" && !skipReportReload) loadReport();
       if (which === "earnings") loadEarnings();
     }
 
@@ -3892,16 +4075,21 @@
       }
     }
 
-    async function loadChart() {
+    async function loadChart(opts = {}) {
       const ticker = ($("ticker").value || "SPY").trim().toUpperCase();
       const months = 0; // always fetch all data; view window controlled by rangeselector
       const base = getApiBase();
+      const reportGeneratedTs = String(
+        opts.reportGeneratedTs || (CHART_SOURCE_CONTEXT === "report_snapshot" ? (LAST_REPORT_GENERATED_TS || "") : ""),
+      ).trim();
       const btn = $("loadChartBtn");
       btn.disabled = true;
       $("chartStatus").textContent = `Loading ${ticker}...`;
       setGlobalStatus(`Loading ${ticker} dashboard...`);
       try {
-        const resp = await apiFetch(`${base}/api/dashboard/${ticker}?months=${months}`);
+        const qs = new URLSearchParams({ months: String(months) });
+        if (reportGeneratedTs) qs.set("report_generated_ts", reportGeneratedTs);
+        const resp = await apiFetch(`${base}/api/dashboard/${ticker}?${qs.toString()}`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const payload = await resp.json();
         syncChartToggleState(payload);
@@ -3973,7 +4161,10 @@
           null,
           { sortable: true }
         );
-        $("chartStatus").textContent = `asof ${payload.asof || "-"} • ${ticker}`;
+        const snapshotLabel = payload.report_generated_ts
+          ? ` • report ${(String(payload.report_generated_ts).slice(0, 16) || "").replace("T", " ")}`
+          : "";
+        $("chartStatus").textContent = `asof ${payload.asof || "-"}${snapshotLabel} • ${ticker}`;
         setGlobalStatus(`Done (${ticker})`);
         markUsageChartLoad(ticker);
       } catch (err) {
@@ -4005,10 +4196,15 @@
       }
     }
 
-    function loadTickerQuick(t) {
+    function loadTickerQuick(t, opts = {}) {
       $("ticker").value = t;
       activateTab("chart");
-      loadChart();
+      if (opts && opts.reportGeneratedTs) {
+        CHART_SOURCE_CONTEXT = "report_snapshot";
+      } else if (!opts || !opts.preserveSourceContext) {
+        CHART_SOURCE_CONTEXT = "live";
+      }
+      loadChart(opts || {});
     }
 
     function jumpToTicker(ticker) {
@@ -4097,7 +4293,7 @@
       el.querySelectorAll("button[data-watch-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const t = btn.getAttribute("data-watch-load");
-          if (t) loadTickerQuick(t);
+          if (t) loadTickerFromReport(t);
         });
       });
       el.querySelectorAll("button[data-watch-remove]").forEach((btn) => {
@@ -4124,7 +4320,12 @@
         const hasReport = data.ok && Object.keys(latest).length > 0;
 
         $("reportNoData").style.display = hasReport ? "none" : "block";
-        if (!hasReport) { $("reportStatus").textContent = "No report yet"; return; }
+        if (!hasReport) {
+          LAST_REPORT_GENERATED_TS = null;
+          $("reportStatus").textContent = "No report yet";
+          return;
+        }
+        LAST_REPORT_GENERATED_TS = String(latest.generated_ts || "").trim() || null;
 
         const makeCard = (label, val) =>
           `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
@@ -4198,7 +4399,7 @@
           ],
           setupAuditRows,
           true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
           { sortable: true },
         );
         $("reportSetupQuickAdds").innerHTML = setupRows
@@ -4213,6 +4414,115 @@
           });
         });
         setReportSetupMode(REPORT_SETUP_SHOW_MORE);
+
+        const setupEval = signals.setup_evaluation || {};
+        const evalEnabled = !!setupEval.enabled && !setupEval.error;
+        const evalOverall = (setupEval.overall && typeof setupEval.overall === "object") ? setupEval.overall : {};
+        const evalFamilies = Array.isArray(setupEval.by_family) ? setupEval.by_family : [];
+        const evalValidity = Array.isArray(setupEval.by_validity_days) ? setupEval.by_validity_days : [];
+        const evalActions = Array.isArray(setupEval.improvement_actions) ? setupEval.improvement_actions : [];
+        const evalLong = evalFamilies
+          .filter((row) => String(row.call_direction || "").toLowerCase() === "long")
+          .slice(0, 8)
+          .map((row) => ({
+            setup_family: humanizeSetupFamily(row.setup_family),
+            calls: row.calls,
+            hit_rate_pct: row.hit_rate_pct,
+            avg_signed_return_pct: row.avg_signed_return_pct,
+            expectancy_pct: row.expectancy_pct,
+          }));
+        const evalShort = evalFamilies
+          .filter((row) => String(row.call_direction || "").toLowerCase() === "short")
+          .slice(0, 8)
+          .map((row) => ({
+            setup_family: humanizeSetupFamily(row.setup_family),
+            calls: row.calls,
+            hit_rate_pct: row.hit_rate_pct,
+            avg_signed_return_pct: row.avg_signed_return_pct,
+            expectancy_pct: row.expectancy_pct,
+          }));
+        const evalWindow = Number(setupEval.window_days || 0);
+        const evalMinSample = Number(setupEval.min_sample || 0);
+        const evalScoredCalls = Number(setupEval.scored_calls || 0);
+        const evalOpenCalls = Number(setupEval.open_calls || 0);
+        const evalThreshold = Number(setupEval.hit_threshold_pct || 0);
+        const evalLatestAsof = String(setupEval.latest_scored_asof || "").trim();
+        const bestValidity = evalValidity
+          .filter((row) => Number(row.calls || 0) > 0)
+          .sort((a, b) => Number(b.expectancy_pct || -999) - Number(a.expectancy_pct || -999))[0];
+        const evalSummaryEl = $("reportSetupEvalSummary");
+        if (evalSummaryEl) {
+          if (!setupEval || !Object.keys(setupEval).length) {
+            evalSummaryEl.textContent = "No setup evaluation data yet.";
+          } else if (!evalEnabled) {
+            const why = setupEval.error || setupEval.reason || "disabled";
+            evalSummaryEl.textContent = `Setup evaluation unavailable (${why}).`;
+          } else {
+            evalSummaryEl.textContent =
+              `Scored calls: ${evalScoredCalls} • Open calls: ${evalOpenCalls} • Window: ${evalWindow || "-"}d • Min sample: ${evalMinSample || "-"} • Hit threshold: ${evalThreshold || "-"}%` +
+              (evalLatestAsof ? ` • Latest scored as-of: ${evalLatestAsof}` : "") +
+              (bestValidity ? ` • Best expectancy horizon: ${bestValidity.validity_days}d (${Number(bestValidity.expectancy_pct || 0).toFixed(2)}%)` : "");
+          }
+        }
+        const evalCardsEl = $("reportSetupEvalCards");
+        if (evalCardsEl) {
+          const hitRate = evalOverall.hit_rate_pct;
+          const avgReturn = evalOverall.avg_signed_return_pct;
+          const expectancy = evalOverall.expectancy_pct;
+          evalCardsEl.innerHTML = evalEnabled
+            ? [
+                makeCard("Hit Rate", hitRate == null ? "—" : `${Number(hitRate).toFixed(1)}%`),
+                makeCard("Avg Signed Return", avgReturn == null ? "—" : `${Number(avgReturn).toFixed(2)}%`),
+                makeCard("Expectancy", expectancy == null ? "—" : `${Number(expectancy).toFixed(2)}%`),
+                makeCard("Scored Calls", Number.isFinite(evalScoredCalls) ? evalScoredCalls : "—"),
+              ].join("")
+            : "";
+        }
+        const evalActionsEl = $("reportSetupEvalActions");
+        if (evalActionsEl) {
+          evalActionsEl.innerHTML = evalEnabled && evalActions.length
+            ? evalActions.slice(0, 5).map((row) => {
+                const pri = String(row.priority || "info").toUpperCase();
+                const scope = String(row.scope || "global").replace(/_/g, " ");
+                const reason = String(row.reason || "").trim();
+                const recommendation = String(row.recommendation || "").trim();
+                return `<li><b>${escHtml(pri)} | ${escHtml(scope)}</b>: ${escHtml(reason || "-")}${recommendation ? `<br><span class="report-inline-note">Tune: ${escHtml(recommendation)}</span>` : ""}</li>`;
+              }).join("")
+            : "<li>No tuning actions yet. Collect more scored calls.</li>";
+        }
+        const evalValidityRows = evalValidity
+          .slice(0, 8)
+          .map((row) => ({
+            validity_days: row.validity_days,
+            calls: row.calls,
+            hit_rate_pct: row.hit_rate_pct,
+            avg_signed_return_pct: row.avg_signed_return_pct,
+            expectancy_pct: row.expectancy_pct,
+          }));
+        renderSimpleTable(
+          "reportSetupEvalValidityTable",
+          ["validity_days", "calls", "hit_rate_pct", "avg_signed_return_pct", "expectancy_pct"],
+          evalValidityRows,
+          false,
+          null,
+          { sortable: false },
+        );
+        renderSimpleTable(
+          "reportSetupEvalLongTable",
+          ["setup_family", "calls", "hit_rate_pct", "avg_signed_return_pct", "expectancy_pct"],
+          evalLong,
+          false,
+          null,
+          { sortable: false },
+        );
+        renderSimpleTable(
+          "reportSetupEvalShortTable",
+          ["setup_family", "calls", "hit_rate_pct", "avg_signed_return_pct", "expectancy_pct"],
+          evalShort,
+          false,
+          null,
+          { sortable: false },
+        );
 
         const sectorRows = signals.sector_heatmap || [];
         const maxAbs = Math.max(1, ...sectorRows.map((r) => Math.abs(Number(r.avg_pct_change || 0))));
@@ -4264,7 +4574,7 @@
           ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
           yoloNew.slice(0, 20),
           true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
           { sortable: false },
         );
 
@@ -4288,7 +4598,7 @@
           ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
           yoloLost.slice(0, 20),
           true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
           { sortable: false },
         );
 
@@ -4313,7 +4623,7 @@
           ["ticker", "pct_change", "close", "prev_close", "pct_from_high"],
           (signals.movers_up_today || []).slice(0, 12),
           true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
           { sortable: false },
         );
         renderSimpleTable(
@@ -4321,7 +4631,7 @@
           ["ticker", "pct_change", "close", "prev_close", "pct_from_low"],
           (signals.movers_down_today || []).slice(0, 12),
           true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
           { sortable: false },
         );
 
@@ -4348,7 +4658,7 @@
           ],
           (signals.yolo_top_today || []).slice(0, 12),
           true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
           { sortable: false });
         $("reportYoloTopNote").textContent = (signals.yolo_top_today || []).length > 12
           ? "Showing top 12 by confidence and recency. Use the chart for the full audit."
@@ -4517,6 +4827,11 @@
       setReportSetupMode(REPORT_SETUP_SHOW_MORE);
     });
     $("loadEarningsBtn").addEventListener("click", loadEarnings);
+    const chartBackBtn = $("chartBackToReportBtn");
+    if (chartBackBtn) chartBackBtn.addEventListener("click", restoreReportFromChart);
+    $("chartFeedbackGoodBtn").addEventListener("click", () => submitChartFeedback("good"));
+    $("chartFeedbackNeutralBtn").addEventListener("click", () => submitChartFeedback("neutral"));
+    $("chartFeedbackBadBtn").addEventListener("click", () => submitChartFeedback("bad"));
     $("tfDailyBtn").addEventListener("click", () => setChartTimeframe("daily"));
     $("tfWeeklyBtn").addEventListener("click", () => setChartTimeframe("weekly"));
     window.addEventListener("keydown", (e) => {

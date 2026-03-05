@@ -2075,6 +2075,27 @@ def _build_chart_commentary_payload(
         llm_meta = {}
     row["narrative_source"] = "rule"
     if isinstance(setup_override, dict) and setup_override:
+        override = dict(setup_override)
+        if override.get("setup_tier") in (None, "") and override.get("tier") not in (None, ""):
+            override["setup_tier"] = override.get("tier")
+        if override.get("score") in (None, "") and override.get("setup_score") not in (None, ""):
+            override["score"] = override.get("setup_score")
+        if override.get("setup_family") in (None, "") and override.get("setup") not in (None, ""):
+            override["setup_family"] = override.get("setup")
+        if override.get("signal_bias") in (None, "") and override.get("bias") not in (None, ""):
+            override["signal_bias"] = override.get("bias")
+        if override.get("actionability") in (None, "") and override.get("state") not in (None, ""):
+            override["actionability"] = override.get("state")
+        if override.get("observation") in (None, "") and override.get("what_it_is") not in (None, ""):
+            override["observation"] = override.get("what_it_is")
+        if override.get("action") in (None, "") and override.get("next_step") not in (None, ""):
+            override["action"] = override.get("next_step")
+        if override.get("risk_note") in (None, "") and override.get("risk") not in (None, ""):
+            override["risk_note"] = override.get("risk")
+        if override.get("technical_read") in (None, "") and override.get("technical_context") not in (None, ""):
+            override["technical_read"] = override.get("technical_context")
+        if override.get("yolo_signal_role") in (None, "") and override.get("yolo_role") not in (None, ""):
+            override["yolo_signal_role"] = override.get("yolo_role")
         for key in (
             "score",
             "confluence_score",
@@ -2102,8 +2123,8 @@ def _build_chart_commentary_payload(
             "yolo_latest_close_in_pattern",
             "breakout_state",
         ):
-            if key in setup_override and setup_override.get(key) is not None:
-                row[key] = setup_override.get(key)
+            if key in override and override.get(key) is not None:
+                row[key] = override.get(key)
         row["narrative_source"] = "report_snapshot"
     else:
         llm_overrides = maybe_rewrite_setup_copy(row, source="chart_commentary")
@@ -2266,6 +2287,40 @@ def _latest_daily_report_json(report_dir: Path) -> tuple[Path | None, dict[str, 
     return None, None
 
 
+def _report_json_for_generated_ts(report_dir: Path, generated_ts: str | None) -> tuple[Path | None, dict[str, Any] | None]:
+    target = parse_iso_utc(generated_ts)
+    if target is None:
+        return _latest_daily_report_json(report_dir)
+    target = target.replace(microsecond=0)
+    target_iso = target.isoformat().replace("+00:00", "Z")
+
+    candidate_path = report_dir / f"daily_report_{target.strftime('%Y%m%dT%H%M%SZ')}.json"
+    payload = _load_json_file(candidate_path)
+    if payload is not None:
+        return candidate_path, payload
+
+    latest_path, latest_payload = _latest_daily_report_json(report_dir)
+    latest_generated = parse_iso_utc((latest_payload or {}).get("generated_ts")) if isinstance(latest_payload, dict) else None
+    if latest_payload is not None and latest_generated is not None and latest_generated.replace(microsecond=0) == target:
+        return latest_path, latest_payload
+
+    candidates = sorted(
+        [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for p in candidates[:120]:
+        payload = _load_json_file(p)
+        if not isinstance(payload, dict):
+            continue
+        row_ts = parse_iso_utc(payload.get("generated_ts"))
+        if row_ts is None:
+            continue
+        if row_ts.replace(microsecond=0).isoformat().replace("+00:00", "Z") == target_iso:
+            return p, payload
+    return _latest_daily_report_json(report_dir)
+
+
 def _extract_report_setup_rows(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -2273,7 +2328,7 @@ def _extract_report_setup_rows(payload: dict[str, Any] | None) -> list[dict[str,
     if not isinstance(signals, dict):
         return []
     out: list[dict[str, Any]] = []
-    for key in ("setup_quality_top", "setup_quality_all", "setup_quality"):
+    for key in ("setup_quality_top", "setup_quality_all", "setup_quality", "watchlist_candidates"):
         rows = signals.get(key)
         if isinstance(rows, list):
             for row in rows:
@@ -2282,12 +2337,53 @@ def _extract_report_setup_rows(payload: dict[str, Any] | None) -> list[dict[str,
     return out
 
 
-def _latest_report_setup_for_ticker(report_dir: Path, ticker: str) -> dict[str, Any] | None:
-    _, payload = _latest_daily_report_json(report_dir)
+def _latest_report_setup_for_ticker(
+    report_dir: Path,
+    ticker: str,
+    *,
+    generated_ts: str | None = None,
+) -> dict[str, Any] | None:
+    def _normalize_setup_row(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        row = dict(raw)
+        if row.get("setup_tier") in (None, "") and row.get("tier") not in (None, ""):
+            row["setup_tier"] = row.get("tier")
+        if row.get("score") in (None, "") and row.get("setup_score") not in (None, ""):
+            row["score"] = row.get("setup_score")
+        if row.get("setup_family") in (None, "") and row.get("setup") not in (None, ""):
+            row["setup_family"] = row.get("setup")
+        if row.get("signal_bias") in (None, "") and row.get("bias") not in (None, ""):
+            row["signal_bias"] = row.get("bias")
+        if row.get("actionability") in (None, "") and row.get("state") not in (None, ""):
+            row["actionability"] = row.get("state")
+        if row.get("observation") in (None, "") and row.get("what_it_is") not in (None, ""):
+            row["observation"] = row.get("what_it_is")
+        if row.get("action") in (None, "") and row.get("next_step") not in (None, ""):
+            row["action"] = row.get("next_step")
+        if row.get("risk_note") in (None, "") and row.get("risk") not in (None, ""):
+            row["risk_note"] = row.get("risk")
+        if row.get("technical_read") in (None, "") and row.get("technical_context") not in (None, ""):
+            row["technical_read"] = row.get("technical_context")
+        if row.get("yolo_signal_role") in (None, "") and row.get("yolo_role") not in (None, ""):
+            row["yolo_signal_role"] = row.get("yolo_role")
+        return row
+
+    _, payload = _report_json_for_generated_ts(report_dir, generated_ts)
     target = str(ticker or "").strip().upper()
+    if isinstance(payload, dict):
+        signals = payload.get("signals")
+        if isinstance(signals, dict):
+            lookup = signals.get("setup_quality_lookup")
+            if isinstance(lookup, dict):
+                row = lookup.get(target) or lookup.get(target.upper()) or lookup.get(target.lower())
+                out = _normalize_setup_row(row if isinstance(row, dict) else None)
+                if isinstance(out, dict):
+                    out.setdefault("ticker", target)
+                    return out
     for row in _extract_report_setup_rows(payload):
         if str(row.get("ticker") or "").strip().upper() == target:
-            return dict(row)
+            return _normalize_setup_row(dict(row))
     return None
 
 
@@ -3236,7 +3332,13 @@ def build_pattern_overlays(
     return out[cols].reset_index(drop=True)
 
 
-def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) -> dict[str, Any]:
+def build_dashboard_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+    *,
+    report_generated_ts: str | None = None,
+) -> dict[str, Any]:
     ticker = ticker.upper().strip()
     fund = get_latest_fundamentals(conn, ticker)
     prices = get_price_df(conn, ticker)
@@ -3308,7 +3410,11 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
     )
     yolo_patterns = get_yolo_patterns(conn, ticker)
     yolo_audit = get_yolo_audit(conn, ticker, limit=14)
-    setup_override = _latest_report_setup_for_ticker(REPORT_DIR, ticker)
+    setup_override = _latest_report_setup_for_ticker(
+        REPORT_DIR,
+        ticker,
+        generated_ts=report_generated_ts,
+    )
     chart_commentary = _build_chart_commentary_payload(
         ticker=ticker,
         fund=fund,
@@ -3339,6 +3445,7 @@ def build_dashboard_payload(conn: sqlite3.Connection, ticker: str, months: int) 
         "yolo_audit": yolo_audit,
         "chart_commentary": chart_commentary,
         "earnings_markers": earnings_markers,
+        "report_generated_ts": report_generated_ts,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
             "config": {
@@ -3802,6 +3909,281 @@ def usage_summary(
         conn.close()
     summary["analytics_enabled"] = True
     return summary
+
+
+@app.post("/api/feedback/setup")
+async def setup_feedback(request: Request) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload.")
+    if not payload.get("client_ip"):
+        payload["client_ip"] = _client_ip(request)
+    if not payload.get("user_agent"):
+        payload["user_agent"] = request.headers.get("user-agent")
+    conn = get_conn()
+    try:
+        result = _record_setup_feedback(conn, payload)
+        summary = _feedback_summary(conn, days=30)
+    finally:
+        conn.close()
+    return {"ok": True, "result": result, "summary": summary}
+
+
+@app.get("/api/admin/feedback-summary")
+def admin_feedback_summary(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=12, ge=1, le=100),
+) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        summary = _feedback_summary(conn, days=days)
+        if not table_exists(conn, "setup_feedback"):
+            return {"ok": True, "summary": summary, "top_tickers": [], "recent": []}
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat()
+        top_rows = conn.execute(
+            """
+            SELECT
+                ticker,
+                COUNT(*) AS votes,
+                SUM(CASE WHEN verdict='good' THEN 1 ELSE 0 END) AS good,
+                SUM(CASE WHEN verdict='bad' THEN 1 ELSE 0 END) AS bad,
+                SUM(CASE WHEN verdict='neutral' THEN 1 ELSE 0 END) AS neutral
+            FROM setup_feedback
+            WHERE created_ts >= ?
+            GROUP BY ticker
+            ORDER BY votes DESC, ticker ASC
+            LIMIT ?
+            """,
+            (cutoff, int(limit)),
+        ).fetchall()
+        recent_rows = conn.execute(
+            """
+            SELECT
+                created_ts,
+                ticker,
+                verdict,
+                source_surface,
+                asof,
+                setup_tier,
+                setup_score
+            FROM setup_feedback
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "ok": True,
+        "summary": summary,
+        "top_tickers": [
+            {
+                "ticker": str(row["ticker"] or ""),
+                "votes": int(row["votes"] or 0),
+                "good": int(row["good"] or 0),
+                "bad": int(row["bad"] or 0),
+                "neutral": int(row["neutral"] or 0),
+                "good_rate_pct": round((int(row["good"] or 0) * 100.0) / int(row["votes"] or 1), 2)
+                if int(row["votes"] or 0)
+                else None,
+            }
+            for row in top_rows
+        ],
+        "recent": [dict(row) for row in recent_rows],
+    }
+
+
+@app.get("/api/admin/setup-eval-summary")
+def admin_setup_eval_summary(limit_families: int = Query(default=12, ge=1, le=100)) -> dict[str, Any]:
+    latest_path, latest_payload = _latest_daily_report_json(REPORT_DIR)
+    if not isinstance(latest_payload, dict):
+        return {
+            "ok": True,
+            "detail": "No daily report available yet.",
+            "generated_ts": None,
+            "summary": {},
+            "top_long_families": [],
+            "top_short_families": [],
+        }
+    signals = latest_payload.get("signals")
+    setup_eval = signals.get("setup_evaluation") if isinstance(signals, dict) else {}
+    if not isinstance(setup_eval, dict):
+        setup_eval = {}
+    families = setup_eval.get("by_family")
+    if not isinstance(families, list):
+        families = []
+    by_validity = setup_eval.get("by_validity_days")
+    if not isinstance(by_validity, list):
+        by_validity = []
+    improvement_actions = setup_eval.get("improvement_actions")
+    if not isinstance(improvement_actions, list):
+        improvement_actions = []
+
+    def _round_stat(value: Any, digits: int = 2) -> float | None:
+        num = _to_float(value)
+        if num is None:
+            return None
+        return round(num, digits)
+
+    def _norm_family(row: Any) -> dict[str, Any] | None:
+        if not isinstance(row, dict):
+            return None
+        direction = str(row.get("call_direction") or "").strip().lower()
+        if direction not in {"long", "short"}:
+            return None
+        out = {
+            "setup_family": str(row.get("setup_family") or "").strip(),
+            "call_direction": direction,
+            "calls": int(row.get("calls") or 0),
+            "hit_rate_pct": _round_stat(row.get("hit_rate_pct"), 2),
+            "avg_signed_return_pct": _round_stat(row.get("avg_signed_return_pct"), 2),
+            "expectancy_pct": _round_stat(row.get("expectancy_pct"), 2),
+            "avg_validity_days": _round_stat(row.get("avg_validity_days"), 2),
+        }
+        return out
+
+    def _norm_validity(row: Any) -> dict[str, Any] | None:
+        if not isinstance(row, dict):
+            return None
+        validity = int(row.get("validity_days") or 0)
+        if validity <= 0:
+            return None
+        return {
+            "validity_days": validity,
+            "calls": int(row.get("calls") or 0),
+            "hit_rate_pct": _round_stat(row.get("hit_rate_pct"), 2),
+            "avg_signed_return_pct": _round_stat(row.get("avg_signed_return_pct"), 2),
+            "expectancy_pct": _round_stat(row.get("expectancy_pct"), 2),
+            "profit_factor": _round_stat(row.get("profit_factor"), 2),
+        }
+
+    normalized = [row for row in (_norm_family(item) for item in families) if isinstance(row, dict)]
+    normalized.sort(
+        key=lambda item: (
+            int(item.get("calls") or 0),
+            float(item.get("hit_rate_pct") or 0.0),
+            float(item.get("avg_signed_return_pct") or 0.0),
+        ),
+        reverse=True,
+    )
+    top_by_edge = sorted(
+        normalized,
+        key=lambda item: (
+            float(item.get("expectancy_pct") or 0.0),
+            float(item.get("hit_rate_pct") or 0.0),
+            int(item.get("calls") or 0),
+        ),
+        reverse=True,
+    )[: int(limit_families)]
+    weakest_by_edge = sorted(
+        normalized,
+        key=lambda item: (
+            float(item.get("expectancy_pct") or 0.0),
+            float(item.get("hit_rate_pct") or 0.0),
+            -int(item.get("calls") or 0),
+        ),
+    )[: int(limit_families)]
+    top_long = [row for row in normalized if row.get("call_direction") == "long"][: int(limit_families)]
+    top_short = [row for row in normalized if row.get("call_direction") == "short"][: int(limit_families)]
+    normalized_validity = [row for row in (_norm_validity(item) for item in by_validity) if isinstance(row, dict)]
+    normalized_validity.sort(key=lambda item: int(item.get("validity_days") or 0))
+
+    return {
+        "ok": True,
+        "report_path": str(latest_path) if latest_path else None,
+        "generated_ts": latest_payload.get("generated_ts"),
+        "summary": setup_eval,
+        "by_validity_days": normalized_validity,
+        "improvement_actions": improvement_actions,
+        "top_long_families": top_long,
+        "top_short_families": top_short,
+        "top_families_by_edge": top_by_edge,
+        "weakest_families_by_edge": weakest_by_edge,
+    }
+
+
+@app.get("/api/admin/setup-eval-calls")
+def admin_setup_eval_calls(
+    status: str = Query(default="scored", pattern="^(open|scored|invalid|all)$"),
+    ticker: str | None = Query(default=None),
+    direction: str | None = Query(default=None, pattern="^(long|short|neutral)$"),
+    limit: int = Query(default=200, ge=1, le=2000),
+) -> dict[str, Any]:
+    conn = get_db_connection()
+    try:
+        if not table_exists(conn, "setup_call_evaluations"):
+            return {
+                "ok": True,
+                "detail": "setup_call_evaluations table not found",
+                "rows": [],
+                "count": 0,
+            }
+        where_parts: list[str] = []
+        params: list[Any] = []
+        status_norm = str(status or "").strip().lower()
+        if status_norm != "all":
+            where_parts.append("status = ?")
+            params.append(status_norm)
+        ticker_norm = str(ticker or "").strip().upper()
+        if ticker_norm:
+            where_parts.append("ticker = ?")
+            params.append(ticker_norm)
+        direction_norm = str(direction or "").strip().lower()
+        if direction_norm:
+            where_parts.append("call_direction = ?")
+            params.append(direction_norm)
+        where_sql = ""
+        if where_parts:
+            where_sql = "WHERE " + " AND ".join(where_parts)
+        params.append(int(limit))
+        rows = conn.execute(
+            f"""
+            SELECT
+                id,
+                asof_date,
+                ticker,
+                status,
+                call_direction,
+                validity_days,
+                setup_family,
+                setup_tier,
+                signal_bias,
+                actionability,
+                score,
+                close_asof,
+                valid_target_date,
+                evaluated_date,
+                close_evaluated,
+                raw_return_pct,
+                signed_return_pct,
+                direction_hit,
+                yolo_pattern,
+                yolo_recency,
+                generated_ts,
+                created_ts,
+                updated_ts
+            FROM setup_call_evaluations
+            {where_sql}
+            ORDER BY asof_date DESC, id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return {
+            "ok": True,
+            "status": status_norm,
+            "ticker": ticker_norm or None,
+            "direction": direction_norm or None,
+            "count": len(rows),
+            "rows": [dict(row) for row in rows],
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/api/admin/pipeline-status")
@@ -4669,10 +5051,19 @@ def tickers(limit: int = Query(default=200, ge=1, le=2000)) -> dict[str, Any]:
 
 
 @app.get("/api/dashboard/{ticker}")
-def dashboard(ticker: str, months: int = Query(default=3, ge=0, le=240)) -> dict[str, Any]:
+def dashboard(
+    ticker: str,
+    months: int = Query(default=3, ge=0, le=240),
+    report_generated_ts: str | None = Query(default=None),
+) -> dict[str, Any]:
     conn = get_conn()
     try:
-        return build_dashboard_payload(conn, ticker=ticker, months=months)
+        return build_dashboard_payload(
+            conn,
+            ticker=ticker,
+            months=months,
+            report_generated_ts=report_generated_ts,
+        )
     finally:
         conn.close()
 
