@@ -6,6 +6,13 @@ from typing import Any
 
 from trader_koo.email_chart_preview import build_chart_preview_url, chart_preview_enabled
 
+EMAIL_CATALYST_DAY_LIMIT = 3
+EMAIL_CATALYST_ROWS_PER_SESSION = 2
+EMAIL_SETUP_ROWS_PER_BUCKET = 2
+EMAIL_SETUP_OBS_MAX_CHARS = 96
+EMAIL_SETUP_ACTION_MAX_CHARS = 84
+EMAIL_PREVIEW_CHART_LIMIT = 2
+
 
 def report_email_app_url() -> str | None:
     for key in ("TRADER_KOO_EMAIL_REPORT_URL", "TRADER_KOO_ALLOWED_ORIGIN"):
@@ -37,6 +44,7 @@ def build_report_email_bodies(
     md_text: str,
     *,
     app_url: str | None = None,
+    manage_url: str | None = None,
 ) -> tuple[str, str]:
     generated = str(report.get("generated_ts") or "unknown")
     ok = bool(report.get("ok"))
@@ -144,6 +152,8 @@ def build_report_email_bodies(
         text_lines += ["", f"Market holiday: {session.get('holiday_name') or '-'}"]
     if app_url:
         text_lines += ["", f"Dashboard: {app_url}"]
+    if manage_url:
+        text_lines += [f"Manage alerts: {manage_url}"]
     text_lines += ["", "Use the dashboard for the full report and chart context."]
     text_body = "\n".join(text_lines)
 
@@ -178,7 +188,7 @@ def build_report_email_bodies(
             f"<strong>{_esc(item.get('title', 'Change'))}.</strong> {_esc(item.get('detail', '-'))}"
             "</li>"
         )
-        for item in key_changes[:5]
+        for item in key_changes[:4]
     ) or "<li style=\"margin:0;\">No material change summary was generated for this run.</li>"
 
     def _mover_rows(rows: list[dict[str, Any]], near_key: str) -> str:
@@ -212,7 +222,7 @@ def build_report_email_bodies(
         preview_candidates = [row for row in setup_rows if str(row.get("yolo_pattern") or "").strip()]
     if not preview_candidates:
         preview_candidates = setup_rows[:]
-    preview_rows = preview_candidates[:4]
+    preview_rows = preview_candidates[:EMAIL_PREVIEW_CHART_LIMIT]
     previews_enabled = chart_preview_enabled(app_url)
     preview_cards_html = ""
     if previews_enabled and preview_rows:
@@ -271,8 +281,8 @@ def build_report_email_bodies(
                 f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:#334155;\">{_esc(_setup_context_label(row))}</td>"
                 "</tr>"
                 "</table>"
-                f"<div style=\"margin-top:8px;font-size:13px;line-height:20px;color:#334155;\"><strong>What it is:</strong> {_esc(_compact_copy(_setup_observation(row), max_sentences=2, max_chars=130))}</div>"
-                f"<div style=\"margin-top:6px;font-size:13px;line-height:20px;color:#475569;\"><strong>Next step:</strong> {_esc(_compact_copy(_setup_action(row), max_sentences=2, max_chars=115))}</div>"
+                f"<div style=\"margin-top:8px;font-size:13px;line-height:20px;color:#334155;\"><strong>What it is:</strong> {_esc(_compact_copy(_setup_observation(row), max_sentences=1, max_chars=EMAIL_SETUP_OBS_MAX_CHARS))}</div>"
+                f"<div style=\"margin-top:6px;font-size:13px;line-height:20px;color:#475569;\"><strong>Next step:</strong> {_esc(_compact_copy(_setup_action(row), max_sentences=1, max_chars=EMAIL_SETUP_ACTION_MAX_CHARS))}</div>"
                 "</div>"
                 "</td></tr>"
             )
@@ -317,6 +327,15 @@ def build_report_email_bodies(
         if app_url
         else ""
     )
+    status_explain_html = ""
+    if not ok:
+        warn_text = str(warnings[0]).strip() if warnings else "One or more checks need review (stale/missing data)."
+        status_explain_html = (
+            "<div style=\"margin-top:8px;font-size:12px;line-height:18px;color:#ffe7e7;\">"
+            "<strong>WARN means review needed:</strong> "
+            + _esc(warn_text)
+            + "</div>"
+        )
 
     html_body = f"""\
 <!doctype html>
@@ -334,6 +353,7 @@ def build_report_email_bodies(
             <span style="display:inline-block;padding:7px 12px;border-radius:999px;background:{status_color};color:#ffffff;font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;">{_esc(status)}</span>
             <span style="display:inline-block;padding:7px 12px;border-radius:999px;background:rgba(255,255,255,0.12);color:#ffffff;font-size:12px;font-weight:600;margin-left:8px;">{_esc(breadth_line)}</span>
           </div>
+          {status_explain_html}
           <div style="margin-top:18px;">{app_link_html}</div>
         </div>
 
@@ -361,7 +381,9 @@ def build_report_email_bodies(
             '<div style="padding:24px 28px 0;">'
             '<h2 style="margin:0 0 12px;font-size:18px;line-height:24px;color:#0f172a;">Catalyst Board</h2>'
             '<div style="font-size:13px;line-height:19px;color:#64748b;margin-bottom:12px;">'
-            'Upcoming earnings are grouped by day and session. Each entry shows labeled fields: Setup Score, bias, event risk, action state, timing quality, and the next step.'
+            'Upcoming earnings grouped by day/session. Each row is labeled so it reads clearly.'
+            '<br /><strong>Bias</strong> = chart direction read (not an earnings forecast), <strong>Risk</strong> = event-window risk, '
+            '<strong>State</strong> = actionability now, <strong>Timing</strong> = confidence in session timing.'
             '</div>'
             f'{catalyst_board_html}'
             '</div>'
@@ -369,7 +391,7 @@ def build_report_email_bodies(
 
         {(
             '<div style="padding:24px 28px 0;">'
-            '<h2 style="margin:0 0 12px;font-size:18px;line-height:24px;color:#0f172a;">Setup Charts</h2>'
+            f'<h2 style="margin:0 0 12px;font-size:18px;line-height:24px;color:#0f172a;">Setup Charts (Top {EMAIL_PREVIEW_CHART_LIMIT})</h2>'
             '<div style="font-size:13px;line-height:19px;color:#64748b;margin-bottom:12px;">Remote images may be hidden until your email client loads them. Each preview shows price, support/resistance, the latest YOLO box, and the upcoming earnings marker when one is available.</div>'
             '<table role="presentation" width="100%" cellspacing="0" cellpadding="0">'
             f'{preview_cards_html}'
@@ -439,6 +461,7 @@ def build_report_email_bodies(
             </div>
             <div style="margin-top:14px;font-size:12px;line-height:18px;color:#6b7280;">
               {_esc("This dashboard is for research and education only. It is not financial advice.")}
+              {f"<br />Manage alerts: <a href='{_esc(manage_url)}' style='color:#0f5dd7;'>unsubscribe</a>" if manage_url else ""}
               {"<br />" + _esc(" • ".join(next_session_bits)) if next_session_bits else ""}
             </div>
           </div>
@@ -470,7 +493,7 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
     if not groups:
         return ""
     day_blocks = []
-    for group in groups[:7]:
+    for group in groups[:EMAIL_CATALYST_DAY_LIMIT]:
         sessions = group.get("sessions") if isinstance(group.get("sessions"), list) else []
         session_rows = []
         for session in sessions:
@@ -480,11 +503,11 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
             code = _fmt_text(session.get("code"))
             label = _fmt_text(session.get("label"))
             rendered_rows = []
-            for row in rows[:10]:
+            for row in rows[:EMAIL_CATALYST_ROWS_PER_SESSION]:
                 rec_state = str(row.get("recommendation_state") or "calendar_only").strip().lower()
                 rec_label = {
-                    "setup_ready": "SETUP READY",
-                    "watch": "WATCH",
+                    "setup_ready": "ACTIONABLE NOW",
+                    "watch": "WAIT FOR CONFIRM",
                     "calendar_only": "CALENDAR ONLY",
                 }.get(rec_state, "CALENDAR ONLY")
                 rec_color = {
@@ -493,36 +516,51 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
                     "calendar_only": "#64748b",
                 }.get(rec_state, "#64748b")
                 schedule_label = {
-                    "confirmed": "Confirmed",
+                    "confirmed": "Session confirmed",
                     "date_only": "Date only",
-                    "snapshot": "Snapshot",
-                    "unverified": "Unverified",
+                    "snapshot": "Snapshot timing",
+                    "unverified": "Unverified timing",
                 }.get(str(row.get("schedule_quality") or "").strip().lower(), _fmt_text(row.get("schedule_quality")))
                 bias_color = _bias_color(row.get("signal_bias"))
+                risk_color = _risk_color(row.get("earnings_risk"))
+                score = _fmt_num(row.get("score"))
+                tier = _fmt_text(row.get("setup_tier"))
                 rendered_rows.append(
                     "<tr><td style=\"padding:0;border:none;\">"
                     "<div style=\"padding:12px 0;border-bottom:1px solid #eef2f7;\">"
-                    "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">"
+                    "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"border-collapse:collapse;\">"
                     "<tr>"
                     f"<td style=\"font-weight:800;color:#0f172a;font-size:15px;line-height:20px;vertical-align:top;\">{_esc(row.get('ticker'))}</td>"
-                    f"<td align=\"right\" style=\"color:#475569;font-size:12px;line-height:18px;vertical-align:top;white-space:nowrap;\"><strong>Setup Score:</strong> {_esc(_fmt_num(row.get('score')))}</td>"
+                    f"<td align=\"right\" style=\"color:#475569;font-size:12px;line-height:18px;vertical-align:top;white-space:nowrap;\"><strong>Setup Score:</strong> {_esc(score)} &nbsp; <strong>Tier:</strong> {_esc(tier)}</td>"
                     "</tr>"
                     "</table>"
                     "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:8px;border-collapse:collapse;\">"
                     "<tr>"
-                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Bias</td>"
-                    f"<td style=\"padding:0 14px 4px 0;font-size:12px;line-height:18px;color:{bias_color};font-weight:700;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</td>"
-                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Risk</td>"
-                    f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:{_risk_color(row.get('earnings_risk'))};font-weight:700;\">{_esc(str(row.get('earnings_risk') or 'normal').upper())}</td>"
+                    "<td style=\"padding:0 8px 6px 0;\">"
+                    "<span style=\"display:inline-block;padding:4px 8px;border-radius:999px;background:#f8fbff;border:1px solid #e6ecf5;font-size:12px;line-height:16px;color:#334155;\">"
+                    f"<strong>Bias:</strong> <span style=\"color:{bias_color};font-weight:800;\">{_esc(str(row.get('signal_bias') or 'neutral').upper())}</span>"
+                    "</span>"
+                    "</td>"
+                    "<td style=\"padding:0 0 6px;\">"
+                    "<span style=\"display:inline-block;padding:4px 8px;border-radius:999px;background:#f8fbff;border:1px solid #e6ecf5;font-size:12px;line-height:16px;color:#334155;\">"
+                    f"<strong>Risk:</strong> <span style=\"color:{risk_color};font-weight:800;\">{_esc(str(row.get('earnings_risk') or 'normal').upper())}</span>"
+                    "</span>"
+                    "</td>"
                     "</tr>"
                     "<tr>"
-                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">State</td>"
-                    f"<td style=\"padding:0 14px 4px 0;font-size:12px;line-height:18px;color:{rec_color};font-weight:700;\">{_esc(rec_label)}</td>"
-                    "<td style=\"padding:0 8px 4px 0;width:64px;font-size:11px;line-height:16px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;\">Timing</td>"
-                    f"<td style=\"padding:0 0 4px;font-size:12px;line-height:18px;color:#334155;\">{_esc(schedule_label)}</td>"
+                    "<td style=\"padding:0 8px 0 0;\">"
+                    "<span style=\"display:inline-block;padding:4px 8px;border-radius:999px;background:#f8fbff;border:1px solid #e6ecf5;font-size:12px;line-height:16px;color:#334155;\">"
+                    f"<strong>State:</strong> <span style=\"color:{rec_color};font-weight:800;\">{_esc(rec_label)}</span>"
+                    "</span>"
+                    "</td>"
+                    "<td style=\"padding:0;\">"
+                    "<span style=\"display:inline-block;padding:4px 8px;border-radius:999px;background:#f8fbff;border:1px solid #e6ecf5;font-size:12px;line-height:16px;color:#334155;\">"
+                    f"<strong>Timing:</strong> {_esc(schedule_label)}"
+                    "</span>"
+                    "</td>"
                     "</tr>"
                     "</table>"
-                    f"<div style=\"margin-top:8px;font-size:13px;line-height:19px;color:#334155;\"><strong>Next step:</strong> {_esc(_compact_copy(str(row.get('recommendation_note') or row.get('action') or '').strip(), max_sentences=2, max_chars=150))}</div>"
+                    f"<div style=\"margin-top:8px;font-size:13px;line-height:19px;color:#334155;\"><strong>Action:</strong> {_esc(_compact_copy(str(row.get('recommendation_note') or row.get('action') or '').strip(), max_sentences=2, max_chars=110))}</div>"
                     "</div>"
                     "</td></tr>"
                 )
@@ -531,7 +569,13 @@ def _catalyst_board_html(groups: list[dict[str, Any]]) -> str:
                 f"<div style=\"font-size:12px;line-height:18px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;\">{_esc(label)} ({_esc(code)})</div>"
                 "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:8px;\">"
                 + "".join(rendered_rows)
-                + "</table></div>"
+                + "</table>"
+                + (
+                    f"<div style=\"margin-top:6px;font-size:12px;line-height:18px;color:#64748b;\">Showing {EMAIL_CATALYST_ROWS_PER_SESSION} of {_esc(_fmt_num(len(rows)))} names for this session.</div>"
+                    if len(rows) > EMAIL_CATALYST_ROWS_PER_SESSION
+                    else ""
+                )
+                + "</div>"
             )
         if not session_rows:
             continue
@@ -656,7 +700,7 @@ def _compact_copy(value: Any, *, max_sentences: int = 2, max_chars: int = 140) -
     cut = clipped.rfind(" ")
     if cut > 80:
         clipped = clipped[:cut]
-    return clipped.rstrip(".,;: ") + "..."
+    return clipped.rstrip(".,;: ")
 
 
 def _setup_family_label(row: dict[str, Any]) -> str:
@@ -716,7 +760,7 @@ def _setup_bucket_sections(rows: list[dict[str, Any]]) -> list[tuple[str, str, l
     def _row_key(row: dict[str, Any]) -> str:
         return str(row.get("ticker") or "").strip().upper()
 
-    def _take(predicate, limit: int = 4) -> list[dict[str, Any]]:
+    def _take(predicate, limit: int = EMAIL_SETUP_ROWS_PER_BUCKET) -> list[dict[str, Any]]:
         selected: list[dict[str, Any]] = []
         for row in rows:
             key = _row_key(row)

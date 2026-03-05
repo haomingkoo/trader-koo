@@ -171,6 +171,13 @@
     }
     .field { display: flex; flex-direction: column; gap: 4px; }
     .field label { color: var(--muted); font-size: 0.72rem; }
+    .field.compact-number { min-width: 112px; max-width: 128px; }
+    .field.compact-number input {
+      width: 100%;
+      padding: 8px 10px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
     .op-help {
       margin-bottom: 8px;
       padding: 8px 10px;
@@ -397,6 +404,78 @@
     .earnings-card-sub strong {
       color: var(--text);
       font-weight: 700;
+    }
+    .earnings-mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .earnings-mini-item {
+      border: 1px solid rgba(142, 160, 189, 0.12);
+      border-radius: 10px;
+      background: rgba(142, 160, 189, 0.06);
+      padding: 7px 8px;
+      min-width: 0;
+    }
+    .earnings-mini-k {
+      color: var(--muted);
+      font-size: 0.62rem;
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+    }
+    .earnings-mini-v {
+      color: var(--text);
+      font-size: 0.74rem;
+      line-height: 1.25;
+      font-weight: 700;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .earnings-mini-v.bullish,
+    .earnings-mini-v.normal,
+    .earnings-mini-v.setup_ready,
+    .earnings-mini-v.confirmed { color: #9ee7ca; }
+    .earnings-mini-v.bearish,
+    .earnings-mini-v.high { color: #ffb3b3; }
+    .earnings-mini-v.elevated,
+    .earnings-mini-v.watch,
+    .earnings-mini-v.date_only,
+    .earnings-mini-v.snapshot { color: #f3dfb1; }
+    .earnings-mini-v.calendar_only,
+    .earnings-mini-v.unverified { color: #cdd7e6; }
+    .earnings-legend {
+      border: 1px solid rgba(142, 160, 189, 0.16);
+      border-radius: 12px;
+      background: rgba(15, 22, 36, 0.55);
+      padding: 10px;
+    }
+    .earnings-legend-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .earnings-legend-item {
+      border: 1px solid rgba(142, 160, 189, 0.12);
+      border-radius: 10px;
+      background: rgba(142, 160, 189, 0.06);
+      padding: 8px 9px;
+    }
+    .earnings-legend-k {
+      color: var(--muted);
+      font-size: 0.64rem;
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+    }
+    .earnings-legend-v {
+      color: var(--text);
+      font-size: 0.72rem;
+      line-height: 1.35;
     }
     .earnings-lane-empty {
       color: var(--muted);
@@ -1075,6 +1154,14 @@
     }
     #reportSetupDetailWrap table th:nth-child(1),
     #reportSetupDetailWrap table td:nth-child(1) { width: 88px; }
+    #reportSetupDetailWrap table {
+      font-family: 'Inter', sans-serif;
+      font-size: 0.74rem;
+    }
+    #reportSetupDetailWrap th,
+    #reportSetupDetailWrap td {
+      line-height: 1.4;
+    }
     #reportSetupDetailWrap table th:nth-child(2),
     #reportSetupDetailWrap table td:nth-child(2) { width: 96px; }
     #reportSetupDetailWrap table th:nth-child(3),
@@ -1233,6 +1320,13 @@
       .report-watch-wrap input, .report-watch-wrap button { width: 100%; }
       .mini-actions button { flex: 1 1 calc(50% - 6px); }
       .heat-row { grid-template-columns: 86px 1fr 58px; gap: 6px; font-size: 0.74rem; }
+      .earnings-mini-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .field.compact-number {
+        min-width: 0;
+        max-width: none;
+      }
       .admin-login-grid,
       .admin-form-grid {
         grid-template-columns: 1fr;
@@ -1245,14 +1339,22 @@
         font-size: 0.78rem;
       }
     }
+    @media (max-width: 920px) {
+      #reportSetupDetailWrap table { display: none; }
+      #reportSetupQualityCards { display: grid; }
+      #reportSetupDetailWrap .report-inline-note { font-size: 0.72rem; }
+    }
+    @media (min-width: 921px) {
+      #reportSetupQualityCards { display: none; }
+    }
     @media (max-width: 420px) {
       .tabs { grid-template-columns: 1fr; }
       .cards { grid-template-columns: 1fr; }
       .mini-actions button { flex: 1 1 100%; }
       #tabReport table { min-width: 380px; }
-    }
-    @media (min-width: 641px) {
-      #reportSetupQualityCards { display: none; }
+      .earnings-mini-grid {
+        grid-template-columns: 1fr;
+      }
     }
     .guide {
       line-height: 1.55;
@@ -1509,11 +1611,11 @@
               <div class="label">Reasonable Action</div>
               <div id="chartAction" class="chart-commentary-copy">The chart read will explain whether the setup is actionable now or only on confirmation.</div>
             </div>
-            <div class="chart-commentary-block">
-              <div class="label">Details</div>
-              <div id="chartTechnicalRead" class="chart-commentary-copy">Trend, levels, momentum, and YOLO context are summarized here.</div>
-            </div>
-          </div>
+	          <div class="chart-commentary-block">
+	              <div class="label">Technical Context</div>
+	              <div id="chartTechnicalRead" class="chart-commentary-copy">Trend, levels, momentum, and YOLO context are summarized here.</div>
+	            </div>
+	          </div>
         </div>
 
         <div id="chart"></div>
@@ -1703,11 +1805,11 @@
         <span id="earningsStatus" style="font-size:0.8rem; color:var(--muted);"></span>
       </div>
       <div class="panel" style="margin-bottom:12px;">
-        <div class="report-watch-wrap">
-          <div class="field" style="min-width:140px;">
-            <label for="earningsDays">Lookahead Days</label>
-            <input id="earningsDays" type="number" min="1" max="90" step="1" value="21" />
-          </div>
+	        <div class="report-watch-wrap">
+	          <div class="field compact-number">
+	            <label for="earningsDays">Lookahead Days</label>
+	            <input id="earningsDays" type="number" min="1" max="90" step="1" value="21" />
+	          </div>
           <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:8px; min-width:220px;">
             <input id="earningsWatchOnly" type="checkbox" style="width:auto; padding:0; margin:0;" />
             <span style="font-size:0.8rem; color:var(--muted);">Watchlist only</span>
@@ -1717,9 +1819,10 @@
             <button id="earningsCalendarModeBtn" type="button" class="active">Calendar View</button>
             <button id="earningsListModeBtn" type="button">List View</button>
           </div>
-        </div>
-        <div id="earningsSummary" class="report-inline-note" style="margin-top:8px;"></div>
-      </div>
+	        </div>
+	        <div id="earningsSummary" class="report-inline-note" style="margin-top:8px;"></div>
+	        <div id="earningsLegend" class="earnings-legend" style="margin-top:8px;"></div>
+	      </div>
       <div id="earningsSummaryCards" class="cards" style="margin-bottom:14px;"></div>
       <div class="panel" id="earningsBoardWrap" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">Calendar View</div>
@@ -2180,7 +2283,7 @@
       if (text.length <= maxChars) return text;
       const clipped = text.slice(0, maxChars);
       const cut = clipped.lastIndexOf(" ");
-      return `${(cut > 90 ? clipped.slice(0, cut) : clipped).trim()}...`;
+      return (cut > 90 ? clipped.slice(0, cut) : clipped).trim();
     }
 
     function buildCompactSetupRows(rows) {
@@ -2192,8 +2295,8 @@
         signal_bias_label: titleCaseWords(row.signal_bias || "neutral"),
         actionability_label: humanizeActionability(row.actionability),
         context_label: humanizeSetupContext(row),
-        observation_short: shortenCopy(row.observation || buildSetupReason(row), 78),
-        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 70),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 56),
+        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 52),
       }));
     }
 
@@ -2206,9 +2309,9 @@
         bias_label: titleCaseWords(row.signal_bias || "neutral"),
         yolo_context: humanizeSetupContext(row),
         level_event: humanizeBreakoutState(row.breakout_state),
-        observation_short: shortenCopy(row.observation || buildSetupReason(row), 150),
-        next_step_short: shortenCopy(row.action || "Watch only until the setup confirms.", 120),
-        audit_notes: shortenCopy(humanizeTechnicalRead(row.technical_read, row), 130),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 84),
+        next_step_short: shortenCopy(row.action || "Watch only until the setup confirms.", 76),
+        audit_notes: shortenCopy(humanizeTechnicalRead(row.technical_read, row), 80),
         signal_bias: row.signal_bias,
       }));
     }
@@ -2294,7 +2397,7 @@
       const el = $(elId);
       const note = $(noteId);
       if (!el || !note) return;
-      const limited = (rows || []).slice(0, 6);
+      const limited = (rows || []).slice(0, 4);
       if (!limited.length) {
         el.innerHTML = `<div class="setup-compact-copy">None</div>`;
         note.textContent = "";
@@ -2373,6 +2476,9 @@
       const moreBtn = $("reportSetupMoreBtn");
       const detailWrap = $("reportSetupDetailWrap");
       const compactList = $("reportSetupCompactList");
+      const detailTable = $("reportSetupQualityTable");
+      const detailCards = $("reportSetupQualityCards");
+      const mobileDetail = window.matchMedia("(max-width: 920px)").matches;
       if (compactBtn) {
         compactBtn.classList.toggle("active", !REPORT_SETUP_SHOW_MORE);
         compactBtn.setAttribute("aria-pressed", String(!REPORT_SETUP_SHOW_MORE));
@@ -2386,6 +2492,12 @@
       }
       if (compactList) {
         compactList.style.display = REPORT_SETUP_SHOW_MORE ? "none" : "";
+      }
+      if (detailTable) {
+        detailTable.style.display = REPORT_SETUP_SHOW_MORE && !mobileDetail ? "" : "none";
+      }
+      if (detailCards) {
+        detailCards.style.display = REPORT_SETUP_SHOW_MORE && mobileDetail ? "grid" : "none";
       }
     }
 
@@ -2486,7 +2598,7 @@
         <strong>Risk:</strong> ${escHtml(data.risk_note || "none")}
       `;
       $("chartTechnicalRead").innerHTML = `
-        <strong>Details:</strong> ${escHtml(humanizeTechnicalRead(data.technical_read, data))}
+        <strong>Technical Context:</strong> ${escHtml(humanizeTechnicalRead(data.technical_read, data))}
       `;
     }
 
@@ -2786,6 +2898,42 @@
       return [row && row.earnings_date, row && row.earnings_session, row && row.ticker].join("|");
     }
 
+    function renderEarningsLegend() {
+      const el = $("earningsLegend");
+      if (!el) return;
+      el.innerHTML = `
+        <div class="earnings-legend-v">
+          Quick legend so each catalyst row is readable at a glance.
+        </div>
+        <div class="earnings-legend-grid">
+          <div class="earnings-legend-item">
+            <div class="earnings-legend-k">Setup Score</div>
+            <div class="earnings-legend-v">0-100 setup quality score from the same rule engine used in the report.</div>
+          </div>
+          <div class="earnings-legend-item">
+            <div class="earnings-legend-k">Bias</div>
+            <div class="earnings-legend-v">Current chart direction read (bullish, bearish, neutral) based on price action. It is not an earnings prediction.</div>
+          </div>
+          <div class="earnings-legend-item">
+            <div class="earnings-legend-k">Risk</div>
+            <div class="earnings-legend-v">Event-window risk band (normal, elevated, high).</div>
+          </div>
+          <div class="earnings-legend-item">
+            <div class="earnings-legend-k">State</div>
+            <div class="earnings-legend-v">Actionability now: setup ready (actionable), watch (wait for confirmation), calendar only (timing info only).</div>
+          </div>
+          <div class="earnings-legend-item">
+            <div class="earnings-legend-k">Timing</div>
+            <div class="earnings-legend-v">How sure we are about session timing (confirmed, date only, snapshot, unverified).</div>
+          </div>
+          <div class="earnings-legend-item">
+            <div class="earnings-legend-k">Days</div>
+            <div class="earnings-legend-v">Days until event from the current market date.</div>
+          </div>
+        </div>
+      `;
+    }
+
     function renderEarningsDetail(row) {
       const detail = $("earningsDetail");
       if (!row) {
@@ -2796,17 +2944,17 @@
         <div class="earnings-detail-head">
           <div>
             <div class="earnings-detail-title">${escHtml(row.ticker || "-")} • ${escHtml(row.earnings_date || "-")} ${escHtml(String(row.earnings_session || "TBD").toUpperCase())}</div>
-            <div class="earnings-detail-subtitle">${escHtml(row.sector || "Unknown")} • ${row.score != null ? `Score ${fmt(row.score)}` : "Unscored"} • ${escHtml(`${row.days_until ?? "-"} day(s) to earnings`)} • ${escHtml(formatRecommendationState(row.recommendation_state))}</div>
+            <div class="earnings-detail-subtitle">${escHtml(row.sector || "Unknown")} • ${row.score != null ? `Setup Score ${fmt(row.score)}` : "Unscored"} • ${escHtml(`${row.days_until ?? "-"} day(s) to earnings`)} • ${escHtml(formatRecommendationState(row.recommendation_state))}</div>
           </div>
           <div class="mini-actions" style="margin-top:0;">
             <button type="button" id="earningsOpenChartBtn">Open Chart</button>
           </div>
         </div>
         <div class="earnings-badges">
-          <span class="earnings-badge ${earningsToneClass(row.recommendation_state)}">${escHtml(formatRecommendationState(row.recommendation_state).toUpperCase())}</span>
-          <span class="earnings-badge ${earningsToneClass(row.schedule_quality)}">${escHtml(formatScheduleQuality(row.schedule_quality).toUpperCase())}</span>
-          <span class="earnings-badge ${earningsToneClass(row.signal_bias)}">${escHtml(String(row.signal_bias || "neutral").toUpperCase())}</span>
-          <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(String(row.earnings_risk || "normal").toUpperCase())}</span>
+          <span class="earnings-badge ${earningsToneClass(row.recommendation_state)}">${escHtml(formatRecommendationState(row.recommendation_state))}</span>
+          <span class="earnings-badge ${earningsToneClass(row.schedule_quality)}">${escHtml(formatScheduleQuality(row.schedule_quality))}</span>
+          <span class="earnings-badge ${earningsToneClass(row.signal_bias)}">${escHtml(titleCaseWords(String(row.signal_bias || "neutral")))}</span>
+          <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(titleCaseWords(String(row.earnings_risk || "normal")))}</span>
           ${row.yolo_pattern ? `<span class="earnings-badge">${escHtml(String(row.yolo_pattern))}</span>` : ""}
           ${row.actionability ? `<span class="earnings-badge">${escHtml(String(row.actionability).toUpperCase())}</span>` : ""}
         </div>
@@ -2855,21 +3003,51 @@
             ? rows.slice(0, 8).map((row) => {
                 const key = earningsRowKey(row);
                 const active = key === LAST_EARNINGS_SELECTED ? ' active' : '';
+                const score = row.score != null ? fmt(row.score) : "—";
+                const tier = String(row.setup_tier || "—").toUpperCase();
+                const bias = titleCaseWords(String(row.signal_bias || "neutral"));
+                const risk = titleCaseWords(String(row.earnings_risk || "normal"));
+                const state = formatRecommendationState(row.recommendation_state);
+                const timing = formatScheduleQuality(row.schedule_quality);
+                const days = `${row.days_until ?? "-"}d`;
+                const nextStep = shortenCopy(
+                  row.recommendation_note || row.action || "Watch only until setup and timing confirm.",
+                  122,
+                );
                 return `
                 <button type="button" class="earnings-card${active}" data-earnings-key="${escHtml(key)}">
                   <div class="earnings-card-head">
                     <div class="earnings-card-ticker">${escHtml(row.ticker || "-")}</div>
-                    <div class="earnings-score">${row.score != null ? `${escHtml(String(row.setup_tier || "—"))} • ${fmt(row.score)}` : "Unscored"}</div>
+                    <div class="earnings-score">Setup Score ${escHtml(score)}</div>
                   </div>
-                  <div class="earnings-badges">
-                    <span class="earnings-badge ${earningsToneClass(row.recommendation_state)}">${escHtml(formatRecommendationState(row.recommendation_state).toUpperCase())}</span>
-                    <span class="earnings-badge ${earningsToneClass(row.schedule_quality)}">${escHtml(formatScheduleQuality(row.schedule_quality).toUpperCase())}</span>
-                    <span class="earnings-badge ${earningsToneClass(row.signal_bias)}">${escHtml(String(row.signal_bias || "neutral").toUpperCase())}</span>
-                    <span class="earnings-badge ${earningsToneClass(row.earnings_risk)}">${escHtml(String(row.earnings_risk || "normal").toUpperCase())}</span>
-                    <span class="earnings-badge">${escHtml(`${row.days_until ?? "-"}d`)}</span>
+                  <div class="earnings-mini-grid">
+                    <div class="earnings-mini-item">
+                      <div class="earnings-mini-k">Tier</div>
+                      <div class="earnings-mini-v">${escHtml(tier)}</div>
+                    </div>
+                    <div class="earnings-mini-item">
+                      <div class="earnings-mini-k">Bias</div>
+                      <div class="earnings-mini-v ${earningsToneClass(row.signal_bias)}">${escHtml(bias)}</div>
+                    </div>
+                    <div class="earnings-mini-item">
+                      <div class="earnings-mini-k">Risk</div>
+                      <div class="earnings-mini-v ${earningsToneClass(row.earnings_risk)}">${escHtml(risk)}</div>
+                    </div>
+                    <div class="earnings-mini-item">
+                      <div class="earnings-mini-k">State</div>
+                      <div class="earnings-mini-v ${earningsToneClass(row.recommendation_state)}">${escHtml(state)}</div>
+                    </div>
+                    <div class="earnings-mini-item">
+                      <div class="earnings-mini-k">Timing</div>
+                      <div class="earnings-mini-v ${earningsToneClass(row.schedule_quality)}">${escHtml(timing)}</div>
+                    </div>
+                    <div class="earnings-mini-item">
+                      <div class="earnings-mini-k">Days</div>
+                      <div class="earnings-mini-v">${escHtml(days)}</div>
+                    </div>
                   </div>
                   <div class="earnings-card-sub">
-                    ${escHtml(earningsCardSummary(row))}
+                    <strong>Next step:</strong> ${escHtml(nextStep)}
                   </div>
                 </button>
               `}).join("")
@@ -3900,7 +4078,7 @@
           ? `Compact view shows the top ${Math.min(15, setupRows.length)} names as short cards. More Metrics is the labeled audit view.`
           : "No confluence rows available yet.";
         $("reportSetupExplain").textContent = setupRows.length
-          ? "Setup Score = overall setup quality. Setup = pattern family. Bias = current directional lean. YOLO Context = fresh, persistent, or stale. Level Event = recent break, reclaim, or rejection."
+          ? "Setup Score = rule-based setup quality. Bias = chart direction read (not a price guarantee). YOLO Context = fresh, persistent, or stale. Level Event = recent break, reclaim, rejection, or coil."
           : "";
         renderSetupCompactList(compactSetupRows);
         renderSetupAuditCards(setupAuditRows);
@@ -4050,17 +4228,6 @@
         // 52W extremes
         const nearHigh = signals.near_52w_high || [];
         const nearLow  = signals.near_52w_low  || [];
-        const fmt52w = (arr, field, refField, color) =>
-          arr.length
-            ? arr.map(t =>
-                `<span style="display:inline-block; margin-right:10px;">` +
-                `<b style="cursor:pointer; color:var(--blue);" onclick="jumpToTicker('${t.ticker}')">${t.ticker}</b> ` +
-                `<span style="color:var(--fg)">$${t.close}</span> ` +
-                `<span style="color:var(--muted); font-size:0.75rem;">(${t[field].toFixed(2)}% from ${refField} $${t[refField === 'high_52w' ? 'high_52w' : 'low_52w']})</span>` +
-                `</span>`
-              ).join("")
-            : `<span style="color:var(--muted)">None</span>`;
-
         renderTickerChipList("report52wHigh", "report52wHighNote", nearHigh, "high");
         renderTickerChipList("report52wLow", "report52wLowNote", nearLow, "low");
 
@@ -4102,7 +4269,9 @@
           false, null, { sortable: false });
 
         const asOf = `As of ${(latest.generated_ts || "").slice(0, 16).replace("T", " ")} UTC`;
-        $("reportStatus").textContent = data.detail ? `${asOf} • ${data.detail}` : asOf;
+        const warnList = Array.isArray(latest.warnings) ? latest.warnings : [];
+        const warnText = warnList.length ? ` • WARN: ${warnList[0]}` : "";
+        $("reportStatus").textContent = data.detail ? `${asOf} • ${data.detail}${warnText}` : `${asOf}${warnText}`;
       } catch (err) {
         $("reportStatus").textContent = `Error: ${err.message}`;
         console.error(err);
@@ -4119,6 +4288,7 @@
         $("earningsStatus").textContent = "Watchlist is empty.";
         $("earningsSummaryCards").innerHTML = "";
         $("earningsSummary").textContent = "Add tickers to the Daily Report watchlist first, then reload this tab.";
+        renderEarningsLegend();
         $("earningsNoData").style.display = "block";
         renderEarningsBoard([]);
         renderSimpleTable("earningsTable", ["ticker", "earnings_date", "earnings_session"], []);
@@ -4153,6 +4323,7 @@
         $("earningsSummary").textContent = watchOnly
           ? `Watchlist filter enabled. ${watchlist.length} local ticker(s) sent to the server. ${providerStatus.detail || ""}`.trim()
           : (`${providerStatus.detail || "Showing upcoming earnings."} Default scope is the tracked universe only. Date-only / unverified rows stay watch-only until timing is confirmed.`).trim();
+        renderEarningsLegend();
         renderEarningsBoard(payload.groups || []);
         renderEarningsDetail(rows[0] || null);
         renderSimpleTable(
@@ -4164,7 +4335,7 @@
             { key: "days_until", label: "Days" },
             { key: "ticker", label: "Ticker" },
             { key: "recommendation_state", label: "State" },
-            { key: "score", label: "Score" },
+            { key: "score", label: "Setup Score" },
             { key: "signal_bias", label: "Bias" },
             { key: "earnings_risk", label: "Risk" },
             { key: "yolo_pattern", label: "YOLO" },
@@ -4184,6 +4355,7 @@
         $("earningsStatus").textContent = `Error: ${err.message}`;
         $("earningsSummaryCards").innerHTML = "";
         $("earningsSummary").textContent = "";
+        renderEarningsLegend();
         LAST_EARNINGS_ROWS = [];
         LAST_EARNINGS_LOOKUP = {};
         LAST_EARNINGS_SELECTED = "";
@@ -4241,6 +4413,9 @@
     });
     $("reportSetupCompactBtn").addEventListener("click", () => setReportSetupMode(false));
     $("reportSetupMoreBtn").addEventListener("click", () => setReportSetupMode(true));
+    window.addEventListener("resize", () => {
+      setReportSetupMode(REPORT_SETUP_SHOW_MORE);
+    });
     $("loadEarningsBtn").addEventListener("click", loadEarnings);
     $("tfDailyBtn").addEventListener("click", () => setChartTimeframe("daily"));
     $("tfWeeklyBtn").addEventListener("click", () => setChartTimeframe("weekly"));
@@ -4265,6 +4440,7 @@
       startUsageHeartbeat();
       setReportSetupMode(false);
       setEarningsViewMode("calendar");
+      renderEarningsLegend();
       activateTab("guide");
       await refreshServiceStatus();
       await loadTickerUniverse();

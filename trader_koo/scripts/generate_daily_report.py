@@ -12,6 +12,7 @@ import sqlite3
 import ssl
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from collections import defaultdict
 from email.message import EmailMessage
 from pathlib import Path
@@ -21,6 +22,20 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from trader_koo.catalyst_data import build_earnings_calendar_payload
+from trader_koo.email_subscribers import (
+    already_sent_generated_report,
+    email_max_recipients,
+    ensure_subscriber_schema,
+    parse_recipients,
+    record_generated_report_delivery,
+    resolve_report_recipients,
+)
+from trader_koo.llm_health import (
+    llm_alert_enabled,
+    mark_llm_alert_sent,
+    should_send_llm_alert,
+)
+from trader_koo.llm_narrative import llm_enabled, llm_max_setups, llm_status, maybe_rewrite_setup_copy
 from trader_koo.report_email import (
     build_report_email_bodies,
     build_report_email_subject,
@@ -285,11 +300,18 @@ def _email_transport() -> str:
     return raw
 
 
-def _send_resend_email(subject: str, text: str, html_body: str, resend: dict[str, Any]) -> None:
+def _send_resend_email(
+    *,
+    subject: str,
+    text: str,
+    html_body: str,
+    resend: dict[str, Any],
+    recipient: str,
+) -> None:
     user_agent = os.getenv("TRADER_KOO_EMAIL_USER_AGENT", "trader-koo/1.0")
     payload = {
         "from": resend["from_email"],
-        "to": [resend["to_email"]],
+        "to": [recipient],
         "subject": subject,
         "text": text,
         "html": html_body,
@@ -317,8 +339,14 @@ def _send_resend_email(subject: str, text: str, html_body: str, resend: dict[str
         raise RuntimeError(f"Resend connect failed: {exc.reason}") from exc
 
 
-def send_report_email(report: dict[str, Any], md_text: str) -> None:
-    """Send the daily report email. Raises on missing config or delivery failure."""
+def send_report_email(
+    report: dict[str, Any],
+    md_text: str,
+    *,
+    db_path: Path | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Send daily report email to resolved recipients with anti-duplication safeguards."""
     transport = _email_transport()
     smtp = _smtp_cfg()
     resend = _resend_cfg()
@@ -328,57 +356,291 @@ def send_report_email(report: dict[str, Any], md_text: str) -> None:
             missing.append("TRADER_KOO_RESEND_API_KEY")
         if not resend["from_email"]:
             missing.append("TRADER_KOO_RESEND_FROM (or TRADER_KOO_SMTP_FROM)")
-        if not resend["to_email"]:
-            missing.append("TRADER_KOO_REPORT_EMAIL_TO")
     else:
         if not smtp["host"]:
             missing.append("TRADER_KOO_SMTP_HOST")
         if not smtp["from_email"]:
             missing.append("TRADER_KOO_SMTP_FROM")
-        if not smtp["to_email"]:
-            missing.append("TRADER_KOO_REPORT_EMAIL_TO")
+    fallback_to = resend["to_email"] if transport == "resend" else smtp["to_email"]
+    fallback_recipients = fallback_to or os.getenv("TRADER_KOO_REPORT_EMAIL_TO", "")
+    if not db_path:
+        default_db = Path(os.getenv("TRADER_KOO_DB_PATH", str((Path(__file__).resolve().parents[1] / "data" / "trader_koo.db"))))
+        db_path = default_db.resolve()
+
+    try:
+        ensure_subscriber_schema(db_path)
+        recipient_rows = resolve_report_recipients(
+            db_path,
+            fallback_raw=fallback_recipients,
+            max_recipients=email_max_recipients(),
+        )
+    except Exception:
+        recipient_rows = [{"email": email, "source": "env", "unsubscribe_token": None} for email in parse_recipients(fallback_recipients)]
+    if not recipient_rows:
+        missing.append("TRADER_KOO_REPORT_EMAIL_TO or active subscribers")
     if missing:
-        raise RuntimeError(f"Missing email env vars for {transport}: {', '.join(missing)}")
+        raise RuntimeError(f"Missing email config for {transport}: {', '.join(missing)}")
 
-    generated = report.get("generated_ts", "unknown")
+    generated = str(report.get("generated_ts") or "").strip()
+    generated_key = generated or "unknown"
     subject = build_report_email_subject(report)
-    text_body, html_body = build_report_email_bodies(
-        report,
-        md_text,
-        app_url=report_email_app_url(),
-    )
-
-    if transport == "resend":
-        _send_resend_email(subject=subject, text=text_body, html_body=html_body, resend=resend)
-        return
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = smtp["from_email"]
-    msg["To"] = smtp["to_email"]
-    msg.set_content(text_body)
-    msg.add_alternative(html_body, subtype="html")
-    msg.add_attachment(md_text.encode(), maintype="text", subtype="markdown",
-                       filename=f"daily_report_{generated[:10]}.md")
+    app_url = report_email_app_url()
+    sent = 0
+    failed = 0
+    skipped_duplicate = 0
+    failures: list[str] = []
 
     host, port, timeout_sec = smtp["host"], int(smtp["port"]), int(smtp["timeout_sec"])
     user, password, security = smtp["user"], smtp["password"], smtp["security"]
+    for row in recipient_rows:
+        recipient = str(row.get("email") or "").strip().lower()
+        if not recipient:
+            continue
+        if generated and not force:
+            try:
+                if already_sent_generated_report(db_path, email=recipient, generated_ts=generated):
+                    skipped_duplicate += 1
+                    continue
+            except Exception:
+                pass
+        unsub_token = str(row.get("unsubscribe_token") or "").strip()
+        manage_url = None
+        if app_url and unsub_token:
+            manage_url = f"{app_url}/api/email/unsubscribe?token={quote(unsub_token)}"
+        text_body, html_body = build_report_email_bodies(
+            report,
+            md_text,
+            app_url=app_url,
+            manage_url=manage_url,
+        )
+        try:
+            if transport == "resend":
+                _send_resend_email(
+                    subject=subject,
+                    text=text_body,
+                    html_body=html_body,
+                    resend=resend,
+                    recipient=recipient,
+                )
+            else:
+                msg = EmailMessage()
+                msg["Subject"] = subject
+                msg["From"] = smtp["from_email"]
+                msg["To"] = recipient
+                msg.set_content(text_body)
+                msg.add_alternative(html_body, subtype="html")
+                msg.add_attachment(
+                    md_text.encode(),
+                    maintype="text",
+                    subtype="markdown",
+                    filename=f"daily_report_{generated_key[:10]}.md",
+                )
+                if security == "ssl":
+                    with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
+                        if user:
+                            server.login(user, password)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
+                        server.ehlo()
+                        if security == "starttls":
+                            server.starttls(context=ssl.create_default_context())
+                            server.ehlo()
+                        if user:
+                            server.login(user, password)
+                        server.send_message(msg)
+            sent += 1
+            try:
+                if generated:
+                    record_generated_report_delivery(
+                        db_path,
+                        email=recipient,
+                        generated_ts=generated,
+                        transport=transport,
+                        status="sent",
+                    )
+            except Exception:
+                pass
+        except Exception as exc:
+            failed += 1
+            failures.append(f"{recipient}: {exc}")
+            try:
+                if generated:
+                    record_generated_report_delivery(
+                        db_path,
+                        email=recipient,
+                        generated_ts=generated,
+                        transport=transport,
+                        status="failed",
+                        error=str(exc),
+                    )
+            except Exception:
+                pass
+    if sent == 0 and failed > 0:
+        raise RuntimeError(f"Email send failed for all recipients: {failures[0]}")
+    if sent == 0 and skipped_duplicate > 0:
+        raise RuntimeError("Email skipped: latest generated report was already sent to all recipients.")
+    return {
+        "transport": transport,
+        "recipients_total": len(recipient_rows),
+        "sent_count": sent,
+        "failed_count": failed,
+        "skipped_duplicate_count": skipped_duplicate,
+        "failed_recipients": failures[:10],
+        "sample_recipients": [str(r.get("email") or "") for r in recipient_rows[:8]],
+    }
 
-    if security == "ssl":
-        with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
-            if user:
-                server.login(user, password)
-            server.send_message(msg)
-        return
 
-    with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
-        server.ehlo()
-        if security == "starttls":
-            server.starttls(context=ssl.create_default_context())
-            server.ehlo()
-        if user:
-            server.login(user, password)
-        server.send_message(msg)
+def send_llm_failure_alert_email(
+    report: dict[str, Any],
+    *,
+    db_path: Path,
+) -> dict[str, Any]:
+    """Send degraded-LLM alert email to operator recipients (not subscribers)."""
+    if not llm_alert_enabled():
+        return {"attempted": False, "reason": "alerts_disabled"}
+
+    llm_meta = ((report.get("meta") or {}).get("llm") or {}) if isinstance(report.get("meta"), dict) else {}
+    health = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
+    if not health.get("degraded"):
+        return {"attempted": False, "reason": "not_degraded"}
+
+    should_alert, reason = should_send_llm_alert(db_path)
+    if not should_alert:
+        return {"attempted": False, "reason": reason}
+
+    transport = _email_transport()
+    smtp = _smtp_cfg()
+    resend = _resend_cfg()
+    fallback_to = resend["to_email"] if transport == "resend" else smtp["to_email"]
+    alert_raw = (
+        str(os.getenv("TRADER_KOO_LLM_FAIL_ALERT_TO", "") or "").strip()
+        or str(os.getenv("TRADER_KOO_LLM_ALERT_TO", "") or "").strip()  # legacy alias
+        or str(fallback_to or "").strip()
+        or str(os.getenv("TRADER_KOO_REPORT_EMAIL_TO", "") or "").strip()
+    )
+    recipients = parse_recipients(alert_raw)
+    if not recipients:
+        return {"attempted": False, "reason": "missing_alert_recipients"}
+
+    if transport == "resend":
+        if not resend.get("api_key") or not resend.get("from_email"):
+            return {"attempted": False, "reason": "resend_not_configured"}
+    else:
+        if not smtp.get("host") or not smtp.get("from_email"):
+            return {"attempted": False, "reason": "smtp_not_configured"}
+        if smtp.get("user") and not smtp.get("password"):
+            return {"attempted": False, "reason": "smtp_password_missing"}
+
+    generated = str(report.get("generated_ts") or "").strip() or dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    report_kind = str(((report.get("meta") or {}).get("report_kind")) or "daily").strip().lower()
+    consecutive = int(health.get("consecutive_failures") or 0)
+    last_failure_ts = str(health.get("last_failure_ts") or "-")
+    last_reason = str(health.get("last_failure_reason") or "unknown")
+    last_error = str(health.get("last_error_class") or "unknown")
+    runtime_disabled = bool(llm_meta.get("runtime_disabled"))
+    disable_remain = int(llm_meta.get("runtime_disabled_remaining_sec") or 0)
+    disable_hint = f"{disable_remain}s remaining" if runtime_disabled and disable_remain > 0 else "not in cooldown"
+
+    subject = (
+        f"[trader_koo] LLM ALERT | {generated[:10]} | {report_kind.upper()} degraded "
+        f"(fails={consecutive})"
+    )
+    text_body = (
+        "trader_koo LLM degradation alert\n\n"
+        f"Generated: {generated}\n"
+        f"Report kind: {report_kind}\n"
+        f"Consecutive failures: {consecutive}\n"
+        f"Last failure ts: {last_failure_ts}\n"
+        f"Last failure reason: {last_reason}\n"
+        f"Last error class: {last_error}\n"
+        f"Runtime cooldown: {disable_hint}\n\n"
+        "Fallback is active: rule-based narratives are being used for continuity.\n"
+        "Please check Azure OpenAI credentials/deployment/network and recent API logs.\n"
+    )
+    html_body = (
+        "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#0f172a;'>"
+        "<h2 style='margin:0 0 10px;color:#b42318;'>trader_koo LLM Alert</h2>"
+        "<p style='line-height:1.6;margin:0 0 12px;'>LLM narrative generation is degraded. "
+        "Rule-based fallback is active so reports continue to run.</p>"
+        "<table style='border-collapse:collapse;'>"
+        f"<tr><td style='padding:4px 10px 4px 0;color:#475569;'>Generated</td><td style='padding:4px 0;font-weight:700;'>{generated}</td></tr>"
+        f"<tr><td style='padding:4px 10px 4px 0;color:#475569;'>Report kind</td><td style='padding:4px 0;'>{report_kind}</td></tr>"
+        f"<tr><td style='padding:4px 10px 4px 0;color:#475569;'>Consecutive failures</td><td style='padding:4px 0;font-weight:700;color:#b42318;'>{consecutive}</td></tr>"
+        f"<tr><td style='padding:4px 10px 4px 0;color:#475569;'>Last failure</td><td style='padding:4px 0;'>{last_failure_ts}</td></tr>"
+        f"<tr><td style='padding:4px 10px 4px 0;color:#475569;'>Reason</td><td style='padding:4px 0;'>{last_reason}</td></tr>"
+        f"<tr><td style='padding:4px 10px 4px 0;color:#475569;'>Error class</td><td style='padding:4px 0;'>{last_error}</td></tr>"
+        f"<tr><td style='padding:4px 10px 4px 0;color:#475569;'>Cooldown</td><td style='padding:4px 0;'>{disable_hint}</td></tr>"
+        "</table>"
+        "<p style='line-height:1.6;margin:12px 0 0;color:#475569;'>"
+        "Check `/api/admin/llm-health` and application logs for details."
+        "</p>"
+        "</div>"
+    )
+
+    sent = 0
+    failed = 0
+    failures: list[str] = []
+    for recipient in recipients:
+        try:
+            if transport == "resend":
+                _send_resend_email(
+                    subject=subject,
+                    text=text_body,
+                    html_body=html_body,
+                    resend=resend,
+                    recipient=recipient,
+                )
+            else:
+                msg = EmailMessage()
+                msg["Subject"] = subject
+                msg["From"] = smtp["from_email"]
+                msg["To"] = recipient
+                msg.set_content(text_body)
+                msg.add_alternative(html_body, subtype="html")
+                host, port, timeout_sec = smtp["host"], int(smtp["port"]), int(smtp["timeout_sec"])
+                user, password, security = smtp["user"], smtp["password"], smtp["security"]
+                if security == "ssl":
+                    with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
+                        if user:
+                            server.login(user, password)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
+                        server.ehlo()
+                        if security == "starttls":
+                            server.starttls(context=ssl.create_default_context())
+                            server.ehlo()
+                        if user:
+                            server.login(user, password)
+                        server.send_message(msg)
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            failures.append(f"{recipient}: {exc}")
+
+    if sent > 0:
+        mark_llm_alert_sent(
+            db_path,
+            detail={
+                "generated_ts": generated,
+                "report_kind": report_kind,
+                "sent_count": sent,
+                "failed_count": failed,
+                "reason": reason,
+            },
+        )
+    if sent == 0 and failed > 0:
+        raise RuntimeError(f"LLM alert email failed for all recipients: {failures[0]}")
+    return {
+        "attempted": True,
+        "reason": reason,
+        "transport": transport,
+        "recipients_total": len(recipients),
+        "sent_count": sent,
+        "failed_count": failed,
+        "failed_recipients": failures[:10],
+    }
 
 
 def _parse_iso_date(value: Any) -> dt.date | None:
@@ -2127,6 +2389,37 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _apply_llm_narrative_overrides(
+    setup_rows: list[dict[str, Any]],
+    *,
+    source: str,
+) -> None:
+    if not setup_rows:
+        return
+    if not llm_enabled():
+        for row in setup_rows:
+            if isinstance(row, dict):
+                row.setdefault("narrative_source", "rule")
+        return
+    max_rows = llm_max_setups()
+    if max_rows <= 0:
+        for row in setup_rows:
+            if isinstance(row, dict):
+                row.setdefault("narrative_source", "rule")
+        return
+    for idx, row in enumerate(setup_rows):
+        if not isinstance(row, dict):
+            continue
+        row.setdefault("narrative_source", "rule")
+        if idx >= max_rows:
+            continue
+        overrides = maybe_rewrite_setup_copy(row, source=source)
+        if not overrides:
+            continue
+        row.update(overrides)
+        row["narrative_source"] = "llm"
+
+
 def _setup_cluster_rows(rows: list[dict[str, Any]], *, score_window: float = 3.0, scan_limit: int = 8) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -3034,6 +3327,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             ),
             reverse=True,
         )
+        _apply_llm_narrative_overrides(setup_rows, source="daily_report")
         signals["setup_quality_top"] = setup_rows[:40]
         signals["watchlist_candidates"] = [
             {
@@ -3126,6 +3420,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     reverse=True,
                 )
 
+                _apply_llm_narrative_overrides(setup_rows, source="daily_report")
                 signals["setup_quality_top"] = setup_rows[:40]
                 signals["watchlist_candidates"] = [
                     {
@@ -3212,6 +3507,7 @@ def fetch_report_payload(
         "generated_ts": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "meta": {
             "report_kind": report_kind_norm,
+            "llm": llm_status(),
         },
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
@@ -3365,6 +3661,12 @@ def fetch_report_payload(
         except Exception:
             payload["signals"]["tonight_key_changes"] = []
 
+        # Refresh LLM status after signal narrative pass so this snapshot reflects current runtime state.
+        try:
+            payload["meta"]["llm"] = llm_status()
+        except Exception:
+            payload["meta"]["llm"] = {}
+
         # Basic health guardrails.
         price_age = payload["freshness"]["price_age_days"]
         fund_age  = payload["freshness"]["fund_age_hours"]
@@ -3381,6 +3683,16 @@ def fetch_report_payload(
             payload["warnings"].append("yolo_data_missing")
         elif isinstance(yolo_age, (int, float)) and yolo_age > 30:
             payload["warnings"].append("yolo_data_stale")
+
+        llm_meta = payload.get("meta", {}).get("llm", {}) if isinstance(payload.get("meta"), dict) else {}
+        llm_health = llm_meta.get("health") if isinstance(llm_meta, dict) and isinstance(llm_meta.get("health"), dict) else {}
+        if llm_enabled():
+            if isinstance(llm_meta, dict) and not llm_meta.get("ready"):
+                payload["warnings"].append("llm_not_ready")
+            if isinstance(llm_meta, dict) and llm_meta.get("runtime_disabled"):
+                payload["warnings"].append("llm_runtime_cooldown")
+            if llm_health.get("degraded"):
+                payload["warnings"].append("llm_degraded")
 
         payload["risk_filters"] = build_no_trade_conditions(payload)
         payload["ok"] = len(payload["warnings"]) == 0
@@ -3404,6 +3716,9 @@ def to_markdown(report: dict[str, Any]) -> str:
     yolo_summary = yolo.get("summary", {})
     warn = report.get("warnings", [])
     email = report.get("email", {}) if isinstance(report.get("email"), dict) else {}
+    llm_meta = ((report.get("meta") or {}).get("llm") or {}) if isinstance(report.get("meta"), dict) else {}
+    llm_health = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
+    llm_alert = report.get("llm_alert", {}) if isinstance(report.get("llm_alert"), dict) else {}
 
     lines: list[str] = []
     lines.append("# Trader Koo Daily Report")
@@ -3460,6 +3775,32 @@ def to_markdown(report: dict[str, Any]) -> str:
             lines.append(_md_line("error", email.get("error")))
     else:
         lines.append("- Not attempted (auto-email disabled for this run).")
+    lines.append("")
+    lines.append("## LLM Health")
+    if llm_meta:
+        lines.append(_md_line("enabled", llm_meta.get("enabled")))
+        lines.append(_md_line("ready", llm_meta.get("ready")))
+        lines.append(_md_line("runtime_disabled", llm_meta.get("runtime_disabled")))
+        lines.append(_md_line("runtime_disabled_remaining_sec", llm_meta.get("runtime_disabled_remaining_sec")))
+        if llm_health:
+            lines.append(_md_line("degraded", llm_health.get("degraded")))
+            lines.append(_md_line("consecutive_failures", llm_health.get("consecutive_failures")))
+            lines.append(_md_line("last_success_ts", llm_health.get("last_success_ts")))
+            lines.append(_md_line("last_failure_ts", llm_health.get("last_failure_ts")))
+            lines.append(_md_line("last_failure_reason", llm_health.get("last_failure_reason")))
+    else:
+        lines.append("- LLM status unavailable")
+    lines.append("")
+    lines.append("## LLM Alert")
+    if llm_alert:
+        lines.append(_md_line("attempted", llm_alert.get("attempted")))
+        lines.append(_md_line("reason", llm_alert.get("reason")))
+        lines.append(_md_line("sent_count", llm_alert.get("sent_count")))
+        lines.append(_md_line("failed_count", llm_alert.get("failed_count")))
+        if llm_alert.get("error"):
+            lines.append(_md_line("error", llm_alert.get("error")))
+    else:
+        lines.append("- no llm alert metadata")
     lines.append("")
     lines.append("## YOLO Summary")
     lines.append(_md_line("table_exists", yolo.get("table_exists")))
@@ -3800,8 +4141,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    db_path = Path(args.db_path).resolve()
     report = fetch_report_payload(
-        db_path=Path(args.db_path).resolve(),
+        db_path=db_path,
         run_log=Path(args.run_log).resolve(),
         tail_lines=max(0, int(args.tail_lines)),
         report_kind=args.report_kind,
@@ -3835,12 +4177,49 @@ def main() -> None:
                     f"to={smtp_cfg.get('to_email') or '-'}"
                 )
             md_text = to_markdown(report)
-            send_report_email(report, md_text)
-            email_meta["sent"] = True
-            print(f"[EMAIL] sent ok transport={transport}")
+            email_summary = send_report_email(
+                report,
+                md_text,
+                db_path=db_path,
+            )
+            email_meta["sent"] = bool(email_summary.get("sent_count"))
+            email_meta["sent_count"] = int(email_summary.get("sent_count") or 0)
+            email_meta["failed_count"] = int(email_summary.get("failed_count") or 0)
+            email_meta["skipped_duplicate_count"] = int(email_summary.get("skipped_duplicate_count") or 0)
+            email_meta["sample_recipients"] = email_summary.get("sample_recipients") or []
+            print(
+                "[EMAIL] sent "
+                f"transport={transport} sent={email_meta['sent_count']} "
+                f"failed={email_meta['failed_count']} "
+                f"skipped_duplicate={email_meta['skipped_duplicate_count']}"
+            )
         except Exception as exc:
             email_meta["error"] = str(exc)
             print(f"[EMAIL] failed {exc}")
+    llm_alert_meta: dict[str, Any] = {"attempted": False, "reason": "not_checked"}
+    try:
+        llm_alert_meta = send_llm_failure_alert_email(
+            report,
+            db_path=db_path,
+        )
+        if llm_alert_meta.get("attempted"):
+            print(
+                "[LLM-ALERT] sent "
+                f"transport={llm_alert_meta.get('transport') or '-'} "
+                f"sent={int(llm_alert_meta.get('sent_count') or 0)} "
+                f"failed={int(llm_alert_meta.get('failed_count') or 0)}"
+            )
+    except Exception as exc:
+        llm_alert_meta = {
+            "attempted": True,
+            "reason": "dispatch_error",
+            "sent_count": 0,
+            "failed_count": 0,
+            "error": str(exc),
+        }
+        print(f"[LLM-ALERT] failed {exc}")
+
+    report["llm_alert"] = llm_alert_meta
     report["email"] = email_meta
     if email_meta["attempted"] and not email_meta["sent"]:
         warnings = report.get("warnings")
@@ -3849,6 +4228,25 @@ def main() -> None:
             report["warnings"] = warnings
         if "report_email_failed" not in warnings:
             warnings.append("report_email_failed")
+    if llm_alert_meta.get("attempted") and int(llm_alert_meta.get("sent_count") or 0) == 0 and llm_alert_meta.get("error"):
+        warnings = report.get("warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+            report["warnings"] = warnings
+        if "llm_alert_send_failed" not in warnings:
+            warnings.append("llm_alert_send_failed")
+    if str(llm_alert_meta.get("reason") or "") in {
+        "missing_alert_recipients",
+        "resend_not_configured",
+        "smtp_not_configured",
+        "smtp_password_missing",
+    }:
+        warnings = report.get("warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+            report["warnings"] = warnings
+        if "llm_alert_not_configured" not in warnings:
+            warnings.append("llm_alert_not_configured")
     report["ok"] = len(report.get("warnings", [])) == 0
 
     out_paths = write_reports(report, Path(args.out_dir).resolve())
@@ -3863,6 +4261,9 @@ def main() -> None:
                 "email_attempted": email_meta.get("attempted", False),
                 "email_sent": email_meta.get("sent", False),
                 "email_error": email_meta.get("error"),
+                "llm_alert_attempted": llm_alert_meta.get("attempted", False),
+                "llm_alert_reason": llm_alert_meta.get("reason"),
+                "llm_alert_sent_count": int(llm_alert_meta.get("sent_count") or 0),
             },
             indent=2,
         )

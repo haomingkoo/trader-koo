@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager
 from email.message import EmailMessage
@@ -27,7 +28,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
@@ -38,6 +39,13 @@ from trader_koo.cv.compare import HybridCVCompareConfig, compare_hybrid_vs_cv
 from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
+from trader_koo.llm_narrative import llm_status, maybe_rewrite_setup_copy
+from trader_koo.llm_health import (
+    llm_alert_cooldown_min,
+    llm_alert_enabled,
+    llm_degraded_threshold,
+    llm_health_summary,
+)
 from trader_koo.catalyst_data import (
     build_earnings_calendar_payload,
     get_ticker_earnings_markers,
@@ -45,6 +53,27 @@ from trader_koo.catalyst_data import (
 from trader_koo.email_chart_preview import (
     build_email_chart_preview_png,
     verify_chart_preview_signature,
+)
+from trader_koo.email_subscribers import (
+    already_sent_generated_report,
+    check_request_rate_limit,
+    confirm_subscriber_token,
+    email_max_recipients,
+    email_subscribe_enabled,
+    ensure_subscriber_schema,
+    find_subscriber_by_email,
+    is_valid_email,
+    mark_verification_sent,
+    parse_recipients,
+    record_generated_report_delivery,
+    record_subscriber_event,
+    resolve_report_recipients,
+    subscribe_email_daily_limit,
+    subscribe_ip_hourly_limit,
+    subscribe_resend_cooldown_min,
+    subscriber_counts,
+    unsubscribe_subscriber_token,
+    upsert_subscriber_pending,
 )
 from trader_koo.report_email import (
     build_report_email_bodies,
@@ -507,6 +536,7 @@ _scheduler.add_job(
 async def lifespan(_app: FastAPI):
     ensure_analytics_schema()
     prune_analytics_sessions()
+    ensure_subscriber_schema(DB_PATH)
     reconcile = _reconcile_stale_running_runs()
     if reconcile.get("reconciled"):
         LOG.warning(
@@ -1816,6 +1846,11 @@ def _build_chart_commentary_payload(
     row.update(tech)
     row.update(_report_score_setup_from_confluence(row))
     row.update(_report_describe_setup(row))
+    row["narrative_source"] = "rule"
+    llm_overrides = maybe_rewrite_setup_copy(row, source="chart_commentary")
+    if llm_overrides:
+        row.update(llm_overrides)
+        row["narrative_source"] = "llm"
 
     primary_audit = yolo_audit[0] if yolo_audit else None
     current_active = [item for item in yolo_audit if bool(item.get("active_now"))]
@@ -1838,6 +1873,7 @@ def _build_chart_commentary_payload(
         "action": row.get("action"),
         "risk_note": row.get("risk_note"),
         "technical_read": row.get("technical_read"),
+        "narrative_source": row.get("narrative_source"),
         "primary_yolo_role": primary_yolo.get("signal_role") if primary_yolo else "none",
         "primary_yolo_recency": primary_yolo.get("yolo_recency") if primary_yolo else "none",
         "commentary_context": {
@@ -2561,6 +2597,79 @@ def _send_smtp_email(message: EmailMessage, smtp: dict[str, Any]) -> None:
         if user:
             server.login(user, password)
         server.send_message(message)
+
+
+def _subscription_base_url(request: Request | None = None) -> str:
+    explicit = report_email_app_url() or STATUS_APP_URL or STATUS_BASE_URL
+    if explicit:
+        return str(explicit).rstrip("/")
+    if request is not None:
+        return str(request.base_url).rstrip("/")
+    return "http://localhost:8000"
+
+
+def _subscription_result_page(title: str, message: str, *, ok: bool = True) -> HTMLResponse:
+    accent = "#0f9d58" if ok else "#d93025"
+    html = f"""\
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+  </head>
+  <body style="margin:0;padding:22px;background:#eef3f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+    <div style="max-width:560px;margin:0 auto;border:1px solid #dde7f0;border-radius:16px;background:#ffffff;padding:20px;">
+      <div style="font-size:20px;line-height:26px;font-weight:700;color:{accent};">{title}</div>
+      <div style="margin-top:10px;font-size:14px;line-height:22px;color:#334155;">{message}</div>
+      <div style="margin-top:14px;font-size:12px;line-height:18px;color:#64748b;">
+        trader_koo alerts are research only and not financial advice.
+      </div>
+    </div>
+  </body>
+</html>
+"""
+    return HTMLResponse(content=html)
+
+
+def _send_transactional_email(
+    *,
+    recipient: str,
+    subject: str,
+    text_body: str,
+    html_body: str,
+) -> str:
+    transport = _email_transport()
+    smtp = _smtp_settings()
+    resend = _resend_settings()
+    if transport == "resend":
+        if not resend["api_key"]:
+            raise RuntimeError("Missing TRADER_KOO_RESEND_API_KEY")
+        if not resend["from_email"]:
+            raise RuntimeError("Missing TRADER_KOO_RESEND_FROM (or TRADER_KOO_SMTP_FROM)")
+        _send_resend_email(
+            subject=subject,
+            text=text_body,
+            recipient=recipient,
+            resend=resend,
+            html_body=html_body,
+        )
+        return "resend"
+
+    if not smtp["host"]:
+        raise RuntimeError("Missing TRADER_KOO_SMTP_HOST")
+    if not smtp["from_email"]:
+        raise RuntimeError("Missing TRADER_KOO_SMTP_FROM")
+    if smtp["user"] and not smtp["password"]:
+        raise RuntimeError("Missing TRADER_KOO_SMTP_PASS")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = smtp["from_email"]
+    msg["To"] = recipient
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
+    _send_smtp_email(msg, smtp)
+    return "smtp"
 
 
 def get_yolo_status(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -3492,6 +3601,202 @@ def earnings_calendar(
         conn.close()
 
 
+@app.post("/api/email/subscribe")
+async def email_subscribe(request: Request) -> dict[str, Any]:
+    if not email_subscribe_enabled():
+        raise HTTPException(status_code=404, detail="Email subscriptions are disabled.")
+    payload: dict[str, Any] = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    email = str(payload.get("email") or request.query_params.get("email") or "").strip().lower()
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    source_ip = _client_ip(request)
+    allowed, reason = check_request_rate_limit(
+        DB_PATH,
+        event_type="subscribe_request",
+        source_ip=source_ip,
+        email=email,
+        ip_hourly_limit=subscribe_ip_hourly_limit(),
+        email_daily_limit=subscribe_email_daily_limit(),
+    )
+    if not allowed:
+        record_subscriber_event(
+            DB_PATH,
+            event_type="subscribe_rate_limited",
+            email=email,
+            source_ip=source_ip,
+            details=reason or "",
+        )
+        raise HTTPException(status_code=429, detail=reason or "Too many requests. Try again later.")
+
+    upserted = upsert_subscriber_pending(
+        DB_PATH,
+        email=email,
+        source_ip=source_ip,
+        source_user_agent=request.headers.get("user-agent"),
+        resend_cooldown_min=subscribe_resend_cooldown_min(),
+    )
+    if not upserted.get("ok"):
+        raise HTTPException(status_code=400, detail=upserted.get("detail") or "Unable to register email.")
+    state = str(upserted.get("state") or "pending")
+    should_send = bool(upserted.get("should_send_verification"))
+    confirm_token = str(upserted.get("confirm_token") or "")
+    unsubscribe_token = str(upserted.get("unsubscribe_token") or "")
+    base_url = _subscription_base_url(request)
+    confirm_url = f"{base_url}/api/email/confirm?token={urllib.parse.quote(confirm_token)}"
+    unsubscribe_url = f"{base_url}/api/email/unsubscribe?token={urllib.parse.quote(unsubscribe_token)}"
+    transport_used = None
+    if should_send:
+        subject = "[trader_koo] Confirm your email subscription"
+        text_body = (
+            "trader_koo email confirmation\n\n"
+            f"Click to confirm alerts: {confirm_url}\n"
+            f"If this was not you, ignore this email or unsubscribe: {unsubscribe_url}\n\n"
+            "This dashboard is research only and not financial advice."
+        )
+        html_body = (
+            "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#0f172a;'>"
+            "<h2 style='margin:0 0 10px;'>Confirm trader_koo Alerts</h2>"
+            "<p style='line-height:1.6;'>You requested daily trader_koo report alerts.</p>"
+            f"<p><a href='{confirm_url}' style='display:inline-block;padding:10px 14px;border-radius:999px;background:#1677ff;color:#fff;text-decoration:none;font-weight:700;'>Confirm subscription</a></p>"
+            f"<p style='font-size:13px;color:#475569;'>Not you? <a href='{unsubscribe_url}'>Unsubscribe</a> or ignore this message.</p>"
+            "<p style='font-size:12px;color:#64748b;'>Research only. Not financial advice.</p>"
+            "</div>"
+        )
+        try:
+            transport_used = _send_transactional_email(
+                recipient=email,
+                subject=subject,
+                text_body=text_body,
+                html_body=html_body,
+            )
+            mark_verification_sent(DB_PATH, email=email)
+        except Exception as exc:
+            record_subscriber_event(
+                DB_PATH,
+                event_type="subscribe_send_failed",
+                email=email,
+                source_ip=source_ip,
+                details=str(exc),
+            )
+            raise HTTPException(status_code=500, detail=f"Unable to send confirmation email: {exc}") from exc
+
+    detail = (
+        "Confirmation email sent. Check inbox/spam and click confirm."
+        if should_send
+        else "Subscription request already pending recently. Check your inbox for the latest confirmation email."
+    )
+    if state == "already_active":
+        detail = "This email is already subscribed."
+    return {
+        "ok": True,
+        "email": email,
+        "state": state,
+        "verification_sent": should_send,
+        "transport": transport_used,
+        "detail": detail,
+    }
+
+
+@app.post("/api/email/unsubscribe-request")
+async def email_unsubscribe_request(request: Request) -> dict[str, Any]:
+    if not email_subscribe_enabled():
+        raise HTTPException(status_code=404, detail="Email subscriptions are disabled.")
+    payload: dict[str, Any] = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    email = str(payload.get("email") or request.query_params.get("email") or "").strip().lower()
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    source_ip = _client_ip(request)
+    allowed, reason = check_request_rate_limit(
+        DB_PATH,
+        event_type="unsubscribe_request",
+        source_ip=source_ip,
+        email=email,
+        ip_hourly_limit=subscribe_ip_hourly_limit(),
+        email_daily_limit=subscribe_email_daily_limit(),
+    )
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason or "Too many requests. Try again later.")
+    record_subscriber_event(
+        DB_PATH,
+        event_type="unsubscribe_request",
+        email=email,
+        source_ip=source_ip,
+    )
+    row = find_subscriber_by_email(DB_PATH, email=email)
+    if row and str(row.get("unsubscribe_token") or "").strip():
+        base_url = _subscription_base_url(request)
+        unsubscribe_url = (
+            f"{base_url}/api/email/unsubscribe?token="
+            f"{urllib.parse.quote(str(row.get('unsubscribe_token') or '').strip())}"
+        )
+        text_body = (
+            "trader_koo unsubscribe request\n\n"
+            f"Click to unsubscribe: {unsubscribe_url}\n\n"
+            "If this was not you, ignore this email."
+        )
+        html_body = (
+            "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#0f172a;'>"
+            "<h2 style='margin:0 0 10px;'>Manage trader_koo Alerts</h2>"
+            "<p style='line-height:1.6;'>You requested an unsubscribe link.</p>"
+            f"<p><a href='{unsubscribe_url}' style='display:inline-block;padding:10px 14px;border-radius:999px;background:#1677ff;color:#fff;text-decoration:none;font-weight:700;'>Unsubscribe</a></p>"
+            "<p style='font-size:12px;color:#64748b;'>If this was not you, ignore this message.</p>"
+            "</div>"
+        )
+        try:
+            _send_transactional_email(
+                recipient=email,
+                subject="[trader_koo] Unsubscribe link",
+                text_body=text_body,
+                html_body=html_body,
+            )
+        except Exception as exc:
+            LOG.warning("Unsubscribe request email send failed for %s: %s", email, exc)
+    return {
+        "ok": True,
+        "detail": "If the address exists, an unsubscribe email has been sent.",
+    }
+
+
+@app.get("/api/email/confirm")
+def email_confirm(token: str = Query(..., min_length=16, max_length=512)) -> HTMLResponse:
+    row = confirm_subscriber_token(DB_PATH, token=token)
+    if row is None:
+        return _subscription_result_page(
+            "Confirmation Link Invalid",
+            "This link is invalid or expired. Request a new confirmation from the dashboard.",
+            ok=False,
+        )
+    return _subscription_result_page(
+        "Subscription Confirmed",
+        f"{row['email']} is now subscribed to trader_koo report emails.",
+        ok=True,
+    )
+
+
+@app.get("/api/email/unsubscribe")
+def email_unsubscribe(token: str = Query(..., min_length=16, max_length=512)) -> HTMLResponse:
+    row = unsubscribe_subscriber_token(DB_PATH, token=token)
+    if row is None:
+        return _subscription_result_page(
+            "Unsubscribe Link Invalid",
+            "This link is invalid or expired. Request a new unsubscribe link from the dashboard.",
+            ok=False,
+        )
+    return _subscription_result_page(
+        "Unsubscribed",
+        f"{row['email']} has been removed from trader_koo report emails.",
+        ok=True,
+    )
+
+
 @app.get("/api/email/chart-preview")
 def email_chart_preview(
     ticker: str = Query(..., min_length=1, max_length=16),
@@ -3558,7 +3863,19 @@ def smtp_health() -> dict[str, Any]:
     smtp = _smtp_settings()
     resend = _resend_settings()
     transport = _email_transport()
+    subs_enabled = email_subscribe_enabled()
+    subs = subscriber_counts(DB_PATH) if subs_enabled else {"active": 0, "pending": 0, "unsubscribed": 0, "total": 0}
     auto_email = str(os.getenv("TRADER_KOO_AUTO_EMAIL", "")).strip().lower() in {"1", "true", "yes"}
+    llm_alert_to = (
+        str(os.getenv("TRADER_KOO_LLM_FAIL_ALERT_TO", "") or "").strip()
+        or str(os.getenv("TRADER_KOO_LLM_ALERT_TO", "") or "").strip()  # legacy alias
+    )
+    llm_alert_recipient_count = len(parse_recipients(llm_alert_to)) if llm_alert_to else 0
+    llm_health = {}
+    try:
+        llm_health = llm_health_summary(DB_PATH, recent_limit=10)
+    except Exception:
+        llm_health = {}
     missing: list[str] = []
     if transport == "resend":
         if not resend["api_key"]:
@@ -3580,6 +3897,9 @@ def smtp_health() -> dict[str, Any]:
         "ok": len(missing) == 0,
         "auto_email_enabled": auto_email,
         "transport": transport,
+        "subscriber_registry_enabled": subs_enabled,
+        "subscriber_counts": subs,
+        "email_max_recipients": email_max_recipients(),
         "missing": missing,
         "smtp": {
             "host": smtp["host"],
@@ -3596,6 +3916,37 @@ def smtp_health() -> dict[str, Any]:
             "from_email": resend["from_email"],
             "default_to": resend["default_to"],
             "timeout_sec": resend["timeout_sec"],
+        },
+        "llm_alert": {
+            "enabled": llm_alert_enabled(),
+            "cooldown_min": llm_alert_cooldown_min(),
+            "degraded_threshold": llm_degraded_threshold(),
+            "has_override_recipients": bool(llm_alert_to),
+            "override_recipient_count": llm_alert_recipient_count,
+            "health": llm_health,
+        },
+    }
+
+
+@app.get("/api/admin/llm-health")
+def admin_llm_health(
+    recent_limit: int = Query(default=25, ge=1, le=200),
+) -> dict[str, Any]:
+    """Return LLM runtime/config health plus recent persisted failure/success events."""
+    health = llm_health_summary(DB_PATH, recent_limit=recent_limit)
+    status = llm_status()
+    return {
+        "ok": True,
+        "status": status,
+        "health": health,
+        "alert": {
+            "enabled": llm_alert_enabled(),
+            "cooldown_min": llm_alert_cooldown_min(),
+            "degraded_threshold": llm_degraded_threshold(),
+            "has_override_recipients": bool(
+                str(os.getenv("TRADER_KOO_LLM_FAIL_ALERT_TO", "") or "").strip()
+                or str(os.getenv("TRADER_KOO_LLM_ALERT_TO", "") or "").strip()  # legacy alias
+            ),
         },
     }
 
@@ -3842,6 +4193,16 @@ def status() -> dict[str, Any]:
         if resume_candidate:
             warnings.append("post-ingest yolo/report recovery recommended")
 
+        llm_meta = llm_status()
+        llm_health = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
+        if llm_meta.get("enabled"):
+            if not llm_meta.get("ready"):
+                warnings.append("llm not ready")
+            if llm_meta.get("runtime_disabled"):
+                warnings.append("llm in runtime cooldown")
+            if llm_health.get("degraded"):
+                warnings.append("llm degraded (rule fallback active)")
+
         activity = {
             "tracked_tickers": counts["tracked_tickers"] if counts else 0,
             "tickers_processed": int((latest_run or {}).get("tickers_processed") or 0),
@@ -3920,6 +4281,7 @@ def status() -> dict[str, Any]:
                 "options_rows": counts["options_rows"] if counts else 0,
             },
             "activity": activity,
+            "llm": llm_meta,
             "latest_data": {
                 "price_date": latest_price_date,
                 "fund_snapshot": latest_fund_snapshot,
