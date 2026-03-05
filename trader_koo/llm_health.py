@@ -212,16 +212,15 @@ def note_llm_success(
             consecutive = 0
         _state_set(conn, "consecutive_failures", "0", now)
         _state_set(conn, "last_success_ts", _iso(now), now)
-        if consecutive > 0:
-            _record_event(
-                conn,
-                now=now,
-                outcome="success",
-                source=source,
-                ticker=ticker,
-                reason="recovered_after_failures",
-            )
-            _prune_events(conn)
+        _record_event(
+            conn,
+            now=now,
+            outcome="success",
+            source=source,
+            ticker=ticker,
+            reason="recovered_after_failures" if consecutive > 0 else "ok",
+        )
+        _prune_events(conn)
         conn.commit()
     finally:
         conn.close()

@@ -1586,6 +1586,9 @@
           <button onclick="loadTickerQuick('^DJI')">DJI</button>
           <button onclick="loadTickerQuick('^TNX')">TNX</button>
         </div>
+        <div id="chartReturnWrap" class="mini-actions hidden" style="margin:0 0 10px 0;">
+          <button id="chartBackToReportBtn" type="button">← Back to Daily Report</button>
+        </div>
 
         <div class="cards">
           <div class="card"><div class="label">Price</div><div id="c-price" class="value">-</div></div>
@@ -1602,6 +1605,7 @@
             <div id="chartCommentaryStatus" class="report-inline-note">Load a ticker to generate commentary.</div>
           </div>
           <div id="chartCommentaryBadges" class="earnings-badges"></div>
+          <div id="chartNarrativeTrace" class="report-inline-note" style="margin:8px 0 10px;">Load a ticker to inspect narrative generation trace.</div>
           <div class="chart-commentary-grid">
             <div class="chart-commentary-block">
               <div class="label">Observation</div>
@@ -1994,6 +1998,7 @@
     let LAST_CHART_PAYLOAD = null;
     let LAST_REPORT_SETUP_ROWS = [];
     let REPORT_SETUP_SHOW_MORE = false;
+    let REPORT_RETURN_STATE = null;
     let CHART_TIMEFRAME = "daily"; // "daily" | "weekly"
     let EARNINGS_VIEW_MODE = "calendar";
     let LAST_EARNINGS_ROWS = [];
@@ -2277,13 +2282,59 @@
       return titleCaseWords(raw);
     }
 
-    function shortenCopy(value, maxChars = 168) {
+    function sanitizeSnippetTail(value) {
       const text = String(value || "").replace(/\s+/g, " ").trim();
+      if (!text) return "";
+      const words = text.split(" ").filter(Boolean);
+      if (!words.length) return text;
+      const last = words[words.length - 1];
+      if (!/[.!?]$/.test(last) && /^[a-z]{1,2}$/i.test(last)) {
+        words.pop();
+      }
+      const out = words.join(" ").trim();
+      return out || text;
+    }
+
+    function shortenCopy(value, maxChars = 168) {
+      const text = sanitizeSnippetTail(value);
       if (!text) return "-";
       if (text.length <= maxChars) return text;
       const clipped = text.slice(0, maxChars);
       const cut = clipped.lastIndexOf(" ");
-      return (cut > 90 ? clipped.slice(0, cut) : clipped).trim();
+      const base = (cut > 40 ? clipped.slice(0, cut) : clipped).trim();
+      return `${base}...`;
+    }
+
+    function setReportReturnContext() {
+      REPORT_RETURN_STATE = {
+        tab: "report",
+        scrollY: window.scrollY,
+        setupModeMore: !!REPORT_SETUP_SHOW_MORE,
+      };
+      const wrap = $("chartReturnWrap");
+      if (wrap) wrap.classList.remove("hidden");
+    }
+
+    function clearReportReturnContext() {
+      REPORT_RETURN_STATE = null;
+      const wrap = $("chartReturnWrap");
+      if (wrap) wrap.classList.add("hidden");
+    }
+
+    function restoreReportFromChart() {
+      activateTab("report");
+      if (REPORT_RETURN_STATE) {
+        setReportSetupMode(!!REPORT_RETURN_STATE.setupModeMore);
+        const y = Number(REPORT_RETURN_STATE.scrollY || 0);
+        window.requestAnimationFrame(() => window.scrollTo({ top: y, behavior: "auto" }));
+      }
+    }
+
+    function loadTickerFromReport(ticker) {
+      const symbol = normalizeTickerSymbol(ticker);
+      if (!symbol) return;
+      setReportReturnContext();
+      loadTickerQuick(symbol);
     }
 
     function buildCompactSetupRows(rows) {
@@ -2295,8 +2346,8 @@
         signal_bias_label: titleCaseWords(row.signal_bias || "neutral"),
         actionability_label: humanizeActionability(row.actionability),
         context_label: humanizeSetupContext(row),
-        observation_short: shortenCopy(row.observation || buildSetupReason(row), 56),
-        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 52),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 120),
+        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 110),
       }));
     }
 
@@ -2309,9 +2360,9 @@
         bias_label: titleCaseWords(row.signal_bias || "neutral"),
         yolo_context: humanizeSetupContext(row),
         level_event: humanizeBreakoutState(row.breakout_state),
-        observation_short: shortenCopy(row.observation || buildSetupReason(row), 84),
-        next_step_short: shortenCopy(row.action || "Watch only until the setup confirms.", 76),
-        audit_notes: shortenCopy(humanizeTechnicalRead(row.technical_read, row), 80),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 140),
+        next_step_short: shortenCopy(row.action || "Watch only until the setup confirms.", 120),
+        audit_notes: shortenCopy(humanizeTechnicalRead(row.technical_read, row), 110),
         signal_bias: row.signal_bias,
       }));
     }
@@ -2345,7 +2396,7 @@
       el.querySelectorAll("button[data-setup-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-setup-load");
-          if (ticker) loadTickerQuick(ticker);
+          if (ticker) loadTickerFromReport(ticker);
         });
       });
     }
@@ -2388,7 +2439,7 @@
       el.querySelectorAll("button[data-setup-audit-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-setup-audit-load");
-          if (ticker) loadTickerQuick(ticker);
+          if (ticker) loadTickerFromReport(ticker);
         });
       });
     }
@@ -2421,7 +2472,7 @@
       el.querySelectorAll("button[data-chip-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-chip-load");
-          if (ticker) loadTickerQuick(ticker);
+          if (ticker) loadTickerFromReport(ticker);
         });
       });
     }
@@ -2465,7 +2516,7 @@
       el.querySelectorAll("button[data-persist-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-persist-load");
-          if (ticker) loadTickerQuick(ticker);
+          if (ticker) loadTickerFromReport(ticker);
         });
       });
     }
@@ -2583,9 +2634,9 @@
       if (data.actionability) badges.push(`<span class="earnings-badge">${escHtml(humanizeActionability(data.actionability).toUpperCase())}</span>`);
       const yoloContextLabel = humanizeSetupContext({ yolo_recency: data.primary_yolo_recency, primary_yolo_role: data.primary_yolo_role });
       if (yoloContextLabel !== "No YOLO") {
-        const yoloLabel = data.primary_yolo_recency
-          ? `${yoloContextLabel} YOLO`
-          : yoloContextLabel;
+        const yoloLabel = /yolo/i.test(yoloContextLabel)
+          ? yoloContextLabel
+          : `${yoloContextLabel} YOLO`;
         badges.push(`<span class="earnings-badge">${escHtml(yoloLabel.toUpperCase())}</span>`);
       }
       $("chartCommentaryBadges").innerHTML = badges.join("");
@@ -2599,6 +2650,45 @@
       `;
       $("chartTechnicalRead").innerHTML = `
         <strong>Technical Context:</strong> ${escHtml(humanizeTechnicalRead(data.technical_read, data))}
+      `;
+      const traceEl = $("chartNarrativeTrace");
+      if (!traceEl) return;
+      const trace = data.narrative_trace && typeof data.narrative_trace === "object" ? data.narrative_trace : {};
+      const sourceRaw = String((data.narrative_source || trace.narrative_source || "rule") || "rule").trim().toLowerCase();
+      const sourceLabel = sourceRaw === "llm"
+        ? "LLM rewrite"
+        : (sourceRaw === "report_snapshot" ? "report snapshot" : "rule-based");
+      const changed = trace.changed_fields && typeof trace.changed_fields === "object" ? trace.changed_fields : {};
+      const changedKeys = Object.entries(changed)
+        .filter((entry) => !!entry[1])
+        .map((entry) => entry[0]);
+      const changedLabel = changedKeys.length ? changedKeys.join(", ") : "none";
+      const llm = trace.llm_status && typeof trace.llm_status === "object" ? trace.llm_status : {};
+      const cooldown = Number(llm.runtime_disabled_remaining_sec || 0);
+      const llmState = llm.runtime_disabled
+        ? `cooldown (${cooldown}s remaining)`
+        : (llm.ready ? "ready" : "not ready");
+      const factMap = trace.input_facts && typeof trace.input_facts === "object" ? trace.input_facts : {};
+      const factText = Object.entries(factMap)
+        .filter((entry) => entry[1] !== null && entry[1] !== undefined && String(entry[1]).trim() !== "")
+        .slice(0, 7)
+        .map((entry) => `${entry[0]}=${entry[1]}`)
+        .join(" | ");
+      const baseline = trace.baseline && typeof trace.baseline === "object" ? trace.baseline : {};
+      const finalText = trace.final && typeof trace.final === "object" ? trace.final : {};
+      const prompt = trace.rewrite_instruction || data.llm_ready_prompt || "";
+      traceEl.innerHTML = `
+        <div><strong>Narrative source:</strong> ${escHtml(sourceLabel)} • <strong>Changed fields:</strong> ${escHtml(changedLabel || "none")}</div>
+        <div><strong>LLM runtime:</strong> ${escHtml(llmState)} • provider=${escHtml(llm.provider || "-")} • temp=${escHtml(llm.temperature ?? "-")} • max_tokens=${escHtml(llm.max_tokens ?? "-")}</div>
+        <details style="margin-top:6px;">
+          <summary style="cursor:pointer;">Show generation trace</summary>
+          <div style="margin-top:6px;"><strong>Instruction:</strong> ${escHtml(prompt || "-")}</div>
+          <div style="margin-top:4px;"><strong>Input facts:</strong> ${escHtml(factText || "-")}</div>
+          <div style="margin-top:4px;"><strong>Baseline observation:</strong> ${escHtml(String(baseline.observation || "-"))}</div>
+          <div style="margin-top:4px;"><strong>Final observation:</strong> ${escHtml(String(finalText.observation || data.observation || "-"))}</div>
+          <div style="margin-top:4px;"><strong>Baseline action:</strong> ${escHtml(String(baseline.action || "-"))}</div>
+          <div style="margin-top:4px;"><strong>Final action:</strong> ${escHtml(String(finalText.action || data.action || "-"))}</div>
+        </details>
       `;
     }
 
@@ -3847,11 +3937,15 @@
             { key: "signal_role", label: "Role" },
             { key: "active_now", label: "Active" },
             { key: "yolo_recency", label: "Recency" },
+            { key: "confirmation_trend", label: "Confirmation" },
+            { key: "lifecycle_state", label: "Lifecycle" },
+            { key: "latest_close_in_pattern", label: "Latest Close In Pattern" },
             { key: "age_days", label: "Age (d)" },
             { key: "current_streak", label: "Streak" },
             { key: "snapshots_seen", label: "Seen" },
             { key: "first_seen_asof", label: "First Seen" },
             { key: "last_seen_asof", label: "Last Seen" },
+            { key: "confidence_delta", label: "Conf Δ" },
             { key: "confidence", label: "Conf." },
           ],
           (payload.yolo_audit || []).map((row) => ({
@@ -3860,6 +3954,11 @@
             signal_role: formatSignalRole(row.signal_role),
             active_now: !!row.active_now,
             yolo_recency: row.yolo_recency ? String(row.yolo_recency).replaceAll("_", " ") : "-",
+            confirmation_trend: row.confirmation_trend ? String(row.confirmation_trend).replaceAll("_", " ") : "-",
+            lifecycle_state: row.lifecycle_state ? String(row.lifecycle_state).replaceAll("_", " ") : "-",
+            latest_close_in_pattern: row.latest_close_in_pattern === null || row.latest_close_in_pattern === undefined
+              ? "-"
+              : (row.latest_close_in_pattern ? "yes" : "no"),
             age_days: row.age_days,
             current_streak: row.current_streak,
             snapshots_seen: row.snapshots_seen,
@@ -3867,6 +3966,7 @@
               ? `retained ${row.first_seen_asof}`
               : row.first_seen_asof,
             last_seen_asof: row.last_seen_asof,
+            confidence_delta: row.confidence_delta,
             confidence: row.confidence,
           })),
           false,
