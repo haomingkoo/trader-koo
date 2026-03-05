@@ -65,6 +65,13 @@ def _as_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in TRUTHY_VALUES
 
 
+SETUP_EVAL_ENABLED = _as_bool(os.getenv("TRADER_KOO_SETUP_EVAL_ENABLED", "1"))
+SETUP_EVAL_TRACK_LIMIT = max(5, int(os.getenv("TRADER_KOO_SETUP_EVAL_TRACK_LIMIT", "40")))
+SETUP_EVAL_WINDOW_DAYS = max(30, int(os.getenv("TRADER_KOO_SETUP_EVAL_WINDOW_DAYS", "180")))
+SETUP_EVAL_MIN_SAMPLE = max(3, int(os.getenv("TRADER_KOO_SETUP_EVAL_MIN_SAMPLE", "5")))
+SETUP_EVAL_HIT_THRESHOLD_PCT = float(os.getenv("TRADER_KOO_SETUP_EVAL_HIT_THRESHOLD_PCT", "0.3"))
+
+
 def _normalize_report_kind(value: Any) -> str:
     raw = str(value or "").strip().lower()
     if raw == "weekly":
@@ -2420,6 +2427,731 @@ def _apply_llm_narrative_overrides(
         row["narrative_source"] = "llm"
 
 
+def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS setup_call_evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asof_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            report_kind TEXT NOT NULL DEFAULT 'daily',
+            generated_ts TEXT,
+            call_direction TEXT NOT NULL,
+            validity_days INTEGER NOT NULL DEFAULT 5,
+            valid_target_date TEXT,
+            setup_family TEXT,
+            setup_tier TEXT,
+            signal_bias TEXT,
+            actionability TEXT,
+            score REAL,
+            close_asof REAL NOT NULL,
+            yolo_pattern TEXT,
+            yolo_recency TEXT,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'open',
+            evaluated_date TEXT,
+            close_evaluated REAL,
+            raw_return_pct REAL,
+            signed_return_pct REAL,
+            direction_hit INTEGER,
+            UNIQUE(asof_date, ticker, report_kind)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_status ON setup_call_evaluations(status, asof_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_family ON setup_call_evaluations(setup_family, call_direction, asof_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_tier ON setup_call_evaluations(setup_tier, asof_date)"
+    )
+
+
+def _setup_call_direction(row: dict[str, Any]) -> str:
+    family = str(row.get("setup_family") or "").strip().lower()
+    bias = str(row.get("signal_bias") or "").strip().lower()
+    if family.startswith("bullish") or bias == "bullish":
+        return "long"
+    if family.startswith("bearish") or bias == "bearish":
+        return "short"
+    return "neutral"
+
+
+def _setup_validity_days(row: dict[str, Any]) -> int:
+    family = str(row.get("setup_family") or "").strip().lower()
+    actionability = str(row.get("actionability") or "").strip().lower()
+    yolo_recency = str(row.get("yolo_recency") or "").strip().lower()
+    if "continuation" in family:
+        days = 5
+    elif "reversal" in family:
+        days = 7
+    elif "watch" in family:
+        days = 4
+    else:
+        days = 3
+
+    if actionability == "higher-probability":
+        days += 1
+    elif actionability in {"wait", "watch-only"}:
+        days = max(3, days - 1)
+
+    if yolo_recency == "stale":
+        days = max(2, days - 2)
+    elif yolo_recency == "aging":
+        days = max(3, days - 1)
+    return int(max(2, min(12, days)))
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(v) for v in values)
+    n = len(ordered)
+    if n % 2 == 1:
+        return ordered[n // 2]
+    return (ordered[(n // 2) - 1] + ordered[n // 2]) / 2.0
+
+
+def _round_or_none(value: float | None, digits: int = 2) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), digits)
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _persist_setup_call_candidates(
+    conn: sqlite3.Connection,
+    *,
+    generated_ts: str | None,
+    report_kind: str,
+    asof_date: str | None,
+    setup_rows: list[dict[str, Any]],
+) -> int:
+    if not asof_date:
+        return 0
+    inserted = 0
+    for row in (setup_rows or [])[:SETUP_EVAL_TRACK_LIMIT]:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "").upper().strip()
+        if not ticker:
+            continue
+        direction = _setup_call_direction(row)
+        if direction not in {"long", "short"}:
+            continue
+        close_asof = row.get("close")
+        if not isinstance(close_asof, (int, float)) or float(close_asof) <= 0:
+            close_row = conn.execute(
+                "SELECT CAST(close AS REAL) FROM price_daily WHERE ticker = ? AND date = ? LIMIT 1",
+                (ticker, asof_date),
+            ).fetchone()
+            close_asof = float(close_row[0]) if close_row and close_row[0] is not None else None
+        if not isinstance(close_asof, (int, float)) or float(close_asof) <= 0:
+            continue
+        validity_days = _setup_validity_days(row)
+        before_changes = conn.total_changes
+        conn.execute(
+            """
+            INSERT INTO setup_call_evaluations (
+                asof_date,
+                ticker,
+                report_kind,
+                generated_ts,
+                call_direction,
+                validity_days,
+                setup_family,
+                setup_tier,
+                signal_bias,
+                actionability,
+                score,
+                close_asof,
+                yolo_pattern,
+                yolo_recency,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+            ON CONFLICT(asof_date, ticker, report_kind) DO NOTHING
+            """,
+            (
+                asof_date,
+                ticker,
+                report_kind,
+                generated_ts,
+                direction,
+                int(validity_days),
+                row.get("setup_family"),
+                row.get("setup_tier"),
+                row.get("signal_bias"),
+                row.get("actionability"),
+                row.get("score"),
+                float(close_asof),
+                row.get("yolo_pattern"),
+                row.get("yolo_recency"),
+            ),
+        )
+        if conn.total_changes > before_changes:
+            inserted += 1
+    return inserted
+
+
+def _score_open_setup_call_outcomes(conn: sqlite3.Connection) -> int:
+    open_rows = conn.execute(
+        """
+        SELECT id, ticker, asof_date, call_direction, validity_days, close_asof
+        FROM setup_call_evaluations
+        WHERE status = 'open'
+        ORDER BY asof_date ASC, id ASC
+        """
+    ).fetchall()
+    scored = 0
+    for row in open_rows:
+        call_id = int(row[0])
+        ticker = str(row[1] or "").upper().strip()
+        asof_date = str(row[2] or "").strip()
+        call_direction = str(row[3] or "").strip().lower()
+        validity_days = int(row[4] or 0)
+        close_asof = float(row[5] or 0.0)
+        if call_direction not in {"long", "short"} or validity_days <= 0 or close_asof <= 0.0:
+            conn.execute(
+                """
+                UPDATE setup_call_evaluations
+                SET status = 'invalid',
+                    updated_ts = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (call_id,),
+            )
+            continue
+
+        future_rows = conn.execute(
+            """
+            SELECT date, CAST(close AS REAL) AS close
+            FROM price_daily
+            WHERE ticker = ? AND date > ?
+            ORDER BY date ASC
+            LIMIT ?
+            """,
+            (ticker, asof_date, int(validity_days)),
+        ).fetchall()
+        if len(future_rows) < validity_days:
+            continue
+        eval_date = str(future_rows[-1][0] or "").strip()
+        eval_close = float(future_rows[-1][1] or 0.0)
+        if not eval_date or eval_close <= 0.0:
+            continue
+        raw_return_pct = ((eval_close / close_asof) - 1.0) * 100.0
+        signed_return_pct = raw_return_pct if call_direction == "long" else (-raw_return_pct)
+        hit = 1 if signed_return_pct >= float(SETUP_EVAL_HIT_THRESHOLD_PCT) else 0
+        conn.execute(
+            """
+            UPDATE setup_call_evaluations
+            SET status = 'scored',
+                valid_target_date = ?,
+                evaluated_date = ?,
+                close_evaluated = ?,
+                raw_return_pct = ?,
+                signed_return_pct = ?,
+                direction_hit = ?,
+                updated_ts = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                eval_date,
+                eval_date,
+                round(eval_close, 6),
+                round(raw_return_pct, 6),
+                round(signed_return_pct, 6),
+                int(hit),
+                call_id,
+            ),
+        )
+        scored += 1
+    return scored
+
+
+def _setup_eval_bucket(
+    label: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    calls = len(rows)
+    wins = [row for row in rows if int(row.get("direction_hit") or 0) == 1]
+    losses = [row for row in rows if int(row.get("direction_hit") or 0) != 1]
+    hits = len(wins)
+    losses_count = len(losses)
+    signed_vals = [float(row.get("signed_return_pct")) for row in rows if isinstance(row.get("signed_return_pct"), (int, float))]
+    win_vals = [float(row.get("signed_return_pct")) for row in wins if isinstance(row.get("signed_return_pct"), (int, float))]
+    loss_vals = [float(row.get("signed_return_pct")) for row in losses if isinstance(row.get("signed_return_pct"), (int, float))]
+    hit_rate = (hits / calls) if calls else None
+    loss_rate = (losses_count / calls) if calls else None
+    avg_win = (sum(win_vals) / len(win_vals)) if win_vals else None
+    avg_loss = (sum(loss_vals) / len(loss_vals)) if loss_vals else None
+    expectancy: float | None = None
+    if hit_rate is not None and loss_rate is not None:
+        expectancy = (hit_rate * float(avg_win or 0.0)) + (loss_rate * float(avg_loss or 0.0))
+    pos_sum = sum(v for v in signed_vals if v > 0.0)
+    neg_abs_sum = abs(sum(v for v in signed_vals if v < 0.0))
+    profit_factor: float | None = None
+    if neg_abs_sum > 0.0:
+        profit_factor = pos_sum / neg_abs_sum
+    elif pos_sum > 0.0 and calls > 0:
+        profit_factor = 9.99
+    return {
+        "label": label,
+        "calls": calls,
+        "hits": hits,
+        "losses": losses_count,
+        "hit_rate_pct": _round_or_none((hit_rate * 100.0) if hit_rate is not None else None),
+        "loss_rate_pct": _round_or_none((loss_rate * 100.0) if loss_rate is not None else None),
+        "avg_signed_return_pct": _round_or_none((sum(signed_vals) / len(signed_vals)) if signed_vals else None),
+        "median_signed_return_pct": _round_or_none(_median(signed_vals)),
+        "avg_win_return_pct": _round_or_none(avg_win),
+        "avg_loss_return_pct": _round_or_none(avg_loss),
+        "expectancy_pct": _round_or_none(expectancy),
+        "profit_factor": _round_or_none(profit_factor),
+    }
+
+
+def _build_setup_eval_improvement_actions(
+    *,
+    scored_calls: int,
+    min_sample: int,
+    hit_threshold_pct: float,
+    overall: dict[str, Any],
+    by_direction: list[dict[str, Any]],
+    by_family: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    if scored_calls < max(5, int(min_sample) * 3):
+        actions.append(
+            {
+                "priority": "info",
+                "scope": "dataset",
+                "reason": (
+                    f"Backtest sample is still small ({scored_calls} scored calls). "
+                    f"Target at least {max(5, int(min_sample) * 3)} for stable family tuning."
+                ),
+                "recommendation": "Keep current score weights conservative and collect more outcomes before major threshold changes.",
+            }
+        )
+        return actions
+
+    overall_expectancy = _to_float(overall.get("expectancy_pct"))
+    overall_hit = _to_float(overall.get("hit_rate_pct"))
+    if overall_expectancy is not None and overall_expectancy <= 0.0:
+        actions.append(
+            {
+                "priority": "high",
+                "scope": "global",
+                "reason": (
+                    f"Overall expectancy is non-positive ({round(overall_expectancy, 2)}%)."
+                ),
+                "recommendation": (
+                    "Tighten setup-ready criteria: require stronger level confirmation and downgrade stale-context candidates to watch."
+                ),
+            }
+        )
+    if overall_hit is not None and overall_hit < float(hit_threshold_pct):
+        actions.append(
+            {
+                "priority": "high",
+                "scope": "global",
+                "reason": (
+                    f"Overall hit rate ({round(overall_hit, 2)}%) is below target threshold ({round(hit_threshold_pct, 2)}%)."
+                ),
+                "recommendation": (
+                    "Increase entry confirmation requirements (fresh YOLO + candle/level alignment) before labeling a setup as actionable."
+                ),
+            }
+        )
+
+    dir_map = {
+        str(row.get("direction") or "").strip().lower(): row
+        for row in by_direction
+        if isinstance(row, dict)
+    }
+    long_row = dir_map.get("long") or {}
+    short_row = dir_map.get("short") or {}
+    long_calls = int(long_row.get("calls") or 0)
+    short_calls = int(short_row.get("calls") or 0)
+    long_expectancy = _to_float(long_row.get("expectancy_pct"))
+    short_expectancy = _to_float(short_row.get("expectancy_pct"))
+    if long_calls >= int(min_sample) and long_expectancy is not None and long_expectancy < 0.0:
+        actions.append(
+            {
+                "priority": "medium",
+                "scope": "long_setups",
+                "reason": f"Long calls have negative expectancy ({round(long_expectancy, 2)}%) over {long_calls} samples.",
+                "recommendation": "Reduce long setup score bonus until trend/level confirmation improves.",
+            }
+        )
+    if short_calls >= int(min_sample) and short_expectancy is not None and short_expectancy < 0.0:
+        actions.append(
+            {
+                "priority": "medium",
+                "scope": "short_setups",
+                "reason": f"Short calls have negative expectancy ({round(short_expectancy, 2)}%) over {short_calls} samples.",
+                "recommendation": "Reduce short setup score bonus until breakdown confirmation improves.",
+            }
+        )
+
+    candidates = [row for row in by_family if isinstance(row, dict) and int(row.get("calls") or 0) >= int(min_sample)]
+    weak = [
+        row for row in candidates
+        if (
+            (_to_float(row.get("hit_rate_pct")) is not None and float(_to_float(row.get("hit_rate_pct")) or 0.0) < float(hit_threshold_pct))
+            or (_to_float(row.get("expectancy_pct")) is not None and float(_to_float(row.get("expectancy_pct")) or 0.0) < 0.0)
+        )
+    ]
+    weak.sort(
+        key=lambda row: (
+            float(_to_float(row.get("expectancy_pct")) or 0.0),
+            float(_to_float(row.get("hit_rate_pct")) or 0.0),
+            -int(row.get("calls") or 0),
+        )
+    )
+    if weak:
+        top_weak = weak[0]
+        family = str(top_weak.get("setup_family") or "-")
+        direction = str(top_weak.get("call_direction") or "-")
+        actions.append(
+            {
+                "priority": "medium",
+                "scope": "family",
+                "reason": (
+                    f"Weak family detected: {family}:{direction} "
+                    f"(hit {top_weak.get('hit_rate_pct')}%, expectancy {top_weak.get('expectancy_pct')}%, calls {top_weak.get('calls')})."
+                ),
+                "recommendation": (
+                    f"Demote {family}:{direction} by default (or require stronger confirmation) until its backtest edge recovers."
+                ),
+            }
+        )
+
+    strong = [
+        row for row in candidates
+        if (
+            (_to_float(row.get("hit_rate_pct")) is not None and float(_to_float(row.get("hit_rate_pct")) or 0.0) >= float(hit_threshold_pct) + 5.0)
+            and (_to_float(row.get("expectancy_pct")) is not None and float(_to_float(row.get("expectancy_pct")) or 0.0) > 0.0)
+        )
+    ]
+    strong.sort(
+        key=lambda row: (
+            float(_to_float(row.get("expectancy_pct")) or 0.0),
+            float(_to_float(row.get("hit_rate_pct")) or 0.0),
+            int(row.get("calls") or 0),
+        ),
+        reverse=True,
+    )
+    if strong:
+        top_strong = strong[0]
+        family = str(top_strong.get("setup_family") or "-")
+        direction = str(top_strong.get("call_direction") or "-")
+        actions.append(
+            {
+                "priority": "low",
+                "scope": "family",
+                "reason": (
+                    f"Strong family detected: {family}:{direction} "
+                    f"(hit {top_strong.get('hit_rate_pct')}%, expectancy {top_strong.get('expectancy_pct')}%, calls {top_strong.get('calls')})."
+                ),
+                "recommendation": (
+                    f"Use {family}:{direction} as a baseline and compare weaker families against this quality bar."
+                ),
+            }
+        )
+
+    return actions[:5]
+
+
+def _summarize_setup_call_evaluations(
+    conn: sqlite3.Connection,
+    *,
+    window_days: int = SETUP_EVAL_WINDOW_DAYS,
+    min_sample: int = SETUP_EVAL_MIN_SAMPLE,
+) -> tuple[dict[str, Any], dict[tuple[str, str], dict[str, Any]]]:
+    if not table_exists(conn, "setup_call_evaluations"):
+        return {}, {}
+    cutoff_date = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=max(30, int(window_days)))).isoformat()
+    open_calls = int(
+        (
+            conn.execute("SELECT COUNT(*) FROM setup_call_evaluations WHERE status = 'open'").fetchone() or [0]
+        )[0]
+        or 0
+    )
+    scored_rows = [
+        dict(r)
+        for r in conn.execute(
+            """
+            SELECT
+                ticker,
+                asof_date,
+                setup_family,
+                setup_tier,
+                call_direction,
+                validity_days,
+                direction_hit,
+                signed_return_pct
+            FROM setup_call_evaluations
+            WHERE status = 'scored'
+              AND asof_date >= ?
+            ORDER BY asof_date DESC, id DESC
+            """,
+            (cutoff_date,),
+        ).fetchall()
+    ]
+
+    overall = _setup_eval_bucket("overall", scored_rows)
+    validity_vals = [int(row.get("validity_days") or 0) for row in scored_rows if int(row.get("validity_days") or 0) > 0]
+    overall["avg_validity_days"] = _round_or_none((sum(validity_vals) / len(validity_vals)) if validity_vals else None)
+
+    by_direction: list[dict[str, Any]] = []
+    for direction in ("long", "short"):
+        group = [row for row in scored_rows if str(row.get("call_direction") or "").strip().lower() == direction]
+        bucket = _setup_eval_bucket(direction, group)
+        bucket["direction"] = direction
+        by_direction.append(bucket)
+
+    by_validity: list[dict[str, Any]] = []
+    validity_groups: dict[int, list[dict[str, Any]]] = {}
+    for row in scored_rows:
+        validity = int(row.get("validity_days") or 0)
+        if validity <= 0:
+            continue
+        validity_groups.setdefault(validity, []).append(row)
+    for validity, group in sorted(validity_groups.items(), key=lambda kv: kv[0]):
+        bucket = _setup_eval_bucket(f"{validity}d", group)
+        bucket["validity_days"] = int(validity)
+        by_validity.append(bucket)
+
+    by_tier: list[dict[str, Any]] = []
+    for tier in ("A", "B", "C", "D"):
+        group = [row for row in scored_rows if str(row.get("setup_tier") or "").strip().upper() == tier]
+        bucket = _setup_eval_bucket(tier, group)
+        bucket["setup_tier"] = tier
+        by_tier.append(bucket)
+
+    family_map: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in scored_rows:
+        family = str(row.get("setup_family") or "").strip().lower()
+        direction = str(row.get("call_direction") or "").strip().lower()
+        if not family or direction not in {"long", "short"}:
+            continue
+        family_map.setdefault((family, direction), []).append(row)
+
+    by_family: list[dict[str, Any]] = []
+    reliability_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for key, group in family_map.items():
+        family, direction = key
+        bucket = _setup_eval_bucket(f"{family}:{direction}", group)
+        bucket["setup_family"] = family
+        bucket["call_direction"] = direction
+        by_family.append(bucket)
+        if int(bucket.get("calls") or 0) >= max(1, int(min_sample)):
+            reliability_lookup[key] = {
+                "hit_rate_pct": bucket.get("hit_rate_pct"),
+                "calls": int(bucket.get("calls") or 0),
+                "avg_signed_return_pct": bucket.get("avg_signed_return_pct"),
+            }
+    by_family.sort(
+        key=lambda item: (
+            int(item.get("calls") or 0),
+            float(item.get("hit_rate_pct") or 0.0),
+            float(item.get("avg_signed_return_pct") or 0.0),
+        ),
+        reverse=True,
+    )
+
+    top_long = [row for row in by_family if str(row.get("call_direction") or "").lower() == "long"][:8]
+    top_short = [row for row in by_family if str(row.get("call_direction") or "").lower() == "short"][:8]
+    weak_families = sorted(
+        [
+            row for row in by_family
+            if int(row.get("calls") or 0) >= int(max(1, min_sample))
+        ],
+        key=lambda row: (
+            float(_to_float(row.get("expectancy_pct")) or 0.0),
+            float(_to_float(row.get("hit_rate_pct")) or 0.0),
+            -int(row.get("calls") or 0),
+        ),
+    )[:8]
+
+    newest_scored = next(
+        (str(row.get("asof_date") or "").strip() for row in scored_rows if str(row.get("asof_date") or "").strip()),
+        None,
+    )
+    summary = {
+        "enabled": True,
+        "window_days": int(max(30, int(window_days))),
+        "min_sample": int(max(1, int(min_sample))),
+        "hit_threshold_pct": float(SETUP_EVAL_HIT_THRESHOLD_PCT),
+        "scored_calls": int(overall.get("calls") or 0),
+        "open_calls": int(open_calls),
+        "latest_scored_asof": newest_scored,
+        "overall": overall,
+        "by_direction": by_direction,
+        "by_validity_days": by_validity,
+        "by_tier": by_tier,
+        "by_family": by_family[:12],
+        "top_long_families": top_long,
+        "top_short_families": top_short,
+        "weak_families": weak_families,
+    }
+    summary["improvement_actions"] = _build_setup_eval_improvement_actions(
+        scored_calls=int(summary.get("scored_calls") or 0),
+        min_sample=int(summary.get("min_sample") or 1),
+        hit_threshold_pct=float(summary.get("hit_threshold_pct") or 0.0),
+        overall=overall,
+        by_direction=by_direction,
+        by_family=by_family,
+    )
+    return summary, reliability_lookup
+
+
+def _setup_eval_score_adjustment(
+    stat: dict[str, Any] | None,
+    *,
+    min_sample: int,
+    hit_threshold_pct: float,
+) -> float:
+    if not stat:
+        return 0.0
+    calls = int(stat.get("calls") or 0)
+    if calls < max(1, int(min_sample)):
+        return 0.0
+    hit_rate = float(stat.get("hit_rate_pct") or 0.0)
+    avg_signed_return = float(stat.get("avg_signed_return_pct") or 0.0)
+
+    # Confidence grows with sample size but is bounded so old data cannot dominate.
+    sample_scale = _clamp(calls / float(max(1, int(min_sample) * 4)), 0.35, 1.0)
+    hit_component = _clamp((hit_rate - float(hit_threshold_pct)) * 0.28, -8.0, 8.0)
+    return_component = _clamp(avg_signed_return * 1.6, -6.0, 6.0)
+    adjustment = (hit_component + return_component) * sample_scale
+    return round(_clamp(adjustment, -10.0, 10.0), 1)
+
+
+def _apply_setup_eval_fields(
+    setup_rows: list[dict[str, Any]],
+    *,
+    reliability_lookup: dict[tuple[str, str], dict[str, Any]],
+    min_sample: int,
+    hit_threshold_pct: float,
+) -> dict[str, Any]:
+    adjusted_calls = 0
+    adjustments: list[float] = []
+    for row in setup_rows or []:
+        if not isinstance(row, dict):
+            continue
+        call_direction = _setup_call_direction(row)
+        validity_days = _setup_validity_days(row)
+        family = str(row.get("setup_family") or "").strip().lower()
+        stat = reliability_lookup.get((family, call_direction))
+        row["call_direction"] = call_direction
+        row["validity_days"] = int(validity_days)
+        row["validity_label"] = f"{int(validity_days)} trading day{'s' if int(validity_days) != 1 else ''}"
+        row["historical_reliability_pct"] = stat.get("hit_rate_pct") if stat else None
+        row["historical_sample_size"] = int(stat.get("calls") or 0) if stat else 0
+        row["historical_avg_signed_return_pct"] = stat.get("avg_signed_return_pct") if stat else None
+        if stat:
+            row["reliability_label"] = (
+                f"{_round_or_none(stat.get('hit_rate_pct'))}% hit rate "
+                f"({int(stat.get('calls') or 0)} calls)"
+            )
+        else:
+            row["reliability_label"] = "insufficient history"
+        raw_score = float(row.get("score") or 0.0)
+        adjustment = _setup_eval_score_adjustment(
+            stat,
+            min_sample=min_sample,
+            hit_threshold_pct=hit_threshold_pct,
+        )
+        adjusted_score = round(_clamp(raw_score + adjustment, 0.0, 100.0), 1)
+        row["setup_score_raw"] = round(raw_score, 1)
+        row["setup_score_adjustment"] = adjustment
+        row["setup_score_adjusted"] = adjusted_score
+        if adjustment >= 2.0:
+            row["reliability_signal"] = "tailwind"
+        elif adjustment <= -2.0:
+            row["reliability_signal"] = "headwind"
+        else:
+            row["reliability_signal"] = "neutral"
+        if adjustment != 0.0:
+            adjusted_calls += 1
+            adjustments.append(adjustment)
+            row["score"] = adjusted_score
+            row["confluence_score"] = adjusted_score
+            row["setup_tier"] = _setup_tier(adjusted_score)
+    return {
+        "adjusted_calls": int(adjusted_calls),
+        "avg_adjustment": _round_or_none((sum(adjustments) / len(adjustments)) if adjustments else 0.0),
+        "max_positive_adjustment": _round_or_none(max(adjustments) if adjustments else 0.0),
+        "max_negative_adjustment": _round_or_none(min(adjustments) if adjustments else 0.0),
+    }
+
+
+def _refresh_setup_eval_surfaces(signals: dict[str, Any]) -> None:
+    setup_rows = (signals.get("setup_quality_top") or []) if isinstance(signals, dict) else []
+    by_ticker = {
+        str(row.get("ticker") or "").upper(): row
+        for row in setup_rows
+        if isinstance(row, dict) and row.get("ticker")
+    }
+    eval_keys = (
+        "call_direction",
+        "validity_days",
+        "validity_label",
+        "historical_reliability_pct",
+        "historical_sample_size",
+        "historical_avg_signed_return_pct",
+        "reliability_label",
+        "reliability_signal",
+        "setup_score_raw",
+        "setup_score_adjustment",
+        "setup_score_adjusted",
+        "score",
+        "confluence_score",
+        "setup_tier",
+        "setup_family",
+        "signal_bias",
+        "actionability",
+        "observation",
+        "action",
+        "risk_note",
+        "technical_read",
+        "narrative_source",
+    )
+    watchlist = signals.get("watchlist_candidates")
+    if isinstance(watchlist, list):
+        for row in watchlist:
+            if not isinstance(row, dict):
+                continue
+            ticker = str(row.get("ticker") or "").upper()
+            src = by_ticker.get(ticker)
+            if not src:
+                continue
+            for key in eval_keys:
+                row[key] = src.get(key)
+    setup_lookup = signals.get("setup_quality_lookup")
+    if isinstance(setup_lookup, dict):
+        for ticker, payload in list(setup_lookup.items()):
+            if not isinstance(payload, dict):
+                continue
+            src = by_ticker.get(str(ticker or "").upper())
+            if not src:
+                continue
+            for key in eval_keys:
+                payload[key] = src.get(key)
+
+
 def _setup_cluster_rows(rows: list[dict[str, Any]], *, score_window: float = 3.0, scan_limit: int = 8) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -2659,6 +3391,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "setup_quality_top": [],
         "setup_quality_lookup": {},
         "watchlist_candidates": [],
+        "setup_evaluation": {},
         "earnings_catalysts": {},
         "tonight_key_changes": [],
     }
@@ -3624,6 +4357,59 @@ def fetch_report_payload(
 
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
+        if SETUP_EVAL_ENABLED:
+            eval_summary: dict[str, Any] = {"enabled": True, "scored_calls": 0, "open_calls": 0}
+            try:
+                ensure_setup_call_eval_schema(conn)
+                signals_ref = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}
+                setup_rows_ref = signals_ref.get("setup_quality_top") if isinstance(signals_ref.get("setup_quality_top"), list) else []
+                asof_for_eval = str((payload.get("latest_data") or {}).get("price_date") or "").strip()
+                inserted_calls = 0
+                if asof_for_eval and setup_rows_ref:
+                    inserted_calls = _persist_setup_call_candidates(
+                        conn,
+                        generated_ts=str(payload.get("generated_ts") or ""),
+                        report_kind=report_kind_norm,
+                        asof_date=asof_for_eval,
+                        setup_rows=setup_rows_ref,
+                    )
+                scored_this_run = _score_open_setup_call_outcomes(conn)
+                conn.commit()
+                summary, reliability_lookup = _summarize_setup_call_evaluations(
+                    conn,
+                    window_days=SETUP_EVAL_WINDOW_DAYS,
+                    min_sample=SETUP_EVAL_MIN_SAMPLE,
+                )
+                calibration = _apply_setup_eval_fields(
+                    setup_rows_ref,
+                    reliability_lookup=reliability_lookup,
+                    min_sample=SETUP_EVAL_MIN_SAMPLE,
+                    hit_threshold_pct=SETUP_EVAL_HIT_THRESHOLD_PCT,
+                )
+                setup_rows_ref.sort(
+                    key=lambda r: (
+                        float(r.get("score") or 0.0),
+                        float(r.get("confirmation_count") or 0.0),
+                        -float(r.get("contradiction_count") or 0.0),
+                        float(r.get("pct_change") or 0.0),
+                    ),
+                    reverse=True,
+                )
+                _refresh_setup_eval_surfaces(signals_ref)
+                eval_summary = summary or {"enabled": True}
+                eval_summary["tracked_this_run"] = int(min(len(setup_rows_ref), SETUP_EVAL_TRACK_LIMIT))
+                eval_summary["inserted_calls"] = int(inserted_calls)
+                eval_summary["scored_this_run"] = int(scored_this_run)
+                eval_summary["calibration"] = calibration
+            except Exception:
+                conn.rollback()
+                eval_summary = {
+                    "enabled": True,
+                    "error": "setup_evaluation_failed",
+                }
+            payload["signals"]["setup_evaluation"] = eval_summary
+        else:
+            payload["signals"]["setup_evaluation"] = {"enabled": False, "reason": "disabled_by_env"}
         market_date_raw = str((payload.get("market_session") or {}).get("market_date") or "").strip()
         market_date_obj: dt.date | None = None
         try:
@@ -3964,13 +4750,82 @@ def to_markdown(report: dict[str, Any]) -> str:
     if setup_rows:
         lines.append("")
         lines.append("## Confluence Score (Top Candidates)")
-        lines.append("| ticker | score | bias | observation | reasonable_action | risk_note |")
-        lines.append("|---|---:|---|---|---|---|")
+        lines.append("| ticker | score | tier | bias | reliability_signal | validity | historical_reliability | observation | reasonable_action | risk_note |")
+        lines.append("|---|---:|---|---|---|---|---|---|---|---|")
         for r in setup_rows:
             lines.append(
-                f"| {r.get('ticker')} | {r.get('score')} | {r.get('signal_bias') or '-'} | "
+                f"| {r.get('ticker')} | {r.get('score')} | {r.get('setup_tier') or '-'} | "
+                f"{r.get('signal_bias') or '-'} | {r.get('reliability_signal') or '-'} | "
+                f"{r.get('validity_label') or '-'} | {r.get('reliability_label') or '-'} | "
                 f"{r.get('observation') or '-'} | {r.get('action') or '-'} | {r.get('risk_note') or '-'} |"
             )
+
+    setup_eval = signals.get("setup_evaluation", {})
+    if isinstance(setup_eval, dict) and setup_eval.get("enabled"):
+        lines.append("")
+        lines.append("## Setup Evaluation Backtest")
+        lines.append(_md_line("window_days", setup_eval.get("window_days")))
+        lines.append(_md_line("min_sample", setup_eval.get("min_sample")))
+        lines.append(_md_line("hit_threshold_pct", setup_eval.get("hit_threshold_pct")))
+        lines.append(_md_line("tracked_this_run", setup_eval.get("tracked_this_run")))
+        lines.append(_md_line("inserted_calls", setup_eval.get("inserted_calls")))
+        lines.append(_md_line("scored_this_run", setup_eval.get("scored_this_run")))
+        lines.append(_md_line("scored_calls", setup_eval.get("scored_calls")))
+        lines.append(_md_line("open_calls", setup_eval.get("open_calls")))
+        lines.append(_md_line("latest_scored_asof", setup_eval.get("latest_scored_asof")))
+        calibration = setup_eval.get("calibration", {}) if isinstance(setup_eval.get("calibration"), dict) else {}
+        if calibration:
+            lines.append(_md_line("calibration_adjusted_calls", calibration.get("adjusted_calls")))
+            lines.append(_md_line("calibration_avg_adjustment", calibration.get("avg_adjustment")))
+            lines.append(_md_line("calibration_max_positive_adjustment", calibration.get("max_positive_adjustment")))
+            lines.append(_md_line("calibration_max_negative_adjustment", calibration.get("max_negative_adjustment")))
+        overall_eval = setup_eval.get("overall", {}) if isinstance(setup_eval.get("overall"), dict) else {}
+        if overall_eval:
+            lines.append(_md_line("overall_hit_rate_pct", overall_eval.get("hit_rate_pct")))
+            lines.append(_md_line("overall_avg_signed_return_pct", overall_eval.get("avg_signed_return_pct")))
+            lines.append(_md_line("overall_median_signed_return_pct", overall_eval.get("median_signed_return_pct")))
+            lines.append(_md_line("overall_expectancy_pct", overall_eval.get("expectancy_pct")))
+            lines.append(_md_line("overall_profit_factor", overall_eval.get("profit_factor")))
+            lines.append(_md_line("overall_avg_validity_days", overall_eval.get("avg_validity_days")))
+        by_dir = setup_eval.get("by_direction", [])
+        if isinstance(by_dir, list) and by_dir:
+            lines.append("")
+            lines.append("| direction | calls | hit_rate_pct | avg_signed_return_pct | expectancy_pct | profit_factor |")
+            lines.append("|---|---:|---:|---:|---:|---:|")
+            for row in by_dir:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"| {row.get('direction') or row.get('label') or '-'} | {row.get('calls')} | "
+                    f"{row.get('hit_rate_pct')} | {row.get('avg_signed_return_pct')} | {row.get('expectancy_pct')} | {row.get('profit_factor')} |"
+                )
+        by_validity = setup_eval.get("by_validity_days", [])
+        if isinstance(by_validity, list) and by_validity:
+            lines.append("")
+            lines.append("| validity_days | calls | hit_rate_pct | avg_signed_return_pct | expectancy_pct |")
+            lines.append("|---:|---:|---:|---:|---:|")
+            for row in by_validity:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"| {row.get('validity_days') or '-'} | {row.get('calls')} | "
+                    f"{row.get('hit_rate_pct')} | {row.get('avg_signed_return_pct')} | {row.get('expectancy_pct')} |"
+                )
+        improvement_actions = setup_eval.get("improvement_actions", [])
+        if isinstance(improvement_actions, list) and improvement_actions:
+            lines.append("")
+            lines.append("### Setup Improvement Actions")
+            for action in improvement_actions:
+                if not isinstance(action, dict):
+                    continue
+                lines.append(
+                    f"- [{action.get('priority', 'info')}] "
+                    f"{action.get('scope', 'global')}: "
+                    f"{action.get('reason', '-')}"
+                )
+                recommendation = str(action.get("recommendation") or "").strip()
+                if recommendation:
+                    lines.append(f"  - recommendation: {recommendation}")
 
     sector_rows = signals.get("sector_heatmap", [])[:12]
     if sector_rows:
