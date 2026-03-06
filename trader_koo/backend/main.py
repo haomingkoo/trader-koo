@@ -2107,6 +2107,7 @@ def _build_chart_commentary_payload(
             "risk_note",
             "observation",
             "technical_read",
+            "yolo_bias",
             "yolo_pattern",
             "yolo_confidence",
             "yolo_age_days",
@@ -2118,6 +2119,8 @@ def _build_chart_commentary_payload(
             "yolo_signal_role",
             "yolo_role",
             "yolo_recency",
+            "yolo_direction_conflict",
+            "yolo_conflict_strength",
             "yolo_confirmation_trend",
             "yolo_lifecycle_state",
             "yolo_latest_close_in_pattern",
@@ -2204,8 +2207,11 @@ def _build_chart_commentary_payload(
             "structure_state": row.get("structure_state"),
             "candle_bias": row.get("candle_bias"),
             "yolo_pattern": row.get("yolo_pattern"),
+            "yolo_bias": row.get("yolo_bias"),
             "yolo_recency": row.get("yolo_recency"),
             "yolo_age_days": row.get("yolo_age_days"),
+            "yolo_direction_conflict": row.get("yolo_direction_conflict"),
+            "yolo_conflict_strength": row.get("yolo_conflict_strength"),
         },
     }
     return {
@@ -2226,6 +2232,9 @@ def _build_chart_commentary_payload(
         "primary_yolo_confirmation_trend": yolo_confirmation_trend,
         "primary_yolo_lifecycle_state": yolo_lifecycle_state,
         "primary_yolo_latest_close_in_pattern": bool(yolo_latest_close_in_pattern) if yolo_latest_close_in_pattern is not None else None,
+        "yolo_bias": row.get("yolo_bias"),
+        "yolo_direction_conflict": bool(row.get("yolo_direction_conflict")),
+        "yolo_conflict_strength": row.get("yolo_conflict_strength"),
         "commentary_context": {
             "ticker": ticker,
             "asof": asof_date,

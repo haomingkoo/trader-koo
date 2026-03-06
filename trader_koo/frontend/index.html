@@ -3011,6 +3011,9 @@
           : `${normalizedYoloLabel} YOLO`;
         badges.push(`<span class="earnings-badge">${escHtml(yoloLabel.toUpperCase())}</span>`);
       }
+      if (data.yolo_direction_conflict) {
+        badges.push(`<span class="earnings-badge ${earningsToneClass("high")}">YOLO CONFLICT</span>`);
+      }
       $("chartCommentaryBadges").innerHTML = badges.join("");
       $("chartCommentaryStatus").textContent = data.asof ? `As of ${data.asof}` : "Load a ticker to generate commentary.";
       $("chartObservation").innerHTML = data.observation

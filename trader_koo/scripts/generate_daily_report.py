@@ -2105,6 +2105,8 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
 
     yolo_age_factor = _yolo_age_factor(yolo_age_days, yolo_timeframe)
     yolo_recency = _yolo_recency_label(yolo_age_days, yolo_timeframe)
+    yolo_direction_conflict = False
+    yolo_conflict_strength = "none"
     fresh_bear_gap = recent_gap_state == "bear_gap" and isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2
     fresh_bull_gap = recent_gap_state == "bull_gap" and isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2
     below_short_mas = bool(
@@ -2358,6 +2360,22 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         bias = "bearish"
     else:
         bias = "neutral"
+    score_margin = abs(bull_score - bear_score)
+    if bias in {"bullish", "bearish"} and yolo_bias in {"bullish", "bearish"} and bias != yolo_bias:
+        yolo_direction_conflict = True
+        if yolo_recency == "fresh":
+            yolo_conflict_strength = "fresh"
+            # Fresh opposite YOLO should neutralize directional claims unless the edge is very large.
+            if score_margin < 12.0:
+                bias = "neutral"
+        elif yolo_recency == "recent":
+            yolo_conflict_strength = "recent"
+            if score_margin < 8.0:
+                bias = "neutral"
+        elif yolo_recency == "aging":
+            yolo_conflict_strength = "aging"
+        elif yolo_recency == "stale":
+            yolo_conflict_strength = "stale"
 
     family = "neutral_watch"
     confirmations = 0
@@ -2402,13 +2420,18 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         contradictions = max(contradictions_bull, contradictions_bear)
         score = 25.0 + max(bull_score, bear_score) - abs(bull_score - bear_score)
 
-    if bias in {"bullish", "bearish"} and yolo_bias in {"bullish", "bearish"} and bias != yolo_bias:
-        if yolo_age_factor >= 0.5:
-            score -= 8.0
+    if yolo_direction_conflict:
+        if yolo_conflict_strength == "fresh":
+            score -= 10.0
+            contradictions += 2
+        elif yolo_conflict_strength == "recent":
+            score -= 7.0
             contradictions += 1
-        elif yolo_age_factor >= 0.2:
+        elif yolo_conflict_strength == "aging":
             score -= 4.0
             contradictions += 1
+        elif yolo_conflict_strength == "stale":
+            score -= 2.0
     if yolo_recency == "stale" and yolo_bias in {"bullish", "bearish"}:
         score -= 3.0
     if (
@@ -2444,6 +2467,16 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     else:
         tier = "D"
 
+    if yolo_direction_conflict:
+        if bias == "bullish" and family in {"bullish_reversal", "bullish_continuation"}:
+            family = "bullish_watch"
+        elif bias == "bearish" and family in {"bearish_reversal", "bearish_continuation"}:
+            family = "bearish_watch"
+        if yolo_conflict_strength == "fresh" and tier in {"A", "B"}:
+            tier = "C"
+        elif yolo_conflict_strength == "recent" and tier == "A":
+            tier = "B"
+
     return {
         "signal_bias": bias,
         "setup_family": family,
@@ -2458,6 +2491,10 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         "bear_score": round(bear_score, 1),
         "yolo_age_factor": round(yolo_age_factor, 2) if yolo_age_factor else 0.0,
         "yolo_recency": yolo_recency,
+        "yolo_bias": yolo_bias or "neutral",
+        "yolo_direction_conflict": yolo_direction_conflict,
+        "yolo_conflict_strength": yolo_conflict_strength,
+        "score_margin": round(score_margin, 1),
     }
 
 
@@ -2483,6 +2520,11 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     pct_vs_ma20 = row.get("pct_vs_ma20")
     pct_change = row.get("pct_change")
     pattern = str(row.get("yolo_pattern") or "").strip()
+    yolo_bias = str(row.get("yolo_bias") or _yolo_pattern_bias(pattern) or "neutral")
+    yolo_direction_conflict = bool(row.get("yolo_direction_conflict"))
+    if not yolo_direction_conflict and bias in {"bullish", "bearish"} and yolo_bias in {"bullish", "bearish"}:
+        yolo_direction_conflict = yolo_bias != bias
+    yolo_conflict_strength = str(row.get("yolo_conflict_strength") or "none").strip().lower()
     yolo_age_days = row.get("yolo_age_days")
     yolo_timeframe = str(row.get("yolo_timeframe") or "daily")
     yolo_recency = str(row.get("yolo_recency") or _yolo_recency_label(yolo_age_days, yolo_timeframe))
@@ -2624,6 +2666,12 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
             observation_parts.append(f"stale YOLO context: {pattern}")
     else:
         observation_parts.append("no decisive YOLO")
+    if yolo_direction_conflict and pattern:
+        conflict_prefix = (
+            "fresh" if yolo_conflict_strength == "fresh"
+            else ("recent" if yolo_conflict_strength == "recent" else "older")
+        )
+        observation_parts.append(f"{conflict_prefix} YOLO disagrees with this direction ({yolo_bias} {pattern})")
     if isinstance(yolo_snapshots_seen, int) and yolo_snapshots_seen > 1:
         if isinstance(yolo_current_streak, int) and yolo_current_streak > 1:
             observation_parts.append(f"YOLO has persisted {yolo_current_streak} snapshots")
@@ -2755,6 +2803,15 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
     elif aging_yolo and pattern and actionability == "higher-probability":
         actionability = "conditional"
         action = "Pattern context is older. Keep it on watch and require fresh confirmation from current price action."
+    if yolo_direction_conflict and pattern:
+        if yolo_conflict_strength in {"fresh", "recent"}:
+            actionability = "wait"
+        elif actionability == "higher-probability":
+            actionability = "conditional"
+        action = (
+            f"Directional conflict: latest {yolo_bias} YOLO context disagrees with the current {bias} read. "
+            "Treat this as watch-only until candles and levels resolve in one direction."
+        )
 
     risk_notes: list[str] = []
     if stretch == "extended_up":
@@ -2771,6 +2828,11 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         risk_notes.append("stale YOLO context")
     elif aging_yolo and pattern:
         risk_notes.append("older YOLO context")
+    if yolo_direction_conflict:
+        if yolo_conflict_strength in {"fresh", "recent"}:
+            risk_notes.append("fresh opposite YOLO signal")
+        else:
+            risk_notes.append("YOLO direction conflict")
     if ma_major_signal == "death_cross":
         risk_notes.append("death cross regime")
     elif ma_signal == "bearish_20_50_cross":
@@ -2790,6 +2852,8 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         level_bits.append(f"resistance {resistance_level}")
     if isinstance(yolo_age_days, (int, float)) and pattern:
         level_bits.append(f"YOLO age {int(float(yolo_age_days))}d")
+    if yolo_direction_conflict and yolo_bias in {"bullish", "bearish"} and pattern:
+        level_bits.append(f"YOLO conflict ({yolo_bias})")
     if isinstance(yolo_snapshots_seen, int) and yolo_snapshots_seen > 0 and yolo_first_seen_asof:
         if (
             isinstance(yolo_age_days, (int, float))
@@ -2831,6 +2895,8 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
         "actionability": actionability,
         "action": action,
         "risk_note": ", ".join(risk_notes[:3]) if risk_notes else "none",
+        "yolo_direction_conflict": yolo_direction_conflict,
+        "yolo_conflict_strength": yolo_conflict_strength,
         "technical_read": (
             f"{family_short_label} | {bias_short_label} | {trend_short_label} | "
             f"{location_short} | "
@@ -4651,9 +4717,13 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                             "candle_bias",
                             "candle_confidence",
                             "yolo_pattern",
+                            "yolo_bias",
                             "yolo_confidence",
                             "yolo_age_days",
                             "yolo_timeframe",
+                            "yolo_recency",
+                            "yolo_direction_conflict",
+                            "yolo_conflict_strength",
                             "trend_state",
                             "level_context",
                             "support_level",
