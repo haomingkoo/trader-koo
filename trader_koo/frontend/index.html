@@ -1543,7 +1543,7 @@
     <div class="tabs">
       <button id="tabGuideBtn" class="tab-btn active">Guide</button>
       <button id="tabReportBtn" class="tab-btn">Daily Report</button>
-      <button id="tabRegimeBtn" class="tab-btn">Regime</button>
+      <button id="tabRegimeBtn" class="tab-btn">VIX Analysis</button>
       <button id="tabEarningsBtn" class="tab-btn">Earnings Calendar</button>
       <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
       <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
@@ -1892,14 +1892,14 @@
 
     <section id="tabRegime" class="panel hidden">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
-        <h2 style="margin:0; font-size:1.1rem;">Regime</h2>
+        <h2 style="margin:0; font-size:1.1rem;">VIX Analysis</h2>
         <span id="regimeStatus" style="font-size:0.8rem; color:var(--muted);"></span>
       </div>
       <div class="report-inline-note" style="margin-bottom:10px;">
-        Regime is context only, not a standalone buy/sell signal. Use it to size risk and filter conviction.
+        VIX analysis is context only, not a standalone buy/sell signal. Use it to size risk and filter conviction.
       </div>
       <div id="regimeSummaryCards" class="cards" style="margin-bottom:12px;"></div>
-      <div id="regimeSummaryText" class="report-inline-note" style="margin-bottom:12px;">Load Daily Report to view regime context.</div>
+      <div id="regimeSummaryText" class="report-inline-note" style="margin-bottom:12px;">Load Daily Report to view VIX analysis context.</div>
       <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">Market Health Drivers</div>
         <div id="regimeHealthDrivers" class="report-inline-note">Load Daily Report to view health drivers.</div>
@@ -1991,7 +1991,7 @@
           </div>
           <div class="guide-card">
             <div class="guide-k">Daily Report</div>
-            <div class="guide-v">Nightly summary of what changed, strongest setups, market regime, and YOLO deltas.</div>
+            <div class="guide-v">Nightly summary of what changed, strongest setups, VIX analysis context, and YOLO deltas.</div>
           </div>
           <div class="guide-card">
             <div class="guide-k">Chart + Levels</div>
@@ -2692,6 +2692,118 @@
       }
     }
 
+    function deriveVixAnalysisFallback(signals) {
+      const safeSignals = signals && typeof signals === "object" ? signals : {};
+      const volCtx = safeSignals.volatility_context && typeof safeSignals.volatility_context === "object"
+        ? safeSignals.volatility_context
+        : {};
+      const breadth = safeSignals.market_breadth && typeof safeSignals.market_breadth === "object"
+        ? safeSignals.market_breadth
+        : {};
+      if (!Object.keys(volCtx).length && !Object.keys(breadth).length) return {};
+
+      const vixPctileRaw = Number(volCtx.vix_percentile_1y);
+      const vixPctile = Number.isFinite(vixPctileRaw) ? vixPctileRaw : null;
+      const vixCloseRaw = Number(volCtx.vix_close);
+      const vixClose = Number.isFinite(vixCloseRaw) ? vixCloseRaw : null;
+      const pctAdvRaw = Number(breadth.pct_advancing);
+      const pctAdv = Number.isFinite(pctAdvRaw) ? pctAdvRaw : null;
+      const advancersRaw = Number(breadth.advancers);
+      const advancers = Number.isFinite(advancersRaw) ? advancersRaw : null;
+      const declinersRaw = Number(breadth.decliners);
+      const decliners = Number.isFinite(declinersRaw) ? declinersRaw : null;
+
+      let riskState = "mixed_regime";
+      if (vixPctile != null) {
+        if (vixPctile >= 85) riskState = "high_risk";
+        else if (vixPctile >= 65) riskState = "elevated_risk";
+        else if (vixPctile <= 35) riskState = "calm_risk";
+      }
+      const participationBias = pctAdv == null
+        ? "unknown"
+        : (pctAdv >= 55 ? "risk_on" : (pctAdv <= 45 ? "risk_off" : "mixed"));
+
+      let healthScore = 50;
+      if (pctAdv != null) healthScore += (pctAdv - 50) * 0.8;
+      if (vixPctile != null) healthScore -= (vixPctile - 50) * 0.5;
+      healthScore = Math.max(0, Math.min(100, healthScore));
+      const healthState = healthScore >= 60
+        ? "constructive"
+        : (healthScore <= 40 ? "defensive" : "mixed");
+
+      const drivers = [];
+      if (vixClose != null) drivers.push(`VIX close ${fmt(vixClose, 2)}`);
+      if (vixPctile != null) drivers.push(`VIX percentile ${fmt(vixPctile, 1)}%`);
+      if (pctAdv != null) drivers.push(`Breadth advancers ${fmt(pctAdv, 2)}%`);
+      if (advancers != null && decliners != null) drivers.push(`Breadth ${fmt(advancers, 0)} up / ${fmt(decliners, 0)} down`);
+
+      const warnings = [];
+      if (riskState === "high_risk") warnings.push("High volatility regime");
+      if (riskState === "elevated_risk") warnings.push("Elevated volatility regime");
+      if (participationBias === "risk_off") warnings.push("Risk-off participation bias");
+
+      const summaryParts = [];
+      if (vixClose != null) summaryParts.push(`VIX ${fmt(vixClose, 2)}`);
+      if (vixPctile != null) summaryParts.push(`${fmt(vixPctile, 1)} percentile`);
+      if (pctAdv != null) summaryParts.push(`${fmt(pctAdv, 2)}% advancers`);
+      const summaryTail = summaryParts.length
+        ? `Derived VIX analysis fallback: ${summaryParts.join(" • ")}.`
+        : "Derived VIX analysis fallback from volatility context.";
+
+      const participationRows = [];
+      if (advancers != null || decliners != null || pctAdv != null) {
+        const upDays = advancers != null ? advancers : null;
+        const downDays = decliners != null ? decliners : null;
+        const upDownRatio = (upDays != null && downDays != null && downDays > 0)
+          ? upDays / downDays
+          : null;
+        participationRows.push({
+          symbol: "Universe",
+          window_days: 1,
+          up_days: upDays,
+          down_days: downDays,
+          up_volume_share_pct: pctAdv,
+          down_volume_share_pct: pctAdv != null ? Math.max(0, 100 - pctAdv) : null,
+          up_down_volume_ratio: upDownRatio,
+          heavy_up_days: null,
+          heavy_down_days: null,
+          bias: participationBias,
+        });
+      }
+
+      return {
+        source: "volatility_context_fallback",
+        asof_date: "Report snapshot",
+        summary: summaryTail,
+        overall: { participation_bias: participationBias },
+        health: {
+          state: healthState,
+          score: healthScore,
+          drivers,
+          warnings,
+        },
+        vix: {
+          ticker: "^VIX",
+          close: vixClose,
+          change_pct_1d: null,
+          ma20: null,
+          ma50: null,
+          ma100: null,
+          ma_state: "",
+          ma_cross_state: "",
+          compression_state: "",
+          breakout_state: "",
+          risk_state: riskState,
+          term_structure_ratio: null,
+          term_structure_state: "unavailable",
+          bb_width_pctile_lookback: vixPctile,
+        },
+        timeframes: [],
+        levels: [],
+        participation: participationRows,
+      };
+    }
+
     function renderRegimeContext(regime) {
       const makeCard = (label, val) =>
         `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
@@ -2702,8 +2814,9 @@
       const participation = Array.isArray(safeRegime.participation) ? safeRegime.participation : [];
       const timeframes = Array.isArray(safeRegime.timeframes) ? safeRegime.timeframes : [];
       const levels = Array.isArray(safeRegime.levels) ? safeRegime.levels : [];
-      const summary = safeRegime.summary || "Regime context is unavailable for this report snapshot.";
+      const summary = safeRegime.summary || "VIX analysis context is unavailable for this report snapshot.";
       const asof = safeRegime.asof_date || "—";
+      const source = String(safeRegime.source || "regime_context");
       const riskState = titleCaseWords(String(vix.risk_state || "unknown").replaceAll("_", " "));
       const participationBias = titleCaseWords(String(overall.participation_bias || "unknown").replaceAll("_", " "));
       const healthState = titleCaseWords(String(health.state || "unknown").replaceAll("_", " "));
@@ -2711,10 +2824,11 @@
       const healthDrivers = Array.isArray(health.drivers) ? health.drivers.filter(Boolean).map(String) : [];
       const healthWarnings = Array.isArray(health.warnings) ? health.warnings.filter(Boolean).map(String) : [];
 
-      $("regimeStatus").textContent = `As of ${asof}`;
+      const sourceSuffix = source === "regime_context" ? "" : " · fallback";
+      $("regimeStatus").textContent = `As of ${asof}${sourceSuffix}`;
       $("regimeSummaryText").textContent = String(summary);
       $("regimeSummaryCards").innerHTML = [
-        makeCard("Market Health", healthScore),
+        makeCard("VIX Analysis Health", healthScore),
         makeCard("Health State", healthState),
         makeCard("VIX Risk State", riskState),
         makeCard("Participation Bias", participationBias),
@@ -4545,7 +4659,13 @@
         ].join("");
 
         const keyChanges = signals.tonight_key_changes || [];
-        renderRegimeContext(signals.regime_context || {});
+        const reportRegimeContext = signals.regime_context && typeof signals.regime_context === "object"
+          ? signals.regime_context
+          : {};
+        const vixAnalysisContext = Object.keys(reportRegimeContext).length
+          ? reportRegimeContext
+          : deriveVixAnalysisFallback(signals);
+        renderRegimeContext(vixAnalysisContext);
         $("reportKeyChangesList").innerHTML = keyChanges.length
           ? keyChanges
               .slice(0, 5)
