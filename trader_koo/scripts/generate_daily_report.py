@@ -1126,6 +1126,449 @@ def _fetch_volatility_inputs(conn: sqlite3.Connection) -> tuple[dict[str, dict[s
     return by_ticker, market_ctx
 
 
+def _fetch_symbol_ohlcv(
+    conn: sqlite3.Connection, ticker: str, limit: int = 120
+) -> list[dict[str, float | str]]:
+    rows = conn.execute(
+        """
+        SELECT date, CAST(open AS REAL), CAST(high AS REAL), CAST(low AS REAL), CAST(close AS REAL), CAST(volume AS REAL)
+        FROM price_daily
+        WHERE ticker = ? AND close IS NOT NULL
+        ORDER BY date DESC
+        LIMIT ?
+        """,
+        (ticker, int(max(10, limit))),
+    ).fetchall()
+    out: list[dict[str, float | str]] = []
+    for r in reversed(rows):
+        try:
+            close_v = float(r[4])
+        except (TypeError, ValueError):
+            continue
+        if close_v <= 0:
+            continue
+        try:
+            open_v = float(r[1])
+            high_v = float(r[2])
+            low_v = float(r[3])
+            vol_v = float(r[5] or 0.0)
+        except (TypeError, ValueError):
+            continue
+        out.append(
+            {
+                "date": str(r[0]),
+                "open": open_v,
+                "high": high_v,
+                "low": low_v,
+                "close": close_v,
+                "volume": vol_v,
+            }
+        )
+    return out
+
+
+def _percentile_rank(values: list[float], current: float | None) -> float | None:
+    if current is None or not values:
+        return None
+    rank_le = sum(1 for v in values if v <= current)
+    return (rank_le / len(values)) * 100.0
+
+
+def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
+    regime: dict[str, Any] = {
+        "context_only": True,
+        "asof_date": None,
+        "summary": "",
+        "vix": {},
+        "participation": [],
+        "overall": {},
+        "health": {},
+        "timeframes": [],
+        "levels": [],
+    }
+    if not table_exists(conn, "price_daily"):
+        return regime
+
+    # --- VIX structure context ---
+    vix_rows = _fetch_symbol_ohlcv(conn, "^VIX", limit=280)
+    vix_latest = None
+    if len(vix_rows) >= 55:
+        closes = [float(r["close"]) for r in vix_rows]
+        latest = closes[-1]
+        prev = closes[-2]
+        vix_latest = latest
+        ma20 = sum(closes[-20:]) / 20.0
+        ma50 = sum(closes[-50:]) / 50.0
+        ma100 = sum(closes[-100:]) / 100.0 if len(closes) >= 100 else None
+        pct_vs_ma20 = ((latest / ma20) - 1.0) * 100.0 if ma20 > 0 else None
+        pct_vs_ma50 = ((latest / ma50) - 1.0) * 100.0 if ma50 > 0 else None
+        pct_vs_ma100 = ((latest / ma100) - 1.0) * 100.0 if isinstance(ma100, (int, float)) and ma100 > 0 else None
+
+        if latest >= ma20 and latest >= ma50:
+            ma_state = "above_ma20_ma50"
+        elif latest >= ma20 and latest < ma50:
+            ma_state = "above_ma20_below_ma50"
+        elif latest < ma20 and latest >= ma50:
+            ma_state = "below_ma20_above_ma50"
+        else:
+            ma_state = "below_ma20_ma50"
+
+        ma_cross_state = "ma20_above_ma50" if ma20 > ma50 else "ma20_below_ma50"
+
+        bb_width_series: list[float] = []
+        for idx in range(19, len(closes)):
+            win = closes[idx - 19 : idx + 1]
+            mean_20 = sum(win) / 20.0
+            sd_20 = _stdev(win)
+            if mean_20 > 0 and sd_20 is not None:
+                bb_width_series.append(((4.0 * sd_20) / mean_20) * 100.0)
+        bb_width_20 = bb_width_series[-1] if bb_width_series else None
+        bb_width_pctile = _percentile_rank(bb_width_series, bb_width_20)
+        if isinstance(bb_width_pctile, (int, float)):
+            if bb_width_pctile <= 30.0:
+                compression_state = "compression"
+            elif bb_width_pctile >= 70.0:
+                compression_state = "expansion"
+            else:
+                compression_state = "normal"
+        else:
+            compression_state = "normal"
+
+        # 10-day range break context (excluding latest bar for reference range).
+        prev_window = closes[-11:-1] if len(closes) >= 11 else closes[:-1]
+        breakout_state = "inside_range"
+        if prev_window:
+            hi_prev = max(prev_window)
+            lo_prev = min(prev_window)
+            if latest >= (hi_prev * 1.002):
+                breakout_state = "range_breakout_up"
+            elif latest <= (lo_prev * 0.998):
+                breakout_state = "range_breakdown_down"
+
+        if ma_state == "above_ma20_ma50" and breakout_state == "range_breakout_up":
+            risk_state = "risk_off_pressure_rising"
+        elif ma_state == "below_ma20_ma50" and breakout_state == "range_breakdown_down":
+            risk_state = "risk_on_relief"
+        elif compression_state == "compression":
+            risk_state = "coiled_regime"
+        else:
+            risk_state = "mixed_regime"
+
+        vix3m_rows = _fetch_symbol_ohlcv(conn, "^VIX3M", limit=12) or _fetch_symbol_ohlcv(conn, "VIX3M", limit=12)
+        vix3m_latest = None
+        if vix3m_rows:
+            try:
+                vix3m_latest = float(vix3m_rows[-1]["close"])
+            except (TypeError, ValueError):
+                vix3m_latest = None
+        term_structure_ratio = None
+        term_structure_state = "unavailable"
+        if isinstance(vix3m_latest, (int, float)) and vix3m_latest > 0 and latest > 0:
+            term_structure_ratio = vix3m_latest / latest
+            if term_structure_ratio >= 1.03:
+                term_structure_state = "contango"
+            elif term_structure_ratio <= 0.97:
+                term_structure_state = "backwardation"
+            else:
+                term_structure_state = "flat"
+
+        # Multi-timeframe VIX structure using rolling windows on daily bars.
+        tf_rows: list[dict[str, Any]] = []
+        for label, bars in (("1W", 5), ("2W", 10), ("1M", 21), ("3M", 63)):
+            if len(closes) < (bars + 1):
+                continue
+            start = closes[-(bars + 1)]
+            if start <= 0:
+                continue
+            change_pct = ((latest / start) - 1.0) * 100.0
+            win = closes[-bars:]
+            hi = max(win)
+            lo = min(win)
+            range_pos = ((latest - lo) / max(hi - lo, 1e-9)) * 100.0
+            if change_pct >= 8.0:
+                structure = "vol_expansion"
+            elif change_pct <= -8.0:
+                structure = "vol_compression"
+            else:
+                structure = "rangebound"
+            if range_pos >= 80.0:
+                location = "near_range_high"
+            elif range_pos <= 20.0:
+                location = "near_range_low"
+            else:
+                location = "mid_range"
+            tf_rows.append(
+                {
+                    "timeframe": label,
+                    "lookback_days": bars,
+                    "change_pct": round(change_pct, 2),
+                    "range_high": round(hi, 2),
+                    "range_low": round(lo, 2),
+                    "range_position_pct": round(range_pos, 1),
+                    "structure": structure,
+                    "location": location,
+                }
+            )
+        regime["timeframes"] = tf_rows
+
+        # VIX support/resistance using the same level engine as chart mode.
+        levels_out: list[dict[str, Any]] = []
+        try:
+            model = pd.DataFrame(vix_rows).copy()
+            if len(model) >= REPORT_FEATURE_CFG.min_bars:
+                model = add_basic_features(model, REPORT_FEATURE_CFG)
+                model = compute_pivots(model, REPORT_FEATURE_CFG)
+                levels_raw = build_levels_from_pivots(model, REPORT_LEVEL_CFG)
+                levels = select_target_levels(levels_raw, float(latest), REPORT_LEVEL_CFG)
+                levels = add_fallback_levels(model, levels, float(latest), REPORT_LEVEL_CFG)
+                if levels is not None and not levels.empty:
+                    level_pool = levels.copy()
+
+                    def _ordered_side(side: str) -> pd.DataFrame:
+                        pool = level_pool[level_pool["type"] == side].copy()
+                        if pool.empty:
+                            return pool
+                        if side == "support":
+                            near = pool[pool["level"] <= latest].sort_values("level", ascending=False)
+                            far = pool[pool["level"] > latest].sort_values("level", ascending=True)
+                        else:
+                            near = pool[pool["level"] >= latest].sort_values("level", ascending=True)
+                            far = pool[pool["level"] < latest].sort_values("level", ascending=False)
+                        return pd.concat([near, far], ignore_index=True).head(3)
+
+                    selected = pd.concat(
+                        [_ordered_side("support"), _ordered_side("resistance")],
+                        ignore_index=True,
+                    )
+                    for _, lv in selected.iterrows():
+                        level_v = float(lv.get("level") or 0.0)
+                        if level_v <= 0:
+                            continue
+                        side = str(lv.get("type") or "")
+                        if side == "support":
+                            dist_pct = ((latest - level_v) / level_v) * 100.0
+                        else:
+                            dist_pct = ((level_v - latest) / level_v) * 100.0
+                        levels_out.append(
+                            {
+                                "type": side,
+                                "level": round(level_v, 2),
+                                "zone_low": round(float(lv.get("zone_low") or level_v), 2),
+                                "zone_high": round(float(lv.get("zone_high") or level_v), 2),
+                                "tier": str(lv.get("tier") or ""),
+                                "touches": int(lv.get("touches") or 0),
+                                "distance_pct": round(dist_pct, 2),
+                                "last_touch_date": str(lv.get("last_touch_date") or ""),
+                            }
+                        )
+        except Exception:
+            levels_out = []
+        regime["levels"] = levels_out
+
+        regime["asof_date"] = str(vix_rows[-1]["date"])
+        regime["vix"] = {
+            "ticker": "^VIX",
+            "close": round(latest, 2),
+            "change_pct_1d": round(((latest / prev) - 1.0) * 100.0, 2) if prev > 0 else None,
+            "ma20": round(ma20, 2),
+            "ma50": round(ma50, 2),
+            "ma100": round(ma100, 2) if isinstance(ma100, (int, float)) else None,
+            "pct_vs_ma20": round(pct_vs_ma20, 2) if pct_vs_ma20 is not None else None,
+            "pct_vs_ma50": round(pct_vs_ma50, 2) if pct_vs_ma50 is not None else None,
+            "pct_vs_ma100": round(pct_vs_ma100, 2) if pct_vs_ma100 is not None else None,
+            "ma_state": ma_state,
+            "ma_cross_state": ma_cross_state,
+            "bb_width_20": round(bb_width_20, 2) if isinstance(bb_width_20, (int, float)) else None,
+            "bb_width_pctile_lookback": round(bb_width_pctile, 1)
+            if isinstance(bb_width_pctile, (int, float))
+            else None,
+            "compression_state": compression_state,
+            "breakout_state": breakout_state,
+            "risk_state": risk_state,
+            "term_structure_ratio": round(term_structure_ratio, 3)
+            if isinstance(term_structure_ratio, (int, float))
+            else None,
+            "term_structure_state": term_structure_state,
+            "vix3m_close": round(vix3m_latest, 2) if isinstance(vix3m_latest, (int, float)) else None,
+        }
+
+    # --- Participation / distribution context for core market proxies ---
+    participation_rows: list[dict[str, Any]] = []
+    for symbol in ("SPY", "QQQ"):
+        sym_rows = _fetch_symbol_ohlcv(conn, symbol, limit=45)
+        window = 20
+        if len(sym_rows) < window + 1:
+            continue
+        closes = [float(r["close"]) for r in sym_rows[-(window + 1) :]]
+        vols = [float(r["volume"]) for r in sym_rows[-(window + 1) :]]
+        up_days = 0
+        down_days = 0
+        up_vol = 0.0
+        down_vol = 0.0
+        day_changes: list[tuple[float, float]] = []
+        for idx in range(1, len(closes)):
+            prev_c = closes[idx - 1]
+            cur_c = closes[idx]
+            vol = vols[idx]
+            if prev_c <= 0:
+                continue
+            ret = ((cur_c / prev_c) - 1.0) * 100.0
+            day_changes.append((ret, vol))
+            if ret > 0:
+                up_days += 1
+                up_vol += vol
+            elif ret < 0:
+                down_days += 1
+                down_vol += vol
+
+        total_signed_vol = up_vol + down_vol
+        up_share = (up_vol / total_signed_vol) * 100.0 if total_signed_vol > 0 else None
+        down_share = (down_vol / total_signed_vol) * 100.0 if total_signed_vol > 0 else None
+        vol_ratio = (up_vol / down_vol) if down_vol > 0 else None
+
+        avg_vol = sum(v for _, v in day_changes) / len(day_changes) if day_changes else 0.0
+        heavy_up_days = sum(1 for ret, vol in day_changes if ret > 0 and vol >= avg_vol)
+        heavy_down_days = sum(1 for ret, vol in day_changes if ret < 0 and vol >= avg_vol)
+
+        if isinstance(vol_ratio, (int, float)) and vol_ratio >= 1.15 and heavy_up_days >= heavy_down_days:
+            bias = "accumulation"
+        elif isinstance(vol_ratio, (int, float)) and vol_ratio <= 0.85 and heavy_down_days >= heavy_up_days:
+            bias = "distribution"
+        else:
+            bias = "balanced"
+
+        participation_rows.append(
+            {
+                "symbol": symbol,
+                "window_days": window,
+                "up_days": up_days,
+                "down_days": down_days,
+                "up_volume_share_pct": round(up_share, 2) if up_share is not None else None,
+                "down_volume_share_pct": round(down_share, 2) if down_share is not None else None,
+                "up_down_volume_ratio": round(vol_ratio, 3) if isinstance(vol_ratio, (int, float)) else None,
+                "heavy_up_days": int(heavy_up_days),
+                "heavy_down_days": int(heavy_down_days),
+                "bias": bias,
+            }
+        )
+
+    regime["participation"] = participation_rows
+    if participation_rows:
+        accum = sum(1 for row in participation_rows if row.get("bias") == "accumulation")
+        dist = sum(1 for row in participation_rows if row.get("bias") == "distribution")
+        avg_up_share = [
+            float(row.get("up_volume_share_pct"))
+            for row in participation_rows
+            if isinstance(row.get("up_volume_share_pct"), (int, float))
+        ]
+        if accum > dist:
+            overall_participation = "accumulation_bias"
+        elif dist > accum:
+            overall_participation = "distribution_bias"
+        else:
+            overall_participation = "balanced_bias"
+        regime["overall"] = {
+            "participation_bias": overall_participation,
+            "accumulation_symbols": accum,
+            "distribution_symbols": dist,
+            "total_symbols": len(participation_rows),
+            "avg_up_volume_share_pct": round(sum(avg_up_share) / len(avg_up_share), 2) if avg_up_share else None,
+        }
+    else:
+        regime["overall"] = {"participation_bias": "unknown"}
+
+    # --- Overall market health score (0-100, context-only) ---
+    vix_info = regime.get("vix", {}) if isinstance(regime.get("vix"), dict) else {}
+    participation_bias = str((regime.get("overall") or {}).get("participation_bias") or "unknown")
+    health_score = 50.0
+    drivers: list[str] = []
+    warnings: list[str] = []
+
+    ma_state = str(vix_info.get("ma_state") or "")
+    if ma_state == "below_ma20_ma50":
+        health_score += 15.0
+        drivers.append("VIX below MA20 and MA50 (risk-on backdrop)")
+    elif ma_state == "above_ma20_ma50":
+        health_score -= 15.0
+        warnings.append("VIX above MA20 and MA50 (risk-off pressure)")
+    elif ma_state == "below_ma20_above_ma50":
+        health_score += 6.0
+        drivers.append("VIX below MA20 while still above MA50")
+    elif ma_state == "above_ma20_below_ma50":
+        health_score -= 6.0
+        warnings.append("VIX above MA20 while below MA50 (short-term stress)")
+
+    breakout_state = str(vix_info.get("breakout_state") or "")
+    if breakout_state == "range_breakdown_down":
+        health_score += 10.0
+        drivers.append("VIX broke down from its recent range")
+    elif breakout_state == "range_breakout_up":
+        health_score -= 10.0
+        warnings.append("VIX broke up from its recent range")
+
+    compression_state = str(vix_info.get("compression_state") or "")
+    if compression_state == "compression":
+        health_score += 4.0
+        drivers.append("VIX volatility is compressed (coiled regime)")
+    elif compression_state == "expansion":
+        health_score -= 4.0
+        warnings.append("VIX volatility is expanding")
+
+    change_1d = vix_info.get("change_pct_1d")
+    if isinstance(change_1d, (int, float)):
+        if change_1d <= -2.0:
+            health_score += 6.0
+            drivers.append("VIX fell sharply vs prior session")
+        elif change_1d >= 2.0:
+            health_score -= 6.0
+            warnings.append("VIX rose sharply vs prior session")
+
+    term_state = str(vix_info.get("term_structure_state") or "")
+    if term_state == "contango":
+        health_score += 8.0
+        drivers.append("VIX term structure is in contango")
+    elif term_state == "backwardation":
+        health_score -= 8.0
+        warnings.append("VIX term structure is in backwardation")
+
+    if participation_bias == "accumulation_bias":
+        health_score += 12.0
+        drivers.append("SPY/QQQ volume profile shows accumulation")
+    elif participation_bias == "distribution_bias":
+        health_score -= 12.0
+        warnings.append("SPY/QQQ volume profile shows distribution")
+
+    health_score = _clamp(health_score, 0.0, 100.0)
+    if health_score >= 65.0:
+        health_state = "risk_on"
+    elif health_score <= 35.0:
+        health_state = "risk_off"
+    else:
+        health_state = "neutral"
+
+    regime["health"] = {
+        "score": round(health_score, 1),
+        "state": health_state,
+        "confidence": round(abs(health_score - 50.0) * 2.0, 1),  # distance from neutral center
+        "drivers": drivers[:6],
+        "warnings": warnings[:6],
+    }
+
+    if isinstance(vix_latest, (int, float)):
+        summary_prefix = (
+            f"Market health {regime['health']['score']}/100 ({health_state.replace('_', ' ')})"
+        )
+        vix_risk = str(vix_info.get("risk_state") or "mixed_regime").replace("_", " ")
+        participation_state = participation_bias.replace("_", " ")
+        regime["summary"] = (
+            f"{summary_prefix}. VIX regime: {vix_risk}; participation: {participation_state}. "
+            "Use this as backdrop for sizing and confirmation, not as a standalone trigger."
+        )
+    else:
+        regime["summary"] = "Regime context unavailable (insufficient VIX history)."
+    return regime
+
+
 def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     """Build report interpretation context using the same level engine as the dashboard."""
     by_ticker: dict[str, dict[str, Any]] = {}
@@ -3385,6 +3828,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "large_moves_today": [],
         "market_breadth": {},
         "volatility_context": {},
+        "regime_context": {},
         "yolo_top_today": [],
         "candle_patterns_today": [],
         "sector_heatmap": [],
@@ -3409,6 +3853,10 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         signals["volatility_context"] = vol_ctx
     except Exception:
         pass
+    try:
+        signals["regime_context"] = _build_regime_context(conn)
+    except Exception:
+        signals["regime_context"] = {}
     try:
         technical_by_ticker = _fetch_technical_context(conn)
     except Exception:
@@ -4693,6 +5141,104 @@ def to_markdown(report: dict[str, Any]) -> str:
         lines.append(_md_line("vix_close", vol_ctx.get("vix_close")))
         lines.append(_md_line("vix_percentile_1y", vol_ctx.get("vix_percentile_1y")))
         lines.append(_md_line("vix_points", vol_ctx.get("vix_points")))
+
+    regime_ctx = signals.get("regime_context", {})
+    if isinstance(regime_ctx, dict) and (
+        regime_ctx.get("summary") or regime_ctx.get("vix") or regime_ctx.get("participation")
+    ):
+        lines.append("")
+        lines.append("## Regime Context")
+        lines.append(_md_line("context_only", regime_ctx.get("context_only")))
+        lines.append(_md_line("asof_date", regime_ctx.get("asof_date")))
+        lines.append(_md_line("summary", regime_ctx.get("summary")))
+        vix_block = regime_ctx.get("vix", {})
+        if isinstance(vix_block, dict) and vix_block:
+            lines.append("")
+            lines.append("### VIX Structure")
+            for key in [
+                "close",
+                "change_pct_1d",
+                "ma20",
+                "ma50",
+                "ma100",
+                "pct_vs_ma20",
+                "pct_vs_ma50",
+                "pct_vs_ma100",
+                "ma_state",
+                "ma_cross_state",
+                "bb_width_20",
+                "bb_width_pctile_lookback",
+                "compression_state",
+                "breakout_state",
+                "risk_state",
+                "term_structure_ratio",
+                "term_structure_state",
+                "vix3m_close",
+            ]:
+                lines.append(_md_line(key, vix_block.get(key)))
+        health_block = regime_ctx.get("health", {})
+        if isinstance(health_block, dict) and health_block:
+            lines.append("")
+            lines.append("### Market Health")
+            for key in ["score", "state", "confidence"]:
+                lines.append(_md_line(key, health_block.get(key)))
+            drivers = [str(v).strip() for v in (health_block.get("drivers") or []) if str(v or "").strip()]
+            warnings = [str(v).strip() for v in (health_block.get("warnings") or []) if str(v or "").strip()]
+            lines.append(_md_line("drivers", "; ".join(drivers) if drivers else "-"))
+            lines.append(_md_line("warnings", "; ".join(warnings) if warnings else "-"))
+        tf_rows = regime_ctx.get("timeframes", [])
+        if isinstance(tf_rows, list) and tf_rows:
+            lines.append("")
+            lines.append("### VIX Multi-Timeframe")
+            lines.append("| timeframe | lookback_days | change_pct | range_low | range_high | range_position_pct | structure | location |")
+            lines.append("|---|---:|---:|---:|---:|---:|---|---|")
+            for row in tf_rows:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"| {row.get('timeframe', '-')} | {row.get('lookback_days', '-')} | {row.get('change_pct', '-')} | "
+                    f"{row.get('range_low', '-')} | {row.get('range_high', '-')} | {row.get('range_position_pct', '-')} | "
+                    f"{row.get('structure', '-')} | {row.get('location', '-')} |"
+                )
+        level_rows = regime_ctx.get("levels", [])
+        if isinstance(level_rows, list) and level_rows:
+            lines.append("")
+            lines.append("### VIX Key Levels")
+            lines.append("| type | level | zone_low | zone_high | tier | touches | distance_pct | last_touch_date |")
+            lines.append("|---|---:|---:|---:|---|---:|---:|---|")
+            for row in level_rows:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"| {row.get('type', '-')} | {row.get('level', '-')} | {row.get('zone_low', '-')} | {row.get('zone_high', '-')} | "
+                    f"{row.get('tier', '-')} | {row.get('touches', '-')} | {row.get('distance_pct', '-')} | {row.get('last_touch_date', '-')} |"
+                )
+        participation = regime_ctx.get("participation", [])
+        if isinstance(participation, list) and participation:
+            lines.append("")
+            lines.append("### Participation")
+            lines.append("| symbol | window_days | up_days | down_days | up_volume_share_pct | down_volume_share_pct | up_down_volume_ratio | heavy_up_days | heavy_down_days | bias |")
+            lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+            for row in participation:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"| {row.get('symbol', '-')} | {row.get('window_days', '-')} | {row.get('up_days', '-')} | {row.get('down_days', '-')} | "
+                    f"{row.get('up_volume_share_pct', '-')} | {row.get('down_volume_share_pct', '-')} | {row.get('up_down_volume_ratio', '-')} | "
+                    f"{row.get('heavy_up_days', '-')} | {row.get('heavy_down_days', '-')} | {row.get('bias', '-')} |"
+                )
+        overall = regime_ctx.get("overall", {})
+        if isinstance(overall, dict) and overall:
+            lines.append("")
+            lines.append("### Regime Rollup")
+            for key in [
+                "participation_bias",
+                "accumulation_symbols",
+                "distribution_symbols",
+                "total_symbols",
+                "avg_up_volume_share_pct",
+            ]:
+                lines.append(_md_line(key, overall.get(key)))
 
     movers_up = signals.get("movers_up_today", [])[:10]
     if movers_up:
