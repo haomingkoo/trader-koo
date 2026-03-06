@@ -1543,6 +1543,7 @@
     <div class="tabs">
       <button id="tabGuideBtn" class="tab-btn active">Guide</button>
       <button id="tabReportBtn" class="tab-btn">Daily Report</button>
+      <button id="tabRegimeBtn" class="tab-btn">Regime</button>
       <button id="tabEarningsBtn" class="tab-btn">Earnings Calendar</button>
       <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
       <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
@@ -1889,6 +1890,38 @@
       </div>
     </section>
 
+    <section id="tabRegime" class="panel hidden">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+        <h2 style="margin:0; font-size:1.1rem;">Regime</h2>
+        <span id="regimeStatus" style="font-size:0.8rem; color:var(--muted);"></span>
+      </div>
+      <div class="report-inline-note" style="margin-bottom:10px;">
+        Regime is context only, not a standalone buy/sell signal. Use it to size risk and filter conviction.
+      </div>
+      <div id="regimeSummaryCards" class="cards" style="margin-bottom:12px;"></div>
+      <div id="regimeSummaryText" class="report-inline-note" style="margin-bottom:12px;">Load Daily Report to view regime context.</div>
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">Market Health Drivers</div>
+        <div id="regimeHealthDrivers" class="report-inline-note">Load Daily Report to view health drivers.</div>
+      </div>
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">VIX Structure</div>
+        <table id="regimeVixTable"></table>
+      </div>
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">VIX Multi-Timeframe</div>
+        <table id="regimeTimeframeTable"></table>
+      </div>
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">VIX Key Levels</div>
+        <table id="regimeLevelsTable"></table>
+      </div>
+      <div class="panel">
+        <div class="label" style="margin-bottom:8px;">Participation (SPY / QQQ)</div>
+        <table id="regimeParticipationTable"></table>
+      </div>
+    </section>
+
     <section id="tabEarnings" class="panel hidden">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
         <h2 style="margin:0; font-size:1.1rem;">Earnings Calendar</h2>
@@ -2068,11 +2101,13 @@
     const tabChartBtn = $("tabChartBtn");
     const tabGuideBtn = $("tabGuideBtn");
     const tabReportBtn = $("tabReportBtn");
+    const tabRegimeBtn = $("tabRegimeBtn");
     const tabEarningsBtn = $("tabEarningsBtn");
     const tabOp = $("tabOp");
     const tabChart = $("tabChart");
     const tabGuide = $("tabGuide");
     const tabReport = $("tabReport");
+    const tabRegime = $("tabRegime");
     const tabEarnings = $("tabEarnings");
     const API_BASE_STORAGE_KEY = "trader_koo_api_base";
     const WATCHLIST_STORAGE_KEY = "trader_koo_watchlist";
@@ -2250,9 +2285,19 @@
       "realized_vol_20",
       "bb_width_20",
       "pct_change",
+      "change_pct",
+      "change_pct_1d",
+      "pct_vs_ma20",
+      "pct_vs_ma50",
+      "pct_vs_ma100",
+      "range_position_pct",
+      "distance_pct",
       "pct_advancing",
       "pct_from_high",
       "pct_from_low",
+      "up_volume_share_pct",
+      "down_volume_share_pct",
+      "avg_up_volume_share_pct",
     ]);
     const DECIMAL_BY_COLUMN = {
       price: 2,
@@ -2647,6 +2692,149 @@
       }
     }
 
+    function renderRegimeContext(regime) {
+      const makeCard = (label, val) =>
+        `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
+      const safeRegime = regime && typeof regime === "object" ? regime : {};
+      const vix = safeRegime.vix && typeof safeRegime.vix === "object" ? safeRegime.vix : {};
+      const health = safeRegime.health && typeof safeRegime.health === "object" ? safeRegime.health : {};
+      const overall = safeRegime.overall && typeof safeRegime.overall === "object" ? safeRegime.overall : {};
+      const participation = Array.isArray(safeRegime.participation) ? safeRegime.participation : [];
+      const timeframes = Array.isArray(safeRegime.timeframes) ? safeRegime.timeframes : [];
+      const levels = Array.isArray(safeRegime.levels) ? safeRegime.levels : [];
+      const summary = safeRegime.summary || "Regime context is unavailable for this report snapshot.";
+      const asof = safeRegime.asof_date || "—";
+      const riskState = titleCaseWords(String(vix.risk_state || "unknown").replaceAll("_", " "));
+      const participationBias = titleCaseWords(String(overall.participation_bias || "unknown").replaceAll("_", " "));
+      const healthState = titleCaseWords(String(health.state || "unknown").replaceAll("_", " "));
+      const healthScore = Number.isFinite(Number(health.score)) ? `${fmt(health.score, 1)} / 100` : "—";
+      const healthDrivers = Array.isArray(health.drivers) ? health.drivers.filter(Boolean).map(String) : [];
+      const healthWarnings = Array.isArray(health.warnings) ? health.warnings.filter(Boolean).map(String) : [];
+
+      $("regimeStatus").textContent = `As of ${asof}`;
+      $("regimeSummaryText").textContent = String(summary);
+      $("regimeSummaryCards").innerHTML = [
+        makeCard("Market Health", healthScore),
+        makeCard("Health State", healthState),
+        makeCard("VIX Risk State", riskState),
+        makeCard("Participation Bias", participationBias),
+        makeCard("VIX Close", vix.close ?? "—"),
+        makeCard("VIX vs MA20", vix.pct_vs_ma20 != null ? `${fmt(vix.pct_vs_ma20, 2)}%` : "—"),
+        makeCard("VIX vs MA50", vix.pct_vs_ma50 != null ? `${fmt(vix.pct_vs_ma50, 2)}%` : "—"),
+        makeCard("VIX vs MA100", vix.pct_vs_ma100 != null ? `${fmt(vix.pct_vs_ma100, 2)}%` : "—"),
+        makeCard("VIX Term Structure", titleCaseWords(String(vix.term_structure_state || "unavailable").replaceAll("_", " "))),
+        makeCard("VIX BB Width Pctl", vix.bb_width_pctile_lookback ?? "—"),
+      ].join("");
+      const healthNotes = [];
+      if (healthDrivers.length) healthNotes.push(`Drivers: ${healthDrivers.join(" | ")}`);
+      if (healthWarnings.length) healthNotes.push(`Warnings: ${healthWarnings.join(" | ")}`);
+      if (!healthNotes.length) healthNotes.push("No clear health driver set for this snapshot.");
+      $("regimeHealthDrivers").textContent = healthNotes.join("  ");
+
+      const vixRows = Object.keys(vix).length
+        ? [{
+            ticker: vix.ticker || "^VIX",
+            close: vix.close,
+            change_pct_1d: vix.change_pct_1d,
+            ma20: vix.ma20,
+            ma50: vix.ma50,
+            ma100: vix.ma100,
+            ma_state: titleCaseWords(String(vix.ma_state || "").replaceAll("_", " ")),
+            ma_cross_state: titleCaseWords(String(vix.ma_cross_state || "").replaceAll("_", " ")),
+            compression_state: titleCaseWords(String(vix.compression_state || "").replaceAll("_", " ")),
+            breakout_state: titleCaseWords(String(vix.breakout_state || "").replaceAll("_", " ")),
+            risk_state: titleCaseWords(String(vix.risk_state || "").replaceAll("_", " ")),
+            term_structure_ratio: vix.term_structure_ratio,
+            term_structure_state: titleCaseWords(String(vix.term_structure_state || "unavailable").replaceAll("_", " ")),
+          }]
+        : [];
+      renderSimpleTable(
+        "regimeVixTable",
+        [
+          { key: "ticker", label: "Ticker" },
+          { key: "close", label: "Close" },
+          { key: "change_pct_1d", label: "1D %" },
+          { key: "ma20", label: "MA20" },
+          { key: "ma50", label: "MA50" },
+          { key: "ma100", label: "MA100" },
+          { key: "ma_state", label: "MA State" },
+          { key: "ma_cross_state", label: "MA20 vs MA50" },
+          { key: "compression_state", label: "Vol State" },
+          { key: "breakout_state", label: "Range Event" },
+          { key: "term_structure_state", label: "Term Structure" },
+          { key: "term_structure_ratio", label: "3M/1M Ratio" },
+          { key: "risk_state", label: "Risk State" },
+        ],
+        vixRows,
+        false,
+        null,
+        { sortable: false },
+      );
+      renderSimpleTable(
+        "regimeTimeframeTable",
+        [
+          { key: "timeframe", label: "Timeframe" },
+          { key: "lookback_days", label: "Days" },
+          { key: "change_pct", label: "Change %" },
+          { key: "range_low", label: "Range Low" },
+          { key: "range_high", label: "Range High" },
+          { key: "range_position_pct", label: "Pos in Range %" },
+          { key: "structure", label: "Structure" },
+          { key: "location", label: "Location" },
+        ],
+        timeframes.map((row) => ({
+          ...row,
+          structure: titleCaseWords(String(row.structure || "unknown").replaceAll("_", " ")),
+          location: titleCaseWords(String(row.location || "unknown").replaceAll("_", " ")),
+        })),
+        false,
+        null,
+        { sortable: false },
+      );
+      renderSimpleTable(
+        "regimeLevelsTable",
+        [
+          { key: "type", label: "Type" },
+          { key: "level", label: "Level" },
+          { key: "zone_low", label: "Zone Low" },
+          { key: "zone_high", label: "Zone High" },
+          { key: "tier", label: "Tier" },
+          { key: "touches", label: "Touches" },
+          { key: "distance_pct", label: "Distance %" },
+          { key: "last_touch_date", label: "Last Touch" },
+        ],
+        levels.map((row) => ({
+          ...row,
+          type: titleCaseWords(String(row.type || "unknown")),
+        })),
+        false,
+        null,
+        { sortable: false },
+      );
+      renderSimpleTable(
+        "regimeParticipationTable",
+        [
+          { key: "symbol", label: "Symbol" },
+          { key: "window_days", label: "Window" },
+          { key: "up_days", label: "Up Days" },
+          { key: "down_days", label: "Down Days" },
+          { key: "up_volume_share_pct", label: "Up Vol %" },
+          { key: "down_volume_share_pct", label: "Down Vol %" },
+          { key: "up_down_volume_ratio", label: "Up/Down Ratio" },
+          { key: "heavy_up_days", label: "Heavy Up" },
+          { key: "heavy_down_days", label: "Heavy Down" },
+          { key: "bias", label: "Bias" },
+        ],
+        participation.map((row) => ({
+          ...row,
+          bias: titleCaseWords(String(row.bias || "unknown").replaceAll("_", " ")),
+        })),
+        false,
+        null,
+        { sortable: false },
+      );
+    }
+
     function formatTableValue(col, raw) {
       if (raw === null || raw === undefined || raw === "") return "-";
       if (typeof raw === "boolean") return raw ? "yes" : "no";
@@ -2815,9 +3003,12 @@
       if (data.actionability) badges.push(`<span class="earnings-badge">${escHtml(humanizeActionability(data.actionability).toUpperCase())}</span>`);
       const yoloContextLabel = humanizeSetupContext({ yolo_recency: data.primary_yolo_recency, primary_yolo_role: data.primary_yolo_role });
       if (yoloContextLabel !== "No YOLO") {
-        const yoloLabel = /yolo/i.test(yoloContextLabel)
-          ? yoloContextLabel
-          : `${yoloContextLabel} YOLO`;
+        const normalizedYoloLabel = String(yoloContextLabel || "")
+          .replace(/\bYOLO\b\s+\bYOLO\b/gi, "YOLO")
+          .trim();
+        const yoloLabel = /yolo/i.test(normalizedYoloLabel)
+          ? normalizedYoloLabel
+          : `${normalizedYoloLabel} YOLO`;
         badges.push(`<span class="earnings-badge">${escHtml(yoloLabel.toUpperCase())}</span>`);
       }
       $("chartCommentaryBadges").innerHTML = badges.join("");
@@ -3011,6 +3202,7 @@
         chart: [tabChartBtn, tabChart],
         guide: [tabGuideBtn, tabGuide],
         report: [tabReportBtn, tabReport],
+        regime: [tabRegimeBtn, tabRegime],
         earnings: [tabEarningsBtn, tabEarnings],
       };
       for (const [k, [btn, sec]] of Object.entries(all)) {
@@ -3018,7 +3210,7 @@
         else             { btn.classList.remove("active"); sec.classList.add("hidden"); }
       }
       markUsageTabView(which);
-      if (which === "report" && !skipReportReload) loadReport();
+      if ((which === "report" || which === "regime") && !skipReportReload) loadReport();
       if (which === "earnings") loadEarnings();
     }
 
@@ -3026,6 +3218,7 @@
     tabChartBtn.addEventListener("click", () => activateTab("chart"));
     tabGuideBtn.addEventListener("click", () => activateTab("guide"));
     tabReportBtn.addEventListener("click", () => activateTab("report"));
+    tabRegimeBtn.addEventListener("click", () => activateTab("regime"));
     tabEarningsBtn.addEventListener("click", () => activateTab("earnings"));
 
     function fillCards(payload) {
@@ -3255,7 +3448,7 @@
         </div>
       `;
       const btn = $("earningsOpenChartBtn");
-      if (btn) btn.addEventListener("click", () => row.ticker ? loadTickerQuick(row.ticker) : null);
+      if (btn) btn.addEventListener("click", () => row.ticker ? loadTickerFromReport(row.ticker) : null);
     }
 
     function renderEarningsBoard(groups) {
@@ -4323,6 +4516,7 @@
         if (!hasReport) {
           LAST_REPORT_GENERATED_TS = null;
           $("reportStatus").textContent = "No report yet";
+          renderRegimeContext({});
           return;
         }
         LAST_REPORT_GENERATED_TS = String(latest.generated_ts || "").trim() || null;
@@ -4348,6 +4542,7 @@
         ].join("");
 
         const keyChanges = signals.tonight_key_changes || [];
+        renderRegimeContext(signals.regime_context || {});
         $("reportKeyChangesList").innerHTML = keyChanges.length
           ? keyChanges
               .slice(0, 5)
@@ -4758,7 +4953,7 @@
           ],
           rows,
           true,
-          (row) => row && row.ticker ? loadTickerQuick(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
           { sortable: true },
         );
       } catch (err) {
