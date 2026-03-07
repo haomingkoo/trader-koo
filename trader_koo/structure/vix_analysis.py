@@ -353,3 +353,155 @@ def format_percentile_display(percentile: Optional[float]) -> str:
 
     return f"VIX Percentile: {percentile:.1f}% [{color.upper()}]{warning}"
 
+
+
+@dataclass
+class CompressionThresholds:
+    """Adaptive compression thresholds based on VIX regime."""
+
+    lower_percentile: float  # e.g., 20, 25, or 30
+    upper_percentile: float  # e.g., 80, 75, or 70
+    regime: str  # "tight" | "moderate" | "wide"
+    vix_90d_percentile: float
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "lower_percentile": self.lower_percentile,
+            "upper_percentile": self.upper_percentile,
+            "regime": self.regime,
+            "vix_90d_percentile": round(self.vix_90d_percentile, 2),
+        }
+
+
+def calculate_compression_thresholds(
+    conn: sqlite3.Connection
+) -> CompressionThresholds:
+    """
+    Calculate adaptive compression thresholds based on 90-day VIX percentile.
+
+    Threshold regimes:
+    - Tight (low vol): 20th/80th percentile when VIX percentile < 30
+    - Moderate (normal vol): 25th/75th percentile when VIX percentile 30-70
+    - Wide (high vol): 30th/70th percentile when VIX percentile > 70
+
+    Args:
+        conn: Database connection
+
+    Returns:
+        CompressionThresholds with regime-appropriate thresholds
+
+    Requirements: 13.1, 13.2, 13.3, 13.4
+    """
+    # Calculate 90-day VIX percentile
+    vix_90d_percentile = calculate_vix_percentile(conn, window_days=90)
+
+    if vix_90d_percentile is None:
+        logger.warning("Unable to calculate VIX percentile, using moderate thresholds")
+        vix_90d_percentile = 50.0  # Default to moderate
+
+    # Determine threshold regime based on VIX percentile
+    if vix_90d_percentile < 30:
+        # Low volatility - use tight thresholds (Requirement 13.2)
+        lower, upper = 20.0, 80.0
+        regime = "tight"
+        logger.info(
+            f"Using TIGHT compression thresholds (20/80) - "
+            f"VIX 90d percentile: {vix_90d_percentile:.1f}%"
+        )
+    elif vix_90d_percentile <= 70:
+        # Normal volatility - use moderate thresholds (Requirement 13.3)
+        lower, upper = 25.0, 75.0
+        regime = "moderate"
+        logger.info(
+            f"Using MODERATE compression thresholds (25/75) - "
+            f"VIX 90d percentile: {vix_90d_percentile:.1f}%"
+        )
+    else:
+        # High volatility - use wide thresholds (Requirement 13.4)
+        lower, upper = 30.0, 70.0
+        regime = "wide"
+        logger.info(
+            f"Using WIDE compression thresholds (30/70) - "
+            f"VIX 90d percentile: {vix_90d_percentile:.1f}%"
+        )
+
+    return CompressionThresholds(
+        lower_percentile=lower,
+        upper_percentile=upper,
+        regime=regime,
+        vix_90d_percentile=vix_90d_percentile,
+    )
+
+
+def detect_compression_signal(
+    bb_width_percentile: Optional[float],
+    thresholds: CompressionThresholds
+) -> tuple[str, str]:
+    """
+    Detect compression/expansion state using adaptive thresholds.
+
+    Args:
+        bb_width_percentile: Bollinger Band width percentile (0-100)
+        thresholds: Adaptive compression thresholds
+
+    Returns:
+        Tuple of (compression_state, labeled_state)
+        - compression_state: "compression" | "expansion" | "normal"
+        - labeled_state: State with regime label, e.g., "compression (tight)"
+
+    Requirements: 13.6
+    """
+    if bb_width_percentile is None:
+        return "normal", "normal"
+
+    if bb_width_percentile <= thresholds.lower_percentile:
+        state = "compression"
+        labeled = f"compression ({thresholds.regime})"
+    elif bb_width_percentile >= thresholds.upper_percentile:
+        state = "expansion"
+        labeled = f"expansion ({thresholds.regime})"
+    else:
+        state = "normal"
+        labeled = "normal"
+
+    logger.debug(
+        f"Compression detection: BB width percentile={bb_width_percentile:.1f}%, "
+        f"thresholds={thresholds.lower_percentile}/{thresholds.upper_percentile} "
+        f"({thresholds.regime}), state={labeled}"
+    )
+
+    return state, labeled
+
+
+def format_compression_thresholds_display(
+    thresholds: CompressionThresholds
+) -> str:
+    """
+    Format compression thresholds for display in VIX analysis tab.
+
+    Args:
+        thresholds: Compression thresholds to display
+
+    Returns:
+        Formatted display string
+
+    Requirements: 13.5
+    """
+    regime_emoji = {
+        "tight": "🔒",
+        "moderate": "⚖️",
+        "wide": "📏"
+    }
+
+    emoji = regime_emoji.get(thresholds.regime, "")
+
+    lines = [
+        f"{emoji} Compression Thresholds: {thresholds.regime.upper()} regime",
+        f"  Lower: {thresholds.lower_percentile:.0f}th percentile",
+        f"  Upper: {thresholds.upper_percentile:.0f}th percentile",
+        f"  VIX 90-day percentile: {thresholds.vix_90d_percentile:.1f}%",
+    ]
+
+    return "\n".join(lines)
+

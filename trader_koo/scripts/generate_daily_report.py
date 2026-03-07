@@ -50,8 +50,11 @@ from trader_koo.structure.levels import (
     select_target_levels,
 )
 from trader_koo.structure.vix_analysis import (
+    calculate_compression_thresholds,
     calculate_term_structure,
     calculate_vix_percentile,
+    detect_compression_signal,
+    format_compression_thresholds_display,
     get_percentile_color,
     should_show_volatility_warning,
 )
@@ -1307,15 +1310,14 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                 bb_width_series.append(((4.0 * sd_20) / mean_20) * 100.0)
         bb_width_20 = bb_width_series[-1] if bb_width_series else None
         bb_width_pctile = _percentile_rank(bb_width_series, bb_width_20)
-        if isinstance(bb_width_pctile, (int, float)):
-            if bb_width_pctile <= 30.0:
-                compression_state = "compression"
-            elif bb_width_pctile >= 70.0:
-                compression_state = "expansion"
-            else:
-                compression_state = "normal"
-        else:
-            compression_state = "normal"
+        
+        # Calculate adaptive compression thresholds (Requirements 13.1-13.4)
+        compression_thresholds = calculate_compression_thresholds(conn)
+        
+        # Detect compression using adaptive thresholds (Requirement 13.6)
+        compression_state, compression_labeled = detect_compression_signal(
+            bb_width_pctile, compression_thresholds
+        )
 
         # 10-day range break context (excluding latest bar for reference range).
         prev_window = closes[-11:-1] if len(closes) >= 11 else closes[:-1]
@@ -1558,6 +1560,8 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
             if isinstance(bb_width_pctile, (int, float))
             else None,
             "compression_state": compression_state,
+            "compression_labeled": compression_labeled,  # Requirement 13.6
+            "compression_thresholds": compression_thresholds.to_dict(),  # Requirements 13.1-13.5
             "breakout_state": breakout_state,
             "risk_state": risk_state,
             "term_structure_ratio": round(term_structure_ratio, 3)
