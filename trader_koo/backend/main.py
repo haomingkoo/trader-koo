@@ -104,6 +104,10 @@ from trader_koo.structure.hybrid_patterns import HybridPatternConfig, score_hybr
 from trader_koo.structure.levels import LevelConfig, add_fallback_levels, build_levels_from_pivots, select_target_levels
 from trader_koo.structure.patterns import PatternConfig, detect_patterns
 from trader_koo.structure.trendlines import TrendlineConfig, detect_trendlines
+from trader_koo.audit import AuditLogger, ensure_audit_schema, apply_retention_policy, get_audit_stats
+from trader_koo.audit.middleware import AuditMiddleware, log_auth_attempt
+from trader_koo.audit.api import query_audit_logs, export_audit_logs, get_audit_summary
+from trader_koo.audit.export import get_exporter_from_env, schedule_daily_export
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -588,6 +592,16 @@ async def lifespan(_app: FastAPI):
     ensure_feedback_schema()
     prune_analytics_sessions()
     ensure_subscriber_schema(DB_PATH)
+    
+    # Initialize audit logging schema (Requirement 15.5)
+    if DB_PATH.exists():
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            ensure_audit_schema(conn)
+            LOG.info("Audit logging schema initialized")
+        finally:
+            conn.close()
+    
     reconcile = _reconcile_stale_running_runs()
     if reconcile.get("reconciled"):
         LOG.warning(
@@ -654,6 +668,14 @@ else:
 # Add error sanitization middleware to prevent secret exposure (Requirement 6.4)
 app.add_middleware(ErrorSanitizationMiddleware)
 
+# Add audit logging middleware (Requirement 15.1, 15.2)
+app.add_middleware(AuditMiddleware, db_path=DB_PATH)
+
+def get_audit_logger() -> AuditLogger:
+    """Get audit logger instance with database connection."""
+    conn = sqlite3.connect(str(DB_PATH))
+    return AuditLogger(conn)
+
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
@@ -661,6 +683,8 @@ async def api_key_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith(ADMIN_API_PREFIX):
         client_ip = _client_ip(request)
+        user_agent = request.headers.get("user-agent", "-")
+        
         blocked, retry_after = _admin_auth_blocked(client_ip, dt.datetime.now(dt.timezone.utc).timestamp())
         if blocked:
             LOG.warning(
@@ -687,6 +711,22 @@ async def api_key_middleware(request: Request, call_next):
                     status_code=503,
                 )
             request.state.admin_identity = {"username": "local-dev", "mode": "open-admin"}
+            
+            # Log successful auth for local dev mode (Requirement 15.2)
+            try:
+                audit_logger = get_audit_logger()
+                log_auth_attempt(
+                    audit_logger,
+                    success=True,
+                    username="local-dev",
+                    ip_address=client_ip,
+                    user_agent=user_agent,
+                    auth_method="local_dev",
+                )
+                audit_logger.conn.close()
+            except Exception as e:
+                LOG.warning("Failed to log auth attempt: %s", e)
+            
             return await call_next(request)
         provided = request.headers.get("X-API-Key", "")
         if not secrets.compare_digest(provided, API_KEY):
@@ -705,6 +745,23 @@ async def api_key_middleware(request: Request, call_next):
                 ua,
                 referer,
             )
+            
+            # Log failed auth attempt (Requirement 15.2)
+            try:
+                audit_logger = get_audit_logger()
+                log_auth_attempt(
+                    audit_logger,
+                    success=False,
+                    username=None,
+                    ip_address=client_ip,
+                    user_agent=ua,
+                    auth_method="api_key",
+                    reason="invalid_api_key",
+                )
+                audit_logger.conn.close()
+            except Exception as e:
+                LOG.warning("Failed to log auth attempt: %s", e)
+            
             if blocked_now:
                 return JSONResponse(
                     {"detail": "Too many unauthorized attempts. Try again later."},
@@ -713,7 +770,24 @@ async def api_key_middleware(request: Request, call_next):
                     )
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
         _admin_auth_clear(client_ip)
-        request.state.admin_identity = {"username": ADMIN_USER or "admin", "mode": "api_key"}
+        username = ADMIN_USER or "admin"
+        request.state.admin_identity = {"username": username, "mode": "api_key", "user_id": username}
+        
+        # Log successful auth (Requirement 15.2)
+        try:
+            audit_logger = get_audit_logger()
+            log_auth_attempt(
+                audit_logger,
+                success=True,
+                username=username,
+                ip_address=client_ip,
+                user_agent=user_agent,
+                auth_method="api_key",
+            )
+            audit_logger.conn.close()
+        except Exception as e:
+            LOG.warning("Failed to log auth attempt: %s", e)
+    
     return await call_next(request)
 
 
@@ -4992,6 +5066,255 @@ def admin_data_source_health() -> dict[str, Any]:
         "alerts": alerts,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+# ============================================================================
+# Audit Logging Endpoints (Requirement 15)
+# ============================================================================
+
+@app.get("/api/admin/audit-logs")
+def admin_audit_logs(
+    start_date: str | None = Query(default=None, description="Filter logs after this date (ISO format)"),
+    end_date: str | None = Query(default=None, description="Filter logs before this date (ISO format)"),
+    user_id: str | None = Query(default=None, description="Filter by user ID"),
+    event_type: str | None = Query(default=None, description="Filter by event type"),
+    resource: str | None = Query(default=None, description="Filter by resource"),
+    action: str | None = Query(default=None, description="Filter by action"),
+    page: int = Query(default=1, ge=1, description="Page number"),
+    per_page: int = Query(default=50, ge=1, le=200, description="Results per page"),
+) -> dict[str, Any]:
+    """
+    Query audit logs with filtering and pagination.
+    
+    Requirements:
+    - 15.6: Provide admin endpoint to query audit logs with filtering
+    
+    Returns:
+        Dictionary containing:
+        - logs: List of audit log entries
+        - pagination: Pagination metadata
+        - filters: Applied filters
+    """
+    audit_logger = get_audit_logger()
+    
+    try:
+        result = query_audit_logs(
+            audit_logger,
+            start_date=start_date,
+            end_date=end_date,
+            user_id=user_id,
+            event_type=event_type,
+            resource=resource,
+            action=action,
+            page=page,
+            per_page=per_page,
+        )
+        
+        return {
+            "ok": True,
+            **result,
+        }
+    finally:
+        audit_logger.conn.close()
+
+
+@app.get("/api/admin/audit-logs/export")
+def admin_audit_logs_export(
+    start_date: str | None = Query(default=None, description="Export logs after this date"),
+    end_date: str | None = Query(default=None, description="Export logs before this date"),
+    user_id: str | None = Query(default=None, description="Filter by user ID"),
+    event_type: str | None = Query(default=None, description="Filter by event type"),
+    format: str = Query(default="json", pattern="^(json|csv)$", description="Export format"),
+) -> Any:
+    """
+    Export audit logs in JSON or CSV format.
+    
+    Requirements:
+    - 15.8: Export audit logs to external storage for long-term retention
+    
+    Returns:
+        Exported audit logs in requested format
+    """
+    audit_logger = get_audit_logger()
+    
+    try:
+        result = export_audit_logs(
+            audit_logger,
+            start_date=start_date,
+            end_date=end_date,
+            user_id=user_id,
+            event_type=event_type,
+            format=format,
+        )
+        
+        if format == "csv":
+            return Response(
+                content=result,
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": f"attachment; filename=audit_logs_{dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+                },
+            )
+        
+        return result
+    finally:
+        audit_logger.conn.close()
+
+
+@app.get("/api/admin/audit-logs/summary")
+def admin_audit_logs_summary(
+    days: int = Query(default=7, ge=1, le=365, description="Number of days to include in summary"),
+) -> dict[str, Any]:
+    """
+    Get summary statistics for audit logs.
+    
+    Returns:
+        Dictionary containing:
+        - total_events: Total number of events
+        - event_type_counts: Count by event type
+        - top_users: Most active users
+        - top_resources: Most accessed resources
+        - hourly_activity: Activity by hour of day
+    """
+    audit_logger = get_audit_logger()
+    
+    try:
+        summary = get_audit_summary(audit_logger, days=days)
+        
+        return {
+            "ok": True,
+            **summary,
+        }
+    finally:
+        audit_logger.conn.close()
+
+
+@app.get("/api/admin/audit-logs/stats")
+def admin_audit_logs_stats() -> dict[str, Any]:
+    """
+    Get audit log statistics and retention info.
+    
+    Requirements:
+    - 15.5: Store audit logs with indexed fields
+    - 15.7: Retain audit logs for minimum 90 days
+    
+    Returns:
+        Dictionary containing:
+        - total_count: Total number of audit log entries
+        - oldest_entry: Timestamp of oldest entry
+        - newest_entry: Timestamp of newest entry
+        - by_event_type: Count by event type
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    
+    try:
+        stats = get_audit_stats(conn)
+        
+        return {
+            "ok": True,
+            **stats,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/audit-logs/retention")
+def admin_audit_logs_retention(
+    retention_days: int = Query(default=90, ge=30, le=3650, description="Days to retain logs"),
+    dry_run: bool = Query(default=True, description="Preview without deleting"),
+) -> dict[str, Any]:
+    """
+    Apply retention policy to audit logs.
+    
+    Requirements:
+    - 15.7: Retain audit logs for minimum 90 days
+    
+    Args:
+        retention_days: Number of days to retain (minimum 30)
+        dry_run: If True, preview without deleting
+        
+    Returns:
+        Dictionary containing:
+        - would_delete: Number of records that would be deleted (dry run)
+        - deleted: Number of records deleted (actual run)
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    
+    try:
+        if dry_run:
+            # Count records that would be deleted
+            cutoff_date = dt.datetime.utcnow() - dt.timedelta(days=retention_days)
+            cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
+            
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM audit_logs WHERE timestamp < ?",
+                (cutoff_str,)
+            )
+            count = cursor.fetchone()[0]
+            
+            return {
+                "ok": True,
+                "dry_run": True,
+                "would_delete": count,
+                "retention_days": retention_days,
+                "cutoff_date": cutoff_str,
+            }
+        else:
+            # Actually delete old records
+            deleted = apply_retention_policy(conn, retention_days=retention_days)
+            
+            return {
+                "ok": True,
+                "dry_run": False,
+                "deleted": deleted,
+                "retention_days": retention_days,
+            }
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/audit-logs/external-export")
+def admin_audit_logs_external_export(
+    start_date: str | None = Query(default=None, description="Export logs after this date"),
+    end_date: str | None = Query(default=None, description="Export logs before this date"),
+    export_format: str = Query(default="jsonl", pattern="^(jsonl|csv)$", description="Export format"),
+) -> dict[str, Any]:
+    """
+    Export audit logs to external storage (S3, Azure Blob, or local).
+    
+    Requirements:
+    - 15.8: Export audit logs to external storage for long-term retention
+    
+    Configuration via environment variables:
+        AUDIT_EXPORT_STORAGE: Storage type (s3, azure_blob, local)
+        AUDIT_EXPORT_PATH: Local path for local storage
+        AUDIT_EXPORT_S3_BUCKET: S3 bucket name
+        AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY: AWS credentials
+        AUDIT_EXPORT_AZURE_CONNECTION_STRING: Azure connection string
+    
+    Returns:
+        Dictionary containing:
+        - success: Whether export succeeded
+        - location: Storage location of exported file
+        - records_exported: Number of records exported
+    """
+    audit_logger = get_audit_logger()
+    exporter = get_exporter_from_env()
+    
+    try:
+        result = exporter.export_logs(
+            audit_logger,
+            start_date=start_date,
+            end_date=end_date,
+            export_format=export_format,
+        )
+        
+        return {
+            "ok": True,
+            **result,
+        }
+    finally:
+        audit_logger.conn.close()
 
 
 @app.post("/api/admin/email-latest-report")
