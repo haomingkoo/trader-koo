@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/middleware/cors.py
+# hypothesis_version: 6.151.9
+
+[200, 403, '*, X-API-Key', ',', '-', '600', 'OPTIONS', '[]', 'false', 'http://localhost', 'origin', 'x-forwarded-for']

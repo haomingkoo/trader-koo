@@ -34,7 +34,18 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from trader_koo.config import validate_config, ConfigError
 from trader_koo.data.schema import ensure_ohlcv_schema
+from trader_koo.data.sources import get_data_source_manager
+from trader_koo.middleware.cors import RestrictiveCORSMiddleware
+from trader_koo.middleware.auth import (
+    auto_register_admin_endpoints,
+    verify_all_admin_endpoints_protected,
+    get_admin_endpoint_registry,
+)
+from trader_koo.security.logging_filter import install_secret_redaction_filter
+from trader_koo.security.error_middleware import ErrorSanitizationMiddleware
+from trader_koo.security.endpoint_validator import sanitize_public_response
 from trader_koo.cv.compare import HybridCVCompareConfig, compare_hybrid_vs_cv
 from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
@@ -151,7 +162,7 @@ INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STAL
 AUTO_RESUME_POST_INGEST = _as_bool(os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1"))
 AUTO_RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_AGE_HOURS", "18")))
 AUTO_RESUME_MAX_RETRIES = max(0, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_RETRIES", "2")))
-ADMIN_STRICT_API_KEY = _as_bool(os.getenv("TRADER_KOO_ADMIN_STRICT_KEY", "1"))
+ADMIN_STRICT_API_KEY = _as_bool(os.getenv("ADMIN_STRICT_API_KEY", "1"))
 ADMIN_AUTH_WINDOW_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_WINDOW_SEC", "300")))
 ADMIN_AUTH_MAX_FAILS = max(3, int(os.getenv("TRADER_KOO_ADMIN_AUTH_MAX_FAILS", "20")))
 ADMIN_AUTH_BLOCK_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_BLOCK_SEC", "600")))
@@ -216,6 +227,10 @@ log_level = os.getenv("TRADER_KOO_LOG_LEVEL", "INFO").upper()
 log_format = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 if not ROOT_LOGGER.handlers:
     logging.basicConfig(level=log_level, format=log_format)
+
+# Install secret redaction filter on root logger (Requirement 6.2, 6.3)
+install_secret_redaction_filter()
+
 if not any(
     isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")) == API_LOG_PATH
     for h in ROOT_LOGGER.handlers
@@ -536,6 +551,39 @@ _scheduler.add_job(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Validate configuration at startup
+    try:
+        config = validate_config()
+        LOG.info("Configuration validation passed")
+        
+        # Store config in app state for middleware access
+        _app.state.config = config
+    except ConfigError as e:
+        LOG.error("Configuration validation failed: %s", str(e))
+        raise
+    
+    # Register all admin endpoints and verify authentication (Requirement 5.1, 5.2, 5.3)
+    auto_register_admin_endpoints(_app)
+    all_protected, unprotected = verify_all_admin_endpoints_protected()
+    
+    if not all_protected:
+        error_msg = (
+            f"FATAL: {len(unprotected)} admin endpoint(s) lack authentication. "
+            f"All /api/admin/* endpoints must have @require_admin_auth decorator. "
+            f"Unprotected endpoints: {', '.join(unprotected)}"
+        )
+        LOG.error(error_msg)
+        # In strict mode, refuse to start
+        if config.admin_strict_api_key:
+            raise RuntimeError(error_msg)
+        else:
+            LOG.warning(
+                "Running in development mode (ADMIN_STRICT_API_KEY=0). "
+                "Unprotected admin endpoints are allowed but not recommended."
+            )
+    else:
+        LOG.info("All admin endpoints are properly protected with authentication")
+    
     ensure_analytics_schema()
     ensure_feedback_schema()
     prune_analytics_sessions()
@@ -576,13 +624,35 @@ if os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1":
     app.redoc_url = "/redoc"
     app.openapi_url = "/openapi.json"
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[_ALLOWED_ORIGIN] if _ALLOWED_ORIGIN != "*" else ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*", "X-API-Key"],
-)
+# Configure CORS middleware with restrictive defaults
+# Use new TRADER_KOO_CORS_ORIGINS for restrictive CORS, fall back to legacy TRADER_KOO_ALLOWED_ORIGIN
+cors_origins_env = os.getenv("TRADER_KOO_CORS_ORIGINS", "")
+if cors_origins_env:
+    # New restrictive CORS configuration
+    from trader_koo.config import Config
+    temp_config = Config()
+    app.add_middleware(
+        RestrictiveCORSMiddleware,
+        allowed_origins=temp_config.cors_allowed_origins,
+        development_mode=temp_config.development_mode,
+    )
+else:
+    # Legacy CORS configuration for backward compatibility
+    # This will be deprecated in favor of TRADER_KOO_CORS_ORIGINS
+    LOG.warning(
+        "Using legacy TRADER_KOO_ALLOWED_ORIGIN for CORS. "
+        "Please migrate to TRADER_KOO_CORS_ORIGINS for restrictive CORS policy."
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[_ALLOWED_ORIGIN] if _ALLOWED_ORIGIN != "*" else ["*"],
+        allow_credentials=False,  # Changed to False for security (Requirement 4.7)
+        allow_methods=["*"],
+        allow_headers=["*", "X-API-Key"],
+    )
+
+# Add error sanitization middleware to prevent secret exposure (Requirement 6.4)
+app.add_middleware(ErrorSanitizationMiddleware)
 
 
 @app.middleware("http")
@@ -1873,20 +1943,20 @@ def _build_chart_technical_context(model: pd.DataFrame, levels: pd.DataFrame) ->
         if close_now > rzh:
             breakout_state = "breakout_up"
         elif high_now > rzh and close_now <= rzh:
-            breakout_state = "failed_breakout_up"
+            breakout_state = "bull_trap"  # Also known as failed_breakout
     if isinstance(support_zone_low, (int, float)):
         szl = float(support_zone_low)
         if close_now < szl:
             breakout_state = "breakout_down"
         elif low_now < szl and close_now >= szl and breakout_state == "none":
-            breakout_state = "failed_breakdown_down"
+            breakout_state = "bear_trap"  # Also known as failed_breakdown
     if breakout_state == "breakout_up":
         level_event = "resistance_breakout"
     elif breakout_state == "breakout_down":
         level_event = "support_breakdown"
-    elif breakout_state == "failed_breakout_up":
+    elif breakout_state == "bull_trap":
         level_event = "resistance_reject"
-    elif breakout_state == "failed_breakdown_down":
+    elif breakout_state == "bear_trap":
         level_event = "support_reclaim"
 
     if (
@@ -3355,6 +3425,42 @@ def build_pattern_overlays(
     return out[cols].reset_index(drop=True)
 
 
+def _get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
+    """Get data source information for a ticker.
+    
+    Requirements:
+    - 12.7: Include source in API responses with data source and timestamp
+    
+    Returns:
+        Dictionary with data source information
+    """
+    try:
+        # Get the most recent data source and timestamp for this ticker
+        row = conn.execute(
+            """
+            SELECT data_source, fetch_timestamp
+            FROM price_daily
+            WHERE ticker = ?
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            (ticker,)
+        ).fetchone()
+        
+        if row:
+            return {
+                "price": row[0] or "unknown",
+                "price_timestamp": row[1] or None,
+            }
+    except Exception as e:
+        LOG.warning(f"Failed to get data sources for {ticker}: {e}")
+    
+    return {
+        "price": "unknown",
+        "price_timestamp": None,
+    }
+
+
 def build_dashboard_payload(
     conn: sqlite3.Connection,
     ticker: str,
@@ -3469,6 +3575,7 @@ def build_dashboard_payload(
         "chart_commentary": chart_commentary,
         "earnings_markers": earnings_markers,
         "report_generated_ts": report_generated_ts,
+        "data_sources": _get_data_sources(conn, ticker),
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
             "config": {
@@ -3523,21 +3630,82 @@ def select_fund_snapshot(conn: sqlite3.Connection, min_complete_tickers: int = 4
 
 @app.get("/api/config", include_in_schema=False)
 def config() -> dict[str, Any]:
-    """Public client config — never expose secrets."""
-    return {
+    """Public client config — never expose secrets (Requirement 6.6)."""
+    response = {
         "auth": {
             "admin_api_key_required": bool(API_KEY),
             "admin_api_key_header": "X-API-Key",
         },
     }
+    # Sanitize response to ensure no secrets are exposed
+    return sanitize_public_response(response)
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    """Health check endpoint (Requirement 6.5)."""
     db_exists = DB_PATH.exists()
     payload = {"ok": db_exists, "db_exists": db_exists}
     if EXPOSE_STATUS_INTERNAL:
         payload["db_path"] = str(DB_PATH)
-    return payload
+    # Sanitize response to ensure no secrets are exposed
+    return sanitize_public_response(payload)
+
+
+@app.get("/api/vix-glossary")
+def vix_glossary() -> dict[str, Any]:
+    """Return glossary definitions for VIX trap/reclaim patterns.
+    
+    Requirements: 8.5
+    """
+    from trader_koo.structure.vix_patterns import get_pattern_glossary
+    
+    return {
+        "glossary": get_pattern_glossary(),
+        "description": "Definitions for VIX trap and reclaim pattern terminology",
+    }
+
+
+@app.get("/api/admin/routes")
+def admin_routes() -> dict[str, Any]:
+    """List all admin endpoints with their authentication status.
+    
+    This endpoint helps verify that all admin endpoints are properly protected.
+    
+    Requirements:
+    - 5.4: Provide admin endpoint to list all protected routes with authentication status
+    
+    Returns:
+        Dictionary containing:
+        - total: Total number of admin endpoints
+        - protected: Number of endpoints with authentication
+        - unprotected: Number of endpoints without authentication
+        - routes: List of all admin endpoints with their details
+    """
+    registry = get_admin_endpoint_registry()
+    
+    routes = []
+    protected_count = 0
+    unprotected_count = 0
+    
+    for key, info in sorted(registry.items()):
+        routes.append({
+            "method": info["method"],
+            "path": info["path"],
+            "has_auth": info["has_auth"],
+            "key": key,
+        })
+        if info["has_auth"]:
+            protected_count += 1
+        else:
+            unprotected_count += 1
+    
+    return {
+        "total": len(routes),
+        "protected": protected_count,
+        "unprotected": unprotected_count,
+        "all_protected": unprotected_count == 0,
+        "routes": routes,
+    }
 
 
 @app.post("/api/usage/session", include_in_schema=False)
@@ -4262,6 +4430,7 @@ def _daily_report_response(
                     for key in (
                         "asof_date",
                         "summary",
+                        "llm_commentary",
                         "vix",
                         "ma_matrix",
                         "comparison",
@@ -4573,6 +4742,15 @@ def email_confirm(token: str = Query(..., min_length=16, max_length=512)) -> HTM
             "This link is invalid or expired. Request a new confirmation from the dashboard.",
             ok=False,
         )
+    
+    # Check if token expired
+    if row.get("error") == "token_expired":
+        return _subscription_result_page(
+            "Confirmation Link Expired",
+            row.get("detail", "This confirmation link has expired. Please request a new one."),
+            ok=False,
+        )
+    
     return _subscription_result_page(
         "Subscription Confirmed",
         f"{row['email']} is now subscribed to trader_koo report emails.",
@@ -4760,6 +4938,42 @@ def admin_llm_usage(
     return {
         "ok": True,
         **summary,
+    }
+
+
+@app.get("/api/admin/data-source-health")
+def admin_data_source_health() -> dict[str, Any]:
+    """Return data source success/failure rates and metrics.
+    
+    Requirements:
+    - 12.5: Track success/failure rates and expose via admin health endpoint
+    - 12.6: Alert when primary source failure rate > 10%
+    
+    Returns:
+        Dictionary containing:
+        - ok: Overall health status
+        - sources: Metrics for each data source (yfinance, alpha_vantage, csv_fallback)
+        - alerts: List of active alerts for high failure rates
+    """
+    manager = get_data_source_manager()
+    metrics = manager.get_metrics()
+    
+    # Check for alerts
+    alerts = []
+    for source_name, source_metrics in metrics.items():
+        if source_name == "yfinance" and source_metrics["failure_rate"] > 10.0:
+            alerts.append({
+                "source": source_name,
+                "failure_rate": source_metrics["failure_rate"],
+                "message": f"Primary source {source_name} failure rate ({source_metrics['failure_rate']:.1f}%) exceeds 10% threshold",
+                "severity": "warning"
+            })
+    
+    return {
+        "ok": True,
+        "sources": metrics,
+        "alerts": alerts,
+        "timestamp": datetime.now().isoformat(),
     }
 
 
@@ -5104,7 +5318,8 @@ def status() -> dict[str, Any]:
             with _STATUS_CACHE_LOCK:
                 _STATUS_CACHE_AT = now
                 _STATUS_CACHE_PAYLOAD = payload
-        return payload
+        # Sanitize response to ensure no secrets are exposed (Requirement 6.5)
+        return sanitize_public_response(payload)
     finally:
         conn.close()
 

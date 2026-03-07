@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/cv/compare.py
+# hypothesis_version: 6.151.9
+
+[0.0, 'agreement', 'aligned', 'coerce', 'confidence_gap', 'consensus_confidence', 'cv_confidence', 'cv_status', 'hybrid_confidence', 'hybrid_status', 'outer', 'pattern', 'single_source', 'status']

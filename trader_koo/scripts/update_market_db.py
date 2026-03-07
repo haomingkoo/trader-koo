@@ -220,6 +220,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             low REAL,
             close REAL,
             volume REAL,
+            data_source TEXT DEFAULT 'yfinance',
+            fetch_timestamp TEXT,
             PRIMARY KEY (ticker, date)
         );
 
@@ -503,61 +505,70 @@ def fetch_price_daily(
     auto_adjust: bool = False,
     timeout_sec: float = DEFAULT_PRICE_TIMEOUT_SEC,
     retry_attempts: int = 3,
-) -> pd.DataFrame:
-    last_err: Optional[Exception] = None
-    for attempt in range(1, max(1, retry_attempts) + 1):
-        try:
-            raw = yf.download(
-                tickers=ticker,
-                start=start,
-                end=end,
-                auto_adjust=auto_adjust,
-                progress=False,
-                actions=False,
-                group_by="column",
-                threads=False,
-                timeout=timeout_sec,
-            )
-            break
-        except Exception as exc:
-            last_err = exc
-            if attempt >= max(1, retry_attempts):
-                raise RuntimeError(f"price fetch failed for {ticker}: {last_err}") from last_err
-            sleep_s = (1.8 ** (attempt - 1)) + random.uniform(0.0, 0.4)
-            LOG.warning(
-                "price_fetch_retry ticker=%s attempt=%s/%s timeout=%.1fs err=%s sleep=%.2fs",
-                ticker,
-                attempt,
-                max(1, retry_attempts),
-                timeout_sec,
-                exc,
-                sleep_s,
-            )
-            time.sleep(sleep_s)
-
-    if raw is None or raw.empty:
-        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-    raw_reset = raw.reset_index()
-    try:
-        df = ensure_ohlcv_schema(raw_reset)
-    except Exception:
-        LOG.exception(
-            "schema_normalization_failed ticker=%s start=%s end=%s columns=%s",
-            ticker,
-            start,
-            end,
-            [str(c) for c in raw_reset.columns],
-        )
-        raise
-    if df.empty:
-        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-    df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-    return df[["date", "open", "high", "low", "close", "volume"]].copy()
+) -> tuple[pd.DataFrame, str]:
+    """Fetch daily price data with multi-source redundancy.
+    
+    Requirements:
+    - 12.1: Implement yfinance as primary source
+    - 12.2: Implement Alpha Vantage fallback
+    - 12.3: Implement CSV fallback
+    - 12.4: Add source logging
+    
+    Args:
+        ticker: Ticker symbol
+        start: Start date (YYYY-MM-DD)
+        end: End date (YYYY-MM-DD), optional
+        auto_adjust: Whether to auto-adjust prices
+        timeout_sec: Request timeout in seconds
+        retry_attempts: Number of retry attempts (used for yfinance)
+        
+    Returns:
+        Tuple of (DataFrame with columns: date, open, high, low, close, volume, data source name)
+    """
+    from trader_koo.data.sources import get_data_source_manager
+    
+    # Use multi-source manager for fetching
+    manager = get_data_source_manager()
+    result = manager.fetch_ticker_data(
+        ticker=ticker,
+        start=start,
+        end=end,
+        auto_adjust=auto_adjust,
+        timeout_sec=timeout_sec,
+    )
+    
+    # Log the source used
+    LOG.info(
+        f"Fetched {ticker} from {result.source.value}: "
+        f"{len(result.data)} rows, success={result.success}"
+    )
+    
+    if not result.success or result.data.empty:
+        LOG.warning(f"All data sources failed for {ticker}: {result.error}")
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"]), "none"
+    
+    return result.data, result.source.value
 
 
-def write_price_daily(conn: sqlite3.Connection, ticker: str, df: pd.DataFrame) -> None:
+def write_price_daily(
+    conn: sqlite3.Connection, 
+    ticker: str, 
+    df: pd.DataFrame,
+    data_source: str = "yfinance",
+    fetch_timestamp: Optional[str] = None,
+) -> None:
+    """Write price data to database with data source tracking.
+    
+    Requirements:
+    - 12.4: Add source logging
+    - 12.7: Include source in API responses with data source and timestamp
+    """
     if df.empty:
         return
+    
+    if fetch_timestamp is None:
+        fetch_timestamp = utc_now_iso()
+    
     rows = [
         (
             ticker,
@@ -567,14 +578,16 @@ def write_price_daily(conn: sqlite3.Connection, ticker: str, df: pd.DataFrame) -
             float(r.low),
             float(r.close),
             float(r.volume) if pd.notna(r.volume) else None,
+            data_source,
+            fetch_timestamp,
         )
         for r in df.itertuples(index=False)
     ]
     conn.executemany(
         """
         INSERT OR REPLACE INTO price_daily (
-            ticker, date, open, high, low, close, volume
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ticker, date, open, high, low, close, volume, data_source, fetch_timestamp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -861,7 +874,7 @@ def run(args: argparse.Namespace) -> None:
                                 lookback_days=args.price_lookback_days,
                                 full_refresh=args.full_price_refresh,
                             )
-                            price_df = fetch_price_daily(
+                            price_df, data_source = fetch_price_daily(
                                 ticker=tkr,
                                 start=price_fetch_start,
                                 end=args.price_end,
@@ -870,9 +883,10 @@ def run(args: argparse.Namespace) -> None:
                                 retry_attempts=args.price_retry_attempts,
                             )
                             price_rows = len(price_df)
-                            write_price_daily(conn, tkr, price_df)
+                            write_price_daily(conn, tkr, price_df, data_source=data_source)
                             message_parts.append(f"price:start={price_fetch_start}")
                             message_parts.append(f"price:rows={price_rows}")
+                            message_parts.append(f"price:source={data_source}")
 
                         if args.include_options:
                             last_opt = get_latest_snapshot_ts(conn, "options_iv", tkr)

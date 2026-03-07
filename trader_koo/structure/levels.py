@@ -32,6 +32,7 @@ LEVEL_COLUMNS = [
     "recency_score",
     "dist",
     "tier",
+    "source",
 ]
 
 
@@ -109,6 +110,7 @@ def _build_side_levels(
                 "recency_score": recency_score,
                 "dist": np.nan,
                 "tier": "raw",
+                "source": "pivot_cluster",  # Requirement 10.1
             }
         )
 
@@ -150,11 +152,20 @@ def select_target_levels(levels: pd.DataFrame, last_close: float, cfg: LevelConf
     lv = lv[lv["dist"] <= cfg.max_dist_secondary_pct * last_close].copy()
     if lv.empty:
         return _empty_levels()
+    
+    # Requirement 10.4: Prioritize pivot_cluster > ma_anchor > fallback
+    # Add priority score for sorting
+    source_priority = {"pivot_cluster": 0, "ma_anchor": 1, "fallback": 2}
+    lv["source_priority"] = lv.get("source", "pivot_cluster").map(source_priority).fillna(2)
 
     def pick(side: str, is_support: bool) -> pd.DataFrame:
         cond = lv["type"] == side
         cond = cond & (lv["level"] <= last_close if is_support else lv["level"] >= last_close)
-        pool = lv[cond].sort_values(["dist", "touches", "recency_score"], ascending=[True, False, False])
+        # Sort by source priority first, then distance, touches, and recency
+        pool = lv[cond].sort_values(
+            ["source_priority", "dist", "touches", "recency_score"], 
+            ascending=[True, True, False, False]
+        )
         # If price is sitting at/near extremes, strict one-sided filtering can return empty.
         # In that case, allow nearby levels around last_close before falling back.
         if pool.empty:
@@ -164,7 +175,10 @@ def select_target_levels(levels: pd.DataFrame, last_close: float, cfg: LevelConf
                 near_cond = near_cond & (lv["level"] <= last_close * (1 + tol))
             else:
                 near_cond = near_cond & (lv["level"] >= last_close * (1 - tol))
-            pool = lv[near_cond].sort_values(["dist", "touches", "recency_score"], ascending=[True, False, False])
+            pool = lv[near_cond].sort_values(
+                ["source_priority", "dist", "touches", "recency_score"], 
+                ascending=[True, True, False, False]
+            )
         if pool.empty:
             return _empty_levels()
         primary = pool[pool["dist"] <= cfg.max_dist_primary_pct * last_close].head(cfg.primary_each_side).copy()
@@ -178,6 +192,9 @@ def select_target_levels(levels: pd.DataFrame, last_close: float, cfg: LevelConf
     out = _safe_concat([sup, res])
     if out.empty:
         return out
+    # Drop the temporary priority column before returning
+    if "source_priority" in out.columns:
+        out = out.drop(columns=["source_priority"])
     return out.drop_duplicates(subset=["type", "level"]).sort_values("level").reset_index(drop=True)
 
 
@@ -219,6 +236,7 @@ def add_fallback_levels(
                 "recency_score": 1.0,
                 "dist": abs(level - last_close),
                 "tier": "fallback",
+                "source": "fallback",  # Requirement 10.1
             }
         )
 
@@ -240,6 +258,7 @@ def add_fallback_levels(
                 "recency_score": 1.0,
                 "dist": abs(level - last_close),
                 "tier": "fallback",
+                "source": "fallback",  # Requirement 10.1
             }
         )
 

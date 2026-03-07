@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/cv/proxy_patterns.py
+# hypothesis_version: 6.151.9
+
+[0.0, 1e-12, 1e-09, 0.0008, 0.005, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, 0.18, 0.2, 0.22, 0.25, 0.28, 0.3, 0.38, 0.4, 0.42, 0.44, 0.45, 0.5, 0.65, 0.92, 0.99, 1.0, 2.0, 3.0, 4.0, 100, 120, 150, '%Y-%m-%d', 'ascending_triangle', 'bear_flag', 'breakdown', 'breakout', 'bull_flag', 'close', 'coerce', 'cv_confidence', 'cv_proxy_pivot', 'cv_proxy_regression', 'date', 'descending_triangle', 'double_bottom', 'double_top', 'end_date', 'falling_wedge', 'forming', 'head_and_shoulders', 'high', 'low', 'method', 'notes', 'open', 'pattern', 'rising_wedge', 'start_date', 'status', 'symmetrical_triangle', 'x0_date', 'x1_date', 'x_mid_date', 'y0', 'y0b', 'y1', 'y1b', 'y_mid']

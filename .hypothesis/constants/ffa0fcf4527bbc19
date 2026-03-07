@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/structure/patterns.py
+# hypothesis_version: 6.151.9
+
+[0.0, 1e-09, 0.003, 0.04, 0.05, 0.12, 0.14, 0.4, 0.45, 0.75, 0.78, 0.99, 1.0, 2.0, 2.4, 4.0, '%Y-%m-%d', 'bear_flag', 'breakdown', 'breakout', 'bull_flag', 'close', 'confidence', 'date', 'end_date', 'falling_wedge', 'forming', 'high', 'low', 'notes', 'open', 'pattern', 'rising_wedge', 'start_date', 'status', 'x0_date', 'x1_date', 'y0', 'y0b', 'y1', 'y1b']

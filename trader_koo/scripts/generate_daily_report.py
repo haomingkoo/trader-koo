@@ -49,6 +49,17 @@ from trader_koo.structure.levels import (
     build_levels_from_pivots,
     select_target_levels,
 )
+from trader_koo.structure.vix_analysis import (
+    calculate_term_structure,
+    calculate_vix_percentile,
+    get_percentile_color,
+    should_show_volatility_warning,
+)
+from trader_koo.structure.vix_patterns import (
+    VIXTrapReclaimConfig,
+    detect_vix_trap_reclaim_patterns,
+    get_pattern_glossary,
+)
 
 
 MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
@@ -1176,6 +1187,72 @@ def _percentile_rank(values: list[float], current: float | None) -> float | None
     return (rank_le / len(values)) * 100.0
 
 
+def _build_regime_llm_commentary(regime: dict[str, Any]) -> dict[str, Any]:
+    safe_regime = regime if isinstance(regime, dict) else {}
+    vix = safe_regime.get("vix") if isinstance(safe_regime.get("vix"), dict) else {}
+    health = safe_regime.get("health") if isinstance(safe_regime.get("health"), dict) else {}
+    summary = str(safe_regime.get("summary") or "").strip() or "Regime context is unavailable for this snapshot."
+    health_state = str(health.get("state") or "neutral").strip().lower()
+    warnings = [str(w).strip() for w in (health.get("warnings") or []) if str(w).strip()]
+    risk_note = warnings[0] if warnings else "context_only_signal"
+    asof_date = str(safe_regime.get("asof_date") or "").strip() or None
+    setup_score = health.get("score")
+    try:
+        setup_score = float(setup_score) if setup_score is not None else None
+    except (TypeError, ValueError):
+        setup_score = None
+    if isinstance(setup_score, (int, float)):
+        if setup_score >= 85:
+            setup_tier = "A"
+        elif setup_score >= 70:
+            setup_tier = "B"
+        elif setup_score >= 55:
+            setup_tier = "C"
+        else:
+            setup_tier = "D"
+    else:
+        setup_tier = "C"
+
+    if health_state == "risk_on":
+        action = "Risk backdrop is supportive, but only act on confirmed setups with defined invalidation levels."
+        signal_bias = "bullish"
+    elif health_state == "risk_off":
+        action = "Risk backdrop is defensive. Reduce gross exposure and wait for stronger confirmation before adding risk."
+        signal_bias = "bearish"
+    else:
+        action = "Backdrop is mixed. Keep size moderate and prioritize cleaner structures with confirmation."
+        signal_bias = "neutral"
+
+    row: dict[str, Any] = {
+        "ticker": "^VIX",
+        "asof": asof_date,
+        "score": setup_score,
+        "setup_tier": setup_tier,
+        "setup_family": "market_regime",
+        "signal_bias": signal_bias,
+        "trend_state": vix.get("ma_state"),
+        "breakout_state": vix.get("breakout_state"),
+        "structure_state": vix.get("compression_state"),
+        "observation": summary,
+        "action": action,
+        "risk_note": risk_note,
+    }
+    source = "rule"
+    try:
+        llm_overrides = maybe_rewrite_setup_copy(row, source="regime_context")
+    except Exception:
+        llm_overrides = {}
+    if llm_overrides:
+        row.update(llm_overrides)
+        source = "llm"
+    return {
+        "source": source,
+        "observation": str(row.get("observation") or summary),
+        "action": str(row.get("action") or action),
+        "risk_note": str(row.get("risk_note") or risk_note or "context_only_signal"),
+    }
+
+
 def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
     regime: dict[str, Any] = {
         "context_only": True,
@@ -1260,23 +1337,27 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
         else:
             risk_state = "mixed_regime"
 
-        vix3m_rows = _fetch_symbol_ohlcv(conn, "^VIX3M", limit=12) or _fetch_symbol_ohlcv(conn, "VIX3M", limit=12)
-        vix3m_latest = None
-        if vix3m_rows:
-            try:
-                vix3m_latest = float(vix3m_rows[-1]["close"])
-            except (TypeError, ValueError):
-                vix3m_latest = None
+        # Calculate term structure with fallback (Requirements 9.1-9.6)
+        term_structure = calculate_term_structure(conn)
+        
+        # Extract values for backward compatibility
+        vix3m_latest = term_structure.vix_3m or term_structure.vix_6m
         term_structure_ratio = None
         term_structure_state = "unavailable"
-        if isinstance(vix3m_latest, (int, float)) and vix3m_latest > 0 and latest > 0:
-            term_structure_ratio = vix3m_latest / latest
-            if term_structure_ratio >= 1.03:
-                term_structure_state = "contango"
-            elif term_structure_ratio <= 0.97:
-                term_structure_state = "backwardation"
-            else:
-                term_structure_state = "flat"
+        
+        if term_structure.source != "unavailable":
+            if term_structure.vix_3m:
+                term_structure_ratio = term_structure.vix_3m / latest
+            elif term_structure.vix_6m:
+                term_structure_ratio = term_structure.vix_6m / latest
+            
+            if term_structure_ratio:
+                if term_structure_ratio >= 1.03:
+                    term_structure_state = "contango"
+                elif term_structure_ratio <= 0.97:
+                    term_structure_state = "backwardation"
+                else:
+                    term_structure_state = "flat"
 
         # Multi-timeframe VIX structure using rolling windows on daily bars.
         tf_rows: list[dict[str, Any]] = []
@@ -1366,6 +1447,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                                 "touches": int(lv.get("touches") or 0),
                                 "distance_pct": round(dist_pct, 2),
                                 "last_touch_date": str(lv.get("last_touch_date") or ""),
+                                "source": str(lv.get("source") or "pivot_cluster"),  # Requirement 10.1, 10.3
                             }
                         )
         except Exception:
@@ -1422,9 +1504,41 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                         "touches": 1 if last_touch_idx is not None else 0,
                         "distance_pct": round(dist_pct, 2),
                         "last_touch_date": dates_for_levels[last_touch_idx] if last_touch_idx is not None else "",
+                        "source": "fallback",  # Requirement 10.1, 10.3
                     }
                 )
         regime["levels"] = levels_out
+
+        # Detect VIX trap/reclaim patterns
+        trap_reclaim_patterns: list[dict[str, Any]] = []
+        try:
+            vix_df = pd.DataFrame(vix_rows)
+            if not vix_df.empty and levels_out:
+                patterns = detect_vix_trap_reclaim_patterns(
+                    vix_df, levels_out, VIXTrapReclaimConfig()
+                )
+                for pattern in patterns:
+                    trap_reclaim_patterns.append(
+                        {
+                            "pattern_type": pattern.pattern_type,
+                            "date": pattern.date,
+                            "price": round(pattern.price, 2),
+                            "level": round(pattern.level, 2),
+                            "confidence": round(pattern.confidence, 2),
+                            "explanation": pattern.explanation,
+                            "bars_to_reversal": pattern.bars_to_reversal,
+                        }
+                    )
+        except Exception as e:
+            # Log but don't fail if pattern detection has issues
+            pass
+
+        regime["trap_reclaim_patterns"] = trap_reclaim_patterns
+
+        # Calculate VIX percentile (Requirement 11.1)
+        vix_percentile = calculate_vix_percentile(conn, window_days=252)
+        vix_percentile_color = get_percentile_color(vix_percentile)
+        vix_percentile_warning = should_show_volatility_warning(vix_percentile)
 
         regime["asof_date"] = str(vix_rows[-1]["date"])
         regime["vix"] = {
@@ -1450,8 +1564,13 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
             if isinstance(term_structure_ratio, (int, float))
             else None,
             "term_structure_state": term_structure_state,
+            "term_structure_source": term_structure.source,  # Requirement 9.3
+            "term_structure_timestamp": term_structure.timestamp.isoformat(),  # Requirement 9.6
             "vix3m_close": round(vix3m_latest, 2) if isinstance(vix3m_latest, (int, float)) else None,
             "level_source": level_source,
+            "percentile": round(vix_percentile, 1) if vix_percentile is not None else None,  # Requirement 11.6
+            "percentile_color": vix_percentile_color,  # Requirement 11.3
+            "percentile_warning": vix_percentile_warning,  # Requirement 11.5
         }
         regime["ma_matrix"] = [
             {
@@ -1631,6 +1750,30 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
     drivers: list[str] = []
     warnings: list[str] = []
 
+    # VIX percentile as primary factor (Requirement 11.4)
+    vix_percentile = vix_info.get("percentile")
+    if isinstance(vix_percentile, (int, float)):
+        if vix_percentile < 30:
+            # Low volatility percentile = risk-on
+            health_score += 20.0
+            drivers.append(f"VIX percentile at {vix_percentile:.1f}% (historically low volatility)")
+        elif vix_percentile < 50:
+            # Below median = moderately risk-on
+            health_score += 10.0
+            drivers.append(f"VIX percentile at {vix_percentile:.1f}% (below median volatility)")
+        elif vix_percentile < 70:
+            # Above median = moderately risk-off
+            health_score -= 10.0
+            warnings.append(f"VIX percentile at {vix_percentile:.1f}% (above median volatility)")
+        else:
+            # High volatility percentile = risk-off
+            health_score -= 20.0
+            warnings.append(f"VIX percentile at {vix_percentile:.1f}% (historically high volatility)")
+        
+        # Additional warning for elevated volatility (Requirement 11.5)
+        if vix_info.get("percentile_warning"):
+            warnings.append("⚠️ ELEVATED VOLATILITY: VIX percentile exceeds 80%")
+
     ma_state = str(vix_info.get("ma_state") or "")
     if ma_state == "below_ma20_ma50":
         health_score += 15.0
@@ -1713,6 +1856,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
         )
     else:
         regime["summary"] = "Regime context unavailable (insufficient VIX history)."
+    regime["llm_commentary"] = _build_regime_llm_commentary(regime)
     return regime
 
 
@@ -5529,14 +5673,16 @@ def to_markdown(report: dict[str, Any]) -> str:
         if isinstance(level_rows, list) and level_rows:
             lines.append("")
             lines.append("### VIX Key Levels")
-            lines.append("| type | level | zone_low | zone_high | tier | touches | distance_pct | last_touch_date |")
-            lines.append("|---|---:|---:|---:|---|---:|---:|---|")
+            lines.append("| type | level | zone_low | zone_high | tier | source | touches | distance_pct | last_touch_date |")
+            lines.append("|---|---:|---:|---:|---|---|---:|---:|---|")
             for row in level_rows:
                 if not isinstance(row, dict):
                     continue
+                # Requirement 10.6: Include source in reports
+                source = row.get('source', 'unknown')
                 lines.append(
                     f"| {row.get('type', '-')} | {row.get('level', '-')} | {row.get('zone_low', '-')} | {row.get('zone_high', '-')} | "
-                    f"{row.get('tier', '-')} | {row.get('touches', '-')} | {row.get('distance_pct', '-')} | {row.get('last_touch_date', '-')} |"
+                    f"{row.get('tier', '-')} | {source} | {row.get('touches', '-')} | {row.get('distance_pct', '-')} | {row.get('last_touch_date', '-')} |"
                 )
         participation = regime_ctx.get("participation", [])
         if isinstance(participation, list) and participation:

@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/security/__init__.py
+# hypothesis_version: 6.151.9
+
+['SECRET_PATTERNS', 'redact_secrets']
