@@ -82,6 +82,7 @@ from trader_koo.report_email import (
     report_email_app_url,
 )
 from trader_koo.scripts.generate_daily_report import (
+    _build_regime_context as _report_build_regime_context,
     _describe_setup as _report_describe_setup,
     _score_setup_from_confluence as _report_score_setup_from_confluence,
     _yolo_age_factor as _report_yolo_age_factor,
@@ -4233,6 +4234,48 @@ def _daily_report_response(
     """Build daily report payload for admin/public APIs."""
     report_dir = REPORT_DIR
     latest_path, latest_payload = _latest_daily_report_json(report_dir)
+    if isinstance(latest_payload, dict):
+        signals = latest_payload.get("signals")
+        if isinstance(signals, dict):
+            regime_ctx = signals.get("regime_context")
+            needs_ma_matrix = not (
+                isinstance(regime_ctx, dict)
+                and isinstance(regime_ctx.get("ma_matrix"), list)
+                and len(regime_ctx.get("ma_matrix") or []) > 0
+            )
+            comparison = regime_ctx.get("comparison") if isinstance(regime_ctx, dict) else None
+            needs_comparison = not (
+                isinstance(comparison, dict)
+                and isinstance(comparison.get("series"), list)
+                and len(comparison.get("series") or []) > 0
+            )
+            if needs_ma_matrix or needs_comparison:
+                conn = get_conn()
+                try:
+                    live_regime = _report_build_regime_context(conn)
+                except Exception:
+                    live_regime = {}
+                finally:
+                    conn.close()
+                if isinstance(live_regime, dict) and live_regime:
+                    merged = dict(regime_ctx) if isinstance(regime_ctx, dict) else {}
+                    for key in (
+                        "asof_date",
+                        "summary",
+                        "vix",
+                        "ma_matrix",
+                        "comparison",
+                        "participation",
+                        "overall",
+                        "health",
+                        "timeframes",
+                        "levels",
+                    ):
+                        if key not in merged or not merged.get(key):
+                            merged[key] = live_regime.get(key)
+                    if not str(merged.get("source") or "").strip():
+                        merged["source"] = "regime_context_live_patch"
+                    signals["regime_context"] = merged
     pipeline = _pipeline_status_snapshot(log_lines=120)
     detail: str | None = None
     log_hint = "/api/admin/logs?name=cron" if include_admin_log_hints else "server logs"
