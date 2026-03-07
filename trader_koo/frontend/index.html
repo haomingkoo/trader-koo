@@ -358,6 +358,25 @@
       min-width: 0;
       overflow-wrap: anywhere;
     }
+    .earnings-card-ticker-link {
+      width: auto;
+      padding: 0;
+      margin: 0;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 1rem;
+      font-weight: 800;
+      line-height: 1.1;
+      text-align: left;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .earnings-card-ticker-link:hover {
+      color: #c9dcff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
     .earnings-card-actions {
       display: inline-flex;
       align-items: center;
@@ -562,6 +581,14 @@
       gap: 6px;
       margin-top: 8px;
     }
+    .chart-return-sticky {
+      position: sticky;
+      top: 8px;
+      z-index: 45;
+      background: linear-gradient(180deg, rgba(5, 9, 16, 0.98), rgba(5, 9, 16, 0.92));
+      padding: 4px 0 6px;
+      backdrop-filter: blur(2px);
+    }
     .mini-actions button {
       width: auto;
       padding: 5px 9px;
@@ -695,7 +722,7 @@
       align-items: center;
       margin-bottom: 8px;
     }
-    .report-watch-wrap input {
+    .report-watch-wrap > input {
       flex: 1 1 180px;
       min-width: 160px;
       width: auto;
@@ -706,35 +733,78 @@
       font-size: 0.76rem;
     }
     .earnings-controls {
-      align-items: flex-end;
+      align-items: center;
       gap: 10px;
     }
     .earnings-controls .earnings-lookahead {
       display: inline-flex;
-      flex-direction: column;
-      gap: 4px;
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
       flex: 0 0 auto;
-      width: 74px;
-      min-width: 74px;
-      max-width: 74px;
+      width: auto;
+      min-width: 0;
+      max-width: none;
     }
     .earnings-controls .earnings-lookahead label {
       color: var(--muted);
-      font-size: 0.72rem;
-      line-height: 1.2;
+      font-size: 0.68rem;
+      line-height: 1.1;
+      white-space: nowrap;
+      margin: 0;
     }
     .earnings-controls .earnings-lookahead input {
-      width: 74px !important;
-      min-width: 74px !important;
-      max-width: 74px !important;
-      height: 34px !important;
-      min-height: 34px;
-      max-height: 34px;
-      padding: 4px 8px !important;
+      width: 54px !important;
+      min-width: 54px !important;
+      max-width: 54px !important;
+      height: 30px !important;
+      min-height: 30px;
+      max-height: 30px;
+      padding: 2px 6px !important;
       line-height: 1;
       text-align: center;
       font-variant-numeric: tabular-nums;
-      font-size: 0.9rem;
+      font-size: 0.82rem;
+    }
+    input.earnings-days-input {
+      box-sizing: border-box;
+      width: 54px !important;
+      min-width: 54px !important;
+      max-width: 54px !important;
+      height: 30px !important;
+      min-height: 30px !important;
+      max-height: 30px !important;
+      padding: 2px 6px !important;
+      line-height: 1 !important;
+      text-align: center !important;
+      font-variant-numeric: tabular-nums;
+      flex: 0 0 54px !important;
+      display: inline-block;
+    }
+    .report-watch-wrap.earnings-controls input.earnings-days-input {
+      flex: 0 0 54px !important;
+      width: 54px !important;
+      min-width: 54px !important;
+      max-width: 54px !important;
+      height: 30px !important;
+      min-height: 30px !important;
+      max-height: 30px !important;
+      padding: 2px 6px !important;
+      line-height: 1 !important;
+      text-align: center !important;
+      font-variant-numeric: tabular-nums;
+      appearance: textfield;
+      -moz-appearance: textfield;
+    }
+    .report-watch-wrap.earnings-controls input.earnings-days-input::-webkit-outer-spin-button,
+    .report-watch-wrap.earnings-controls input.earnings-days-input::-webkit-inner-spin-button {
+      margin: 0;
+    }
+    .report-watch-wrap.earnings-controls .earnings-lookahead {
+      flex: 0 0 auto !important;
+      width: auto !important;
+      min-width: 0 !important;
+      max-width: none !important;
     }
     .earnings-controls .field.compact-number {
       flex: 0 0 96px;
@@ -1489,7 +1559,7 @@
       .report-watch-wrap > input, .report-watch-wrap > button { width: 100%; }
       .earnings-controls {
         flex-direction: row;
-        align-items: end;
+        align-items: center;
       }
       .earnings-controls .field.compact-number,
       .earnings-controls .field.compact-number input {
@@ -1497,11 +1567,36 @@
         min-width: 86px !important;
         max-width: 86px !important;
       }
-      .earnings-controls .earnings-lookahead,
+      .earnings-controls .earnings-lookahead {
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+      }
       .earnings-controls .earnings-lookahead input {
-        width: 68px !important;
-        min-width: 68px !important;
-        max-width: 68px !important;
+        width: 50px !important;
+        min-width: 50px !important;
+        max-width: 50px !important;
+      }
+      input.earnings-days-input {
+        width: 50px !important;
+        min-width: 50px !important;
+        max-width: 50px !important;
+        height: 30px !important;
+      }
+      .report-watch-wrap.earnings-controls input.earnings-days-input {
+        flex: 0 0 50px !important;
+        width: 50px !important;
+        min-width: 50px !important;
+        max-width: 50px !important;
+        height: 30px !important;
+        min-height: 30px !important;
+        max-height: 30px !important;
+      }
+      .report-watch-wrap.earnings-controls .earnings-lookahead {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
       }
       .earnings-controls .earnings-watch-field {
         flex: 1 1 120px;
@@ -1790,7 +1885,7 @@
           <button onclick="loadTickerQuick('^DJI')">DJI</button>
           <button onclick="loadTickerQuick('^TNX')">TNX</button>
         </div>
-        <div id="chartReturnWrap" class="mini-actions hidden" style="margin:0 0 10px 0;">
+        <div id="chartReturnWrap" class="mini-actions chart-return-sticky hidden" style="margin:0 0 10px 0;">
           <button id="chartBackToReportBtn" type="button">← Back to Daily Report</button>
         </div>
         <div id="chartReturnFloating" class="chart-return-floating hidden">
@@ -2092,8 +2187,8 @@
       <div class="panel" style="margin-bottom:12px;">
 	        <div class="report-watch-wrap earnings-controls">
 	          <div class="earnings-lookahead">
-	            <label for="earningsDays">Lookahead Days</label>
-	            <input id="earningsDays" class="earnings-days-input" type="number" min="1" max="90" step="1" value="21" />
+	            <label for="earningsDays" title="Lookahead Days">Days</label>
+	            <input id="earningsDays" class="earnings-days-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="21" aria-label="Lookahead days" />
 	          </div>
           <label class="field earnings-watch-field" style="display:flex; flex-direction:row; align-items:center; gap:8px; min-width:220px;">
             <input id="earningsWatchOnly" type="checkbox" style="width:auto; padding:0; margin:0;" />
@@ -2293,6 +2388,8 @@
     let LAST_CHART_COMMENTARY = null;
     let USAGE_STATE = null;
     let USAGE_TIMER = null;
+    const REGIME_COMPARE_CACHE = new Map();
+    const REGIME_COMPARE_INFLIGHT = new Map();
 
     function fmt(v, d = 2) {
       if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
@@ -2619,6 +2716,24 @@
       return `${cleaned || clipped}...`;
     }
 
+    function compactSentence(value, maxChars = 220) {
+      const text = sanitizeSnippetTail(value);
+      if (!text) return "-";
+      const cap = Number(maxChars || 0);
+      if (!Number.isFinite(cap) || cap <= 0 || text.length <= cap) return text;
+      const clipped = text.slice(0, cap).trim();
+      const sentenceCut = Math.max(
+        clipped.lastIndexOf(". "),
+        clipped.lastIndexOf("! "),
+        clipped.lastIndexOf("? "),
+      );
+      const cutAt = sentenceCut > 90
+        ? sentenceCut + 1
+        : (clipped.lastIndexOf(" ") > 40 ? clipped.lastIndexOf(" ") : clipped.length);
+      const out = sanitizeSnippetTail(clipped.slice(0, cutAt)).replace(/[.,;:\s]+$/g, "").trim();
+      return `${out || clipped}...`;
+    }
+
     function isUsableSetupOverride(row) {
       if (!row || typeof row !== "object") return false;
       return [
@@ -2641,11 +2756,15 @@
     function syncChartReturnUi() {
       const hasContext = !!REPORT_RETURN_STATE;
       const chartVisible = tabChart ? !tabChart.classList.contains("hidden") : false;
-      const show = hasContext && chartVisible;
+      const show = chartVisible;
       const wrap = $("chartReturnWrap");
       if (wrap) wrap.classList.toggle("hidden", !show);
+      const primaryBtn = $("chartBackToReportBtn");
+      if (primaryBtn) primaryBtn.textContent = hasContext ? "← Back to Daily Report" : "← Go to Daily Report";
       const floating = $("chartReturnFloating");
-      if (floating) floating.classList.toggle("hidden", !show);
+      if (floating) floating.classList.toggle("hidden", !chartVisible);
+      const floatBtn = $("chartBackToReportFloatBtn");
+      if (floatBtn) floatBtn.textContent = hasContext ? "← Daily Report" : "← Report";
     }
 
     function setReportReturnContext() {
@@ -2661,18 +2780,44 @@
     function scrollChartEntryIntoView() {
       const target = $("chartTopAnchor") || $("chartReturnWrap") || $("chartStatus") || $("tabChart");
       if (!target) return;
-      const top = window.scrollY + target.getBoundingClientRect().top - 10;
-      window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+      try {
+        target.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
+      } catch {}
+      const top = window.scrollY + target.getBoundingClientRect().top - 12;
+      const nextTop = Math.max(0, top);
+      window.scrollTo({ top: nextTop, behavior: "auto" });
+      if (document && document.documentElement) document.documentElement.scrollTop = nextTop;
+      if (document && document.body) document.body.scrollTop = nextTop;
+    }
+
+    function forceChartTopVisibility() {
+      const run = () => {
+        window.scrollTo({ top: 0, behavior: "auto" });
+        if (document && document.documentElement) document.documentElement.scrollTop = 0;
+        if (document && document.body) document.body.scrollTop = 0;
+        scrollChartEntryIntoView();
+      };
+      run();
+      window.requestAnimationFrame(run);
+      window.setTimeout(run, 120);
+      window.setTimeout(run, 280);
+      window.setTimeout(run, 550);
+      window.setTimeout(run, 900);
     }
 
     function scheduleChartEntryScroll() {
       const run = () => scrollChartEntryIntoView();
+      run();
       window.requestAnimationFrame(() => {
         run();
         window.setTimeout(run, 120);
         window.setTimeout(run, 280);
         window.setTimeout(run, 550);
         window.setTimeout(run, 900);
+        window.setTimeout(run, 1400);
+        window.setTimeout(run, 2000);
+        window.setTimeout(run, 3000);
+        window.setTimeout(run, 4200);
       });
     }
 
@@ -2694,16 +2839,31 @@
       clearReportReturnContext();
     }
 
+    function findCanonicalReportSetupRow(ticker) {
+      const symbol = normalizeTickerSymbol(ticker);
+      if (!symbol) return null;
+      return (LAST_REPORT_SETUP_ROWS || []).find((row) => normalizeTickerSymbol(row && row.ticker) === symbol) || null;
+    }
+
+    function resolveReportSetupOverride(ticker, setupRow = null) {
+      const symbol = normalizeTickerSymbol(ticker);
+      if (!symbol) return null;
+      const canonical = findCanonicalReportSetupRow(symbol);
+      const explicit = setupRow && typeof setupRow === "object" ? { ...setupRow, ticker: symbol } : null;
+      if (!canonical && !explicit) return null;
+      const merged = { ...(canonical || {}), ...(explicit || {}), ticker: symbol };
+      return isUsableSetupOverride(merged) ? merged : null;
+    }
+
     function loadTickerFromReport(ticker, setupRow = null) {
       const symbol = normalizeTickerSymbol(ticker);
       if (!symbol) return;
-      const fallbackRow = findReportSetupRow(symbol);
-      const explicitRow = setupRow && typeof setupRow === "object" ? { ...setupRow, ticker: symbol } : null;
-      LAST_REPORT_CLICK_OVERRIDE = isUsableSetupOverride(explicitRow) ? explicitRow : (fallbackRow || null);
+      LAST_REPORT_CLICK_OVERRIDE = resolveReportSetupOverride(symbol, setupRow);
       setReportReturnContext();
-      CHART_SOURCE_CONTEXT = LAST_REPORT_GENERATED_TS ? "report_snapshot" : "live";
+      CHART_SOURCE_CONTEXT = "report_snapshot";
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
       loadTickerQuick(symbol, {
-        reportGeneratedTs: LAST_REPORT_GENERATED_TS,
+        reportGeneratedTs: LAST_REPORT_GENERATED_TS || null,
         forceReportOverride: true,
         focusChartEntry: true,
       });
@@ -2718,8 +2878,8 @@
         signal_bias_label: titleCaseWords(row.signal_bias || "neutral"),
         actionability_label: humanizeActionability(row.actionability),
         context_label: humanizeSetupContext(row),
-        observation_short: shortenCopy(row.observation || buildSetupReason(row), 176),
-        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 148),
+        observation_short: compactSentence(row.observation || buildSetupReason(row), 260),
+        action_short: compactSentence(row.action || "Watch only until the setup confirms.", 190),
       }));
     }
 
@@ -2766,11 +2926,16 @@
         );
       }).join("");
       const canonicalRows = (LAST_REPORT_SETUP_ROWS || []).length ? LAST_REPORT_SETUP_ROWS : (rows || []);
-      const rowMap = new Map((canonicalRows || []).map((row) => [normalizeTickerSymbol(row && row.ticker), row]));
+      const rowMap = new Map();
+      (canonicalRows || []).forEach((row) => {
+        const key = normalizeTickerSymbol(row && row.ticker);
+        if (!key || rowMap.has(key)) return;
+        rowMap.set(key, row);
+      });
       el.querySelectorAll("button[data-setup-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-setup-load");
-          if (ticker) loadTickerFromReport(ticker, rowMap.get(normalizeTickerSymbol(ticker)) || null);
+          if (ticker) loadTickerFromReportContext(ticker, rowMap.get(normalizeTickerSymbol(ticker)) || null);
         });
       });
     }
@@ -2811,11 +2976,16 @@
         );
       }).join("");
       const canonicalRows = (LAST_REPORT_SETUP_ROWS || []).length ? LAST_REPORT_SETUP_ROWS : (rows || []);
-      const rowMap = new Map((canonicalRows || []).map((row) => [normalizeTickerSymbol(row && row.ticker), row]));
+      const rowMap = new Map();
+      (canonicalRows || []).forEach((row) => {
+        const key = normalizeTickerSymbol(row && row.ticker);
+        if (!key || rowMap.has(key)) return;
+        rowMap.set(key, row);
+      });
       el.querySelectorAll("button[data-setup-audit-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-setup-audit-load");
-          if (ticker) loadTickerFromReport(ticker, rowMap.get(normalizeTickerSymbol(ticker)) || null);
+          if (ticker) loadTickerFromReportContext(ticker, rowMap.get(normalizeTickerSymbol(ticker)) || null);
         });
       });
     }
@@ -2848,7 +3018,7 @@
       el.querySelectorAll("button[data-chip-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-chip-load");
-          if (ticker) loadTickerFromReport(ticker);
+          if (ticker) loadTickerFromReportContext(ticker);
         });
       });
     }
@@ -2892,7 +3062,7 @@
       el.querySelectorAll("button[data-persist-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-persist-load");
-          if (ticker) loadTickerFromReport(ticker);
+          if (ticker) loadTickerFromReportContext(ticker);
         });
       });
     }
@@ -3040,6 +3210,243 @@
       };
     }
 
+    function deriveRegimeLevelsFallback(levels, timeframes, vixClose) {
+      const given = Array.isArray(levels) ? levels.filter((row) => row && row.level != null) : [];
+      if (given.length) return given;
+      const close = Number(vixClose);
+      const rows = Array.isArray(timeframes) ? timeframes : [];
+      if (!Number.isFinite(close) || !rows.length) return [];
+      const lowPoints = [];
+      const highPoints = [];
+      rows.forEach((row) => {
+        const low = Number(row && row.range_low);
+        const high = Number(row && row.range_high);
+        if (Number.isFinite(low)) lowPoints.push(low);
+        if (Number.isFinite(high)) highPoints.push(high);
+      });
+      const uniq = (arr) => [...new Set(arr.map((n) => Number(n.toFixed(2))))];
+      const supports = uniq(lowPoints).filter((n) => n <= close).sort((a, b) => b - a).slice(0, 2);
+      const resistances = uniq(highPoints).filter((n) => n >= close).sort((a, b) => a - b).slice(0, 2);
+      const zoneBand = (n) => {
+        const width = Math.max(0.08, Math.abs(n) * 0.004);
+        return { low: Number((n - width).toFixed(2)), high: Number((n + width).toFixed(2)) };
+      };
+      const asLevel = (type, n, tier) => {
+        const zone = zoneBand(n);
+        return {
+          type,
+          level: Number(n.toFixed(2)),
+          zone_low: zone.low,
+          zone_high: zone.high,
+          tier,
+          source: "rolling_window_fallback",
+          touches: "-",
+          distance_pct: Number((((n - close) / close) * 100).toFixed(2)),
+          last_touch_date: "-",
+        };
+      };
+      return [
+        ...supports.map((n, idx) => asLevel("support", n, idx === 0 ? "primary" : "secondary")),
+        ...resistances.map((n, idx) => asLevel("resistance", n, idx === 0 ? "primary" : "secondary")),
+      ];
+    }
+
+    function normalizeRegimeComparisonSeriesFromCharts(payloads, symbols) {
+      const rowsByKey = {
+        vix_idx: [],
+        spx_idx: [],
+        dji_idx: [],
+        ndx_idx: [],
+      };
+      Object.entries(payloads || {}).forEach(([k, payload]) => {
+        const chart = Array.isArray(payload && payload.chart) ? payload.chart : [];
+        rowsByKey[k] = chart
+          .map((row) => ({
+            date: String(row && row.date || "").slice(0, 10),
+            close: Number(row && row.close),
+          }))
+          .filter((row) => row.date && Number.isFinite(row.close));
+      });
+      const allDates = [...new Set(
+        Object.values(rowsByKey)
+          .flat()
+          .map((row) => row.date)
+      )].sort();
+      if (!allDates.length) return { series: [], symbols: symbols || {} };
+
+      const maps = {};
+      Object.entries(rowsByKey).forEach(([k, rows]) => {
+        maps[k] = new Map(rows.map((row) => [row.date, row.close]));
+      });
+      const baseByKey = {};
+      Object.keys(rowsByKey).forEach((k) => {
+        let base = null;
+        for (const dt of allDates) {
+          const v = maps[k].get(dt);
+          if (Number.isFinite(v) && v > 0) {
+            base = v;
+            break;
+          }
+        }
+        baseByKey[k] = base;
+      });
+
+      const series = allDates.map((date) => {
+        const row = { date };
+        Object.keys(rowsByKey).forEach((k) => {
+          const v = maps[k].get(date);
+          const base = baseByKey[k];
+          row[k] = Number.isFinite(v) && Number.isFinite(base) && base > 0
+            ? Number(((v / base) * 100).toFixed(4))
+            : null;
+        });
+        return row;
+      });
+      const hasAny = series.some((row) =>
+        ["vix_idx", "spx_idx", "dji_idx", "ndx_idx"].some((k) => Number.isFinite(Number(row[k])))
+      );
+      return hasAny ? { series, symbols: symbols || {} } : { series: [], symbols: symbols || {} };
+    }
+
+    async function getRegimeComparisonFallback(asofDate = "") {
+      const key = String(asofDate || "latest");
+      if (REGIME_COMPARE_CACHE.has(key)) return REGIME_COMPARE_CACHE.get(key);
+      if (REGIME_COMPARE_INFLIGHT.has(key)) return REGIME_COMPARE_INFLIGHT.get(key);
+
+      const base = getApiBase();
+      const endpoint = (symbol) => `${base}/api/dashboard/${encodeURIComponent(symbol)}?months=6`;
+      const symbolCandidates = {
+        vix: ["^VIX", "VIXY", "VXX"],
+        spx: ["^GSPC", "SPY"],
+        dji: ["^DJI", "DIA"],
+        ndx: ["^NDX", "QQQ"],
+      };
+
+      const promise = (async () => {
+        const fetchPayload = async (symbol) => {
+          try {
+            const resp = await apiFetch(endpoint(symbol));
+            if (!resp.ok) return null;
+            const payload = await resp.json();
+            if (!payload || !Array.isArray(payload.chart) || !payload.chart.length) return null;
+            return payload;
+          } catch {
+            return null;
+          }
+        };
+
+        const pickSymbolPayload = async (candidates) => {
+          for (const symbol of (candidates || [])) {
+            const payload = await fetchPayload(symbol);
+            if (payload) return { symbol, payload };
+          }
+          return { symbol: "", payload: null };
+        };
+
+        const [vixPick, spxPick, djiPick, ndxPick] = await Promise.all([
+          pickSymbolPayload(symbolCandidates.vix),
+          pickSymbolPayload(symbolCandidates.spx),
+          pickSymbolPayload(symbolCandidates.dji),
+          pickSymbolPayload(symbolCandidates.ndx),
+        ]);
+
+        const labels = {
+          vix: vixPick.symbol || symbolCandidates.vix[0],
+          spx: spxPick.symbol || symbolCandidates.spx[0],
+          dji: djiPick.symbol || symbolCandidates.dji[0],
+          ndx: ndxPick.symbol || symbolCandidates.ndx[0],
+        };
+
+        const normalized = normalizeRegimeComparisonSeriesFromCharts(
+          {
+            vix_idx: vixPick.payload,
+            spx_idx: spxPick.payload,
+            dji_idx: djiPick.payload,
+            ndx_idx: ndxPick.payload,
+          },
+          labels,
+        );
+        REGIME_COMPARE_CACHE.set(key, normalized);
+        REGIME_COMPARE_INFLIGHT.delete(key);
+        return normalized;
+      })();
+
+      REGIME_COMPARE_INFLIGHT.set(key, promise);
+      return promise;
+    }
+
+    function renderRegimeComparisonPlot(cmpEl, availableSeries, comparisonSymbols, subtitle = "") {
+      if (!cmpEl) return;
+      if (typeof Plotly === "undefined") {
+        cmpEl.innerHTML = `<div class="status-plain">Chart library unavailable.</div>`;
+        return;
+      }
+      const traces = [];
+      const keys = [
+        { key: "vix_idx", name: "^VIX", color: "#ff7a66", symbolKey: "vix" },
+        { key: "spx_idx", name: "SPX", color: "#56d9ff", symbolKey: "spx" },
+        { key: "dji_idx", name: "DJI", color: "#ffd166", symbolKey: "dji" },
+        { key: "ndx_idx", name: "NDX", color: "#7af7c8", symbolKey: "ndx" },
+      ];
+      const xVals = availableSeries.map((row) => row.date || null);
+      for (const spec of keys) {
+        const yVals = availableSeries.map((row) => {
+          const n = Number(row[spec.key]);
+          return Number.isFinite(n) ? n : null;
+        });
+        if (!yVals.some((n) => Number.isFinite(n))) continue;
+        const sym = String((comparisonSymbols && comparisonSymbols[spec.symbolKey]) || spec.name);
+        traces.push({
+          type: "scatter",
+          mode: "lines",
+          name: sym,
+          x: xVals,
+          y: yVals,
+          line: { width: 2, color: spec.color },
+          connectgaps: false,
+          hovertemplate: "%{x}<br>%{fullData.name}: %{y:.2f}<extra></extra>",
+        });
+      }
+      if (!traces.length) {
+        cmpEl.innerHTML = `<div class="status-plain">No indexed comparison values available for this snapshot.</div>`;
+        return;
+      }
+      const layout = {
+        autosize: true,
+        height: 280,
+        margin: { l: 46, r: 18, t: 18, b: 34 },
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(0,0,0,0)",
+        font: { color: "#c9d5ef", family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", size: 12 },
+        xaxis: {
+          gridcolor: "rgba(104,127,170,0.2)",
+          tickfont: { color: "#9ab0d6", size: 11 },
+          title: { text: subtitle || "" },
+        },
+        yaxis: {
+          gridcolor: "rgba(104,127,170,0.2)",
+          tickfont: { color: "#9ab0d6", size: 11 },
+          zeroline: true,
+          zerolinecolor: "rgba(104,127,170,0.3)",
+          title: { text: "Indexed (base=100)", font: { color: "#9ab0d6", size: 11 } },
+        },
+        legend: {
+          orientation: "h",
+          yanchor: "bottom",
+          y: 1.02,
+          xanchor: "left",
+          x: 0,
+          font: { size: 11, color: "#9ab0d6" },
+        },
+      };
+      const config = {
+        responsive: true,
+        displayModeBar: false,
+        scrollZoom: false,
+      };
+      Plotly.react(cmpEl, traces, layout, config);
+    }
+
     function renderRegimeContext(regime) {
       const makeCard = (label, val) =>
         `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
@@ -3049,8 +3456,8 @@
       const overall = safeRegime.overall && typeof safeRegime.overall === "object" ? safeRegime.overall : {};
       const participation = Array.isArray(safeRegime.participation) ? safeRegime.participation : [];
       const timeframes = Array.isArray(safeRegime.timeframes) ? safeRegime.timeframes : [];
-      const levels = Array.isArray(safeRegime.levels) ? safeRegime.levels : [];
-      const maMatrix = Array.isArray(safeRegime.ma_matrix) ? safeRegime.ma_matrix : [];
+      const levelsRaw = Array.isArray(safeRegime.levels) ? safeRegime.levels : [];
+      const maMatrixRaw = Array.isArray(safeRegime.ma_matrix) ? safeRegime.ma_matrix : [];
       const comparison = safeRegime.comparison && typeof safeRegime.comparison === "object" ? safeRegime.comparison : {};
       const comparisonSeries = Array.isArray(comparison.series) ? comparison.series : [];
       const comparisonSymbols = comparison.symbols && typeof comparison.symbols === "object" ? comparison.symbols : {};
@@ -3058,15 +3465,73 @@
       const asof = safeRegime.asof_date || "—";
       const source = String(safeRegime.source || "regime_context");
       const levelSourceRaw = String(vix.level_source || "shared_level_engine");
-      const levelSourceLabel = levelSourceRaw === "rolling_window_fallback"
-        ? "Rolling Window Fallback"
-        : "Shared Level Engine";
       const riskState = titleCaseWords(String(vix.risk_state || "unknown").replaceAll("_", " "));
       const participationBias = titleCaseWords(String(overall.participation_bias || "unknown").replaceAll("_", " "));
       const healthState = titleCaseWords(String(health.state || "unknown").replaceAll("_", " "));
       const healthScore = Number.isFinite(Number(health.score)) ? `${fmt(health.score, 1)} / 100` : "—";
       const healthDrivers = Array.isArray(health.drivers) ? health.drivers.filter(Boolean).map(String) : [];
       const healthWarnings = Array.isArray(health.warnings) ? health.warnings.filter(Boolean).map(String) : [];
+      const parseMaybePercent = (raw) => {
+        if (raw === null || raw === undefined || raw === "") return NaN;
+        const direct = Number(raw);
+        if (Number.isFinite(direct)) return direct;
+        if (typeof raw === "string") {
+          const cleaned = raw.replace(/%/g, "").trim();
+          const n = Number(cleaned);
+          if (Number.isFinite(n)) return n;
+        }
+        return NaN;
+      };
+      const maFallbackRows = [
+        { metric: "VIX vs MA20", key: "pct_vs_ma20" },
+        { metric: "VIX vs MA50", key: "pct_vs_ma50" },
+        { metric: "VIX vs MA100", key: "pct_vs_ma100" },
+      ]
+        .map((spec) => {
+          let n = parseMaybePercent(vix[spec.key]);
+          if (!Number.isFinite(n)) {
+            const close = Number(vix.close);
+            const maKey = spec.key.replace("pct_vs_", "");
+            const ma = Number(vix[maKey]);
+            if (Number.isFinite(close) && Number.isFinite(ma) && ma !== 0) {
+              n = ((close / ma) - 1) * 100;
+            }
+          }
+          if (!Number.isFinite(n)) return null;
+          return {
+            metric: spec.metric,
+            value_pct: n,
+            state: n >= 0 ? "above" : "below",
+            risk_read: n >= 0 ? "risk_off_pressure" : "risk_on_relief",
+          };
+        })
+        .filter(Boolean);
+      if (String(vix.ma_cross_state || "").trim()) {
+        const cross = String(vix.ma_cross_state).trim();
+        maFallbackRows.push({
+          metric: "MA20 vs MA50",
+          value_pct: null,
+          state: cross,
+          risk_read: /above/i.test(cross) ? "risk_off_pressure" : "risk_on_relief",
+        });
+      }
+      if (!maFallbackRows.length && String(vix.ma_state || "").trim()) {
+        const maState = String(vix.ma_state).trim();
+        maFallbackRows.push({
+          metric: "MA State",
+          value_pct: null,
+          state: maState,
+          risk_read: /above/i.test(maState) ? "risk_off_pressure" : "risk_on_relief",
+        });
+      }
+      const maMatrix = maMatrixRaw.length ? maMatrixRaw : maFallbackRows;
+      const levels = deriveRegimeLevelsFallback(levelsRaw, timeframes, vix.close);
+      const effectiveLevelSourceRaw = (!levelsRaw.length && levels.length)
+        ? "rolling_window_fallback"
+        : levelSourceRaw;
+      const levelSourceLabel = effectiveLevelSourceRaw === "rolling_window_fallback"
+        ? "Rolling Window Fallback"
+        : "Shared Level Engine";
 
       const sourceSuffix = source === "regime_context" ? "" : " · fallback";
       $("regimeStatus").textContent = `As of ${asof}${sourceSuffix}`;
@@ -3087,7 +3552,7 @@
       const healthNotes = [];
       if (healthDrivers.length) healthNotes.push(`Drivers: ${healthDrivers.join(" | ")}`);
       if (healthWarnings.length) healthNotes.push(`Warnings: ${healthWarnings.join(" | ")}`);
-      if (levelSourceRaw === "rolling_window_fallback") {
+      if (effectiveLevelSourceRaw === "rolling_window_fallback") {
         healthNotes.push("Level source: rolling fallback (shared level engine unavailable for this snapshot).");
       }
       if (!healthNotes.length) healthNotes.push("No clear health driver set for this snapshot.");
@@ -3178,6 +3643,7 @@
           { key: "zone_low", label: "Zone Low" },
           { key: "zone_high", label: "Zone High" },
           { key: "tier", label: "Tier" },
+          { key: "source_label", label: "Source" },
           { key: "touches", label: "Touches" },
           { key: "distance_pct", label: "Distance %" },
           { key: "last_touch_date", label: "Last Touch" },
@@ -3185,6 +3651,9 @@
         levels.map((row) => ({
           ...row,
           type: titleCaseWords(String(row.type || "unknown")),
+          source_label: String(row.source || "") === "rolling_window_fallback"
+            ? "Rolling Fallback"
+            : "Shared Engine",
         })),
         false,
         null,
@@ -3215,74 +3684,24 @@
       const cmpEl = $("regimeComparisonChart");
       if (cmpEl) {
         const availableSeries = comparisonSeries.filter((row) => row && typeof row === "object");
-        if (!availableSeries.length || typeof Plotly === "undefined") {
-          cmpEl.innerHTML = `<div class="status-plain">${availableSeries.length ? "Chart library unavailable." : "No comparison series available for this snapshot."}</div>`;
+        const renderToken = `${asof || "latest"}:${Date.now()}`;
+        cmpEl.dataset.renderToken = renderToken;
+        if (availableSeries.length) {
+          renderRegimeComparisonPlot(cmpEl, availableSeries, comparisonSymbols, "");
         } else {
-          const traces = [];
-          const keys = [
-            { key: "vix_idx", name: "^VIX", color: "#ff7a66", symbolKey: "vix" },
-            { key: "spx_idx", name: "SPX", color: "#56d9ff", symbolKey: "spx" },
-            { key: "dji_idx", name: "DJI", color: "#ffd166", symbolKey: "dji" },
-            { key: "ndx_idx", name: "NDX", color: "#7af7c8", symbolKey: "ndx" },
-          ];
-          const xVals = availableSeries.map((row) => row.date || null);
-          for (const spec of keys) {
-            const yVals = availableSeries.map((row) => {
-              const n = Number(row[spec.key]);
-              return Number.isFinite(n) ? n : null;
+          cmpEl.innerHTML = `<div class="status-plain">Loading indexed comparison fallback (VIX/SPX/DJI/NDX)...</div>`;
+          getRegimeComparisonFallback(asof)
+            .then((fallback) => {
+              if (!cmpEl || cmpEl.dataset.renderToken !== renderToken) return;
+              const fallbackSeries = Array.isArray(fallback && fallback.series) ? fallback.series : [];
+              const fallbackSymbols = fallback && typeof fallback.symbols === "object" ? fallback.symbols : {};
+              const subtitle = fallbackSeries.length ? "Fallback from dashboard history (6M window)" : "";
+              renderRegimeComparisonPlot(cmpEl, fallbackSeries, fallbackSymbols, subtitle);
+            })
+            .catch(() => {
+              if (!cmpEl || cmpEl.dataset.renderToken !== renderToken) return;
+              cmpEl.innerHTML = `<div class="status-plain">No comparison series available for this snapshot.</div>`;
             });
-            const hasAny = yVals.some((n) => Number.isFinite(n));
-            if (!hasAny) continue;
-            const sym = String(comparisonSymbols[spec.symbolKey] || spec.name);
-            traces.push({
-              type: "scatter",
-              mode: "lines",
-              name: sym,
-              x: xVals,
-              y: yVals,
-              line: { width: 2, color: spec.color },
-              connectgaps: false,
-              hovertemplate: "%{x}<br>%{fullData.name}: %{y:.2f}<extra></extra>",
-            });
-          }
-          if (!traces.length) {
-            cmpEl.innerHTML = `<div class="status-plain">No indexed comparison values available for this snapshot.</div>`;
-          } else {
-            const layout = {
-              autosize: true,
-              height: 280,
-              margin: { l: 46, r: 18, t: 18, b: 34 },
-              paper_bgcolor: "rgba(0,0,0,0)",
-              plot_bgcolor: "rgba(0,0,0,0)",
-              font: { color: "#c9d5ef", family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", size: 12 },
-              xaxis: {
-                gridcolor: "rgba(104,127,170,0.2)",
-                tickfont: { color: "#9ab0d6", size: 11 },
-                title: { text: "" },
-              },
-              yaxis: {
-                gridcolor: "rgba(104,127,170,0.2)",
-                tickfont: { color: "#9ab0d6", size: 11 },
-                zeroline: true,
-                zerolinecolor: "rgba(104,127,170,0.3)",
-                title: { text: "Indexed (base=100)", font: { color: "#9ab0d6", size: 11 } },
-              },
-              legend: {
-                orientation: "h",
-                yanchor: "bottom",
-                y: 1.02,
-                xanchor: "left",
-                x: 0,
-                font: { size: 11, color: "#9ab0d6" },
-              },
-            };
-            const config = {
-              responsive: true,
-              displayModeBar: false,
-              scrollZoom: false,
-            };
-            Plotly.react(cmpEl, traces, layout, config);
-          }
         }
       }
     }
@@ -3463,7 +3882,7 @@
       const yoloContextLabel = humanizeSetupContext({ yolo_recency: data.primary_yolo_recency, primary_yolo_role: data.primary_yolo_role });
       if (yoloContextLabel !== "No YOLO") {
         const normalizedYoloLabel = String(yoloContextLabel || "")
-          .replace(/\bYOLO\b\s+\bYOLO\b/gi, "YOLO")
+          .replace(/(\bYOLO\b)(?:\s+\bYOLO\b)+/gi, "YOLO")
           .trim();
         const yoloLabel = /yolo/i.test(normalizedYoloLabel)
           ? normalizedYoloLabel
@@ -3728,6 +4147,7 @@
 
     function activateTab(which, opts = {}) {
       const skipReportReload = !!opts.skipReportReload;
+      const focusChartEntry = !!opts.focusChartEntry;
       const all = {
         op: [tabOpBtn, tabOp],
         chart: [tabChartBtn, tabChart],
@@ -3744,6 +4164,11 @@
       markUsageTabView(which);
       if ((which === "report" || which === "regime") && !skipReportReload) loadReport();
       if (which === "earnings") loadEarnings();
+      if (which === "chart" && focusChartEntry) {
+        scrollChartEntryIntoView();
+        window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
+        scheduleChartEntryScroll();
+      }
     }
 
     tabOpBtn.addEventListener("click", () => activateTab("op"));
@@ -3901,7 +4326,7 @@
       if (!el) return;
       el.innerHTML = `
         <div class="earnings-legend-v">
-          Quick legend so each catalyst row is readable at a glance.
+          Quick legend so each catalyst row is readable at a glance. Click ticker or <b>Chart</b> for one-step chart open; single-click elsewhere on a card keeps detail review in this tab.
         </div>
         <div class="earnings-legend-grid">
           <div class="earnings-legend-item">
@@ -3980,7 +4405,7 @@
         </div>
       `;
       const btn = $("earningsOpenChartBtn");
-      if (btn) btn.addEventListener("click", () => row.ticker ? loadTickerFromReport(row.ticker) : null);
+      if (btn) btn.addEventListener("click", () => row.ticker ? loadTickerFromReportContext(row.ticker, row) : null);
     }
 
     function renderEarningsBoard(groups) {
@@ -4013,9 +4438,11 @@
                   122,
                 );
                 return `
-                <div class="earnings-card${active}" data-earnings-key="${escHtml(key)}" data-earnings-ticker="${escHtml(String(row.ticker || ""))}" role="button" tabindex="0" title="Click to view details • Double-click to open chart">
+                <div class="earnings-card${active}" data-earnings-key="${escHtml(key)}" data-earnings-ticker="${escHtml(String(row.ticker || ""))}" role="button" tabindex="0" title="Click for details • Chart/ticker click opens chart">
                   <div class="earnings-card-head">
-                    <div class="earnings-card-ticker">${escHtml(row.ticker || "-")}</div>
+                    <div class="earnings-card-ticker">
+                      <button type="button" class="earnings-card-ticker-link" data-earnings-open-chart="1" data-ticker="${escHtml(String(row.ticker || ""))}">${escHtml(row.ticker || "-")}</button>
+                    </div>
                     <div class="earnings-card-actions">
                       <div class="earnings-score">Setup Score ${escHtml(score)}</div>
                       <button type="button" class="earnings-open-chart-btn" data-earnings-open-chart="1" data-ticker="${escHtml(String(row.ticker || ""))}">Chart</button>
@@ -4075,7 +4502,9 @@
         node.addEventListener("click", (ev) => {
           ev.stopPropagation();
           const ticker = String(node.getAttribute("data-ticker") || "").trim();
-          if (ticker) loadTickerFromReport(ticker);
+          const key = String(node.closest(".earnings-card")?.getAttribute("data-earnings-key") || "").trim();
+          const row = key ? LAST_EARNINGS_LOOKUP[key] : null;
+          if (ticker) loadTickerFromReportContext(ticker, row || null);
         });
       });
       board.querySelectorAll(".earnings-card[data-earnings-key]").forEach((node) => {
@@ -4088,17 +4517,28 @@
         };
         node.addEventListener("click", (ev) => {
           if (ev.target && ev.target.closest && ev.target.closest("[data-earnings-open-chart]")) return;
+          const key = node.getAttribute("data-earnings-key") || "";
+          const row = LAST_EARNINGS_LOOKUP[key];
+          const wasSelected = LAST_EARNINGS_SELECTED === key;
+          const openDirect = !!(ev.metaKey || ev.ctrlKey || ev.shiftKey);
           selectCard();
+          if ((openDirect || wasSelected) && row && row.ticker) {
+            loadTickerFromReportContext(row.ticker, row);
+          }
         });
         node.addEventListener("dblclick", () => {
           const key = node.getAttribute("data-earnings-key") || "";
           const row = LAST_EARNINGS_LOOKUP[key];
-          if (row && row.ticker) loadTickerFromReport(row.ticker);
+          if (row && row.ticker) loadTickerFromReportContext(row.ticker, row);
         });
         node.addEventListener("keydown", (ev) => {
           if (ev.key === "Enter" || ev.key === " ") {
             ev.preventDefault();
+            const key = node.getAttribute("data-earnings-key") || "";
+            const row = LAST_EARNINGS_LOOKUP[key];
+            const openDirect = !!ev.shiftKey;
             selectCard();
+            if (openDirect && row && row.ticker) loadTickerFromReportContext(row.ticker, row);
           }
         });
       });
@@ -4842,7 +5282,12 @@
         const resp = await apiFetch(`${base}/api/dashboard/${ticker}?${qs.toString()}`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const payload = await resp.json();
-        const shouldUseReportSnapshot = !!reportGeneratedTs || CHART_SOURCE_CONTEXT === "report_snapshot" || !!opts.forceReportOverride;
+        const hasSetupOverride = !!findReportSetupRow(ticker);
+        const shouldUseReportSnapshot =
+          !!reportGeneratedTs ||
+          CHART_SOURCE_CONTEXT === "report_snapshot" ||
+          !!opts.forceReportOverride ||
+          hasSetupOverride;
         if (shouldUseReportSnapshot) applyReportSetupOverrideToChartPayload(payload, ticker);
         syncChartToggleState(payload);
         fillCards(payload);
@@ -4921,12 +5366,14 @@
         if (opts && opts.focusChartEntry) {
           scheduleChartEntryScroll();
         }
+        syncChartReturnUi();
         setGlobalStatus(`Done (${ticker})`);
         markUsageChartLoad(ticker);
       } catch (err) {
         console.error(err);
         $("chartStatus").textContent = `Failed: ${err.message}`;
         renderChartCommentary({});
+        syncChartReturnUi();
         setGlobalStatus(`Failed (${ticker})`);
       } finally {
         btn.disabled = false;
@@ -4954,8 +5401,12 @@
 
     function loadTickerQuick(t, opts = {}) {
       $("ticker").value = t;
-      activateTab("chart");
+      activateTab("chart", { focusChartEntry: !!(opts && opts.focusChartEntry) });
       if (opts && opts.focusChartEntry) {
+        window.scrollTo({ top: 0, behavior: "auto" });
+        if (document && document.documentElement) document.documentElement.scrollTop = 0;
+        if (document && document.body) document.body.scrollTop = 0;
+        window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
         scheduleChartEntryScroll();
       }
       if (opts && opts.reportGeneratedTs) {
@@ -5000,7 +5451,20 @@
       ) {
         return LAST_REPORT_CLICK_OVERRIDE;
       }
-      return (LAST_REPORT_SETUP_ROWS || []).find((row) => normalizeTickerSymbol(row && row.ticker) === symbol) || null;
+      const canonical = findCanonicalReportSetupRow(symbol);
+      if (canonical) return canonical;
+      return null;
+    }
+
+    function loadTickerFromReportContext(ticker, row = null) {
+      const symbol = normalizeTickerSymbol(ticker || (row && row.ticker) || "");
+      if (!symbol) return;
+      const canonical = findCanonicalReportSetupRow(symbol);
+      const explicit = row && typeof row === "object" ? { ...row, ticker: symbol } : null;
+      const resolved = canonical || explicit
+        ? { ...(canonical || {}), ...(explicit || {}), ticker: symbol }
+        : null;
+      loadTickerFromReport(symbol, resolved);
     }
 
     function applyReportSetupOverrideToChartPayload(payload, ticker) {
@@ -5124,7 +5588,7 @@
       el.querySelectorAll("button[data-watch-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const t = btn.getAttribute("data-watch-load");
-          if (t) loadTickerFromReport(t);
+          if (t) loadTickerFromReportContext(t, setupMap.get(normalizeTickerSymbol(t)) || null);
         });
       });
       el.querySelectorAll("button[data-watch-remove]").forEach((btn) => {
@@ -5240,7 +5704,7 @@
           ],
           setupAuditRows,
           true,
-          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReportContext(row.ticker, row) : null,
           { sortable: true },
         );
         $("reportSetupQuickAdds").innerHTML = setupRows
@@ -5415,7 +5879,7 @@
           ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
           yoloNew.slice(0, 20),
           true,
-          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReportContext(row.ticker, row) : null,
           { sortable: false },
         );
 
@@ -5439,7 +5903,7 @@
           ["ticker", "timeframe", "pattern", "confidence", "x0_date", "x1_date"],
           yoloLost.slice(0, 20),
           true,
-          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReportContext(row.ticker, row) : null,
           { sortable: false },
         );
 
@@ -5464,7 +5928,7 @@
           ["ticker", "pct_change", "close", "prev_close", "pct_from_high"],
           (signals.movers_up_today || []).slice(0, 12),
           true,
-          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReportContext(row.ticker, row) : null,
           { sortable: false },
         );
         renderSimpleTable(
@@ -5472,7 +5936,7 @@
           ["ticker", "pct_change", "close", "prev_close", "pct_from_low"],
           (signals.movers_down_today || []).slice(0, 12),
           true,
-          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReportContext(row.ticker, row) : null,
           { sortable: false },
         );
 
@@ -5499,7 +5963,7 @@
           ],
           (signals.yolo_top_today || []).slice(0, 12),
           true,
-          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReportContext(row.ticker, row) : null,
           { sortable: false });
         $("reportYoloTopNote").textContent = (signals.yolo_top_today || []).length > 12
           ? "Showing top 12 by confidence and recency. Use the chart for the full audit."
@@ -5533,7 +5997,10 @@
     async function loadEarnings() {
       const base = getApiBase();
       if (!base) return;
-      const days = Math.max(1, Math.min(90, Number($("earningsDays").value || 21)));
+      const rawDays = String($("earningsDays").value || "").replace(/[^\d]/g, "");
+      const parsedDays = Number(rawDays || 21);
+      const days = Math.max(1, Math.min(90, Number.isFinite(parsedDays) ? parsedDays : 21));
+      $("earningsDays").value = String(days);
       const watchOnly = !!$("earningsWatchOnly").checked;
       const watchlist = getStoredWatchlist();
       if (watchOnly && !watchlist.length) {
@@ -5600,7 +6067,7 @@
           ],
           rows,
           true,
-          (row) => row && row.ticker ? loadTickerFromReport(row.ticker) : null,
+          (row) => row && row.ticker ? loadTickerFromReportContext(row.ticker, row) : null,
           { sortable: true },
         );
       } catch (err) {
@@ -5667,10 +6134,41 @@
       e.preventDefault();
       $("reportWatchAddBtn").click();
     });
+
+    function normalizeEarningsToolbarSizing() {
+      const wrap = document.querySelector(".report-watch-wrap.earnings-controls");
+      const lookaheadWrap = document.querySelector(".report-watch-wrap.earnings-controls .earnings-lookahead");
+      const input = $("earningsDays");
+      if (!wrap || !input) return;
+      const mobile = window.matchMedia("(max-width: 920px)").matches;
+      const width = mobile ? "56px" : "62px";
+      wrap.style.alignItems = "center";
+      input.style.width = width;
+      input.style.minWidth = width;
+      input.style.maxWidth = width;
+      input.style.height = mobile ? "32px" : "34px";
+      input.style.minHeight = mobile ? "32px" : "34px";
+      input.style.maxHeight = mobile ? "32px" : "34px";
+      input.style.padding = "4px 8px";
+      input.style.lineHeight = "1";
+      input.style.textAlign = "center";
+      input.style.flex = `0 0 ${width}`;
+      input.style.display = "inline-block";
+      if (lookaheadWrap) {
+        lookaheadWrap.style.width = "auto";
+        lookaheadWrap.style.minWidth = "0";
+        lookaheadWrap.style.maxWidth = "none";
+        lookaheadWrap.style.display = "inline-flex";
+        lookaheadWrap.style.flexDirection = "row";
+        lookaheadWrap.style.alignItems = "center";
+        lookaheadWrap.style.gap = "6px";
+      }
+    }
     $("reportSetupCompactBtn").addEventListener("click", () => setReportSetupMode(false));
     $("reportSetupMoreBtn").addEventListener("click", () => setReportSetupMode(true));
     window.addEventListener("resize", () => {
       setReportSetupMode(REPORT_SETUP_SHOW_MORE);
+      normalizeEarningsToolbarSizing();
     });
     $("loadEarningsBtn").addEventListener("click", loadEarnings);
     const chartBackBtn = $("chartBackToReportBtn");
@@ -5703,6 +6201,7 @@
       startUsageHeartbeat();
       setReportSetupMode(false);
       setEarningsViewMode("calendar");
+      normalizeEarningsToolbarSizing();
       renderEarningsLegend();
       activateTab("guide");
       await refreshServiceStatus();
