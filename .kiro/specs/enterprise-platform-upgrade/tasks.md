@@ -439,28 +439,28 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
     - Test querying
     - Test retention
 
-- [~] 16. Implement multi-user RBAC
+- [x] 16. Implement multi-user RBAC
 
-  - [ ] 16.1 Create user database schema
+  - [x] 16.1 Create user database schema
     - Create users, sessions, email_tokens tables
     - _Requirements: 16.2_
-  - [ ] 16.2 Implement authentication service
+  - [x] 16.2 Implement authentication service
     - API key auth
     - JWT auth
     - Email token auth
     - _Requirements: 16.3_
-  - [ ] 16.3 Implement role-based permissions
+  - [x] 16.3 Implement role-based permissions
     - Admin: full access
     - Analyst: read/write analysis, no admin
     - Viewer: read-only
     - _Requirements: 16.4, 16.5, 16.6, 16.7_
-  - [ ] 16.4 Implement user management endpoints
+  - [x] 16.4 Implement user management endpoints
     - Create, update, deactivate users
     - _Requirements: 16.8_
-  - [ ] 16.5 Log role changes
+  - [x] 16.5 Log role changes
     - Add to audit log
     - _Requirements: 16.9_
-  - [ ] 16.6 Implement password complexity
+  - [x] 16.6 Implement password complexity
     - Min 12 chars, uppercase, lowercase, number, special
     - _Requirements: 16.10_
   - [ ]\* 16.7 Write unit tests for RBAC
