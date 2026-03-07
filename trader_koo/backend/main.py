@@ -589,41 +589,49 @@ async def lifespan(_app: FastAPI):
     else:
         LOG.info("All admin endpoints are properly protected with authentication")
     
-    ensure_analytics_schema()
-    ensure_feedback_schema()
-    prune_analytics_sessions()
-    ensure_subscriber_schema(DB_PATH)
-    
-    # Initialize audit logging schema (Requirement 15.5)
+    # Initialize database schemas (skip if DB doesn't exist yet)
     if DB_PATH.exists():
+        LOG.info("Database found, initializing schemas...")
+        ensure_analytics_schema()
+        ensure_feedback_schema()
+        prune_analytics_sessions()
+        ensure_subscriber_schema(DB_PATH)
+        
+        # Initialize audit logging schema (Requirement 15.5)
         conn = sqlite3.connect(str(DB_PATH))
         try:
             ensure_audit_schema(conn)
             LOG.info("Audit logging schema initialized")
         finally:
             conn.close()
+    else:
+        LOG.warning("Database not found at %s - skipping schema initialization (will be created by start.sh)", DB_PATH)
     
     # Initialize rate limiting (Requirement 17)
     rate_limiter = initialize_rate_limiting(_app)
     LOG.info("Rate limiting initialized")
     
-    reconcile = _reconcile_stale_running_runs()
-    if reconcile.get("reconciled"):
-        LOG.warning(
-            "Startup recovered %s stale ingest run(s): %s",
-            reconcile.get("reconciled"),
-            ",".join(reconcile.get("run_ids", [])),
-        )
+    # Skip reconciliation and resume if DB doesn't exist
+    if DB_PATH.exists():
+        reconcile = _reconcile_stale_running_runs()
+        if reconcile.get("reconciled"):
+            LOG.warning(
+                "Startup recovered %s stale ingest run(s): %s",
+                reconcile.get("reconciled"),
+                ",".join(reconcile.get("run_ids", [])),
+            )
+        resume = _queue_post_ingest_resume(source="startup_resume")
+        if resume.get("scheduled"):
+            LOG.warning(
+                "Startup queued post-ingest resume job_id=%s mode=%s reason=%s",
+                resume.get("job_id"),
+                resume.get("mode"),
+                resume.get("reason"),
+            )
+    
     _scheduler.start()
     LOG.info("Scheduler started — daily_update: 22:00 UTC Mon–Fri | weekly_yolo: 00:30 UTC Sat")
-    resume = _queue_post_ingest_resume(source="startup_resume")
-    if resume.get("scheduled"):
-        LOG.warning(
-            "Startup queued post-ingest resume job_id=%s mode=%s reason=%s",
-            resume.get("job_id"),
-            resume.get("mode"),
-            resume.get("reason"),
-        )
+    LOG.info("Application startup complete - ready to serve requests")
     yield
     _scheduler.shutdown(wait=False)
 
