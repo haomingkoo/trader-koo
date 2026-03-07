@@ -2,18 +2,28 @@
 
 These rules are mandatory for any coding/debugging task in this repo.
 
-## 1) Requirements-First Workflow
-- Before making changes, read:
-  - `planning/requirements.md`
-  - `planning/design.md`
-  - `planning/task-list.md`
-  - `planning/test-cases.md`
-- At the start of each task, discover project docs and review relevant markdown context:
-  - Run a markdown inventory (`rg --files -g '*.md'`) for this repo.
-  - Prioritize `planning/*.md`, then any feature-specific docs (for example: `README.md`, `SECURITY.md`, module docs).
-  - If the request touches an area with a local doc, read that doc before implementing.
-- Confirm the requested change maps to at least one requirement/test case.
-- If no requirement exists, add/update it in `planning/*.md` first.
+## 1) Requirements-First, Low-Token Workflow
+- Default doc load order (minimum required):
+  - `planning/INDEX.md`
+  - `planning/contracts/workflow.md`
+  - one relevant requirement module (`planning/modules/requirements/*.md`)
+  - one relevant task module (`planning/modules/tasks/*.md`)
+  - one relevant test module (`planning/modules/tests/*.md`)
+- Do **not** load all rollup docs (`planning/requirements.md`, `planning/design.md`, `planning/task-list.md`, `planning/test-cases.md`) by default.
+- Use rollup docs only when:
+  - scope is cross-cutting or ambiguous
+  - closing/sign-off requires full consistency checks
+  - module docs are missing required detail
+- Do **not** run markdown-wide inventory by default.
+  - Only run `rg --files -g '*.md'` if scope is unclear or docs are missing.
+- Confirm each change maps to at least one requirement ID and one test case ID.
+- If missing, update module docs first, then implement code.
+- Keep active context in `memory/current-task.md`:
+  - scope
+  - requirement IDs
+  - test IDs
+  - files touched
+  - open risks/blockers
 
 ## 2) Single-Source Consistency
 - Do not introduce parallel scoring/narrative logic across surfaces.
@@ -29,5 +39,5 @@ These rules are mandatory for any coding/debugging task in this repo.
 ## 4) Change Discipline
 - For UI changes, verify desktop + mobile behavior.
 - For report/email changes, verify readability and clipping risk.
-- Update `planning/*.md` pass criteria/test cases when behavior changes.
+- Update relevant module docs and `planning/CHANGELOG.md` when behavior changes.
 - Run lightweight validation before commit (syntax/build checks).

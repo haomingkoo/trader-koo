@@ -551,6 +551,43 @@
       cursor: pointer;
     }
     .mini-actions button:hover { border-color: var(--blue); }
+    .chart-return-floating {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 70;
+      pointer-events: none;
+    }
+    .chart-return-floating button {
+      pointer-events: auto;
+      width: auto;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(142, 160, 189, 0.36);
+      background: rgba(9, 14, 23, 0.9);
+      color: var(--text);
+      font-size: 0.78rem;
+      font-weight: 700;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+      cursor: pointer;
+    }
+    .chart-return-floating button:hover {
+      border-color: var(--blue);
+    }
+    .report-warn {
+      margin: 0 0 12px;
+      border: 1px solid rgba(255, 186, 107, 0.42);
+      border-radius: 10px;
+      background: rgba(102, 56, 24, 0.25);
+      color: #ffd8b2;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      padding: 8px 10px;
+      font-family: 'Inter', sans-serif;
+    }
+    .report-warn strong {
+      color: #ffe2c5;
+    }
     .report-actions {
       display: flex;
       flex-wrap: wrap;
@@ -641,10 +678,36 @@
       min-width: 160px;
       width: auto;
     }
-    .report-watch-wrap button {
+    .report-watch-wrap > button {
       width: auto;
       padding: 8px 10px;
       font-size: 0.76rem;
+    }
+    .earnings-controls .field.compact-number {
+      flex: 0 0 96px;
+      min-width: 96px;
+      max-width: 96px;
+    }
+    .earnings-controls .field.compact-number input {
+      width: 96px;
+      min-width: 96px;
+      max-width: 96px;
+      height: 36px;
+      padding: 6px 8px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      font-size: 0.92rem;
+    }
+    .earnings-controls .earnings-watch-field {
+      min-width: 140px !important;
+      width: auto;
+    }
+    .regime-compare-wrap {
+      min-height: 260px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 6px;
+      background: #0f1624;
     }
     .heatmap-grid {
       display: grid;
@@ -1370,8 +1433,32 @@
         font-size: 0.62rem;
       }
       .report-watch-wrap { flex-direction: column; align-items: stretch; }
-      .report-watch-wrap input, .report-watch-wrap button { width: 100%; }
+      .report-watch-wrap > input, .report-watch-wrap > button { width: 100%; }
+      .earnings-controls {
+        flex-direction: row;
+        align-items: end;
+      }
+      .earnings-controls .field.compact-number,
+      .earnings-controls .field.compact-number input {
+        width: 86px !important;
+        min-width: 86px !important;
+        max-width: 86px !important;
+      }
+      .earnings-controls .earnings-watch-field {
+        flex: 1 1 120px;
+      }
+      .earnings-controls button {
+        width: auto !important;
+      }
       .mini-actions button { flex: 1 1 calc(50% - 6px); }
+      .chart-return-floating {
+        right: 10px;
+        bottom: 10px;
+      }
+      .chart-return-floating button {
+        padding: 8px 10px;
+        font-size: 0.74rem;
+      }
       .heat-row { grid-template-columns: 86px 1fr 58px; gap: 6px; font-size: 0.74rem; }
       .earnings-mini-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1599,6 +1686,7 @@
 
     <section id="tabChart" class="hidden">
       <div class="panel">
+        <div id="chartTopAnchor" style="position:relative; top:-2px; height:0;"></div>
         <div class="chart-toolbar">
           <input id="ticker" list="tickerList" value="SPY" placeholder="Ticker e.g. NVDA" />
           <datalist id="tickerList"></datalist>
@@ -1642,6 +1730,9 @@
         </div>
         <div id="chartReturnWrap" class="mini-actions hidden" style="margin:0 0 10px 0;">
           <button id="chartBackToReportBtn" type="button">← Back to Daily Report</button>
+        </div>
+        <div id="chartReturnFloating" class="chart-return-floating hidden">
+          <button id="chartBackToReportFloatBtn" type="button">← Daily Report</button>
         </div>
 
         <div class="cards">
@@ -1728,6 +1819,7 @@
         <h2 style="margin:0; font-size:1.1rem;">Daily Report</h2>
         <span id="reportStatus" style="font-size:0.8rem; color:var(--muted);"></span>
       </div>
+      <div id="reportWarnBanner" class="report-warn hidden"></div>
       <div id="reportSummaryCards" class="cards" style="margin-bottom:14px;"></div>
       <div id="reportYoloCards" class="cards" style="margin-bottom:14px;"></div>
 
@@ -1909,6 +2001,14 @@
         <table id="regimeVixTable"></table>
       </div>
       <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">VIX MA Matrix</div>
+        <table id="regimeMaMatrixTable"></table>
+      </div>
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="label" style="margin-bottom:8px;">VIX vs SPX / DJI / NDX (Indexed)</div>
+        <div id="regimeComparisonChart" class="regime-compare-wrap"></div>
+      </div>
+      <div class="panel" style="margin-bottom:12px;">
         <div class="label" style="margin-bottom:8px;">VIX Multi-Timeframe</div>
         <table id="regimeTimeframeTable"></table>
       </div>
@@ -1928,12 +2028,12 @@
         <span id="earningsStatus" style="font-size:0.8rem; color:var(--muted);"></span>
       </div>
       <div class="panel" style="margin-bottom:12px;">
-	        <div class="report-watch-wrap">
+	        <div class="report-watch-wrap earnings-controls">
 	          <div class="field compact-number">
 	            <label for="earningsDays">Lookahead Days</label>
-	            <input id="earningsDays" type="number" min="1" max="90" step="1" value="21" />
+	            <input id="earningsDays" class="earnings-days-input" type="number" min="1" max="90" step="1" value="21" />
 	          </div>
-          <label class="field" style="display:flex; flex-direction:row; align-items:center; gap:8px; min-width:220px;">
+          <label class="field earnings-watch-field" style="display:flex; flex-direction:row; align-items:center; gap:8px; min-width:220px;">
             <input id="earningsWatchOnly" type="checkbox" style="width:auto; padding:0; margin:0;" />
             <span style="font-size:0.8rem; color:var(--muted);">Watchlist only</span>
           </label>
@@ -2119,6 +2219,7 @@
     let LAST_CHART_PAYLOAD = null;
     let LAST_REPORT_GENERATED_TS = null;
     let LAST_REPORT_SETUP_ROWS = [];
+    let LAST_REPORT_CLICK_OVERRIDE = null;
     let REPORT_SETUP_SHOW_MORE = false;
     let REPORT_RETURN_STATE = null;
     let CHART_SOURCE_CONTEXT = "live"; // "live" | "report_snapshot"
@@ -2410,7 +2511,13 @@
       if (raw === "resistance_reject") return "Resistance Reject";
       if (raw === "support_reclaim") return "Support Reclaim";
       if (raw === "failed_breakdown") return "Failed Breakdown";
+      if (raw === "failed_breakdown_down") return "Failed Support Breakdown (Reclaim)";
       if (raw === "failed_breakout") return "Failed Breakout";
+      if (raw === "failed_breakout_up") return "Failed Resistance Breakout (Reject)";
+      if (raw === "breakout_up") return "Breakout Up";
+      if (raw === "breakout_down") return "Breakdown Down";
+      if (raw === "range_breakout_up") return "Range Breakout Up";
+      if (raw === "range_breakdown_down") return "Range Breakdown Down";
       if (raw === "tight_consolidation") return "Tight Coil";
       if (raw === "parabolic_extension") return "Parabolic";
       return titleCaseWords(raw);
@@ -2434,10 +2541,49 @@
       if (!text) return "-";
       const cap = Number(maxChars || 0);
       if (!Number.isFinite(cap) || cap <= 0 || text.length <= cap) return text;
-      const clipped = text.slice(0, maxChars);
-      const cut = clipped.lastIndexOf(" ");
-      const base = (cut > 40 ? clipped.slice(0, cut) : clipped).trim();
-      return sanitizeSnippetTail(base);
+      const clipped = text.slice(0, cap).trim();
+      const sentenceCut = Math.max(
+        clipped.lastIndexOf(". "),
+        clipped.lastIndexOf("! "),
+        clipped.lastIndexOf("? "),
+        clipped.lastIndexOf("; "),
+      );
+      const wordCut = clipped.lastIndexOf(" ");
+      const cutAt = sentenceCut > 60
+        ? sentenceCut + 1
+        : (wordCut > 40 ? wordCut : clipped.length);
+      const base = sanitizeSnippetTail(clipped.slice(0, cutAt));
+      const cleaned = base.replace(/[.,;:\s]+$/g, "").trim();
+      return `${cleaned || clipped}...`;
+    }
+
+    function isUsableSetupOverride(row) {
+      if (!row || typeof row !== "object") return false;
+      return [
+        "setup_tier",
+        "setup_family",
+        "signal_bias",
+        "actionability",
+        "observation",
+        "action",
+        "technical_read",
+        "tier",
+        "setup",
+        "bias",
+        "state",
+        "what_it_is",
+        "next_step",
+      ].some((key) => row[key] !== undefined && row[key] !== null && row[key] !== "");
+    }
+
+    function syncChartReturnUi() {
+      const hasContext = !!REPORT_RETURN_STATE;
+      const chartVisible = tabChart ? !tabChart.classList.contains("hidden") : false;
+      const show = hasContext && chartVisible;
+      const wrap = $("chartReturnWrap");
+      if (wrap) wrap.classList.toggle("hidden", !show);
+      const floating = $("chartReturnFloating");
+      if (floating) floating.classList.toggle("hidden", !show);
     }
 
     function setReportReturnContext() {
@@ -2447,14 +2593,31 @@
         setupModeMore: !!REPORT_SETUP_SHOW_MORE,
         reportGeneratedTs: LAST_REPORT_GENERATED_TS || null,
       };
-      const wrap = $("chartReturnWrap");
-      if (wrap) wrap.classList.remove("hidden");
+      syncChartReturnUi();
+    }
+
+    function scrollChartEntryIntoView() {
+      const target = $("chartTopAnchor") || $("chartReturnWrap") || $("chartStatus") || $("tabChart");
+      if (!target) return;
+      const top = window.scrollY + target.getBoundingClientRect().top - 10;
+      window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+    }
+
+    function scheduleChartEntryScroll() {
+      const run = () => scrollChartEntryIntoView();
+      window.requestAnimationFrame(() => {
+        run();
+        window.setTimeout(run, 120);
+        window.setTimeout(run, 280);
+        window.setTimeout(run, 550);
+        window.setTimeout(run, 900);
+      });
     }
 
     function clearReportReturnContext() {
       REPORT_RETURN_STATE = null;
-      const wrap = $("chartReturnWrap");
-      if (wrap) wrap.classList.add("hidden");
+      LAST_REPORT_CLICK_OVERRIDE = null;
+      syncChartReturnUi();
     }
 
     function restoreReportFromChart() {
@@ -2469,12 +2632,19 @@
       clearReportReturnContext();
     }
 
-    function loadTickerFromReport(ticker) {
+    function loadTickerFromReport(ticker, setupRow = null) {
       const symbol = normalizeTickerSymbol(ticker);
       if (!symbol) return;
+      const fallbackRow = findReportSetupRow(symbol);
+      const explicitRow = setupRow && typeof setupRow === "object" ? { ...setupRow, ticker: symbol } : null;
+      LAST_REPORT_CLICK_OVERRIDE = isUsableSetupOverride(explicitRow) ? explicitRow : (fallbackRow || null);
       setReportReturnContext();
       CHART_SOURCE_CONTEXT = LAST_REPORT_GENERATED_TS ? "report_snapshot" : "live";
-      loadTickerQuick(symbol, { reportGeneratedTs: LAST_REPORT_GENERATED_TS });
+      loadTickerQuick(symbol, {
+        reportGeneratedTs: LAST_REPORT_GENERATED_TS,
+        forceReportOverride: true,
+        focusChartEntry: true,
+      });
     }
 
     function buildCompactSetupRows(rows) {
@@ -2486,8 +2656,8 @@
         signal_bias_label: titleCaseWords(row.signal_bias || "neutral"),
         actionability_label: humanizeActionability(row.actionability),
         context_label: humanizeSetupContext(row),
-        observation_short: sanitizeSnippetTail(row.observation || buildSetupReason(row)),
-        action_short: sanitizeSnippetTail(row.action || "Watch only until the setup confirms."),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 176),
+        action_short: shortenCopy(row.action || "Watch only until the setup confirms.", 148),
       }));
     }
 
@@ -2500,9 +2670,9 @@
         bias_label: titleCaseWords(row.signal_bias || "neutral"),
         yolo_context: humanizeSetupContext(row),
         level_event: humanizeBreakoutState(row.breakout_state),
-        observation_short: sanitizeSnippetTail(row.observation || buildSetupReason(row)),
-        next_step_short: sanitizeSnippetTail(row.action || "Watch only until the setup confirms."),
-        audit_notes: sanitizeSnippetTail(humanizeTechnicalRead(row.technical_read, row)),
+        observation_short: shortenCopy(row.observation || buildSetupReason(row), 150),
+        next_step_short: shortenCopy(row.action || "Watch only until the setup confirms.", 140),
+        audit_notes: shortenCopy(humanizeTechnicalRead(row.technical_read, row), 170),
         signal_bias: row.signal_bias,
       }));
     }
@@ -2533,10 +2703,12 @@
           `</button>`
         );
       }).join("");
+      const canonicalRows = (LAST_REPORT_SETUP_ROWS || []).length ? LAST_REPORT_SETUP_ROWS : (rows || []);
+      const rowMap = new Map((canonicalRows || []).map((row) => [normalizeTickerSymbol(row && row.ticker), row]));
       el.querySelectorAll("button[data-setup-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-setup-load");
-          if (ticker) loadTickerFromReport(ticker);
+          if (ticker) loadTickerFromReport(ticker, rowMap.get(normalizeTickerSymbol(ticker)) || null);
         });
       });
     }
@@ -2576,10 +2748,12 @@
           `</button>`
         );
       }).join("");
+      const canonicalRows = (LAST_REPORT_SETUP_ROWS || []).length ? LAST_REPORT_SETUP_ROWS : (rows || []);
+      const rowMap = new Map((canonicalRows || []).map((row) => [normalizeTickerSymbol(row && row.ticker), row]));
       el.querySelectorAll("button[data-setup-audit-load]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const ticker = btn.getAttribute("data-setup-audit-load");
-          if (ticker) loadTickerFromReport(ticker);
+          if (ticker) loadTickerFromReport(ticker, rowMap.get(normalizeTickerSymbol(ticker)) || null);
         });
       });
     }
@@ -2814,9 +2988,17 @@
       const participation = Array.isArray(safeRegime.participation) ? safeRegime.participation : [];
       const timeframes = Array.isArray(safeRegime.timeframes) ? safeRegime.timeframes : [];
       const levels = Array.isArray(safeRegime.levels) ? safeRegime.levels : [];
+      const maMatrix = Array.isArray(safeRegime.ma_matrix) ? safeRegime.ma_matrix : [];
+      const comparison = safeRegime.comparison && typeof safeRegime.comparison === "object" ? safeRegime.comparison : {};
+      const comparisonSeries = Array.isArray(comparison.series) ? comparison.series : [];
+      const comparisonSymbols = comparison.symbols && typeof comparison.symbols === "object" ? comparison.symbols : {};
       const summary = safeRegime.summary || "VIX analysis context is unavailable for this report snapshot.";
       const asof = safeRegime.asof_date || "—";
       const source = String(safeRegime.source || "regime_context");
+      const levelSourceRaw = String(vix.level_source || "shared_level_engine");
+      const levelSourceLabel = levelSourceRaw === "rolling_window_fallback"
+        ? "Rolling Window Fallback"
+        : "Shared Level Engine";
       const riskState = titleCaseWords(String(vix.risk_state || "unknown").replaceAll("_", " "));
       const participationBias = titleCaseWords(String(overall.participation_bias || "unknown").replaceAll("_", " "));
       const healthState = titleCaseWords(String(health.state || "unknown").replaceAll("_", " "));
@@ -2837,11 +3019,15 @@
         makeCard("VIX vs MA50", vix.pct_vs_ma50 != null ? `${fmt(vix.pct_vs_ma50, 2)}%` : "—"),
         makeCard("VIX vs MA100", vix.pct_vs_ma100 != null ? `${fmt(vix.pct_vs_ma100, 2)}%` : "—"),
         makeCard("VIX Term Structure", titleCaseWords(String(vix.term_structure_state || "unavailable").replaceAll("_", " "))),
+        makeCard("VIX Key Levels", levelSourceLabel),
         makeCard("VIX BB Width Pctl", vix.bb_width_pctile_lookback ?? "—"),
       ].join("");
       const healthNotes = [];
       if (healthDrivers.length) healthNotes.push(`Drivers: ${healthDrivers.join(" | ")}`);
       if (healthWarnings.length) healthNotes.push(`Warnings: ${healthWarnings.join(" | ")}`);
+      if (levelSourceRaw === "rolling_window_fallback") {
+        healthNotes.push("Level source: rolling fallback (shared level engine unavailable for this snapshot).");
+      }
       if (!healthNotes.length) healthNotes.push("No clear health driver set for this snapshot.");
       $("regimeHealthDrivers").textContent = healthNotes.join("  ");
 
@@ -2856,7 +3042,7 @@
             ma_state: titleCaseWords(String(vix.ma_state || "").replaceAll("_", " ")),
             ma_cross_state: titleCaseWords(String(vix.ma_cross_state || "").replaceAll("_", " ")),
             compression_state: titleCaseWords(String(vix.compression_state || "").replaceAll("_", " ")),
-            breakout_state: titleCaseWords(String(vix.breakout_state || "").replaceAll("_", " ")),
+            breakout_state: humanizeBreakoutState(vix.breakout_state),
             risk_state: titleCaseWords(String(vix.risk_state || "").replaceAll("_", " ")),
             term_structure_ratio: vix.term_structure_ratio,
             term_structure_state: titleCaseWords(String(vix.term_structure_state || "unavailable").replaceAll("_", " ")),
@@ -2880,6 +3066,23 @@
           { key: "risk_state", label: "Risk State" },
         ],
         vixRows,
+        false,
+        null,
+        { sortable: false },
+      );
+      renderSimpleTable(
+        "regimeMaMatrixTable",
+        [
+          { key: "metric", label: "Metric" },
+          { key: "value_pct", label: "Value %" },
+          { key: "state", label: "State" },
+          { key: "risk_read", label: "Risk Read" },
+        ],
+        maMatrix.map((row) => ({
+          ...row,
+          state: titleCaseWords(String(row.state || "").replaceAll("_", " ")),
+          risk_read: titleCaseWords(String(row.risk_read || "").replaceAll("_", " ")),
+        })),
         false,
         null,
         { sortable: false },
@@ -2947,6 +3150,79 @@
         null,
         { sortable: false },
       );
+      const cmpEl = $("regimeComparisonChart");
+      if (cmpEl) {
+        const availableSeries = comparisonSeries.filter((row) => row && typeof row === "object");
+        if (!availableSeries.length || typeof Plotly === "undefined") {
+          cmpEl.innerHTML = `<div class="status-plain">${availableSeries.length ? "Chart library unavailable." : "No comparison series available for this snapshot."}</div>`;
+        } else {
+          const traces = [];
+          const keys = [
+            { key: "vix_idx", name: "^VIX", color: "#ff7a66", symbolKey: "vix" },
+            { key: "spx_idx", name: "SPX", color: "#56d9ff", symbolKey: "spx" },
+            { key: "dji_idx", name: "DJI", color: "#ffd166", symbolKey: "dji" },
+            { key: "ndx_idx", name: "NDX", color: "#7af7c8", symbolKey: "ndx" },
+          ];
+          const xVals = availableSeries.map((row) => row.date || null);
+          for (const spec of keys) {
+            const yVals = availableSeries.map((row) => {
+              const n = Number(row[spec.key]);
+              return Number.isFinite(n) ? n : null;
+            });
+            const hasAny = yVals.some((n) => Number.isFinite(n));
+            if (!hasAny) continue;
+            const sym = String(comparisonSymbols[spec.symbolKey] || spec.name);
+            traces.push({
+              type: "scatter",
+              mode: "lines",
+              name: sym,
+              x: xVals,
+              y: yVals,
+              line: { width: 2, color: spec.color },
+              connectgaps: false,
+              hovertemplate: "%{x}<br>%{fullData.name}: %{y:.2f}<extra></extra>",
+            });
+          }
+          if (!traces.length) {
+            cmpEl.innerHTML = `<div class="status-plain">No indexed comparison values available for this snapshot.</div>`;
+          } else {
+            const layout = {
+              autosize: true,
+              height: 280,
+              margin: { l: 46, r: 18, t: 18, b: 34 },
+              paper_bgcolor: "rgba(0,0,0,0)",
+              plot_bgcolor: "rgba(0,0,0,0)",
+              font: { color: "#c9d5ef", family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", size: 12 },
+              xaxis: {
+                gridcolor: "rgba(104,127,170,0.2)",
+                tickfont: { color: "#9ab0d6", size: 11 },
+                title: { text: "" },
+              },
+              yaxis: {
+                gridcolor: "rgba(104,127,170,0.2)",
+                tickfont: { color: "#9ab0d6", size: 11 },
+                zeroline: true,
+                zerolinecolor: "rgba(104,127,170,0.3)",
+                title: { text: "Indexed (base=100)", font: { color: "#9ab0d6", size: 11 } },
+              },
+              legend: {
+                orientation: "h",
+                yanchor: "bottom",
+                y: 1.02,
+                xanchor: "left",
+                x: 0,
+                font: { size: 11, color: "#9ab0d6" },
+              },
+            };
+            const config = {
+              responsive: true,
+              displayModeBar: false,
+              scrollZoom: false,
+            };
+            Plotly.react(cmpEl, traces, layout, config);
+          }
+        }
+      }
     }
 
     function formatTableValue(col, raw) {
@@ -3014,13 +3290,20 @@
           return clean.replace(/\b([a-z]+(?:_[a-z]+)+)\b/gi, (match) => titleCaseWords(match.replace(/_/g, " ")));
         })
         .filter(Boolean);
-      const filtered = parts.filter((part, idx) => {
+      const mapped = parts.map((part) => {
+        const raw = String(part || "").trim();
+        const low = raw.toLowerCase();
+        if (low === "failed breakdown down") return "Failed support breakdown (reclaim)";
+        if (low === "failed breakout up") return "Failed resistance breakout (reject)";
+        return raw;
+      });
+      const filtered = mapped.filter((part, idx) => {
         const norm = String(part || "").toLowerCase().replace(/[^a-z]/g, "");
         if (idx === 0 && familyNorm && norm === familyNorm) return false;
         if ((idx === 0 || idx === 1) && biasNorm && (norm === biasNorm || norm === `${biasNorm}bias`)) return false;
         return true;
       });
-      return (filtered.length ? filtered : parts).join(" | ");
+      return (filtered.length ? filtered : mapped).join(" | ");
     }
 
     function setChartFeedbackBusy(isBusy) {
@@ -3125,20 +3408,56 @@
           : `${normalizedYoloLabel} YOLO`;
         badges.push(`<span class="earnings-badge">${escHtml(yoloLabel.toUpperCase())}</span>`);
       }
+      const debateStateRaw = String(
+        data.debate_consensus_state
+          || (data.debate_v1 && data.debate_v1.consensus && data.debate_v1.consensus.consensus_state)
+          || "",
+      ).trim().toLowerCase();
+      const debateAgreementRaw = Number(
+        data.debate_agreement_score
+          ?? (data.debate_v1 && data.debate_v1.consensus && data.debate_v1.consensus.agreement_score)
+          ?? NaN,
+      );
+      const debateDisagreementsRaw = Number(
+        data.debate_disagreement_count
+          ?? (data.debate_v1 && data.debate_v1.consensus && data.debate_v1.consensus.disagreement_count)
+          ?? 0,
+      );
+      if (debateStateRaw) {
+        const debateTone =
+          debateStateRaw === "ready" ? "normal" :
+          (debateStateRaw === "conditional" ? "elevated" : "high");
+        const agreementText = Number.isFinite(debateAgreementRaw) ? ` ${debateAgreementRaw.toFixed(0)}%` : "";
+        badges.push(
+          `<span class="earnings-badge ${earningsToneClass(debateTone)}">DEBATE ${escHtml(debateStateRaw.toUpperCase())}${escHtml(agreementText)}</span>`
+        );
+      }
+      if (Number.isFinite(debateDisagreementsRaw) && debateDisagreementsRaw > 0) {
+        badges.push(`<span class="earnings-badge ${earningsToneClass("elevated")}">${escHtml(`DISAGREE x${debateDisagreementsRaw}`)}</span>`);
+      }
       if (data.yolo_direction_conflict) {
         badges.push(`<span class="earnings-badge ${earningsToneClass("high")}">YOLO CONFLICT</span>`);
       }
       $("chartCommentaryBadges").innerHTML = badges.join("");
       $("chartCommentaryStatus").textContent = data.asof ? `As of ${data.asof}` : "Load a ticker to generate commentary.";
+      const actionValue = String(data.action || "The chart read will explain whether the setup is actionable now or only on confirmation.")
+        .replace(/^action:\s*/i, "")
+        .trim();
+      const riskValue = String(data.risk_note || "none")
+        .replace(/^risk:\s*/i, "")
+        .trim();
+      const technicalValue = String(humanizeTechnicalRead(data.technical_read, data))
+        .replace(/^technical context:\s*/i, "")
+        .trim();
       $("chartObservation").innerHTML = data.observation
         ? escHtml(data.observation)
         : "Load a ticker to generate commentary.";
       $("chartAction").innerHTML = `
-        <strong>Action:</strong> ${escHtml(data.action || "The chart read will explain whether the setup is actionable now or only on confirmation.")}<br />
-        <strong>Risk:</strong> ${escHtml(data.risk_note || "none")}
+        <strong>Action:</strong> ${escHtml(actionValue || "-")}<br />
+        <strong>Risk:</strong> ${escHtml(riskValue || "none")}
       `;
       $("chartTechnicalRead").innerHTML = `
-        <strong>Technical Context:</strong> ${escHtml(humanizeTechnicalRead(data.technical_read, data))}
+        <strong>Technical Context:</strong> ${escHtml(technicalValue || "-")}
       `;
       setChartFeedbackStatus("Help improve narrative quality for this ticker.", "muted");
       const traceEl = $("chartNarrativeTrace");
@@ -3167,9 +3486,42 @@
       const baseline = trace.baseline && typeof trace.baseline === "object" ? trace.baseline : {};
       const finalText = trace.final && typeof trace.final === "object" ? trace.final : {};
       const prompt = trace.rewrite_instruction || data.llm_ready_prompt || "";
+      const debate = data.debate_v1 && typeof data.debate_v1 === "object" ? data.debate_v1 : {};
+      const debateConsensus = debate.consensus && typeof debate.consensus === "object" ? debate.consensus : {};
+      const debateRoles = Array.isArray(debate.roles) ? debate.roles : [];
+      const debateRoleRows = debateRoles
+        .slice(0, 5)
+        .map((role) => {
+          const roleName = String(role.role || "-").replace(/_/g, " ");
+          const roleStance = String(role.stance || "neutral");
+          const roleConf = Number(role.confidence || 0);
+          const roleEvidence = Array.isArray(role.evidence) ? role.evidence.filter(Boolean).slice(0, 2).join(" • ") : "-";
+          return `<div style=\"margin-top:4px;\"><strong>${escHtml(roleName)}:</strong> ${escHtml(roleStance)} (${escHtml(roleConf.toFixed(2))}) — ${escHtml(roleEvidence || "-")}</div>`;
+        })
+        .join("");
+      const debateBlock = debate.version
+        ? `
+        <details style="margin-top:6px;">
+          <summary style="cursor:pointer;">Show multi-angle debate</summary>
+          <div style="margin-top:6px;">
+            <strong>Consensus:</strong> ${escHtml(String(debateConsensus.consensus_bias || "neutral"))}
+            • state=${escHtml(String(debateConsensus.consensus_state || "watch"))}
+            • agreement=${escHtml(String(debateConsensus.agreement_score ?? "-"))}
+          </div>
+          <div style="margin-top:4px;">
+            <strong>Disagreements:</strong> ${escHtml(String(debateConsensus.disagreement_count ?? 0))}
+            ${Array.isArray(debateConsensus.safety_adjustment) && debateConsensus.safety_adjustment.length
+              ? `• safety=${escHtml(debateConsensus.safety_adjustment.join(", "))}` : ""}
+          </div>
+          <div style="margin-top:6px;"><strong>Roles:</strong></div>
+          ${debateRoleRows || '<div style=\"margin-top:4px;\">-</div>'}
+        </details>
+        `
+        : "";
       traceEl.innerHTML = `
         <div><strong>Narrative source:</strong> ${escHtml(sourceLabel)} • <strong>Changed fields:</strong> ${escHtml(changedLabel || "none")}</div>
         <div><strong>LLM runtime:</strong> ${escHtml(llmState)} • provider=${escHtml(llm.provider || "-")} • temp=${escHtml(llm.temperature ?? "-")} • max_tokens=${escHtml(llm.max_tokens ?? "-")}</div>
+        ${debateBlock}
         <details style="margin-top:6px;">
           <summary style="cursor:pointer;">Show generation trace</summary>
           <div style="margin-top:6px;"><strong>Instruction:</strong> ${escHtml(prompt || "-")}</div>
@@ -3326,6 +3678,7 @@
         if (k === which) { btn.classList.add("active"); sec.classList.remove("hidden"); }
         else             { btn.classList.remove("active"); sec.classList.add("hidden"); }
       }
+      syncChartReturnUi();
       markUsageTabView(which);
       if ((which === "report" || which === "regime") && !skipReportReload) loadReport();
       if (which === "earnings") loadEarnings();
@@ -4402,6 +4755,8 @@
         const resp = await apiFetch(`${base}/api/dashboard/${ticker}?${qs.toString()}`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
         const payload = await resp.json();
+        const shouldUseReportSnapshot = !!reportGeneratedTs || CHART_SOURCE_CONTEXT === "report_snapshot" || !!opts.forceReportOverride;
+        if (shouldUseReportSnapshot) applyReportSetupOverrideToChartPayload(payload, ticker);
         syncChartToggleState(payload);
         fillCards(payload);
         renderChartCommentary(payload);
@@ -4471,10 +4826,14 @@
           null,
           { sortable: true }
         );
-        const snapshotLabel = payload.report_generated_ts
-          ? ` • report ${(String(payload.report_generated_ts).slice(0, 16) || "").replace("T", " ")}`
+        const effectiveReportTs = payload.report_generated_ts || reportGeneratedTs || null;
+        const snapshotLabel = effectiveReportTs
+          ? ` • report ${(String(effectiveReportTs).slice(0, 16) || "").replace("T", " ")}`
           : "";
         $("chartStatus").textContent = `asof ${payload.asof || "-"}${snapshotLabel} • ${ticker}`;
+        if (opts && opts.focusChartEntry) {
+          scheduleChartEntryScroll();
+        }
         setGlobalStatus(`Done (${ticker})`);
         markUsageChartLoad(ticker);
       } catch (err) {
@@ -4509,6 +4868,9 @@
     function loadTickerQuick(t, opts = {}) {
       $("ticker").value = t;
       activateTab("chart");
+      if (opts && opts.focusChartEntry) {
+        scheduleChartEntryScroll();
+      }
       if (opts && opts.reportGeneratedTs) {
         CHART_SOURCE_CONTEXT = "report_snapshot";
       } else if (!opts || !opts.preserveSourceContext) {
@@ -4540,6 +4902,78 @@
 
     function saveStoredWatchlist(list) {
       localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify([...new Set((list || []).map(normalizeTickerSymbol).filter(Boolean))]));
+    }
+
+    function findReportSetupRow(ticker) {
+      const symbol = normalizeTickerSymbol(ticker);
+      if (!symbol) return null;
+      if (
+        LAST_REPORT_CLICK_OVERRIDE &&
+        normalizeTickerSymbol(LAST_REPORT_CLICK_OVERRIDE.ticker || ticker) === symbol
+      ) {
+        return LAST_REPORT_CLICK_OVERRIDE;
+      }
+      return (LAST_REPORT_SETUP_ROWS || []).find((row) => normalizeTickerSymbol(row && row.ticker) === symbol) || null;
+    }
+
+    function applyReportSetupOverrideToChartPayload(payload, ticker) {
+      if (!payload || typeof payload !== "object") return payload;
+      const setupRow = findReportSetupRow(ticker);
+      if (!setupRow || typeof setupRow !== "object") return payload;
+      const override = { ...setupRow };
+      if ((override.setup_tier === undefined || override.setup_tier === null || override.setup_tier === "") && override.tier) override.setup_tier = override.tier;
+      if ((override.setup_family === undefined || override.setup_family === null || override.setup_family === "") && override.setup) override.setup_family = override.setup;
+      if ((override.signal_bias === undefined || override.signal_bias === null || override.signal_bias === "") && override.bias) override.signal_bias = override.bias;
+      if ((override.actionability === undefined || override.actionability === null || override.actionability === "") && override.state) override.actionability = override.state;
+      if ((override.observation === undefined || override.observation === null || override.observation === "") && override.what_it_is) override.observation = override.what_it_is;
+      if ((override.action === undefined || override.action === null || override.action === "") && override.next_step) override.action = override.next_step;
+      if ((override.risk_note === undefined || override.risk_note === null || override.risk_note === "") && override.risk) override.risk_note = override.risk;
+      if ((override.technical_read === undefined || override.technical_read === null || override.technical_read === "") && override.technical_context) override.technical_read = override.technical_context;
+      if ((override.primary_yolo_role === undefined || override.primary_yolo_role === null || override.primary_yolo_role === "") && override.yolo_role) override.primary_yolo_role = override.yolo_role;
+      if ((override.primary_yolo_recency === undefined || override.primary_yolo_recency === null || override.primary_yolo_recency === "") && override.yolo_recency) override.primary_yolo_recency = override.yolo_recency;
+
+      const chartCommentary = payload.chart_commentary && typeof payload.chart_commentary === "object"
+        ? { ...payload.chart_commentary }
+        : {};
+      [
+        "setup_tier",
+        "setup_family",
+        "signal_bias",
+        "actionability",
+        "observation",
+        "action",
+        "risk_note",
+        "technical_read",
+        "primary_yolo_role",
+        "primary_yolo_recency",
+        "primary_yolo_confirmation_trend",
+        "primary_yolo_lifecycle_state",
+        "primary_yolo_latest_close_in_pattern",
+        "yolo_direction_conflict",
+        "yolo_conflict_strength",
+        "breakout_state",
+      ].forEach((key) => {
+        if (override[key] !== undefined && override[key] !== null && override[key] !== "") {
+          chartCommentary[key] = override[key];
+        }
+      });
+      chartCommentary.narrative_source = "report_snapshot";
+      payload.chart_commentary = chartCommentary;
+      return payload;
+    }
+
+    function renderReportWarnBanner(warnings) {
+      const el = $("reportWarnBanner");
+      if (!el) return;
+      const list = Array.isArray(warnings) ? warnings.filter((row) => String(row || "").trim()) : [];
+      if (!list.length) {
+        el.classList.add("hidden");
+        el.innerHTML = "";
+        return;
+      }
+      const items = list.slice(0, 6).map((row) => `<li>${escHtml(String(row))}</li>`).join("");
+      el.innerHTML = `<strong>Warnings</strong><ul class="report-list" style="margin-top:6px;">${items}</ul>`;
+      el.classList.remove("hidden");
     }
 
     function addTickerToWatchlist(ticker) {
@@ -4617,6 +5051,7 @@
     async function loadReport() {
       const base = getApiBase();
       $("reportStatus").textContent = "Loading...";
+      renderReportWarnBanner([]);
       try {
         const resp = await apiFetch(`${base}/api/daily-report?limit=20`);
         if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
@@ -4633,6 +5068,7 @@
         if (!hasReport) {
           LAST_REPORT_GENERATED_TS = null;
           $("reportStatus").textContent = "No report yet";
+          renderReportWarnBanner([]);
           renderRegimeContext({});
           return;
         }
@@ -4998,10 +5434,11 @@
 
         const asOf = `As of ${(latest.generated_ts || "").slice(0, 16).replace("T", " ")} UTC`;
         const warnList = Array.isArray(latest.warnings) ? latest.warnings : [];
-        const warnText = warnList.length ? ` • WARN: ${warnList[0]}` : "";
-        $("reportStatus").textContent = data.detail ? `${asOf} • ${data.detail}${warnText}` : `${asOf}${warnText}`;
+        $("reportStatus").textContent = data.detail ? `${asOf} • ${data.detail}` : `${asOf}`;
+        renderReportWarnBanner(warnList);
       } catch (err) {
         $("reportStatus").textContent = `Error: ${err.message}`;
+        renderReportWarnBanner([]);
         console.error(err);
       }
     }
@@ -5114,7 +5551,11 @@
       if ($("opSearch")) $("opSearch").value = "";
       loadOpportunities();
     });
-    $("loadChartBtn").addEventListener("click", loadChart);
+    $("loadChartBtn").addEventListener("click", () => {
+      CHART_SOURCE_CONTEXT = "live";
+      clearReportReturnContext();
+      loadChart();
+    });
     $("reportWatchAddBtn").addEventListener("click", () => {
       const input = $("reportWatchTickerInput");
       if (!input) return;
@@ -5147,6 +5588,8 @@
     $("loadEarningsBtn").addEventListener("click", loadEarnings);
     const chartBackBtn = $("chartBackToReportBtn");
     if (chartBackBtn) chartBackBtn.addEventListener("click", restoreReportFromChart);
+    const chartBackFloatBtn = $("chartBackToReportFloatBtn");
+    if (chartBackFloatBtn) chartBackFloatBtn.addEventListener("click", restoreReportFromChart);
     $("chartFeedbackGoodBtn").addEventListener("click", () => submitChartFeedback("good"));
     $("chartFeedbackNeutralBtn").addEventListener("click", () => submitChartFeedback("neutral"));
     $("chartFeedbackBadBtn").addEventListener("click", () => submitChartFeedback("bad"));
