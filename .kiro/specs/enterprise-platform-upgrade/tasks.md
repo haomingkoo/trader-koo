@@ -376,25 +376,25 @@ Improve VIX analysis accuracy and reliability with multi-source redundancy, adap
     - Test regime classification
     - Test signal labeling
 
-- [~] 14. Implement enhanced trap/reclaim detection
-  - [ ] 14.1 Detect bull traps
+- [x] 14. Implement enhanced trap/reclaim detection
+  - [x] 14.1 Detect bull traps
     - VIX breaks resistance, closes below within 3 bars
     - Calculate confidence from volume and reversal speed
     - _Requirements: 14.1, 14.3_
-  - [ ] 14.2 Detect bear traps
+  - [x] 14.2 Detect bear traps
     - VIX breaks support, closes above within 3 bars
     - Calculate confidence from volume and reversal speed
     - _Requirements: 14.2, 14.3_
-  - [ ] 14.3 Detect support reclaims
+  - [x] 14.3 Detect support reclaims
     - VIX closes above broken support for 2+ bars
     - _Requirements: 14.4_
-  - [ ] 14.4 Detect resistance reclaims
+  - [x] 14.4 Detect resistance reclaims
     - VIX closes below broken resistance for 2+ bars
     - _Requirements: 14.5_
-  - [ ] 14.5 Include in regime analysis
+  - [x] 14.5 Include in regime analysis
     - Add patterns with confidence scores
     - _Requirements: 14.6_
-  - [ ] 14.6 Display on VIX chart
+  - [x] 14.6 Display on VIX chart
     - Add distinct visual markers
     - _Requirements: 14.7_
   - [ ]\* 14.7 Write unit tests for trap/reclaim detection

@@ -1529,6 +1529,8 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                             "confidence": round(pattern.confidence, 2),
                             "explanation": pattern.explanation,
                             "bars_to_reversal": pattern.bars_to_reversal,
+                            "volume_factor": round(pattern.volume_factor, 2) if pattern.volume_factor else None,
+                            "reversal_speed_factor": round(pattern.reversal_speed_factor, 2) if pattern.reversal_speed_factor else None,
                         }
                     )
         except Exception as e:

@@ -3665,6 +3665,23 @@ def vix_glossary() -> dict[str, Any]:
     }
 
 
+@app.get("/api/vix-pattern-markers")
+def vix_pattern_markers() -> dict[str, Any]:
+    """Return visual marker specifications for VIX trap/reclaim patterns.
+    
+    This endpoint provides styling information for frontend chart rendering,
+    including colors, symbols, and positioning for each pattern type.
+    
+    Requirements: 14.7
+    """
+    from trader_koo.structure.vix_patterns import get_pattern_visual_markers
+    
+    return {
+        "markers": get_pattern_visual_markers(),
+        "description": "Visual marker specifications for VIX trap/reclaim patterns on charts",
+    }
+
+
 @app.get("/api/admin/routes")
 def admin_routes() -> dict[str, Any]:
     """List all admin endpoints with their authentication status.
