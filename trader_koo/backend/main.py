@@ -108,6 +108,7 @@ from trader_koo.audit import AuditLogger, ensure_audit_schema, apply_retention_p
 from trader_koo.audit.middleware import AuditMiddleware, log_auth_attempt
 from trader_koo.audit.api import query_audit_logs, export_audit_logs, get_audit_summary
 from trader_koo.audit.export import get_exporter_from_env, schedule_daily_export
+from trader_koo.ratelimit.integration import initialize_rate_limiting
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -602,6 +603,10 @@ async def lifespan(_app: FastAPI):
         finally:
             conn.close()
     
+    # Initialize rate limiting (Requirement 17)
+    rate_limiter = initialize_rate_limiting(_app)
+    LOG.info("Rate limiting initialized")
+    
     reconcile = _reconcile_stale_running_runs()
     if reconcile.get("reconciled"):
         LOG.warning(
@@ -670,6 +675,11 @@ app.add_middleware(ErrorSanitizationMiddleware)
 
 # Add audit logging middleware (Requirement 15.1, 15.2)
 app.add_middleware(AuditMiddleware, db_path=DB_PATH)
+
+# Add rate limiting middleware (Requirement 17)
+# Note: Rate limiter instance will be set during lifespan initialization
+from trader_koo.ratelimit.middleware import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
 
 def get_audit_logger() -> AuditLogger:
     """Get audit logger instance with database connection."""
@@ -5066,6 +5076,108 @@ def admin_data_source_health() -> dict[str, Any]:
         "alerts": alerts,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+@app.get("/api/admin/database-stats")
+def admin_database_stats() -> dict[str, Any]:
+    """Return database statistics including record counts and date ranges.
+    
+    Returns:
+        Dictionary containing:
+        - db_path: Path to database file
+        - db_exists: Whether database file exists
+        - db_size_mb: Database file size in MB
+        - tables: Statistics for each table
+        - price_data: Detailed price data statistics
+    """
+    if not DB_PATH.exists():
+        return {
+            "ok": False,
+            "db_path": str(DB_PATH),
+            "db_exists": False,
+            "error": "Database file not found"
+        }
+    
+    try:
+        import os
+        db_size_bytes = os.path.getsize(DB_PATH)
+        db_size_mb = round(db_size_bytes / (1024 * 1024), 2)
+        
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        
+        # Get all tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        tables = [row[0] for row in cursor.fetchall()]
+        
+        table_stats = {}
+        for table in tables:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                count = cursor.fetchone()[0]
+                table_stats[table] = {"row_count": count}
+            except Exception as e:
+                table_stats[table] = {"error": str(e)}
+        
+        # Get detailed price_daily stats
+        price_stats = {}
+        try:
+            cursor.execute("""
+                SELECT 
+                    COUNT(DISTINCT ticker) as ticker_count,
+                    COUNT(*) as total_rows,
+                    MIN(date) as earliest_date,
+                    MAX(date) as latest_date
+                FROM price_daily
+            """)
+            row = cursor.fetchone()
+            if row:
+                price_stats = {
+                    "ticker_count": row[0],
+                    "total_rows": row[1],
+                    "earliest_date": row[2],
+                    "latest_date": row[3]
+                }
+                
+            # Get per-ticker stats
+            cursor.execute("""
+                SELECT ticker, COUNT(*) as row_count, MIN(date) as first_date, MAX(date) as last_date
+                FROM price_daily
+                GROUP BY ticker
+                ORDER BY ticker
+            """)
+            ticker_stats = []
+            for row in cursor.fetchall():
+                ticker_stats.append({
+                    "ticker": row[0],
+                    "row_count": row[1],
+                    "first_date": row[2],
+                    "last_date": row[3]
+                })
+            price_stats["by_ticker"] = ticker_stats
+        except Exception as e:
+            price_stats["error"] = str(e)
+        
+        conn.close()
+        
+        return {
+            "ok": True,
+            "db_path": str(DB_PATH),
+            "db_exists": True,
+            "db_size_mb": db_size_mb,
+            "tables": table_stats,
+            "price_data": price_stats,
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "ok": False,
+            "db_path": str(DB_PATH),
+            "db_exists": True,
+            "error": str(e),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat()
+        }
 
 
 # ============================================================================
