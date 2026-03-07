@@ -6,7 +6,7 @@ This module implements detection logic for VIX-specific patterns:
 - Support reclaims (recovery after breakdown)
 - Resistance reclaims (recovery after breakout)
 
-Requirements: 8.1, 8.2, 8.3, 8.4, 14.1, 14.2, 14.3, 14.4, 14.5
+Requirements: 8.1, 8.2, 8.3, 8.4, 14.1, 14.2, 14.3, 14.4, 14.5, 14.7
 """
 
 from __future__ import annotations
@@ -38,6 +38,8 @@ class TrapReclaimPattern:
     confidence: float  # 0.0 to 1.0
     explanation: str  # Human-readable description
     bars_to_reversal: int | None = None  # For traps: how many bars until reversal
+    volume_factor: float | None = None  # Volume contribution to confidence
+    reversal_speed_factor: float | None = None  # Speed contribution to confidence
 
 
 def detect_vix_trap_reclaim_patterns(
@@ -92,12 +94,20 @@ def _detect_bull_traps(
 ) -> list[TrapReclaimPattern]:
     """Detect bull traps: VIX breaks above resistance then reverses down within N bars.
 
+    Confidence calculation includes:
+    - Reversal magnitude (how far price fell from breakout high)
+    - Reversal speed (faster reversals = higher confidence)
+    - Volume profile (higher volume on reversal = higher confidence)
+
     Requirements: 8.1, 14.1, 14.3
     """
     patterns: list[TrapReclaimPattern] = []
 
     if not resistance_levels or len(df) < cfg.trap_lookback_bars + 1:
         return patterns
+
+    # Check if volume data is available
+    has_volume = "volume" in df.columns
 
     for level_info in resistance_levels:
         resistance = float(level_info.get("level", 0))
@@ -124,10 +134,33 @@ def _detect_bull_traps(
                     bars_to_reversal = j - i
                     date_str = str(df.iloc[j]["date"])
 
-                    # Calculate confidence based on reversal speed and magnitude
+                    # Calculate reversal magnitude (normalized)
                     reversal_magnitude = (high_i - close_j) / resistance
+                    magnitude_score = min(0.4, reversal_magnitude * 2.0)
+
+                    # Calculate reversal speed factor
                     speed_factor = 1.0 - (bars_to_reversal / cfg.trap_lookback_bars)
-                    confidence = min(0.95, 0.5 + reversal_magnitude * 2.0 + speed_factor * 0.3)
+                    speed_score = speed_factor * 0.3
+
+                    # Calculate volume factor if available
+                    volume_score = 0.0
+                    volume_factor = None
+                    if has_volume:
+                        try:
+                            # Compare reversal bar volume to breakout bar volume
+                            volume_breakout = float(df.iloc[i]["volume"])
+                            volume_reversal = float(df.iloc[j]["volume"])
+                            
+                            if volume_breakout > 0:
+                                volume_ratio = volume_reversal / volume_breakout
+                                # Higher volume on reversal increases confidence
+                                volume_factor = min(2.0, volume_ratio)
+                                volume_score = min(0.3, volume_factor * 0.15)
+                        except (ValueError, KeyError):
+                            pass
+
+                    # Base confidence + magnitude + speed + volume
+                    confidence = min(0.95, 0.5 + magnitude_score + speed_score + volume_score)
 
                     patterns.append(
                         TrapReclaimPattern(
@@ -136,8 +169,10 @@ def _detect_bull_traps(
                             price=close_j,
                             level=resistance,
                             confidence=confidence,
-                            explanation=f"VIX broke above resistance at {resistance:.2f} then reversed back below within {bars_to_reversal} bars",
+                            explanation=f"VIX broke above resistance at {resistance:.2f} then reversed back below within {bars_to_reversal} bars (confidence: {confidence:.0%})",
                             bars_to_reversal=bars_to_reversal,
+                            volume_factor=volume_factor,
+                            reversal_speed_factor=speed_factor,
                         )
                     )
                     break  # Found trap for this level, move to next level
@@ -152,12 +187,20 @@ def _detect_bear_traps(
 ) -> list[TrapReclaimPattern]:
     """Detect bear traps: VIX breaks below support then reverses up within N bars.
 
+    Confidence calculation includes:
+    - Reversal magnitude (how far price rose from breakdown low)
+    - Reversal speed (faster reversals = higher confidence)
+    - Volume profile (higher volume on reversal = higher confidence)
+
     Requirements: 8.2, 14.2, 14.3
     """
     patterns: list[TrapReclaimPattern] = []
 
     if not support_levels or len(df) < cfg.trap_lookback_bars + 1:
         return patterns
+
+    # Check if volume data is available
+    has_volume = "volume" in df.columns
 
     for level_info in support_levels:
         support = float(level_info.get("level", 0))
@@ -184,10 +227,33 @@ def _detect_bear_traps(
                     bars_to_reversal = j - i
                     date_str = str(df.iloc[j]["date"])
 
-                    # Calculate confidence based on reversal speed and magnitude
+                    # Calculate reversal magnitude (normalized)
                     reversal_magnitude = (close_j - low_i) / support
+                    magnitude_score = min(0.4, reversal_magnitude * 2.0)
+
+                    # Calculate reversal speed factor
                     speed_factor = 1.0 - (bars_to_reversal / cfg.trap_lookback_bars)
-                    confidence = min(0.95, 0.5 + reversal_magnitude * 2.0 + speed_factor * 0.3)
+                    speed_score = speed_factor * 0.3
+
+                    # Calculate volume factor if available
+                    volume_score = 0.0
+                    volume_factor = None
+                    if has_volume:
+                        try:
+                            # Compare reversal bar volume to breakdown bar volume
+                            volume_breakdown = float(df.iloc[i]["volume"])
+                            volume_reversal = float(df.iloc[j]["volume"])
+                            
+                            if volume_breakdown > 0:
+                                volume_ratio = volume_reversal / volume_breakdown
+                                # Higher volume on reversal increases confidence
+                                volume_factor = min(2.0, volume_ratio)
+                                volume_score = min(0.3, volume_factor * 0.15)
+                        except (ValueError, KeyError):
+                            pass
+
+                    # Base confidence + magnitude + speed + volume
+                    confidence = min(0.95, 0.5 + magnitude_score + speed_score + volume_score)
 
                     patterns.append(
                         TrapReclaimPattern(
@@ -196,8 +262,10 @@ def _detect_bear_traps(
                             price=close_j,
                             level=support,
                             confidence=confidence,
-                            explanation=f"VIX broke below support at {support:.2f} then reversed back above within {bars_to_reversal} bars",
+                            explanation=f"VIX broke below support at {support:.2f} then reversed back above within {bars_to_reversal} bars (confidence: {confidence:.0%})",
                             bars_to_reversal=bars_to_reversal,
+                            volume_factor=volume_factor,
+                            reversal_speed_factor=speed_factor,
                         )
                     )
                     break  # Found trap for this level, move to next level
@@ -359,4 +427,50 @@ def get_pattern_glossary() -> dict[str, str]:
         "failed_breakdown": "Same as bear trap - VIX breaks below support then reverses back above within a few bars.",
         "support_reclaim": "VIX recovers and closes back above a support level after previously breaking below it, suggesting the support is holding.",
         "resistance_reclaim": "VIX falls back and closes below a resistance level after previously breaking above it, suggesting the resistance is holding.",
+    }
+
+
+def get_pattern_visual_markers() -> dict[str, dict[str, Any]]:
+    """Return visual marker specifications for trap/reclaim patterns.
+    
+    This provides styling information for frontend chart rendering.
+    
+    Requirements: 14.7
+    
+    Returns:
+        Dictionary mapping pattern types to visual marker specifications with:
+        - color: Hex color code for the marker
+        - symbol: Recommended chart symbol (triangle, circle, etc.)
+        - label: Short label for the marker
+        - position: Where to place marker relative to price (above/below)
+    """
+    return {
+        "bull_trap": {
+            "color": "#FF6B6B",  # Red
+            "symbol": "triangle-down",
+            "label": "Bull Trap",
+            "position": "above",
+            "description": "Failed breakout above resistance",
+        },
+        "bear_trap": {
+            "color": "#51CF66",  # Green
+            "symbol": "triangle-up",
+            "label": "Bear Trap",
+            "position": "below",
+            "description": "Failed breakdown below support",
+        },
+        "support_reclaim": {
+            "color": "#4DABF7",  # Blue
+            "symbol": "circle",
+            "label": "Support Reclaim",
+            "position": "below",
+            "description": "VIX reclaimed support after breakdown",
+        },
+        "resistance_reclaim": {
+            "color": "#FAB005",  # Yellow/Orange
+            "symbol": "circle",
+            "label": "Resistance Reclaim",
+            "position": "above",
+            "description": "VIX reclaimed resistance after breakout",
+        },
     }
