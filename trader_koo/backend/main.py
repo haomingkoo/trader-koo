@@ -45,6 +45,7 @@ from trader_koo.llm_health import (
     llm_alert_enabled,
     llm_degraded_threshold,
     llm_health_summary,
+    llm_token_usage_summary,
 )
 from trader_koo.catalyst_data import (
     build_earnings_calendar_payload,
@@ -4703,6 +4704,19 @@ def admin_llm_health(
                 or str(os.getenv("TRADER_KOO_LLM_ALERT_TO", "") or "").strip()  # legacy alias
             ),
         },
+    }
+
+
+@app.get("/api/admin/llm-usage")
+def admin_llm_usage(
+    days: int = Query(default=30, ge=1, le=3650),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> dict[str, Any]:
+    """Return persisted LLM token usage/cost estimates for this app only."""
+    summary = llm_token_usage_summary(DB_PATH, days=days, limit=limit)
+    return {
+        "ok": True,
+        **summary,
     }
 
 

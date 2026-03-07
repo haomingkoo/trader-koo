@@ -16,6 +16,7 @@ from trader_koo.llm_health import (
     llm_health_summary,
     note_llm_failure,
     note_llm_success,
+    note_llm_token_usage,
 )
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -149,6 +150,34 @@ def _safe_note_success(
         LOG.debug("Failed to persist llm success state", exc_info=True)
 
 
+def _safe_note_token_usage(
+    db_path: Path,
+    *,
+    source: str,
+    ticker: str | None,
+    usage_meta: dict[str, Any],
+) -> None:
+    if not isinstance(usage_meta, dict):
+        return
+    try:
+        note_llm_token_usage(
+            db_path,
+            source=source,
+            ticker=ticker,
+            model=usage_meta.get("model"),
+            deployment=usage_meta.get("deployment"),
+            prompt_tokens=usage_meta.get("prompt_tokens"),
+            completion_tokens=usage_meta.get("completion_tokens"),
+            total_tokens=usage_meta.get("total_tokens"),
+            meta={
+                "api_version": usage_meta.get("api_version"),
+                "response_id": usage_meta.get("response_id"),
+            },
+        )
+    except Exception:
+        LOG.debug("Failed to persist llm token usage", exc_info=True)
+
+
 def llm_ready() -> bool:
     if not llm_enabled():
         return False
@@ -221,10 +250,10 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     return {}
 
 
-def _azure_chat_rewrite(prompt_payload: dict[str, Any]) -> dict[str, Any]:
+def _azure_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     cfg = _azure_cfg()
     if not (cfg["endpoint"] and cfg["api_key"] and cfg["deployment"]):
-        return {}
+        return ({}, {})
     url = (
         f"{cfg['endpoint']}/openai/deployments/{cfg['deployment']}"
         f"/chat/completions?api-version={cfg['api_version']}"
@@ -256,12 +285,36 @@ def _azure_chat_rewrite(prompt_payload: dict[str, Any]) -> dict[str, Any]:
     with urllib.request.urlopen(req, timeout=_llm_timeout_sec()) as resp:
         raw = resp.read().decode("utf-8", errors="replace")
     payload = json.loads(raw)
+    usage = payload.get("usage") if isinstance(payload, dict) else {}
+    try:
+        prompt_tokens = max(0, int(float((usage or {}).get("prompt_tokens") or 0)))
+    except Exception:
+        prompt_tokens = 0
+    try:
+        completion_tokens = max(0, int(float((usage or {}).get("completion_tokens") or 0)))
+    except Exception:
+        completion_tokens = 0
+    try:
+        total_tokens = max(0, int(float((usage or {}).get("total_tokens") or 0)))
+    except Exception:
+        total_tokens = 0
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    usage_meta = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "model": str(payload.get("model") or "").strip() if isinstance(payload, dict) else "",
+        "deployment": cfg["deployment"],
+        "api_version": cfg["api_version"],
+        "response_id": str(payload.get("id") or "").strip() if isinstance(payload, dict) else "",
+    }
     choices = payload.get("choices") or []
     if not choices:
-        return {}
+        return ({}, usage_meta)
     msg = choices[0].get("message") if isinstance(choices[0], dict) else {}
     content = msg.get("content") if isinstance(msg, dict) else ""
-    return _extract_json_object(str(content or ""))
+    return (_extract_json_object(str(content or "")), usage_meta)
 
 
 def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, str]:
@@ -320,7 +373,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         return dict(cached)
 
     try:
-        rewritten = _azure_chat_rewrite(context)
+        rewritten, usage_meta = _azure_chat_rewrite(context)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
         error_class = "network_or_decode_error"
         _safe_note_failure(
@@ -346,6 +399,13 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         _set_runtime_disable()
         LOG.warning("LLM rewrite failed (%s); falling back to rule narrative", type(exc).__name__)
         return {}
+
+    _safe_note_token_usage(
+        db_path,
+        source=source,
+        ticker=context.get("ticker"),
+        usage_meta=usage_meta if isinstance(usage_meta, dict) else {},
+    )
 
     observation = _compact_text(rewritten.get("observation") or base_observation, max_chars=260)
     action = _compact_text(rewritten.get("action") or base_action, max_chars=180)
