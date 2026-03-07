@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/structure/gaps.py
+# hypothesis_version: 6.151.9
+
+[0.12, 2.0, '%Y-%m-%d', 'bear_gap', 'bull_gap', 'coerce', 'date', 'dist', 'fill_date', 'filled', 'gap_high', 'gap_low', 'high', 'low', 'mid', 'prev_high', 'prev_low', 'type']

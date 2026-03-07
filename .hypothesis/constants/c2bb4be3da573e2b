@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/structure/vix_patterns.py
+# hypothesis_version: 6.151.9
+
+[0.1, 0.2, 0.3, 0.5, 0.6, 0.95, 1.0, 2.0, 3.0, 'bear_trap', 'bull_trap', 'close', 'date', 'failed_breakdown', 'failed_breakout', 'high', 'level', 'low', 'resistance', 'resistance_reclaim', 'support', 'support_reclaim', 'type', 'zone_high', 'zone_low']

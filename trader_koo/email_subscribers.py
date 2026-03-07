@@ -52,6 +52,15 @@ def subscribe_resend_cooldown_min() -> int:
         return 15
 
 
+def email_token_expiry_hours() -> int:
+    """Get email token expiry hours from environment (default: 168 = 7 days)."""
+    raw = str(os.getenv("EMAIL_TOKEN_EXPIRY_HOURS", "168") or "").strip()
+    try:
+        return max(1, min(8760, int(raw)))  # 1 hour to 1 year
+    except ValueError:
+        return 168
+
+
 def canonical_email(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -136,7 +145,9 @@ def ensure_subscriber_schema(db_path: Path) -> None:
                 last_verify_sent_ts TEXT,
                 last_email_sent_ts TEXT,
                 last_email_error TEXT,
-                updated_ts TEXT NOT NULL
+                updated_ts TEXT NOT NULL,
+                confirm_token_created_ts TEXT,
+                confirm_token_expires_ts TEXT
             )
             """
         )
@@ -282,6 +293,41 @@ def _new_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _calculate_token_expiry(
+    created_ts: dt.datetime,
+    expiry_hours: int = 168  # 7 days default
+) -> dt.datetime:
+    """Calculate token expiration timestamp.
+    
+    Args:
+        created_ts: Token creation timestamp.
+        expiry_hours: Hours until expiration (default: 168 = 7 days).
+        
+    Returns:
+        Expiration timestamp.
+    """
+    return created_ts + dt.timedelta(hours=expiry_hours)
+
+
+def _is_token_expired(
+    expires_ts: dt.datetime | None,
+    now_utc: dt.datetime | None = None
+) -> bool:
+    """Check if a token has expired.
+    
+    Args:
+        expires_ts: Token expiration timestamp.
+        now_utc: Current time (defaults to now).
+        
+    Returns:
+        True if token is expired, False otherwise.
+    """
+    if expires_ts is None:
+        return False
+    now = now_utc or _utc_now()
+    return now >= expires_ts
+
+
 def upsert_subscriber_pending(
     db_path: Path,
     *,
@@ -290,10 +336,12 @@ def upsert_subscriber_pending(
     source_user_agent: str | None,
     now_utc: dt.datetime | None = None,
     resend_cooldown_min: int | None = None,
+    token_expiry_hours: int | None = None,
 ) -> dict[str, Any]:
     ensure_subscriber_schema(db_path)
     now = now_utc or _utc_now()
     cooldown = int(resend_cooldown_min if resend_cooldown_min is not None else subscribe_resend_cooldown_min())
+    expiry_hours = int(token_expiry_hours if token_expiry_hours is not None else email_token_expiry_hours())
     normalized = canonical_email(email)
     if not is_valid_email(normalized):
         return {
@@ -312,6 +360,8 @@ def upsert_subscriber_pending(
         status = str(existing.get("status") or "").strip().lower()
         unsubscribe_token = str(existing.get("unsubscribe_token") or "").strip() or _new_token()
         confirm_token = _new_token()
+        confirm_token_created_ts = now
+        confirm_token_expires_ts = _calculate_token_expiry(now, expiry_hours)
         should_send = True
         state = "pending"
 
@@ -331,6 +381,8 @@ def upsert_subscriber_pending(
             confirm_token = str(existing.get("confirm_token") or "") or None
             if not confirm_token:
                 confirm_token = _new_token()
+                confirm_token_created_ts = now
+                confirm_token_expires_ts = _calculate_token_expiry(now, expiry_hours)
                 status = "pending"
                 state = "pending"
                 should_send = True
@@ -350,9 +402,11 @@ def upsert_subscriber_pending(
                 subscribed_ts,
                 confirmed_ts,
                 unsubscribed_ts,
-                updated_ts
+                updated_ts,
+                confirm_token_created_ts,
+                confirm_token_expires_ts
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
                 status = excluded.status,
                 confirm_token = excluded.confirm_token,
@@ -362,7 +416,9 @@ def upsert_subscriber_pending(
                 subscribed_ts = COALESCE(email_subscribers.subscribed_ts, excluded.subscribed_ts),
                 confirmed_ts = excluded.confirmed_ts,
                 unsubscribed_ts = excluded.unsubscribed_ts,
-                updated_ts = excluded.updated_ts
+                updated_ts = excluded.updated_ts,
+                confirm_token_created_ts = excluded.confirm_token_created_ts,
+                confirm_token_expires_ts = excluded.confirm_token_expires_ts
             """,
             (
                 normalized,
@@ -375,6 +431,8 @@ def upsert_subscriber_pending(
                 confirmed_ts,
                 unsubscribed_ts,
                 _iso(now),
+                _iso(confirm_token_created_ts),
+                _iso(confirm_token_expires_ts),
             ),
         )
         conn.execute(
@@ -398,6 +456,7 @@ def upsert_subscriber_pending(
             "should_send_verification": bool(should_send),
             "confirm_token": confirm_token,
             "unsubscribe_token": unsubscribe_token,
+            "confirm_token_expires_ts": _iso(confirm_token_expires_ts),
         }
     finally:
         conn.close()
@@ -451,12 +510,23 @@ def confirm_subscriber_token(
     conn = _connect(db_path)
     try:
         row = conn.execute(
-            "SELECT email, status FROM email_subscribers WHERE confirm_token = ? LIMIT 1",
+            "SELECT email, status, confirm_token_expires_ts FROM email_subscribers WHERE confirm_token = ? LIMIT 1",
             (token_clean,),
         ).fetchone()
         if row is None:
             return None
+        
         email = canonical_email(row["email"])
+        expires_ts = _parse_iso(row["confirm_token_expires_ts"])
+        
+        # Check if token has expired
+        if _is_token_expired(expires_ts, now):
+            return {
+                "error": "token_expired",
+                "detail": "This confirmation link has expired. Please request a new one.",
+                "email": email,
+            }
+        
         conn.execute(
             """
             UPDATE email_subscribers
@@ -465,7 +535,9 @@ def confirm_subscriber_token(
                 confirm_token = NULL,
                 confirmed_ts = COALESCE(confirmed_ts, ?),
                 unsubscribed_ts = NULL,
-                updated_ts = ?
+                updated_ts = ?,
+                confirm_token_created_ts = NULL,
+                confirm_token_expires_ts = NULL
             WHERE email = ?
             """,
             (_iso(now), _iso(now), email),

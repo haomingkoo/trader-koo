@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/llm_health.py
+# hypothesis_version: 6.151.9
+
+[0.0, 60.0, 1000000.0, 120, 180, 200, 300, 500, 1000, 2000, 3600, 3650, 5000, 20000, 200000, 2000000, '+00:00', ',', '0', '1', '180', '20000', '3', '300', '5000', ':', 'Z', 'alert', 'alerts_disabled', 'by_source', 'c', 'completion_tokens', 'consecutive_failures', 'count', 'counts', 'daily', 'degraded', 'degraded_threshold', 'estimated_cost_usd', 'estimation_enabled', 'failure', 'input_per_1m', 'last_alert_payload', 'last_alert_ts', 'last_error_class', 'last_error_details', 'last_failure_reason', 'last_failure_ts', 'last_success_ts', 'not_degraded', 'ok', 'on', 'other', 'outcome', 'output_per_1m', 'pricing', 'prompt_tokens', 'recent', 'recent_events', 'requests', 'success', 'top_tickers', 'total', 'total_tokens', 'totals', 'true', 'value', 'window_days', 'yes', '|']

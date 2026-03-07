@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/security/error_middleware.py
+# hypothesis_version: 6.151.9
+
+[500, 'config', 'detail', 'status_code', 'trace', 'type']

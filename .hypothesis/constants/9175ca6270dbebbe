@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/data/schema.py
+# hypothesis_version: 6.151.9
+
+['_', 'adj_close', 'adjclose', 'close', 'coerce', 'date', 'datetime', 'high', 'last', 'low', 'none', 'open', 'timestamp', 'vol', 'volume']

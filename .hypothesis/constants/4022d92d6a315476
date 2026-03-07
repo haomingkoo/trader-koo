@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/features/candle_patterns.py
+# hypothesis_version: 6.151.9
+
+[0.0, 1e-09, 0.1, 0.35, 0.5, 0.55, 0.56, 0.58, 0.6, 0.62, 0.64, 0.7, 0.95, 0.99, 2.0, 2.2, 200.0, 100, 180, 200, '%Y-%m-%d', '3blackcrows', '3inside', '3linestrike', '3outside', '3whitesoldiers', 'CDL', '_', 'abandoned_baby', 'abandonedbaby', 'bear', 'bearish', 'bearish_engulfing', 'bias', 'bull', 'bullish', 'bullish_engulfing', 'close', 'coerce', 'confidence', 'date', 'doji', 'engulfing', 'evening', 'evening_star', 'explanation', 'hammer', 'high', 'low', 'morning', 'morning_star', 'neutral', 'open', 'pattern', 'shooting', 'shooting_star', 'three_black_crows', 'three_inside', 'three_inside_down', 'three_inside_up', 'three_line_strike', 'three_outside', 'three_outside_down', 'three_outside_up', 'three_white_soldiers']
