@@ -832,6 +832,71 @@
       padding: 6px;
       background: #0f1624;
     }
+    .regime-compare-note {
+      color: var(--muted);
+      font-size: 0.74rem;
+      margin: 2px 4px 8px;
+    }
+    .regime-compare-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px;
+    }
+    .regime-compare-card {
+      border: 1px solid rgba(142, 160, 189, 0.24);
+      border-radius: 10px;
+      background: #0d1422;
+      padding: 8px;
+      min-height: 206px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .regime-compare-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .regime-compare-symbol {
+      font-weight: 800;
+      letter-spacing: 0.01em;
+    }
+    .regime-compare-change {
+      font-size: 0.78rem;
+      font-variant-numeric: tabular-nums;
+      border: 1px solid rgba(142, 160, 189, 0.24);
+      border-radius: 999px;
+      padding: 1px 8px;
+      white-space: nowrap;
+    }
+    .regime-compare-change.positive {
+      color: var(--up);
+      border-color: rgba(72, 214, 172, 0.5);
+      background: rgba(72, 214, 172, 0.1);
+    }
+    .regime-compare-change.negative {
+      color: var(--down);
+      border-color: rgba(255, 122, 122, 0.5);
+      background: rgba(255, 122, 122, 0.1);
+    }
+    .regime-compare-change.neutral {
+      color: var(--muted);
+      border-color: rgba(142, 160, 189, 0.32);
+      background: rgba(142, 160, 189, 0.08);
+    }
+    .regime-compare-mini {
+      min-height: 150px;
+      border: 1px solid rgba(142, 160, 189, 0.2);
+      border-radius: 8px;
+      background: #0a1120;
+      overflow: hidden;
+    }
+    .regime-compare-trend {
+      color: var(--muted);
+      font-size: 0.72rem;
+      line-height: 1.3;
+    }
     .heatmap-grid {
       display: grid;
       gap: 6px;
@@ -2162,7 +2227,7 @@
         <table id="regimeMaMatrixTable"></table>
       </div>
       <div class="panel" style="margin-bottom:12px;">
-        <div class="label" style="margin-bottom:8px;">VIX vs SPX / DJI / NDX (Indexed)</div>
+        <div class="label" style="margin-bottom:8px;">VIX vs Market Benchmarks (Indexed Mini-Panels)</div>
         <div id="regimeComparisonChart" class="regime-compare-wrap"></div>
       </div>
       <div class="panel" style="margin-bottom:12px;">
@@ -3381,14 +3446,14 @@
         cmpEl.innerHTML = `<div class="status-plain">Chart library unavailable.</div>`;
         return;
       }
-      const traces = [];
       const keys = [
-        { key: "vix_idx", name: "^VIX", color: "#ff7a66", symbolKey: "vix" },
-        { key: "spx_idx", name: "SPX", color: "#56d9ff", symbolKey: "spx" },
-        { key: "dji_idx", name: "DJI", color: "#ffd166", symbolKey: "dji" },
-        { key: "ndx_idx", name: "NDX", color: "#7af7c8", symbolKey: "ndx" },
+        { key: "vix_idx", name: "^VIX", color: "#ff7a66", symbolKey: "vix", kind: "vix" },
+        { key: "spx_idx", name: "^GSPC", color: "#56d9ff", symbolKey: "spx", kind: "index" },
+        { key: "dji_idx", name: "^DJI", color: "#ffd166", symbolKey: "dji", kind: "index" },
+        { key: "ndx_idx", name: "^NDX", color: "#7af7c8", symbolKey: "ndx", kind: "index" },
       ];
       const xVals = availableSeries.map((row) => row.date || null);
+      const panels = [];
       for (const spec of keys) {
         const yVals = availableSeries.map((row) => {
           const n = Number(row[spec.key]);
@@ -3396,55 +3461,101 @@
         });
         if (!yVals.some((n) => Number.isFinite(n))) continue;
         const sym = String((comparisonSymbols && comparisonSymbols[spec.symbolKey]) || spec.name);
-        traces.push({
-          type: "scatter",
-          mode: "lines",
-          name: sym,
-          x: xVals,
-          y: yVals,
-          line: { width: 2, color: spec.color },
-          connectgaps: false,
-          hovertemplate: "%{x}<br>%{fullData.name}: %{y:.2f}<extra></extra>",
+        let last = null;
+        for (let i = yVals.length - 1; i >= 0; i--) {
+          const n = Number(yVals[i]);
+          if (Number.isFinite(n)) {
+            last = n;
+            break;
+          }
+        }
+        const delta = Number.isFinite(last) ? (last - 100) : null;
+        let cls = "neutral";
+        if (Number.isFinite(delta) && delta > 0.2) cls = "positive";
+        if (Number.isFinite(delta) && delta < -0.2) cls = "negative";
+        const changeText = Number.isFinite(delta)
+          ? `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}% vs start`
+          : "No data";
+        const directionText = Number.isFinite(delta)
+          ? (
+              spec.kind === "vix"
+                ? (delta >= 0 ? "VIX is higher than window start (risk pressure up)." : "VIX is lower than window start (risk pressure down).")
+                : (delta >= 0 ? `${sym} is up vs window start.` : `${sym} is down vs window start.`)
+            )
+          : `${sym} has no indexed series in this window.`;
+        panels.push({
+          spec,
+          sym,
+          yVals,
+          changeText,
+          directionText,
+          cls,
         });
       }
-      if (!traces.length) {
+      if (!panels.length) {
         cmpEl.innerHTML = `<div class="status-plain">No indexed comparison values available for this snapshot.</div>`;
         return;
       }
-      const layout = {
-        autosize: true,
-        height: 280,
-        margin: { l: 46, r: 18, t: 18, b: 34 },
-        paper_bgcolor: "rgba(0,0,0,0)",
-        plot_bgcolor: "rgba(0,0,0,0)",
-        font: { color: "#c9d5ef", family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", size: 12 },
-        xaxis: {
-          gridcolor: "rgba(104,127,170,0.2)",
-          tickfont: { color: "#9ab0d6", size: 11 },
-          title: { text: subtitle || "" },
-        },
-        yaxis: {
-          gridcolor: "rgba(104,127,170,0.2)",
-          tickfont: { color: "#9ab0d6", size: 11 },
-          zeroline: true,
-          zerolinecolor: "rgba(104,127,170,0.3)",
-          title: { text: "Indexed (base=100)", font: { color: "#9ab0d6", size: 11 } },
-        },
-        legend: {
-          orientation: "h",
-          yanchor: "bottom",
-          y: 1.02,
-          xanchor: "left",
-          x: 0,
-          font: { size: 11, color: "#9ab0d6" },
-        },
-      };
-      const config = {
-        responsive: true,
-        displayModeBar: false,
-        scrollZoom: false,
-      };
-      Plotly.react(cmpEl, traces, layout, config);
+      const noteText = subtitle
+        ? `Indexed base=100 at window start. ${subtitle}`
+        : "Indexed base=100 at window start. Above 100 means up vs start, below 100 means down vs start.";
+      cmpEl.innerHTML =
+        `<div class="regime-compare-note">${escHtml(noteText)}</div>` +
+        `<div class="regime-compare-grid">` +
+        panels.map((panel, idx) => (
+          `<div class="regime-compare-card">` +
+          `<div class="regime-compare-head">` +
+          `<div class="regime-compare-symbol">${escHtml(panel.sym)}</div>` +
+          `<div class="regime-compare-change ${panel.cls}">${escHtml(panel.changeText)}</div>` +
+          `</div>` +
+          `<div id="regimeCompareMini${idx}" class="regime-compare-mini"></div>` +
+          `<div class="regime-compare-trend">${escHtml(panel.directionText)}</div>` +
+          `</div>`
+        )).join("") +
+        `</div>`;
+
+      panels.forEach((panel, idx) => {
+        const miniEl = $(`regimeCompareMini${idx}`);
+        if (!miniEl) return;
+        const trace = {
+          type: "scatter",
+          mode: "lines",
+          name: panel.sym,
+          x: xVals,
+          y: panel.yVals,
+          line: { width: 2, color: panel.spec.color },
+          connectgaps: false,
+          hovertemplate: "%{x}<br>%{fullData.name}: %{y:.2f}<extra></extra>",
+        };
+        const layout = {
+          autosize: true,
+          height: 150,
+          margin: { l: 34, r: 8, t: 8, b: 24 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(0,0,0,0)",
+          font: { color: "#c9d5ef", family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", size: 11 },
+          xaxis: {
+            gridcolor: "rgba(104,127,170,0.18)",
+            tickfont: { color: "#9ab0d6", size: 10 },
+            showline: false,
+            title: { text: "" },
+          },
+          yaxis: {
+            gridcolor: "rgba(104,127,170,0.18)",
+            tickfont: { color: "#9ab0d6", size: 10 },
+            zeroline: true,
+            zerolinecolor: "rgba(104,127,170,0.3)",
+            title: { text: "" },
+          },
+          showlegend: false,
+        };
+        const config = {
+          responsive: true,
+          displayModeBar: false,
+          scrollZoom: false,
+        };
+        Plotly.react(miniEl, [trace], layout, config);
+      });
     }
 
     function renderRegimeContext(regime) {
