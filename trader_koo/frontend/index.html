@@ -332,6 +332,7 @@
       transition: border-color .15s ease, transform .15s ease;
       width: 100%;
       text-align: left;
+      appearance: none;
     }
     .earnings-card:hover {
       border-color: rgba(106, 169, 255, 0.7);
@@ -357,6 +358,12 @@
       min-width: 0;
       overflow-wrap: anywhere;
     }
+    .earnings-card-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
     .earnings-score {
       border-radius: 999px;
       padding: 4px 8px;
@@ -366,6 +373,21 @@
       font-weight: 700;
       white-space: nowrap;
       flex: 0 0 auto;
+    }
+    .earnings-open-chart-btn {
+      width: auto;
+      padding: 4px 8px;
+      font-size: 0.66rem;
+      border-radius: 999px;
+      border: 1px solid rgba(106, 169, 255, 0.42);
+      background: rgba(106, 169, 255, 0.08);
+      color: #c9dcff;
+      cursor: pointer;
+      line-height: 1.1;
+    }
+    .earnings-open-chart-btn:hover {
+      border-color: rgba(106, 169, 255, 0.82);
+      background: rgba(106, 169, 255, 0.16);
     }
     .earnings-badges {
       display: flex;
@@ -682,6 +704,37 @@
       width: auto;
       padding: 8px 10px;
       font-size: 0.76rem;
+    }
+    .earnings-controls {
+      align-items: flex-end;
+      gap: 10px;
+    }
+    .earnings-controls .earnings-lookahead {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 0 0 auto;
+      width: 74px;
+      min-width: 74px;
+      max-width: 74px;
+    }
+    .earnings-controls .earnings-lookahead label {
+      color: var(--muted);
+      font-size: 0.72rem;
+      line-height: 1.2;
+    }
+    .earnings-controls .earnings-lookahead input {
+      width: 74px !important;
+      min-width: 74px !important;
+      max-width: 74px !important;
+      height: 34px !important;
+      min-height: 34px;
+      max-height: 34px;
+      padding: 4px 8px !important;
+      line-height: 1;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      font-size: 0.9rem;
     }
     .earnings-controls .field.compact-number {
       flex: 0 0 96px;
@@ -1444,11 +1497,20 @@
         min-width: 86px !important;
         max-width: 86px !important;
       }
+      .earnings-controls .earnings-lookahead,
+      .earnings-controls .earnings-lookahead input {
+        width: 68px !important;
+        min-width: 68px !important;
+        max-width: 68px !important;
+      }
       .earnings-controls .earnings-watch-field {
         flex: 1 1 120px;
       }
       .earnings-controls button {
         width: auto !important;
+      }
+      .earnings-open-chart-btn {
+        padding: 4px 7px;
       }
       .mini-actions button { flex: 1 1 calc(50% - 6px); }
       .chart-return-floating {
@@ -2029,7 +2091,7 @@
       </div>
       <div class="panel" style="margin-bottom:12px;">
 	        <div class="report-watch-wrap earnings-controls">
-	          <div class="field compact-number">
+	          <div class="earnings-lookahead">
 	            <label for="earningsDays">Lookahead Days</label>
 	            <input id="earningsDays" class="earnings-days-input" type="number" min="1" max="90" step="1" value="21" />
 	          </div>
@@ -3951,10 +4013,13 @@
                   122,
                 );
                 return `
-                <button type="button" class="earnings-card${active}" data-earnings-key="${escHtml(key)}">
+                <div class="earnings-card${active}" data-earnings-key="${escHtml(key)}" data-earnings-ticker="${escHtml(String(row.ticker || ""))}" role="button" tabindex="0" title="Click to view details • Double-click to open chart">
                   <div class="earnings-card-head">
                     <div class="earnings-card-ticker">${escHtml(row.ticker || "-")}</div>
-                    <div class="earnings-score">Setup Score ${escHtml(score)}</div>
+                    <div class="earnings-card-actions">
+                      <div class="earnings-score">Setup Score ${escHtml(score)}</div>
+                      <button type="button" class="earnings-open-chart-btn" data-earnings-open-chart="1" data-ticker="${escHtml(String(row.ticker || ""))}">Chart</button>
+                    </div>
                   </div>
                   <div class="earnings-mini-grid">
                     <div class="earnings-mini-item">
@@ -3985,7 +4050,7 @@
                   <div class="earnings-card-sub">
                     <strong>Next step:</strong> ${escHtml(nextStep)}
                   </div>
-                </button>
+                </div>
               `}).join("")
             : `<div class="earnings-lane-empty">No names in this session.</div>`;
           return `
@@ -4006,13 +4071,35 @@
           </div>
         `;
       }).join("");
+      board.querySelectorAll(".earnings-open-chart-btn[data-earnings-open-chart]").forEach((node) => {
+        node.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const ticker = String(node.getAttribute("data-ticker") || "").trim();
+          if (ticker) loadTickerFromReport(ticker);
+        });
+      });
       board.querySelectorAll(".earnings-card[data-earnings-key]").forEach((node) => {
-        node.addEventListener("click", () => {
+        const selectCard = () => {
           const key = node.getAttribute("data-earnings-key") || "";
           const row = LAST_EARNINGS_LOOKUP[key];
           LAST_EARNINGS_SELECTED = key;
           renderEarningsBoard(dayGroups);
           renderEarningsDetail(row || null);
+        };
+        node.addEventListener("click", (ev) => {
+          if (ev.target && ev.target.closest && ev.target.closest("[data-earnings-open-chart]")) return;
+          selectCard();
+        });
+        node.addEventListener("dblclick", () => {
+          const key = node.getAttribute("data-earnings-key") || "";
+          const row = LAST_EARNINGS_LOOKUP[key];
+          if (row && row.ticker) loadTickerFromReport(row.ticker);
+        });
+        node.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            selectCard();
+          }
         });
       });
     }
