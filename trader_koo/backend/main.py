@@ -2125,6 +2125,12 @@ def _build_chart_commentary_payload(
             "yolo_lifecycle_state",
             "yolo_latest_close_in_pattern",
             "breakout_state",
+            "debate_v1",
+            "debate_consensus_state",
+            "debate_consensus_bias",
+            "debate_agreement_score",
+            "debate_disagreement_count",
+            "debate_safety_adjustment",
         ):
             if key in override and override.get(key) is not None:
                 row[key] = override.get(key)
@@ -2235,6 +2241,12 @@ def _build_chart_commentary_payload(
         "yolo_bias": row.get("yolo_bias"),
         "yolo_direction_conflict": bool(row.get("yolo_direction_conflict")),
         "yolo_conflict_strength": row.get("yolo_conflict_strength"),
+        "debate_v1": row.get("debate_v1"),
+        "debate_consensus_state": row.get("debate_consensus_state"),
+        "debate_consensus_bias": row.get("debate_consensus_bias"),
+        "debate_agreement_score": row.get("debate_agreement_score"),
+        "debate_disagreement_count": row.get("debate_disagreement_count"),
+        "debate_safety_adjustment": row.get("debate_safety_adjustment"),
         "commentary_context": {
             "ticker": ticker,
             "asof": asof_date,

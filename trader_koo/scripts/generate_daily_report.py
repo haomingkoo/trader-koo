@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from trader_koo.catalyst_data import build_earnings_calendar_payload
+from trader_koo.debate_engine import build_setup_debate
 from trader_koo.email_subscribers import (
     already_sent_generated_report,
     email_max_recipients,
@@ -70,6 +71,7 @@ SETUP_EVAL_TRACK_LIMIT = max(5, int(os.getenv("TRADER_KOO_SETUP_EVAL_TRACK_LIMIT
 SETUP_EVAL_WINDOW_DAYS = max(30, int(os.getenv("TRADER_KOO_SETUP_EVAL_WINDOW_DAYS", "180")))
 SETUP_EVAL_MIN_SAMPLE = max(3, int(os.getenv("TRADER_KOO_SETUP_EVAL_MIN_SAMPLE", "5")))
 SETUP_EVAL_HIT_THRESHOLD_PCT = float(os.getenv("TRADER_KOO_SETUP_EVAL_HIT_THRESHOLD_PCT", "0.3"))
+DEBATE_ENGINE_ENABLED = _as_bool(os.getenv("TRADER_KOO_DEBATE_ENABLED", "1"))
 
 
 def _normalize_report_kind(value: Any) -> str:
@@ -1180,6 +1182,8 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
         "asof_date": None,
         "summary": "",
         "vix": {},
+        "ma_matrix": [],
+        "comparison": {},
         "participation": [],
         "overall": {},
         "health": {},
@@ -1214,6 +1218,8 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
             ma_state = "below_ma20_ma50"
 
         ma_cross_state = "ma20_above_ma50" if ma20 > ma50 else "ma20_below_ma50"
+        ma20_vs_ma50 = ((ma20 / ma50) - 1.0) * 100.0 if ma50 > 0 else None
+        ma50_vs_ma100 = ((ma50 / ma100) - 1.0) * 100.0 if isinstance(ma100, (int, float)) and ma100 > 0 else None
 
         bb_width_series: list[float] = []
         for idx in range(19, len(closes)):
@@ -1313,6 +1319,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
 
         # VIX support/resistance using the same level engine as chart mode.
         levels_out: list[dict[str, Any]] = []
+        level_source = "shared_level_engine"
         try:
             model = pd.DataFrame(vix_rows).copy()
             if len(model) >= REPORT_FEATURE_CFG.min_bars:
@@ -1363,6 +1370,60 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                         )
         except Exception:
             levels_out = []
+        if not levels_out:
+            level_source = "rolling_window_fallback"
+            closes_for_levels = closes
+            dates_for_levels = [str(r.get("date") or "") for r in vix_rows]
+            candidates: list[tuple[str, float, str]] = []
+            for bars, tier in ((21, "primary"), (63, "secondary"), (126, "secondary")):
+                if len(closes_for_levels) < bars:
+                    continue
+                win = closes_for_levels[-bars:]
+                candidates.append(("support", float(min(win)), tier))
+                candidates.append(("resistance", float(max(win)), tier))
+            dedup: dict[tuple[str, int], tuple[str, float, str]] = {}
+            for side, lv, tier in candidates:
+                key = (side, int(round(lv * 100)))
+                dedup[key] = (side, lv, tier)
+
+            def _ordered_fallback(side: str) -> list[tuple[str, float, str]]:
+                pool = [item for item in dedup.values() if item[0] == side]
+                if side == "support":
+                    near = sorted([p for p in pool if p[1] <= latest], key=lambda x: x[1], reverse=True)
+                    far = sorted([p for p in pool if p[1] > latest], key=lambda x: x[1])
+                else:
+                    near = sorted([p for p in pool if p[1] >= latest], key=lambda x: x[1])
+                    far = sorted([p for p in pool if p[1] < latest], key=lambda x: x[1], reverse=True)
+                return (near + far)[:3]
+
+            for side, level_v, tier in _ordered_fallback("support") + _ordered_fallback("resistance"):
+                if level_v <= 0:
+                    continue
+                zone_pad = max(level_v * 0.003, 0.05)
+                zone_low = level_v - zone_pad
+                zone_high = level_v + zone_pad
+                if side == "support":
+                    dist_pct = ((latest - level_v) / level_v) * 100.0
+                else:
+                    dist_pct = ((level_v - latest) / level_v) * 100.0
+                last_touch_idx = None
+                for idx in range(len(closes_for_levels) - 1, -1, -1):
+                    cv = closes_for_levels[idx]
+                    if abs(cv - level_v) / max(level_v, 1e-9) <= 0.004:
+                        last_touch_idx = idx
+                        break
+                levels_out.append(
+                    {
+                        "type": side,
+                        "level": round(level_v, 2),
+                        "zone_low": round(zone_low, 2),
+                        "zone_high": round(zone_high, 2),
+                        "tier": tier,
+                        "touches": 1 if last_touch_idx is not None else 0,
+                        "distance_pct": round(dist_pct, 2),
+                        "last_touch_date": dates_for_levels[last_touch_idx] if last_touch_idx is not None else "",
+                    }
+                )
         regime["levels"] = levels_out
 
         regime["asof_date"] = str(vix_rows[-1]["date"])
@@ -1390,6 +1451,92 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
             else None,
             "term_structure_state": term_structure_state,
             "vix3m_close": round(vix3m_latest, 2) if isinstance(vix3m_latest, (int, float)) else None,
+            "level_source": level_source,
+        }
+        regime["ma_matrix"] = [
+            {
+                "metric": "Close vs MA20",
+                "value_pct": round(pct_vs_ma20, 2) if isinstance(pct_vs_ma20, (int, float)) else None,
+                "state": "above_ma20" if isinstance(pct_vs_ma20, (int, float)) and pct_vs_ma20 >= 0 else "below_ma20",
+                "risk_read": "risk_off_pressure" if isinstance(pct_vs_ma20, (int, float)) and pct_vs_ma20 >= 0 else "risk_on_relief",
+            },
+            {
+                "metric": "Close vs MA50",
+                "value_pct": round(pct_vs_ma50, 2) if isinstance(pct_vs_ma50, (int, float)) else None,
+                "state": "above_ma50" if isinstance(pct_vs_ma50, (int, float)) and pct_vs_ma50 >= 0 else "below_ma50",
+                "risk_read": "risk_off_pressure" if isinstance(pct_vs_ma50, (int, float)) and pct_vs_ma50 >= 0 else "risk_on_relief",
+            },
+            {
+                "metric": "Close vs MA100",
+                "value_pct": round(pct_vs_ma100, 2) if isinstance(pct_vs_ma100, (int, float)) else None,
+                "state": "above_ma100" if isinstance(pct_vs_ma100, (int, float)) and pct_vs_ma100 >= 0 else "below_ma100",
+                "risk_read": "risk_off_pressure" if isinstance(pct_vs_ma100, (int, float)) and pct_vs_ma100 >= 0 else "risk_on_relief",
+            },
+            {
+                "metric": "MA20 vs MA50",
+                "value_pct": round(ma20_vs_ma50, 2) if isinstance(ma20_vs_ma50, (int, float)) else None,
+                "state": "ma20_above_ma50" if ma20 > ma50 else "ma20_below_ma50",
+                "risk_read": "short_term_stress_up" if ma20 > ma50 else "short_term_stress_down",
+            },
+            {
+                "metric": "MA50 vs MA100",
+                "value_pct": round(ma50_vs_ma100, 2) if isinstance(ma50_vs_ma100, (int, float)) else None,
+                "state": "ma50_above_ma100"
+                if isinstance(ma50_vs_ma100, (int, float)) and ma50_vs_ma100 >= 0
+                else "ma50_below_ma100",
+                "risk_read": "intermediate_stress_up"
+                if isinstance(ma50_vs_ma100, (int, float)) and ma50_vs_ma100 >= 0
+                else "intermediate_stress_down",
+            },
+        ]
+
+        # Benchmark comparison window for regime context: VIX + SPX/DJI/NDX.
+        benchmark_candidates = {
+            "spx": ("^GSPC", ".SPX", "SPX"),
+            "dji": ("^DJI", ".DJI", "DJI"),
+            "ndx": ("^NDX", ".NDX", "NDX", "QQQ"),
+        }
+        benchmark_maps: dict[str, dict[str, float]] = {}
+        benchmark_symbol_used: dict[str, str] = {"vix": "^VIX"}
+        for key, symbols in benchmark_candidates.items():
+            rows_best: list[dict[str, float | str]] = []
+            symbol_best = None
+            for symbol in symbols:
+                rows = _fetch_symbol_ohlcv(conn, symbol, limit=160)
+                if len(rows) > len(rows_best):
+                    rows_best = rows
+                    symbol_best = symbol
+            if rows_best:
+                benchmark_maps[key] = {str(r["date"]): float(r["close"]) for r in rows_best if float(r["close"]) > 0}
+                benchmark_symbol_used[key] = str(symbol_best or "")
+
+        vix_map = {str(r["date"]): float(r["close"]) for r in vix_rows if float(r["close"]) > 0}
+        date_pool = sorted(vix_map.keys())[-90:]
+        comparison_rows: list[dict[str, Any]] = []
+        if date_pool:
+            bases: dict[str, float] = {}
+            for name in ("vix", "spx", "dji", "ndx"):
+                source_map = vix_map if name == "vix" else benchmark_maps.get(name, {})
+                base_v = next((source_map.get(d) for d in date_pool if isinstance(source_map.get(d), (int, float))), None)
+                if isinstance(base_v, (int, float)) and base_v > 0:
+                    bases[name] = float(base_v)
+            for d in date_pool:
+                row_cmp: dict[str, Any] = {"date": d}
+                for name in ("vix", "spx", "dji", "ndx"):
+                    source_map = vix_map if name == "vix" else benchmark_maps.get(name, {})
+                    raw_v = source_map.get(d)
+                    row_cmp[f"{name}_close"] = round(float(raw_v), 2) if isinstance(raw_v, (int, float)) else None
+                    base_v = bases.get(name)
+                    row_cmp[f"{name}_idx"] = (
+                        round((float(raw_v) / base_v) * 100.0, 2)
+                        if isinstance(raw_v, (int, float)) and isinstance(base_v, (int, float)) and base_v > 0
+                        else None
+                    )
+                comparison_rows.append(row_cmp)
+        regime["comparison"] = {
+            "window_days": len(comparison_rows),
+            "symbols": benchmark_symbol_used,
+            "series": comparison_rows,
         }
 
     # --- Participation / distribution context for core market proxies ---
@@ -2934,6 +3081,103 @@ def _apply_llm_narrative_overrides(
             continue
         row.update(overrides)
         row["narrative_source"] = "llm"
+
+
+def _apply_debate_payload(setup_rows: list[dict[str, Any]]) -> None:
+    if not DEBATE_ENGINE_ENABLED:
+        for row in setup_rows:
+            if isinstance(row, dict):
+                row.setdefault("debate_v1", {"version": "v1", "mode": "disabled"})
+        return
+    for row in setup_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            row["debate_v1"] = build_setup_debate(row)
+        except Exception:
+            row.setdefault("debate_v1", {"version": "v1", "mode": "error"})
+
+
+def _tier_rank(tier: Any) -> int:
+    raw = str(tier or "").strip().upper()
+    return {"D": 1, "C": 2, "B": 3, "A": 4}.get(raw, 1)
+
+
+def _cap_tier(current_tier: Any, max_tier: str) -> str:
+    cur = str(current_tier or "").strip().upper() or "D"
+    cap = str(max_tier or "").strip().upper() or "D"
+    return cap if _tier_rank(cur) > _tier_rank(cap) else cur
+
+
+def _apply_debate_guardrails(setup_rows: list[dict[str, Any]]) -> None:
+    for row in setup_rows:
+        if not isinstance(row, dict):
+            continue
+        debate = row.get("debate_v1")
+        if not isinstance(debate, dict):
+            continue
+        consensus = debate.get("consensus")
+        if not isinstance(consensus, dict):
+            continue
+
+        state = str(consensus.get("consensus_state") or "watch").strip().lower()
+        bias = str(consensus.get("consensus_bias") or "neutral").strip().lower()
+        agreement = _to_float(consensus.get("agreement_score")) or 0.0
+        disagreement_count = int(_to_float(consensus.get("disagreement_count")) or 0)
+        safety_adj = consensus.get("safety_adjustment")
+        if not isinstance(safety_adj, list):
+            safety_adj = []
+
+        row["debate_consensus_state"] = state
+        row["debate_consensus_bias"] = bias
+        row["debate_agreement_score"] = round(agreement, 1)
+        row["debate_disagreement_count"] = disagreement_count
+        row["debate_safety_adjustment"] = safety_adj
+
+        current_actionability = str(row.get("actionability") or "watch-only").strip().lower()
+
+        if state == "watch":
+            row["actionability"] = "watch-only"
+            row["setup_tier"] = _cap_tier(row.get("setup_tier"), "C")
+            row["action"] = (
+                "Watch-only. Multi-angle evidence is mixed; wait for clearer confirmation "
+                "from trend, levels, and participation."
+            )
+        elif state == "conditional":
+            if current_actionability in {"higher-probability", "setup_ready", "ready"}:
+                row["actionability"] = "conditional"
+            row["setup_tier"] = _cap_tier(row.get("setup_tier"), "B")
+            if current_actionability in {"higher-probability", "setup_ready", "ready"}:
+                row["action"] = (
+                    "Conditional setup. Debate disagreement requires confirmation before acting."
+                )
+        elif state == "ready":
+            # Let the debate lift "watch-only" to conditional when agreement is strong,
+            # but do not auto-promote to higher-probability here.
+            if current_actionability in {"watch-only", "watch", "wait"} and agreement >= 70.0:
+                row["actionability"] = "conditional"
+
+        if disagreement_count >= 2 and str(row.get("actionability") or "").strip().lower() in {
+            "higher-probability",
+            "setup_ready",
+            "ready",
+        }:
+            row["actionability"] = "conditional"
+
+        if bias in {"bullish", "bearish"} and str(row.get("signal_bias") or "neutral").lower() == "neutral":
+            row["signal_bias"] = bias
+
+        if safety_adj and str(row.get("actionability") or "").strip().lower() in {"higher-probability", "setup_ready", "ready"}:
+            row["actionability"] = "conditional"
+            row["action"] = "Conditional setup. Safety guardrails are active; wait for confirmation."
+
+        existing_risk = str(row.get("risk_note") or "").strip()
+        debate_risk = f"debate={state} ({agreement:.0f}% agreement)"
+        if existing_risk and existing_risk.lower() not in {"none", "-"}:
+            if debate_risk not in existing_risk:
+                row["risk_note"] = f"{existing_risk}; {debate_risk}"
+        else:
+            row["risk_note"] = debate_risk
 
 
 def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
@@ -4574,6 +4818,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             ),
             reverse=True,
         )
+        _apply_debate_payload(setup_rows)
+        _apply_debate_guardrails(setup_rows)
         _apply_llm_narrative_overrides(setup_rows, source="daily_report")
         signals["setup_quality_top"] = setup_rows[:40]
         signals["watchlist_candidates"] = [
@@ -4657,6 +4903,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     readout = _describe_setup(row)
                     row.update(readout)
 
+                _apply_debate_payload(setup_rows)
+                _apply_debate_guardrails(setup_rows)
+
                 setup_rows.sort(
                     key=lambda r: (
                         float(r.get("score") or 0.0),
@@ -4724,6 +4973,12 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                             "yolo_recency",
                             "yolo_direction_conflict",
                             "yolo_conflict_strength",
+                            "debate_v1",
+                            "debate_consensus_state",
+                            "debate_consensus_bias",
+                            "debate_agreement_score",
+                            "debate_disagreement_count",
+                            "debate_safety_adjustment",
                             "trend_state",
                             "level_context",
                             "support_level",
