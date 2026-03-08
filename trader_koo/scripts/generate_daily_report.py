@@ -3244,7 +3244,9 @@ def _apply_debate_payload(setup_rows: list[dict[str, Any]]) -> None:
             continue
         try:
             row["debate_v1"] = build_setup_debate(row)
-        except Exception:
+        except Exception as e:
+            ticker = row.get("ticker", "UNKNOWN")
+            print(f"[DEBATE] Error building debate for {ticker}: {type(e).__name__}: {e}")
             row.setdefault("debate_v1", {"version": "v1", "mode": "error"})
 
 
