@@ -36,34 +36,41 @@ Implement all P0 security requirements without breaking existing functionality. 
 
 - [x] 2. Implement LLM output validation and sanitization
 
-  - [ ] 2.1 Define JSON schemas for all LLM response formats
+  - [x] 2.1 Define JSON schemas for all LLM response formats
     - Create `trader_koo/llm/schemas.py` with Pydantic models
     - Define schemas for: narrative generation, pattern explanation, regime analysis
     - Include field type constraints, required fields, and length limits
     - _Requirements: 2.1, 7.1, 7.4, 7.5_
-  - [ ] 2.2 Implement LLM output validator with fallback logic
+  - [x] 2.2 Implement LLM output validator with fallback logic
     - Create `trader_koo/llm/validator.py` with validation functions
     - Validate LLM output against schemas using Pydantic
     - Implement length enforcement (narrative: 5000 chars, summary: 1000 chars)
     - Truncate with ellipsis if exceeds limits
     - Log validation failures with request context
     - _Requirements: 2.2, 2.3, 2.7, 7.3, 7.6, 7.7_
-  - [ ] 2.3 Implement HTML/script sanitization
+  - [x] 2.3 Implement HTML/script sanitization
     - Strip HTML tags using bleach or html.escape
     - Remove script content and dangerous attributes
     - Escape special characters before HTML rendering
     - _Requirements: 2.4, 2.5_
-  - [ ] 2.4 Implement deterministic fallback for LLM failures
+  - [x] 2.4 Implement deterministic fallback for LLM failures
     - Create template-based narrative generation
     - Use rule-based pattern explanations
     - Ensure fallback always returns valid schema-compliant output
     - _Requirements: 2.6_
-  - [ ]\* 2.5 Write property test for LLM output validation
-    - **Property 2: LLM Output Schema Validation with Fallback**
-    - Generate random dictionaries with hypothesis
-    - Verify invalid outputs trigger fallback
-    - Verify all outputs (validated or fallback) pass schema validation
-  - [ ]\* 2.6 Write unit tests for LLM sanitization
+  - [x] 2.5 Integrate validation into maybe_rewrite_setup_copy()
+    - Import validation and sanitization functions
+    - Validate LLM output against SetupRewrite schema
+    - Use fallback on validation failure
+    - Sanitize all text fields before returning
+    - Log validation failures with context
+  - [x]\* 2.6 Write unit tests for LLM validator
+    - Test schema validation success and failure cases
+    - Test fallback narrative generation
+    - Test fallback pattern explanation
+    - Test fallback regime analysis
+    - _Requirements: 2.1, 2.6, 2.7, 7.2, 7.3, 7.6, 7.7_
+  - [x]\* 2.7 Write unit tests for LLM sanitization
     - Test HTML tag stripping
     - Test script content removal
     - Test length truncation
@@ -530,7 +537,7 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
     - Test retry logic
     - Test HMAC signatures
 
-- [~] 19. Implement data export
+- [ ] 19. Implement data export
 
   - [ ] 19.1 Implement dashboard export
     - Support CSV, JSON, Excel formats
@@ -560,7 +567,7 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
     - Test filtering
     - Test rate limiting
 
-- [~] 20. Implement backup and restore
+- [ ] 20. Implement backup and restore
 
   - [ ] 20.1 Create backup database schema
     - Create backups table
@@ -593,7 +600,7 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
     - Test integrity verification
     - Test restore
 
-- [~] 21. Implement health monitoring
+- [ ] 21. Implement health monitoring
 
   - [ ] 21.1 Implement Prometheus metrics
     - Expose at /metrics endpoint
@@ -628,7 +635,7 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
     - Test alerting
     - Test SLA calculation
 
-- [~] 22. Implement white-label support
+- [ ] 22. Implement white-label support
   - [ ] 22.1 Implement logo upload
     - Admin endpoint for custom logo
     - _Requirements: 22.1_
@@ -663,7 +670,7 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
 
 Establish proper version control, CI/CD pipeline, and documentation practices.
 
-- [~] 41. Configure .gitignore
+- [ ] 41. Configure .gitignore
 
   - [ ] 41.1 Exclude planning documents
     - Exclude planning/\*.md except planning/README.md
@@ -685,7 +692,7 @@ Establish proper version control, CI/CD pipeline, and documentation practices.
     - Template for environment variables
     - _Requirements: 41.7_
 
-- [~] 42. Implement CI/CD pipeline
+- [ ] 42. Implement CI/CD pipeline
 
   - [ ] 42.1 Create GitHub Actions workflow
     - Run on PR and push to main
@@ -709,7 +716,7 @@ Establish proper version control, CI/CD pipeline, and documentation practices.
     - Verify all checks run
     - Verify deployment works
 
-- [~] 43. Document version control practices
+- [ ] 43. Document version control practices
   - [ ] 43.1 Create planning/README.md
     - Document which files are tracked
     - _Requirements: 43.1, 43.2_

@@ -18,6 +18,9 @@ from trader_koo.llm_health import (
     note_llm_success,
     note_llm_token_usage,
 )
+from trader_koo.llm.schemas import SetupRewrite
+from trader_koo.llm.sanitizer import sanitize_llm_output
+from trader_koo.llm.validator import generate_fallback_narrative, validate_llm_output
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _CACHE_LOCK = threading.Lock()
@@ -385,8 +388,9 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             details="LLM request failed due to network/timeout/decode error",
         )
         _set_runtime_disable()
-        LOG.warning("LLM rewrite failed (%s); falling back to rule narrative", error_class)
-        return {}
+        LOG.warning("LLM rewrite failed (%s); using fallback narrative", error_class)
+        fallback = generate_fallback_narrative(context)
+        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
     except Exception as exc:
         _safe_note_failure(
             db_path,
@@ -397,8 +401,9 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             details=str(exc),
         )
         _set_runtime_disable()
-        LOG.warning("LLM rewrite failed (%s); falling back to rule narrative", type(exc).__name__)
-        return {}
+        LOG.warning("LLM rewrite failed (%s); using fallback narrative", type(exc).__name__)
+        fallback = generate_fallback_narrative(context)
+        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
 
     _safe_note_token_usage(
         db_path,
@@ -407,27 +412,29 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         usage_meta=usage_meta if isinstance(usage_meta, dict) else {},
     )
 
-    observation = _compact_text(rewritten.get("observation") or base_observation, max_chars=260)
-    action = _compact_text(rewritten.get("action") or base_action, max_chars=180)
-    risk_note = _compact_text(rewritten.get("risk_note") or base_risk, max_chars=80)
-    if not observation or not action:
+    # Validate LLM output against schema
+    validation_ctx = {"source": source, "ticker": context.get("ticker")}
+    validation_result = validate_llm_output(rewritten, SetupRewrite, context=validation_ctx)
+    
+    if not validation_result.is_valid:
         _safe_note_failure(
             db_path,
             source=source,
             ticker=context.get("ticker"),
-            reason="empty_or_invalid_llm_output",
-            error_class="invalid_output",
-            details="LLM response missing observation/action",
+            reason="schema_validation_failed",
+            error_class="validation_error",
+            details=f"Validation errors: {'; '.join(validation_result.errors)}",
         )
-        _set_runtime_disable()
-        return {}
-
-    out = {
-        "observation": observation,
-        "action": action,
-    }
-    if risk_note:
-        out["risk_note"] = risk_note
+        LOG.warning(
+            "LLM output validation failed; using fallback narrative. Errors: %s",
+            "; ".join(validation_result.errors)
+        )
+        fallback = generate_fallback_narrative(context)
+        out = sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+    else:
+        # Sanitize validated output
+        validated_dict = validation_result.data.model_dump()
+        out = sanitize_llm_output(validated_dict, field_limits={"observation": 260, "action": 180, "risk_note": 80})
 
     with _CACHE_LOCK:
         _PROMPT_CACHE[prompt_hash] = dict(out)
