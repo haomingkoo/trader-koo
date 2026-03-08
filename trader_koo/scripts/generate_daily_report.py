@@ -4749,6 +4749,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
 
     # ── Sector heatmap + setup quality scoring ───────────────────────────────
     try:
+        print(f"[DEBUG] Starting setup quality scoring. movers_all count: {len(movers_all)}", flush=True)
         sector_buckets: dict[str, dict[str, Any]] = {}
         setup_rows: list[dict[str, Any]] = []
         for m in movers_all:
@@ -5019,7 +5020,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 _apply_agreement_tier_adjustment(row)
         _apply_debate_guardrails(setup_rows)
         _apply_llm_narrative_overrides(setup_rows, source="daily_report")
+        print(f"[DEBUG] About to assign setup_quality_top. setup_rows count: {len(setup_rows)}", flush=True)
         signals["setup_quality_top"] = setup_rows[:40]
+        print(f"[DEBUG] Assigned setup_quality_top with {len(setup_rows[:40])} items", flush=True)
         signals["watchlist_candidates"] = [
             {
                 "ticker": r.get("ticker"),
@@ -5031,7 +5034,11 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             }
             for r in setup_rows[:20]
         ]
-    except Exception:
+        print(f"[DEBUG] First setup_quality_top assignment complete", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Setup quality scoring failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         pass
 
     # ── Candle patterns on latest close date ─────────────────────────────────
@@ -5119,7 +5126,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 )
 
                 _apply_llm_narrative_overrides(setup_rows, source="daily_report")
+                print(f"[DEBUG] About to reassign setup_quality_top after candle enrichment. setup_rows count: {len(setup_rows)}", flush=True)
                 signals["setup_quality_top"] = setup_rows[:40]
+                print(f"[DEBUG] Reassigned setup_quality_top with {len(setup_rows[:40])} items after candle enrichment", flush=True)
                 signals["watchlist_candidates"] = [
                     {
                         "ticker": r.get("ticker"),
