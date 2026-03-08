@@ -7910,9 +7910,9 @@
         );
 
         const head =
-          "<tr><th>ticker</th><th>score</th><th>pct_change</th><th>setup_tier</th><th>yolo_pattern</th><th>actions</th></tr>";
+          "<tr><th>ticker</th><th>score</th><th>pct_change</th><th>setup_tier</th><th>agree</th><th>yolo_pattern</th><th>actions</th></tr>";
         if (!list.length) {
-          el.innerHTML = `${head}<tr><td colspan=\"6\">No watchlist tickers yet</td></tr>`;
+          el.innerHTML = `${head}<tr><td colspan=\"7\">No watchlist tickers yet</td></tr>`;
           if (hint)
             hint.textContent =
               "Tip: Add symbols manually or import top setup candidates.";
@@ -7925,6 +7925,7 @@
             const score = row.score ?? "-";
             const pct = row.pct_change ?? "-";
             const tier = row.setup_tier ?? "-";
+            const agree = formatAgreementScore(row);
             const yolo = row.yolo_pattern || "-";
             return (
               `<tr>` +
@@ -7932,6 +7933,7 @@
               `<td>${escHtml(score)}</td>` +
               `<td>${escHtml(pct)}</td>` +
               `<td>${escHtml(tier)}</td>` +
+              `<td>${escHtml(agree)}</td>` +
               `<td>${escHtml(yolo)}</td>` +
               `<td>` +
               `<button type="button" data-watch-load="${escHtml(ticker)}" style="width:auto; padding:5px 8px; margin-right:6px;">Load</button>` +
