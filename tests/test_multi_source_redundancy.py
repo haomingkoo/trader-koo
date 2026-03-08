@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
-from trader_koo.data.sources import (
+from trader_koo.db.sources import (
     DataSource,
     DataSourceManager,
     FetchResult,

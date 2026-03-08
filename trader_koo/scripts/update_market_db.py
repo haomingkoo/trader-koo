@@ -27,7 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from trader_koo.data.schema import ensure_ohlcv_schema
+from trader_koo.db.schema import ensure_ohlcv_schema
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = str((PROJECT_DIR / "data" / "trader_koo.db").resolve())
@@ -525,7 +525,7 @@ def fetch_price_daily(
     Returns:
         Tuple of (DataFrame with columns: date, open, high, low, close, volume, data source name)
     """
-    from trader_koo.data.sources import get_data_source_manager
+    from trader_koo.db.sources import get_data_source_manager
     
     # Use multi-source manager for fetching
     manager = get_data_source_manager()

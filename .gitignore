@@ -11,17 +11,8 @@ build/
 .ruff_cache/
 
 # Data — DB and logs live on Railway volume, not in git
-trader_koo/data/*.db
-trader_koo/data/logs/
-trader_koo/data/reports/
-trader_koo/data/*.sqlite
-trader_koo/data/*.sqlite3
-trader_koo/data/*.jsonl
-
-# Generated CV images (large, reproducible)
-trader_koo/data/cv/images/
-trader_koo/data/cv/images_review/
-trader_koo/data/cv/windows/
+trader_koo/data/
+!trader_koo/data/.gitkeep
 
 # macOS
 .DS_Store
@@ -44,10 +35,10 @@ id_rsa.pub
 id_ed25519
 id_ed25519.pub
 
-# Root runtime artifacts
-data/
-logs/
-reports/
+# Root runtime artifacts (exclude data directories but not trader_koo/data/*.py source files)
+/data/
+/logs/
+/reports/
 *.db
 *.sqlite
 *.sqlite3

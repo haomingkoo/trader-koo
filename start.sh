@@ -18,7 +18,7 @@ if [ ! -f "$DB_PATH" ]; then
     "$PYTHON" -c "
 import sqlite3
 from pathlib import Path
-from trader_koo.data.schema import ensure_ohlcv_schema
+from trader_koo.db.schema import ensure_ohlcv_schema
 
 db_path = Path('$DB_PATH')
 conn = sqlite3.connect(str(db_path))

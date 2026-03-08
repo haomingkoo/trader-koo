@@ -35,8 +35,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from trader_koo.config import validate_config, ConfigError
-from trader_koo.data.schema import ensure_ohlcv_schema
-from trader_koo.data.sources import get_data_source_manager
+from trader_koo.db.schema import ensure_ohlcv_schema
+from trader_koo.db.sources import get_data_source_manager
 from trader_koo.middleware.cors import RestrictiveCORSMiddleware
 from trader_koo.middleware.auth import (
     auto_register_admin_endpoints,

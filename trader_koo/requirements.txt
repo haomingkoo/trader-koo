@@ -11,3 +11,4 @@ ultralyticsplus>=0.0.28
 opencv-python-headless==4.10.0.84
 pyjwt>=2.8.0
 bcrypt>=4.1.0
+redis>=5.0.0

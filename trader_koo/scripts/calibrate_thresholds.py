@@ -35,7 +35,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
-from trader_koo.data.schema import ensure_ohlcv_schema
+from trader_koo.db.schema import ensure_ohlcv_schema
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
 
 

@@ -469,7 +469,7 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
     - Test role enforcement
     - Test password validation
 
-- [~] 17. Implement API rate limiting
+- [x] 17. Implement API rate limiting
 
   - [ ] 17.1 Implement rate limiter service
     - Per-IP limits for public endpoints (100/min)
@@ -497,7 +497,7 @@ Enable multi-user enterprise deployment with RBAC, audit logging, monitoring, an
     - Test sliding window
     - Test admin overrides
 
-- [~] 18. Implement webhook notifications
+- [x] 18. Implement webhook notifications
 
   - [ ] 18.1 Create webhook database schema
     - Create webhooks, webhook_deliveries tables
