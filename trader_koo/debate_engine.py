@@ -300,59 +300,120 @@ def _risk_role(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _aggregate_roles(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any]:
-    stance_value = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
-    weighted_total = 0.0
-    weighted_abs = 0.0
-
+def _bull_researcher(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any]:
+    """Bull researcher highlights positive signals and growth potential."""
+    evidence: list[str] = []
+    score = 0.0
+    
+    # Look for bullish signals across all analyst reports
     for role in roles:
         stance = str(role.get("stance") or "neutral")
         conf = _to_float(role.get("confidence")) or 0.0
-        weight = _to_float(role.get("weight")) or 0.0
-        weighted_total += stance_value.get(stance, 0.0) * conf * weight
-        weighted_abs += abs(conf * weight)
+        role_evidence = role.get("evidence") or []
+        
+        if stance == "bullish":
+            score += conf * _to_float(role.get("weight")) or 0.0
+            evidence.extend(role_evidence[:2])
+    
+    # Bull researcher is optimistic - amplify positive signals
+    score *= 1.3
+    
+    return {
+        "researcher": "bull",
+        "stance": "bullish" if score > 0.15 else "neutral",
+        "confidence": _clamp(0.5 + score * 0.8, 0.3, 0.95),
+        "evidence": evidence[:4],
+        "weight": 0.5,
+    }
 
-    normalized = weighted_total / weighted_abs if weighted_abs > 0 else 0.0
+
+def _bear_researcher(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any]:
+    """Bear researcher focuses on risks and negative signals."""
+    risks: list[str] = []
+    score = 0.0
+    
+    # Look for bearish signals and risk flags
+    for role in roles:
+        stance = str(role.get("stance") or "neutral")
+        conf = _to_float(role.get("confidence")) or 0.0
+        role_risks = role.get("risk_flags") or []
+        
+        if stance == "bearish":
+            score += conf * _to_float(role.get("weight")) or 0.0
+            risks.extend(role_risks[:2])
+        elif len(role_risks) > 0:
+            # Bear researcher is skeptical - even neutral roles with risks matter
+            score += 0.1 * len(role_risks)
+            risks.extend(role_risks[:2])
+    
+    # Bear researcher is skeptical - amplify negative signals
+    score *= 1.3
+    
+    # Additional skepticism checks
+    pct_vs_ma20 = _to_float(row.get("pct_vs_ma20"))
+    if pct_vs_ma20 is not None and pct_vs_ma20 > 8.0:
+        score += 0.2
+        risks.append("overextended vs MA20")
+    
+    volume_ratio = _to_float(row.get("volume_ratio_20")) or 1.0
+    if volume_ratio < 0.7:
+        score += 0.15
+        risks.append("weak volume confirmation")
+    
+    return {
+        "researcher": "bear",
+        "stance": "bearish" if score > 0.15 else "neutral",
+        "confidence": _clamp(0.5 + score * 0.8, 0.3, 0.95),
+        "evidence": risks[:4],
+        "weight": 0.5,
+    }
+
+
+def _aggregate_roles(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any]:
+    """Aggregate analyst views through bull/bear researcher debate."""
+    # Step 1: Bull and Bear researchers evaluate analyst reports
+    bull = _bull_researcher(roles, row)
+    bear = _bear_researcher(roles, row)
+    
+    # Step 2: Calculate debate outcome
+    bull_score = bull["confidence"] * bull["weight"] if bull["stance"] == "bullish" else 0.0
+    bear_score = bear["confidence"] * bear["weight"] if bear["stance"] == "bearish" else 0.0
+    
+    normalized = bull_score - bear_score
+    
     if normalized >= 0.2:
         consensus_bias = "bullish"
     elif normalized <= -0.2:
         consensus_bias = "bearish"
     else:
         consensus_bias = "neutral"
-
-    opposing: list[dict[str, Any]] = []
-    supporters = 0.0
-    total_scored = 0.0
-    for role in roles:
-        stance = str(role.get("stance") or "neutral")
-        conf = _to_float(role.get("confidence")) or 0.0
-        if stance == "neutral":
-            continue
-        total_scored += conf
-        if consensus_bias != "neutral" and stance == consensus_bias:
-            supporters += conf
-        elif consensus_bias != "neutral":
-            opposing.append(
-                {
-                    "role": role.get("role"),
-                    "stance": stance,
-                    "confidence": round(conf, 2),
-                    "note": (role.get("risk_flags") or role.get("evidence") or [""])[0],
-                }
-            )
-
-    agreement_score = 50.0
-    if consensus_bias == "neutral":
-        agreement_score = 45.0
-    elif total_scored > 0:
-        agreement_score = _clamp((supporters / total_scored) * 100.0, 0.0, 100.0)
-
+    
+    # Step 3: Calculate agreement based on researcher alignment
+    if bull["stance"] == bear["stance"]:
+        # Both agree (rare but possible)
+        agreement_score = 100.0
+    elif bull["stance"] == "neutral" or bear["stance"] == "neutral":
+        # One is neutral
+        agreement_score = 65.0
+    else:
+        # They disagree (expected) - agreement based on confidence gap
+        conf_gap = abs(bull["confidence"] - bear["confidence"])
+        agreement_score = _clamp(50.0 + conf_gap * 50.0, 40.0, 85.0)
+    
+    # Step 4: Penalize unanimous agreement from analysts (suspicious)
+    analyst_stances = [r.get("stance") for r in roles if r.get("stance") != "neutral"]
+    if len(analyst_stances) >= 4 and len(set(analyst_stances)) == 1:
+        # All analysts agree - reduce agreement score (likely missing something)
+        agreement_score *= 0.75
+    
+    # Step 5: Determine state
     state = "watch"
-    if abs(normalized) >= 0.55 and agreement_score >= 75.0:
+    if abs(normalized) >= 0.4 and agreement_score >= 75.0:
         state = "ready"
-    elif abs(normalized) >= 0.3 and agreement_score >= 58.0:
+    elif abs(normalized) >= 0.25 and agreement_score >= 60.0:
         state = "conditional"
-
+    
+    # Step 6: Safety adjustments
     safety_adjustment: list[str] = []
     if bool(row.get("yolo_direction_conflict")):
         if state == "ready":
@@ -360,26 +421,55 @@ def _aggregate_roles(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[s
         elif state == "conditional":
             state = "watch"
         safety_adjustment.append("yolo_direction_conflict")
-
+    
     yolo_recency = str(row.get("yolo_recency") or "").lower()
     if yolo_recency == "stale" and state == "ready":
         state = "conditional"
         safety_adjustment.append("stale_yolo")
-
+    
     risk_role = next((r for r in roles if r.get("role") == "risk_manager"), None)
     risk_flags = (risk_role or {}).get("risk_flags") or []
     if len(risk_flags) >= 2 and state == "ready":
         state = "conditional"
         safety_adjustment.append("risk_manager_flags")
-
+    
+    # Step 7: Build disagreement list
+    opposing: list[dict[str, Any]] = []
+    if bull["stance"] != consensus_bias and bull["stance"] != "neutral":
+        opposing.append({
+            "role": "bull_researcher",
+            "stance": bull["stance"],
+            "confidence": round(bull["confidence"], 2),
+            "note": (bull.get("evidence") or [""])[0] if bull.get("evidence") else "",
+        })
+    if bear["stance"] != consensus_bias and bear["stance"] != "neutral":
+        opposing.append({
+            "role": "bear_researcher",
+            "stance": bear["stance"],
+            "confidence": round(bear["confidence"], 2),
+            "note": (bear.get("evidence") or [""])[0] if bear.get("evidence") else "",
+        })
+    
     return {
         "consensus_bias": consensus_bias,
         "consensus_state": state,
         "agreement_score": round(agreement_score, 1),
         "consensus_strength": round(abs(normalized), 3),
         "disagreement_count": len(opposing),
-        "primary_disagreements": opposing[:3],
+        "primary_disagreements": opposing,
         "safety_adjustment": safety_adjustment,
+        "debate": {
+            "bull_researcher": {
+                "stance": bull["stance"],
+                "confidence": round(bull["confidence"], 2),
+                "evidence": bull["evidence"],
+            },
+            "bear_researcher": {
+                "stance": bear["stance"],
+                "confidence": round(bear["confidence"], 2),
+                "evidence": bear["evidence"],
+            },
+        },
     }
 
 
