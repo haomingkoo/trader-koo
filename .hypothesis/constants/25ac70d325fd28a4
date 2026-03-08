@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/structure/vix_patterns.py
+# hypothesis_version: 6.151.9
+
+[0.0, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.95, 1.0, 2.0, 3.0, '#4DABF7', '#51CF66', '#FAB005', '#FF6B6B', 'Bear Trap', 'Bull Trap', 'Resistance Reclaim', 'Support Reclaim', 'above', 'bear_trap', 'below', 'bull_trap', 'circle', 'close', 'color', 'date', 'description', 'failed_breakdown', 'failed_breakout', 'high', 'label', 'level', 'low', 'position', 'resistance', 'resistance_reclaim', 'support', 'support_reclaim', 'symbol', 'triangle-down', 'triangle-up', 'type', 'volume', 'zone_high', 'zone_low']

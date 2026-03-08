@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/ratelimit/service.py
+# hypothesis_version: 6.151.9
+
+[100, 1000, 'expires_at', 'has_override', 'key', 'limit', 'newest_request', 'oldest_request', 'override', 'request_count', 'window_seconds']

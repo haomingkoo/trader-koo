@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/audit/middleware.py
+# hypothesis_version: 6.151.9
+
+[1000, ',', '/api/admin/', 'X-Correlation-ID', 'admin_identity', 'api_key', 'invalid_credentials', 'unknown', 'user-agent', 'user_id', 'username', 'x-forwarded-for', 'x-real-ip']

@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/ratelimit/api.py
+# hypothesis_version: 6.151.9
+
+[404, 500, '/api/admin/ratelimit', '/cleanup', '/override', '/override/{key}', '/status', '/status/{key}', 'New rate limit', 'admin', 'key', 'max_age_hours', 'message', 'ratelimit', 'removed_count', 'success']

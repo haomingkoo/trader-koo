@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/ratelimit/middleware.py
+# hypothesis_version: 6.151.9
+
+[429, ',', '/api/health', '/api/status', '/export', '/health', '0', '60', ':', 'Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Reset', 'admin_identity', 'detail', 'id', 'limit', 'reset_at', 'unknown', 'user', 'user_id', 'window_seconds', 'x-forwarded-for']

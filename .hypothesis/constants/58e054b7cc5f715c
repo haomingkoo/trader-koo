@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/audit/export.py
+# hypothesis_version: 6.151.9
+
+[1000000, '%Y%m%d_%H%M%S', '%Y-%m-%d', './audit_exports', '.jsonl', 'AUDIT_EXPORT_PATH', 'AUDIT_EXPORT_STORAGE', 'AWS_ACCESS_KEY_ID', 'No logs to export', 'access_key_id', 'application/json', 'audit-logs', 'audit_logs', 'azure_blob', 'bucket', 'connection_string', 'container', 'csv', 'details', 'end_date', 'export_timestamp', 'filename', 'format', 'jsonl', 'local', 'location', 'message', 'path', 'prefix', 'records_exported', 'region', 's3', 'secret_access_key', 'start_date', 'success', 'text/csv', 'us-east-1', 'utf-8']

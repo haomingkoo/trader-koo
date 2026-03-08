@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/auth/models.py
+# hypothesis_version: 6.151.9
+
+['/api/admin', '/api/analysis', '/api/dashboard', '/api/reports', 'admin', 'analyst', 'read', 'viewer', 'write']

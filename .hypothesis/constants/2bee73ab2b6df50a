@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/audit/schema.py
+# hypothesis_version: 6.151.9
+
+['%Y-%m-%d %H:%M:%S', 'by_event_type', 'newest_entry', 'oldest_entry', 'total_count']

@@ -3259,6 +3259,48 @@ def _cap_tier(current_tier: Any, max_tier: str) -> str:
     return cap if _tier_rank(cur) > _tier_rank(cap) else cur
 
 
+def _downgrade_tier(tier: str) -> str:
+    """Downgrade tier by one level (A→B, B→C, C→D, D→D)."""
+    tier_map = {"A": "B", "B": "C", "C": "D", "D": "D"}
+    return tier_map.get(tier.strip().upper(), "D")
+
+
+def _apply_agreement_tier_adjustment(row: dict[str, Any]) -> None:
+    """Apply tier downgrade if agreement score indicates high debate."""
+    debate = row.get("debate_v1")
+    if not isinstance(debate, dict):
+        return
+
+    consensus = debate.get("consensus")
+    if not isinstance(consensus, dict):
+        return
+
+    agreement_score = _to_float(consensus.get("agreement_score"))
+    if agreement_score is None:
+        return  # No adjustment if missing
+
+    # Clamp to valid range
+    if agreement_score < 0.0 or agreement_score > 100.0:
+        original_score = agreement_score
+        agreement_score = _clamp(agreement_score, 0.0, 100.0)
+        ticker = row.get("ticker", "UNKNOWN")
+        print(f"[AGREEMENT] Agreement score {original_score:.1f} clamped to {agreement_score:.1f} for {ticker}")
+
+    # Only downgrade if agreement < 50%
+    if agreement_score < 50.0:
+        current_tier = str(row.get("setup_tier") or "D").strip().upper()
+        downgraded_tier = _downgrade_tier(current_tier)
+        row["setup_tier"] = downgraded_tier
+
+        # Log the adjustment
+        if downgraded_tier != current_tier:
+            ticker = row.get("ticker", "UNKNOWN")
+            print(
+                f"[AGREEMENT] Tier downgraded {current_tier}→{downgraded_tier} "
+                f"for {ticker} due to low agreement ({agreement_score:.1f}%)"
+            )
+
+
 def _apply_debate_guardrails(setup_rows: list[dict[str, Any]]) -> None:
     for row in setup_rows:
         if not isinstance(row, dict):
@@ -4969,6 +5011,10 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             reverse=True,
         )
         _apply_debate_payload(setup_rows)
+        # Apply agreement score tier adjustment after debate payload, before guardrails
+        for row in setup_rows:
+            if isinstance(row, dict):
+                _apply_agreement_tier_adjustment(row)
         _apply_debate_guardrails(setup_rows)
         _apply_llm_narrative_overrides(setup_rows, source="daily_report")
         signals["setup_quality_top"] = setup_rows[:40]
@@ -5054,6 +5100,10 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     row.update(readout)
 
                 _apply_debate_payload(setup_rows)
+                # Apply agreement score tier adjustment after debate payload, before guardrails
+                for row in setup_rows:
+                    if isinstance(row, dict):
+                        _apply_agreement_tier_adjustment(row)
                 _apply_debate_guardrails(setup_rows)
 
                 setup_rows.sort(

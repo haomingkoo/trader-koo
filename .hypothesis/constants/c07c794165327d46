@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/auth/service.py
+# hypothesis_version: 6.151.9
+
+['HS256', 'exp', 'iat', 'legacy-admin', 'legacy_admin', 'role', 'sub', 'username']

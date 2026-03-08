@@ -4122,11 +4122,12 @@
         el.innerHTML = rows
           .map((row) => {
             const biasTone = earningsToneClass(row.signal_bias_label);
+            const agreementScore = formatAgreementScore(row);
             return (
               `<button type="button" class="setup-compact-card" data-setup-load="${escHtml(row.ticker)}">` +
               `<div class="setup-compact-head">` +
               `<div class="setup-compact-title">${escHtml(row.ticker)}</div>` +
-              `<div class="setup-compact-score">${escHtml(formatTableValue("score", row.score))} • Tier ${escHtml(row.setup_tier || "-")}</div>` +
+              `<div class="setup-compact-score">${escHtml(formatTableValue("score", row.score))} • Tier ${escHtml(row.setup_tier || "-")} • Agree ${escHtml(agreementScore)}</div>` +
               `</div>` +
               `<div class="setup-compact-meta">` +
               `<span class="setup-compact-badge">${escHtml(row.setup_family_label)}</span>` +
@@ -4171,10 +4172,12 @@
         el.innerHTML = rows
           .map((row) => {
             const biasTone = earningsToneClass(row.signal_bias);
+            const agreementScore = formatAgreementScore(row);
             const badges = [
               `<span class="mobile-detail-badge">Tier ${escHtml(row.setup_tier)}</span>`,
               `<span class="mobile-detail-badge">${escHtml(row.setup_label)}</span>`,
               `<span class="mobile-detail-badge ${biasTone}">${escHtml(row.bias_label)}</span>`,
+              `<span class="mobile-detail-badge">Agree ${escHtml(agreementScore)}</span>`,
             ];
             if (row.yolo_context && row.yolo_context !== "No YOLO") {
               badges.push(
@@ -5294,6 +5297,19 @@
           minimumFractionDigits: d,
           maximumFractionDigits: d,
         });
+      }
+
+      function formatAgreementScore(row) {
+        const agreementRaw = Number(
+          row.debate_agreement_score ??
+            row.debate_v1?.consensus?.agreement_score ??
+            NaN,
+        );
+
+        if (Number.isFinite(agreementRaw)) {
+          return agreementRaw.toFixed(1) + "%";
+        }
+        return "N/A";
       }
 
       function renderOpFilterHelp(help) {

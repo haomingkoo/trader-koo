@@ -1,0 +1,4 @@
+# file: /Users/koohaoming/dev/trader-koo/trader_koo/audit/logger.py
+# hypothesis_version: 6.151.9
+
+[100, ' AND action = ?', ' AND event_type = ?', ' AND resource = ?', ' AND timestamp <= ?', ' AND timestamp >= ?', ' AND user_id = ?', '%Y-%m-%d %H:%M:%S.%f', 'admin_action', 'after', 'api_key', 'api_request', 'auth_failure', 'auth_method', 'auth_success', 'before', 'config_change', 'data_modification', 'details', 'export', 'invalid_credentials', 'login_failed', 'params', 'reason', 'record_id', 'user_created', 'user_deleted', 'user_updated', 'webhook_trigger']
