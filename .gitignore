@@ -47,3 +47,6 @@ id_ed25519.pub
 # Local planning artifacts (not for git)
 planning/
 memory/
+task*_summary.md
+task*_implementation_summary.md
+task*_verification_summary.md

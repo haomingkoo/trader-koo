@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>trader-koo - Maintenance</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+          Cantarell, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+      }
+
+      .container {
+        text-align: center;
+        padding: 2rem;
+        max-width: 600px;
+      }
+
+      .icon {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      h1 {
+        font-size: 2.5rem;
+        margin-bottom: 1rem;
+        font-weight: 600;
+      }
+
+      p {
+        font-size: 1.2rem;
+        line-height: 1.6;
+        margin-bottom: 2rem;
+        opacity: 0.9;
+      }
+
+      .status {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-top: 2rem;
+      }
+
+      .status-item {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        margin: 0.5rem 0;
+      }
+
+      .spinner {
+        width: 20px;
+        height: 20px;
+        border: 3px solid rgba(255, 255, 255, 0.3);
+        border-top-color: white;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .footer {
+        margin-top: 3rem;
+        font-size: 0.9rem;
+        opacity: 0.7;
+      }
+
+      a {
+        color: white;
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="icon">🔧</div>
+      <h1>Under Maintenance</h1>
+      <p>
+        We're currently upgrading trader-koo to serve you better. We'll be back
+        online shortly.
+      </p>
+
+      <div class="status">
+        <div class="status-item">
+          <div class="spinner"></div>
+          <span>Deploying updates...</span>
+        </div>
+      </div>
+
+      <div class="footer">
+        <p>Expected downtime: ~5 minutes</p>
+        <p>
+          Questions? Contact
+          <a href="mailto:support@trader-koo.com">support@trader-koo.com</a>
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

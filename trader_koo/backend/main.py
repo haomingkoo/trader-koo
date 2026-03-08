@@ -42,6 +42,7 @@ from trader_koo.middleware.auth import (
     auto_register_admin_endpoints,
     verify_all_admin_endpoints_protected,
     get_admin_endpoint_registry,
+    require_admin_auth,
 )
 from trader_koo.security.logging_filter import install_secret_redaction_filter
 from trader_koo.security.error_middleware import ErrorSanitizationMiddleware
@@ -3775,6 +3776,7 @@ def vix_pattern_markers() -> dict[str, Any]:
 
 
 @app.get("/api/admin/routes")
+@require_admin_auth
 def admin_routes() -> dict[str, Any]:
     """List all admin endpoints with their authentication status.
     
@@ -3839,6 +3841,7 @@ async def usage_session(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/admin/trigger-update")
+@require_admin_auth
 def trigger_update(mode: str = Query(default="full")) -> dict[str, Any]:
     """
     Trigger daily_update.sh immediately.
@@ -3905,6 +3908,7 @@ _yolo_seed_thread: threading.Thread | None = None
 
 
 @app.post("/api/admin/run-yolo-seed")
+@require_admin_auth
 def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
     """Trigger full YOLO seed for all tickers in background (no --only-new)."""
     global _yolo_seed_thread
@@ -3936,6 +3940,7 @@ def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
 
 
 @app.get("/api/admin/yolo-status")
+@require_admin_auth
 def yolo_status(log_lines: int = Query(default=40, ge=0, le=400)) -> dict[str, Any]:
     """Return YOLO runner status + DB summary + recent log tail."""
     log_path = Path(os.getenv("TRADER_KOO_YOLO_LOG_PATH", "/data/logs/yolo_patterns.log"))
@@ -3955,6 +3960,7 @@ def yolo_status(log_lines: int = Query(default=40, ge=0, le=400)) -> dict[str, A
 
 
 @app.get("/api/admin/yolo-events")
+@require_admin_auth
 def yolo_events(
     limit: int = Query(default=200, ge=1, le=1000),
     run_id: str = Query(default=""),
@@ -4007,6 +4013,7 @@ def yolo_events(
 
 
 @app.get("/api/admin/report-stability")
+@require_admin_auth
 def report_stability(limit: int = Query(default=60, ge=1, le=365)) -> dict[str, Any]:
     """Summarize recent report JSON files to diagnose YOLO/report stability over time."""
     report_dir = REPORT_DIR
@@ -4196,6 +4203,7 @@ def report_stability(limit: int = Query(default=60, ge=1, le=365)) -> dict[str, 
 
 
 @app.get("/api/admin/usage-summary")
+@require_admin_auth
 def usage_summary(
     days: int = Query(default=7, ge=1, le=365),
     limit: int = Query(default=10, ge=1, le=100),
@@ -4234,6 +4242,7 @@ async def setup_feedback(request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/admin/feedback-summary")
+@require_admin_auth
 def admin_feedback_summary(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=12, ge=1, le=100),
@@ -4299,6 +4308,7 @@ def admin_feedback_summary(
 
 
 @app.get("/api/admin/setup-eval-summary")
+@require_admin_auth
 def admin_setup_eval_summary(limit_families: int = Query(default=12, ge=1, le=100)) -> dict[str, Any]:
     latest_path, latest_payload = _latest_daily_report_json(REPORT_DIR)
     if not isinstance(latest_payload, dict):
@@ -4408,6 +4418,7 @@ def admin_setup_eval_summary(limit_families: int = Query(default=12, ge=1, le=10
 
 
 @app.get("/api/admin/setup-eval-calls")
+@require_admin_auth
 def admin_setup_eval_calls(
     status: str = Query(default="scored", pattern="^(open|scored|invalid|all)$"),
     ticker: str | None = Query(default=None),
@@ -4487,6 +4498,7 @@ def admin_setup_eval_calls(
 
 
 @app.get("/api/admin/pipeline-status")
+@require_admin_auth
 def pipeline_status(log_lines: int = Query(default=120, ge=20, le=1000)) -> dict[str, Any]:
     """Return current pipeline phase inferred from run logs + latest ingest run."""
     snap = _pipeline_status_snapshot(log_lines=log_lines)
@@ -4918,6 +4930,7 @@ def email_chart_preview(
 
 
 @app.get("/api/admin/daily-report")
+@require_admin_auth
 def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown: bool = Query(default=False)) -> dict[str, Any]:
     """Return latest generated daily report and recent report files."""
     return _daily_report_response(
@@ -4929,6 +4942,7 @@ def daily_report(limit: int = Query(default=20, ge=1, le=200), include_markdown:
 
 
 @app.get("/api/admin/logs")
+@require_admin_auth
 def admin_logs(
     name: str = Query(default="cron", pattern="^(cron|update_market_db|yolo|api)$"),
     lines: int = Query(default=80, ge=1, le=800),
@@ -4944,6 +4958,7 @@ def admin_logs(
 
 
 @app.get("/api/admin/smtp-health")
+@require_admin_auth
 def smtp_health() -> dict[str, Any]:
     """Return email delivery config health (without secrets)."""
     smtp = _smtp_settings()
@@ -5015,6 +5030,7 @@ def smtp_health() -> dict[str, Any]:
 
 
 @app.get("/api/admin/llm-health")
+@require_admin_auth
 def admin_llm_health(
     recent_limit: int = Query(default=25, ge=1, le=200),
 ) -> dict[str, Any]:
@@ -5038,6 +5054,7 @@ def admin_llm_health(
 
 
 @app.get("/api/admin/llm-usage")
+@require_admin_auth
 def admin_llm_usage(
     days: int = Query(default=30, ge=1, le=3650),
     limit: int = Query(default=50, ge=1, le=500),
@@ -5051,6 +5068,7 @@ def admin_llm_usage(
 
 
 @app.get("/api/admin/data-source-health")
+@require_admin_auth
 def admin_data_source_health() -> dict[str, Any]:
     """Return data source success/failure rates and metrics.
     
@@ -5087,6 +5105,7 @@ def admin_data_source_health() -> dict[str, Any]:
 
 
 @app.get("/api/admin/database-stats")
+@require_admin_auth
 def admin_database_stats() -> dict[str, Any]:
     """Return database statistics including record counts and date ranges.
     
@@ -5193,6 +5212,7 @@ def admin_database_stats() -> dict[str, Any]:
 # ============================================================================
 
 @app.get("/api/admin/audit-logs")
+@require_admin_auth
 def admin_audit_logs(
     start_date: str | None = Query(default=None, description="Filter logs after this date (ISO format)"),
     end_date: str | None = Query(default=None, description="Filter logs before this date (ISO format)"),
@@ -5239,6 +5259,7 @@ def admin_audit_logs(
 
 
 @app.get("/api/admin/audit-logs/export")
+@require_admin_auth
 def admin_audit_logs_export(
     start_date: str | None = Query(default=None, description="Export logs after this date"),
     end_date: str | None = Query(default=None, description="Export logs before this date"),
@@ -5282,6 +5303,7 @@ def admin_audit_logs_export(
 
 
 @app.get("/api/admin/audit-logs/summary")
+@require_admin_auth
 def admin_audit_logs_summary(
     days: int = Query(default=7, ge=1, le=365, description="Number of days to include in summary"),
 ) -> dict[str, Any]:
@@ -5310,6 +5332,7 @@ def admin_audit_logs_summary(
 
 
 @app.get("/api/admin/audit-logs/stats")
+@require_admin_auth
 def admin_audit_logs_stats() -> dict[str, Any]:
     """
     Get audit log statistics and retention info.
@@ -5339,6 +5362,7 @@ def admin_audit_logs_stats() -> dict[str, Any]:
 
 
 @app.post("/api/admin/audit-logs/retention")
+@require_admin_auth
 def admin_audit_logs_retention(
     retention_days: int = Query(default=90, ge=30, le=3650, description="Days to retain logs"),
     dry_run: bool = Query(default=True, description="Preview without deleting"),
@@ -5394,6 +5418,7 @@ def admin_audit_logs_retention(
 
 
 @app.post("/api/admin/audit-logs/external-export")
+@require_admin_auth
 def admin_audit_logs_external_export(
     start_date: str | None = Query(default=None, description="Export logs after this date"),
     end_date: str | None = Query(default=None, description="Export logs before this date"),
@@ -5438,6 +5463,7 @@ def admin_audit_logs_external_export(
 
 
 @app.post("/api/admin/email-latest-report")
+@require_admin_auth
 def email_latest_report(
     to: str | None = Query(default=None),
     include_markdown: bool = Query(default=True),

@@ -9,6 +9,7 @@ A full-stack stock market analysis dashboard covering the entire S&P 500. Built 
 ## What it does
 
 ### Dashboard
+
 Dark-theme single-page app with three tabs:
 
 - **Guide** — explains every indicator and signal the dashboard surfaces, with NFA disclaimers
@@ -17,16 +18,16 @@ Dark-theme single-page app with three tabs:
 
 ### What gets detected per ticker
 
-| Layer | What it finds |
-|---|---|
-| **Support / Resistance Levels** | Clusters of pivot highs/lows, scored by recency (45-day half-life), tiered as primary / secondary / fallback |
-| **Gaps** | Unfilled bull/bear price gaps within 18 months and 12% of current price |
-| **Trendlines** | Rising support and falling resistance lines fitted through swing pivots |
-| **Rule-based patterns** | Bull/bear flags, rising/falling wedges (geometry + R² threshold) |
-| **Candlestick patterns** | Hammer, shooting star, morning/evening star, engulfing and more |
-| **Hybrid scoring** | Blends rule confidence (50%) + candle signal (20%) + volume (15%) + breakout state (15%) |
-| **CV proxy patterns** | Image-style OHLC geometry scorer — same patterns, different signal source |
-| **YOLO AI patterns** | YOLOv8 model (`foduucom/stockmarket-pattern-detection-yolov8`) run on rendered chart images; two passes — 180-day daily and 730-day weekly |
+| Layer                           | What it finds                                                                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Support / Resistance Levels** | Clusters of pivot highs/lows, scored by recency (45-day half-life), tiered as primary / secondary / fallback                               |
+| **Gaps**                        | Unfilled bull/bear price gaps within 18 months and 12% of current price                                                                    |
+| **Trendlines**                  | Rising support and falling resistance lines fitted through swing pivots                                                                    |
+| **Rule-based patterns**         | Bull/bear flags, rising/falling wedges (geometry + R² threshold)                                                                           |
+| **Candlestick patterns**        | Hammer, shooting star, morning/evening star, engulfing and more                                                                            |
+| **Hybrid scoring**              | Blends rule confidence (50%) + candle signal (20%) + volume (15%) + breakout state (15%)                                                   |
+| **CV proxy patterns**           | Image-style OHLC geometry scorer — same patterns, different signal source                                                                  |
+| **YOLO AI patterns**            | YOLOv8 model (`foduucom/stockmarket-pattern-detection-yolov8`) run on rendered chart images; two passes — 180-day daily and 730-day weekly |
 
 ### Data pipeline
 
@@ -48,6 +49,7 @@ Live at: **https://trader-koo-production.up.railway.app**
 ## Quick start (local)
 
 ### Prerequisites
+
 - Python 3.11+
 - ~4 GB disk (PyTorch CPU build)
 
@@ -74,12 +76,12 @@ pip install -e .
 python trader_koo/scripts/update_market_db.py \
     --use-sp500 \
     --price-lookback-days 365 \
-    --db-path trader_koo/data/trader_koo.db
+    --db-path /data/trader_koo.db
 
 # Or just a few tickers to try it out
 python trader_koo/scripts/update_market_db.py \
     --tickers "SPY,QQQ,AAPL,NVDA,MSFT" \
-    --db-path trader_koo/data/trader_koo.db
+    --db-path /data/trader_koo.db
 ```
 
 ### 3. (Optional) Run YOLO pattern seed
@@ -112,24 +114,24 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 When `TRADER_KOO_API_KEY` is set, admin routes under `/api/admin/*` require `X-API-Key`.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/health` | DB liveness check |
-| GET | `/api/status` | Data freshness, last ingestion run |
-| GET | `/api/config` | Public, non-sensitive client config |
-| GET | `/api/tickers` | All tickers in DB |
-| GET | `/api/dashboard/{ticker}` | Full chart payload (OHLCV + all layers) |
-| GET | `/api/opportunities` | Valuation screening across all tickers |
-| GET | `/api/yolo/{ticker}` | YOLO pattern detections for one ticker |
-| GET | `/api/admin/pipeline-status` | Current pipeline stage, completion markers, stale-run detection |
-| GET | `/api/admin/logs?name=cron&lines=80` | Tail a known service log (`cron`, `update_market_db`, `yolo`, `api`) |
-| POST | `/api/admin/trigger-update` | Manually trigger the daily data refresh |
-| POST | `/api/admin/run-yolo-seed` | Trigger full YOLO seed (background thread) |
-| GET | `/api/admin/yolo-status` | YOLO thread state + DB summary + log tail |
-| GET | `/api/admin/yolo-events` | Persisted per-ticker YOLO outcomes (ok/skipped/timeout/failed + reason) |
-| GET | `/api/admin/daily-report` | Latest daily run report + report history |
-| GET | `/api/admin/usage-summary` | First-party session rollup for control-center analytics |
-| POST | `/api/admin/email-latest-report` | Email latest report (SMTP; optional `?to=you@example.com`) |
+| Method | Endpoint                             | Description                                                             |
+| ------ | ------------------------------------ | ----------------------------------------------------------------------- |
+| GET    | `/api/health`                        | DB liveness check                                                       |
+| GET    | `/api/status`                        | Data freshness, last ingestion run                                      |
+| GET    | `/api/config`                        | Public, non-sensitive client config                                     |
+| GET    | `/api/tickers`                       | All tickers in DB                                                       |
+| GET    | `/api/dashboard/{ticker}`            | Full chart payload (OHLCV + all layers)                                 |
+| GET    | `/api/opportunities`                 | Valuation screening across all tickers                                  |
+| GET    | `/api/yolo/{ticker}`                 | YOLO pattern detections for one ticker                                  |
+| GET    | `/api/admin/pipeline-status`         | Current pipeline stage, completion markers, stale-run detection         |
+| GET    | `/api/admin/logs?name=cron&lines=80` | Tail a known service log (`cron`, `update_market_db`, `yolo`, `api`)    |
+| POST   | `/api/admin/trigger-update`          | Manually trigger the daily data refresh                                 |
+| POST   | `/api/admin/run-yolo-seed`           | Trigger full YOLO seed (background thread)                              |
+| GET    | `/api/admin/yolo-status`             | YOLO thread state + DB summary + log tail                               |
+| GET    | `/api/admin/yolo-events`             | Persisted per-ticker YOLO outcomes (ok/skipped/timeout/failed + reason) |
+| GET    | `/api/admin/daily-report`            | Latest daily run report + report history                                |
+| GET    | `/api/admin/usage-summary`           | First-party session rollup for control-center analytics                 |
+| POST   | `/api/admin/email-latest-report`     | Email latest report (SMTP; optional `?to=you@example.com`)              |
 
 ---
 
@@ -191,33 +193,33 @@ The app is designed for a single Railway service with a persistent `/data` volum
 
 ### Environment variables
 
-| Variable | Description |
-|---|---|
-| `TRADER_KOO_API_KEY` | Random secret — enforces `X-API-Key` auth on `/api/admin/*` routes |
-| `TRADER_KOO_DB_PATH` | SQLite path, e.g. `/data/trader_koo.db` |
-| `TRADER_KOO_LOG_DIR` | Log directory, e.g. `/data/logs` |
-| `TRADER_KOO_LOG_LEVEL` | `INFO` (default) or `DEBUG` |
-| `TRADER_KOO_REPORT_DIR` | Report directory, e.g. `/data/reports` |
-| `TRADER_KOO_ALLOWED_ORIGIN` | Your Railway app URL (CORS) |
-| `TRADER_KOO_BASE_URL` | Optional canonical base URL exposed in `/api/status` for control-center discovery |
-| `TRADER_KOO_APP_URL` | Optional human-facing app URL exposed in `/api/status`; also used for report email links |
-| `TRADER_KOO_REPO_URL` | Optional repo URL exposed in `/api/status` for external inventory wiring |
-| `TRADER_KOO_INGEST_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout in ingest (default `120`) |
-| `TRADER_KOO_PRICE_TIMEOUT_SEC` | yfinance HTTP timeout in seconds (default `25`) |
-| `TRADER_KOO_PRICE_RETRY_ATTEMPTS` | yfinance retry attempts per ticker (default `3`) |
-| `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER` | Per-ticker fail-safe timeout for YOLO (default `180`) |
-| `TRADER_KOO_PIPELINE_STALE_SEC` | Max age for pipeline stage log line before status auto-resets to idle (default `1200`) |
-| `TRADER_KOO_ALPHA_VANTAGE_KEY` | Optional Alpha Vantage key for the earnings calendar feed |
-| `TRADER_KOO_ANALYTICS_ENABLED` | Enable first-party usage/session tracking for control-center rollups (default `1`) |
-| `TRADER_KOO_ANALYTICS_MAX_SESSION_AGE_DAYS` | Prune stored session records older than this many days (default `180`) |
-| `TRADER_KOO_SMTP_HOST` | SMTP host (e.g. `smtp.gmail.com`) |
-| `TRADER_KOO_SMTP_PORT` | SMTP port (e.g. `587` for STARTTLS, `465` for SSL) |
-| `TRADER_KOO_SMTP_SECURITY` | `starttls` (default), `ssl`, or `none` |
-| `TRADER_KOO_SMTP_USER` | SMTP username/login |
-| `TRADER_KOO_SMTP_PASS` | SMTP password/app password |
-| `TRADER_KOO_SMTP_FROM` | Sender address |
-| `TRADER_KOO_REPORT_EMAIL_TO` | Default recipient for report emails |
-| `TRADER_KOO_SMTP_TIMEOUT_SEC` | SMTP timeout in seconds (default `30`) |
+| Variable                                    | Description                                                                              |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `TRADER_KOO_API_KEY`                        | Random secret — enforces `X-API-Key` auth on `/api/admin/*` routes                       |
+| `TRADER_KOO_DB_PATH`                        | SQLite path, e.g. `/data/trader_koo.db`                                                  |
+| `TRADER_KOO_LOG_DIR`                        | Log directory, e.g. `/data/logs`                                                         |
+| `TRADER_KOO_LOG_LEVEL`                      | `INFO` (default) or `DEBUG`                                                              |
+| `TRADER_KOO_REPORT_DIR`                     | Report directory, e.g. `/data/reports`                                                   |
+| `TRADER_KOO_ALLOWED_ORIGIN`                 | Your Railway app URL (CORS)                                                              |
+| `TRADER_KOO_BASE_URL`                       | Optional canonical base URL exposed in `/api/status` for control-center discovery        |
+| `TRADER_KOO_APP_URL`                        | Optional human-facing app URL exposed in `/api/status`; also used for report email links |
+| `TRADER_KOO_REPO_URL`                       | Optional repo URL exposed in `/api/status` for external inventory wiring                 |
+| `TRADER_KOO_INGEST_MAX_SECS_PER_TICKER`     | Per-ticker fail-safe timeout in ingest (default `120`)                                   |
+| `TRADER_KOO_PRICE_TIMEOUT_SEC`              | yfinance HTTP timeout in seconds (default `25`)                                          |
+| `TRADER_KOO_PRICE_RETRY_ATTEMPTS`           | yfinance retry attempts per ticker (default `3`)                                         |
+| `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER`       | Per-ticker fail-safe timeout for YOLO (default `180`)                                    |
+| `TRADER_KOO_PIPELINE_STALE_SEC`             | Max age for pipeline stage log line before status auto-resets to idle (default `1200`)   |
+| `TRADER_KOO_ALPHA_VANTAGE_KEY`              | Optional Alpha Vantage key for the earnings calendar feed                                |
+| `TRADER_KOO_ANALYTICS_ENABLED`              | Enable first-party usage/session tracking for control-center rollups (default `1`)       |
+| `TRADER_KOO_ANALYTICS_MAX_SESSION_AGE_DAYS` | Prune stored session records older than this many days (default `180`)                   |
+| `TRADER_KOO_SMTP_HOST`                      | SMTP host (e.g. `smtp.gmail.com`)                                                        |
+| `TRADER_KOO_SMTP_PORT`                      | SMTP port (e.g. `587` for STARTTLS, `465` for SSL)                                       |
+| `TRADER_KOO_SMTP_SECURITY`                  | `starttls` (default), `ssl`, or `none`                                                   |
+| `TRADER_KOO_SMTP_USER`                      | SMTP username/login                                                                      |
+| `TRADER_KOO_SMTP_PASS`                      | SMTP password/app password                                                               |
+| `TRADER_KOO_SMTP_FROM`                      | Sender address                                                                           |
+| `TRADER_KOO_REPORT_EMAIL_TO`                | Default recipient for report emails                                                      |
+| `TRADER_KOO_SMTP_TIMEOUT_SEC`               | SMTP timeout in seconds (default `30`)                                                   |
 
 ### First deploy
 
@@ -236,10 +238,12 @@ curl -X POST "https://your-app.up.railway.app/api/admin/run-yolo-seed" \
 APScheduler runs `daily_update.sh` inside the process at 22:00 UTC Mon–Fri. No external cron or worker needed.
 
 Each daily run now emits a YOLO dependency preflight line before pattern detection:
+
 - `[YOLO] preflight ok cv2=... torch=...` (expected)
 - or `[YOLO] Preflight failed ...` (dependency/runtime issue)
 
 Daily runs now auto-generate reports at `/data/reports`:
+
 - `daily_report_latest.json`
 - `daily_report_latest.md`
 - timestamped archives (`daily_report_YYYYMMDDTHHMMSSZ.*`)
@@ -300,16 +304,16 @@ trader-koo/
 
 ## Tech stack
 
-| Layer | Technology |
-|---|---|
-| Backend | FastAPI + Uvicorn |
-| Scheduling | APScheduler (in-process cron) |
-| Database | SQLite (Railway persistent volume) |
-| Market data | yfinance, Finviz |
-| Chart rendering | mplfinance + matplotlib (headless) |
-| AI pattern detection | YOLOv8 via `ultralyticsplus` |
-| Frontend | Vanilla JS + Plotly.js (no build step) |
-| Deployment | Railway (nixpacks, single service) |
+| Layer                | Technology                             |
+| -------------------- | -------------------------------------- |
+| Backend              | FastAPI + Uvicorn                      |
+| Scheduling           | APScheduler (in-process cron)          |
+| Database             | SQLite (Railway persistent volume)     |
+| Market data          | yfinance, Finviz                       |
+| Chart rendering      | mplfinance + matplotlib (headless)     |
+| AI pattern detection | YOLOv8 via `ultralyticsplus`           |
+| Frontend             | Vanilla JS + Plotly.js (no build step) |
+| Deployment           | Railway (nixpacks, single service)     |
 
 ---
 
