@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/structure/vix_analysis.py
-# hypothesis_version: 6.151.9
-
-[0.0, 0.03, 0.5, 1.0, 20.0, 25.0, 30.0, 50.0, 70.0, 75.0, 80.0, 100.0, 252, 'UVXY', 'VIX3M', 'VIX6M', 'VXX', '^VIX', '^VIX3M', '^VIX6M', 'compression', 'contango', 'expansion', 'gray', 'green', 'lower_percentile', 'moderate', 'normal', 'red', 'regime', 'slope', 'source', 'synthetic', 'tight', 'timestamp', 'unavailable', 'upper_percentile', 'vix_3m', 'vix_6m', 'vix_90d_percentile', 'vix_spot', 'wide', 'yellow', '⚖️', '📏', '🔒']

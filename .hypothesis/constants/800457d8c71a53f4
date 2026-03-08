@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/email_chart_preview.py
-# hypothesis_version: 6.151.9
-
-[0.0, 5.8, 10.4, 110, 113, 115, 120, 130, 140, 148, 150, 163, 165, 168, 170, 182, 184, 190, 191, 194, 204, 210, 212, 214, 220, 225, 229, 233, 245, 246, 247, 248, 249, 250, 255, 260, 270, 520, 3600, '/', 'AMC', 'BMO', 'PNG', 'RGB', 'RGBA', 'TBD', 'TRADER_KOO_API_KEY', 'ax_x0', 'ax_x1', 'ax_y0', 'ax_y1', 'bottom', 'close', 'coerce', 'confidence', 'daily', 'date', 'dist', 'exp', 'fig_h_px', 'high', 'level', 'low', 'm_head', 'open', 'pattern', 'primary', 'report_ts', 'session', 'sig', 'support', 'ticker', 'tier', 'timeframe', 'top', 'touches', 'type', 'utf-8', 'volume', 'w_bottom', 'weekly', 'x0_date', 'x1_date', 'xlim', 'y0', 'y1', 'ylim', '|']

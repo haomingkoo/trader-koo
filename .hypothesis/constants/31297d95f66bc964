@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/llm/schemas.py
-# hypothesis_version: 6.151.9
-
-[0.0, 1.0, 100, 180, 260, 1000, 5000, 'Key price levels', 'VIX context data', 'action', 'analysis', 'explanation', 'key_characteristics', 'key_levels', 'observation', 'pattern_name', 'regime_type', 'risk_note', 'summary']

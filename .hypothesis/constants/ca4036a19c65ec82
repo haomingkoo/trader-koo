@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/features/technical.py
-# hypothesis_version: 6.151.9
-
-[100, 200, 'atr', 'atr_pct', 'close', 'high', 'low', 'pivot_high', 'pivot_low', 'ret_1d']

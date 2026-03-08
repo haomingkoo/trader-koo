@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/security/redaction.py
-# hypothesis_version: 6.151.9
-
-['/[a-zA-Z0-9_/.-]+', 'API_KEY', 'AWS_ACCESS_KEY_ID', 'AZURE_OPENAI_API_KEY', 'CERTIFICATE', 'CREDENTIALS', 'DATABASE_URL', 'DB_PASSWORD', 'HMAC_SECRET', 'JWT_SECRET_KEY', 'PASS', 'PASSWORD', 'POSTGRES_PASSWORD', 'PRIVATE_KEY', 'SECRET', 'SMTP_PASS', 'SMTP_PASSWORD', 'SMTP_USER', 'TOKEN', 'TRADER_KOO_API_KEY', '[PATH]', '[REDACTED]', '\\1\\2=', '^[A-Za-z0-9+/=_-]+$', 'config', 'configuration', 'env', 'environment', 'settings']

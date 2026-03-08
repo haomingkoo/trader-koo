@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/auth/password.py
-# hypothesis_version: 6.151.9
-
-['[A-Z]', '[a-z]', '\\d', 'utf-8']

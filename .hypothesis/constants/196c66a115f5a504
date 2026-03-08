@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/middleware/auth.py
-# hypothesis_version: 6.151.9
-
-[401, '/api/admin/', '__await__', '__wrapped__', '_requires_admin_auth', 'admin_identity', 'endpoint', 'has_auth', 'method', 'methods', 'path']

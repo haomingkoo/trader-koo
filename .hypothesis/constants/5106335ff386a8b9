@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/email_subscribers.py
-# hypothesis_version: 6.151.9
-
-[100, 168, 200, 254, 255, 400, 5000, 8760, 10000, '+00:00', '1', '12', '15', '168', '200', '6', 'Z', '[,\\s;]+', 'active', 'already_active', 'c', 'confirm_token', 'confirmed_ts', 'created_ts >= ?', 'detail', 'email', 'email = ?', 'email_subscribers', 'env', 'error', 'event_type = ?', 'invalid_email', 'last_verify_sent_ts', 'ok', 'on', 'pending', 'report_email_failed', 'report_email_sent', 'sent', 'source', 'source_ip = ?', 'state', 'status', 'subscribe_request', 'subscribed_ts', 'subscriber', 'token_expired', 'total', 'true', 'unsubscribe_token', 'unsubscribed', 'yes']

@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/db/sources.py
-# hypothesis_version: 6.151.9
-
-[0.0, 10.0, 30.0, 100.0, 100, 3600, '%Y-%m-%d', '1. open', '2. high', '3. low', '4. close', '5. volume', 'Error Message', 'TIME_SERIES_DAILY', 'Time Series (Daily)', 'alpha_vantage', 'apikey', 'close', 'coerce', 'column', 'csv_fallback', 'datatype', 'date', 'failed_fetches', 'failure_rate', 'fallback_data', 'full', 'function', 'high', 'index', 'json', 'low', 'open', 'outputsize', 'success_rate', 'successful_fetches', 'symbol', 'total_attempts', 'volume', 'yfinance']

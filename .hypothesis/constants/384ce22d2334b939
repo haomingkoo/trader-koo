@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/llm/validator.py
-# hypothesis_version: 6.151.9
-
-[0.7, '.', 'T', 'UNKNOWN', 'action', 'analysis', 'bear_flag', 'bearish', 'bull_flag', 'bullish', 'confidence', 'context', 'double_bottom', 'double_top', 'elevated_volatility', 'error', 'error_count', 'errors', 'explanation', 'field_count', 'head_and_shoulders', 'high_volatility', 'key_characteristics', 'key_levels', 'loc', 'low_volatility', 'msg', 'neutral', 'normal_volatility', 'observation', 'output_keys', 'output_type', 'pattern_name', 'regime_type', 'risk_note', 'schema', 'setup_tier', 'signal_bias', 'summary', 'ticker', 'trend_state', 'type', 'unknown', 'vix', 'vix_context']

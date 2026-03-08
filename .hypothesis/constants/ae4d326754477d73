@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/structure/vix_analysis.py
-# hypothesis_version: 6.151.9
-
-[0.0, 0.03, 0.5, 1.0, 20.0, 'UVXY', 'VIX3M', 'VIX6M', 'VXX', '^VIX', '^VIX3M', '^VIX6M', 'contango', 'slope', 'source', 'synthetic', 'timestamp', 'unavailable', 'vix_3m', 'vix_6m', 'vix_spot']

@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/audit/api.py
-# hypothesis_version: 6.151.9
-
-[200, 100000, '%Y-%m-%d', '+00:00', 'Z', 'action', 'csv', 'details', 'end_date', 'event_type', 'event_type_counts', 'export_timestamp', 'filters', 'has_next', 'has_prev', 'hourly_activity', 'json', 'logs', 'page', 'pagination', 'per_page', 'period_days', 'resource', 'start_date', 'timestamp', 'top_resources', 'top_users', 'total', 'total_events', 'total_pages', 'total_records', 'unknown', 'user_id']

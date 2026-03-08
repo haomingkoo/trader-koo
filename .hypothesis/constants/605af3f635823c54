@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/config.py
-# hypothesis_version: 6.151.9
-
-[168, 8760, ',', '0', '1', '168', 'ADMIN_STRICT_API_KEY', 'TRADER_KOO_API_KEY', 'http://localhost', 'https://', 'on', 'true', 'yes']

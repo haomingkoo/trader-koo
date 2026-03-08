@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/llm/sanitizer.py
-# hypothesis_version: 6.151.9
-
-['...', '<[^>]+>', '\\s+', '\\s+on\\w+\\s*=\\s*\\S+']

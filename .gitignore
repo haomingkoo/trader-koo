@@ -9,6 +9,7 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 
 # Data — DB and logs live on Railway volume, not in git
 trader_koo/data/

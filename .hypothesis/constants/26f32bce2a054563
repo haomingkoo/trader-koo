@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/structure/trendlines.py
-# hypothesis_version: 6.151.9
-
-[1e-06, 0.01, 0.03, 0.5, 0.7, 1.0, 1.5, 10.0, 252, '%Y-%m-%d', '-inf', 'atr', 'date', 'high', 'intercept', 'last_touch_date', 'low', 'pivot_high', 'pivot_low', 'price', 'resistance_line', 'score', 'slope', 'support_line', 'touch_count', 'type', 'x0_date', 'x1_date', 'y0', 'y1']

@@ -1,4 +1,0 @@
-# file: /Users/koohaoming/dev/trader-koo/trader_koo/auth/user_management.py
-# hypothesis_version: 6.151.9
-
-['Email already exists', 'No updates provided', 'User not found', 'email', 'email = ?', 'password_hash = ?', 'role = ?', 'username', 'username = ?']
