@@ -279,6 +279,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
 
+    # Migrate older DBs that predate the data_source / fetch_timestamp columns.
+    # ALTER TABLE ADD COLUMN is idempotent via the try/except — SQLite raises
+    # OperationalError("duplicate column name") if the column already exists.
+    for col_ddl in (
+        "ALTER TABLE price_daily ADD COLUMN data_source TEXT DEFAULT 'yfinance'",
+        "ALTER TABLE price_daily ADD COLUMN fetch_timestamp TEXT",
+    ):
+        try:
+            conn.execute(col_ddl)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    conn.commit()
+
 
 def get_latest_snapshot_ts(conn: sqlite3.Connection, table: str, ticker: str) -> Optional[str]:
     allowed = {"finviz_fundamentals", "options_iv"}

@@ -412,6 +412,12 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         usage_meta=usage_meta if isinstance(usage_meta, dict) else {},
     )
 
+    # Sanitize raw LLM output (strip HTML, trim to schema field limits) before
+    # validation so that slightly-over-length strings don't trigger fallback.
+    rewritten = sanitize_llm_output(
+        rewritten, field_limits={"observation": 260, "action": 180, "risk_note": 80}
+    )
+
     # Validate LLM output against schema
     validation_ctx = {"source": source, "ticker": context.get("ticker")}
     validation_result = validate_llm_output(rewritten, SetupRewrite, context=validation_ctx)

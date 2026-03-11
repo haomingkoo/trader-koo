@@ -5100,7 +5100,7 @@ def admin_data_source_health() -> dict[str, Any]:
         "ok": True,
         "sources": metrics,
         "alerts": alerts,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
 
