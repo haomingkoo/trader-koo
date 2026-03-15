@@ -39,7 +39,7 @@ def llm_enabled() -> bool:
 
 def _llm_provider() -> str:
     provider = str(os.getenv("TRADER_KOO_LLM_PROVIDER", "azure_openai") or "azure_openai").strip().lower()
-    return provider if provider in {"azure_openai"} else "azure_openai"
+    return provider if provider in {"azure_openai", "gemini"} else "azure_openai"
 
 
 def _llm_timeout_sec() -> int:
@@ -181,27 +181,38 @@ def _safe_note_token_usage(
         LOG.debug("Failed to persist llm token usage", exc_info=True)
 
 
+def _gemini_cfg() -> dict[str, Any]:
+    return {
+        "api_key": str(os.getenv("GOOGLE_API_KEY", "") or "").strip(),
+        "model": str(os.getenv("TRADER_KOO_GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash").strip(),
+    }
+
+
 def llm_ready() -> bool:
     if not llm_enabled():
         return False
-    if _llm_provider() != "azure_openai":
-        return False
-    cfg = _azure_cfg()
-    return bool(cfg["endpoint"] and cfg["api_key"] and cfg["deployment"] and cfg["api_version"])
+    provider = _llm_provider()
+    if provider == "azure_openai":
+        cfg = _azure_cfg()
+        return bool(cfg["endpoint"] and cfg["api_key"] and cfg["deployment"] and cfg["api_version"])
+    if provider == "gemini":
+        cfg = _gemini_cfg()
+        return bool(cfg["api_key"])
+    return False
 
 
 def llm_status() -> dict[str, Any]:
-    cfg = _azure_cfg()
     now = dt.datetime.now(dt.timezone.utc)
     runtime_disabled = _runtime_disabled_now(now)
+    provider = _llm_provider()
     health = {}
     try:
         health = llm_health_summary(_default_db_path(), recent_limit=10)
     except Exception:
         health = {}
-    return {
+    base = {
         "enabled": llm_enabled(),
-        "provider": _llm_provider(),
+        "provider": provider,
         "ready": llm_ready(),
         "runtime_disabled": runtime_disabled,
         "runtime_disabled_remaining_sec": _runtime_disable_remaining_sec(now),
@@ -209,12 +220,19 @@ def llm_status() -> dict[str, Any]:
         "timeout_sec": _llm_timeout_sec(),
         "max_tokens": _llm_max_tokens(),
         "max_setups": llm_max_setups(),
-        "has_endpoint": bool(cfg["endpoint"]),
-        "has_api_key": bool(cfg["api_key"]),
-        "has_deployment": bool(cfg["deployment"]),
-        "api_version": cfg["api_version"],
         "health": health,
     }
+    if provider == "gemini":
+        cfg = _gemini_cfg()
+        base["has_api_key"] = bool(cfg["api_key"])
+        base["model"] = cfg["model"]
+    else:
+        cfg = _azure_cfg()
+        base["has_endpoint"] = bool(cfg["endpoint"])
+        base["has_api_key"] = bool(cfg["api_key"])
+        base["has_deployment"] = bool(cfg["deployment"])
+        base["api_version"] = cfg["api_version"]
+    return base
 
 
 def _compact_text(value: Any, *, max_chars: int) -> str:
@@ -251,6 +269,61 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _gemini_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    cfg = _gemini_cfg()
+    if not cfg["api_key"]:
+        return ({}, {})
+    model = cfg["model"]
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
+        f":generateContent?key={cfg['api_key']}"
+    )
+    system_prompt = (
+        "You rewrite stock setup copy for a dashboard. "
+        "Use ONLY facts from INPUT. Do not fabricate indicators, events, or prices. "
+        "Keep text concise, risk-first, and confirmation-first. "
+        "Return STRICT JSON only with keys: observation, action, risk_note."
+    )
+    user_prompt = json.dumps(prompt_payload, ensure_ascii=True, separators=(",", ":"))
+    body = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": _llm_temperature(),
+            "maxOutputTokens": _llm_max_tokens(),
+            "responseMimeType": "application/json",
+        },
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=_llm_timeout_sec()) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+    payload = json.loads(raw)
+    usage = payload.get("usageMetadata") or {}
+    prompt_tokens = int(usage.get("promptTokenCount") or 0)
+    completion_tokens = int(usage.get("candidatesTokenCount") or 0)
+    total_tokens = int(usage.get("totalTokenCount") or 0)
+    usage_meta = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "model": model,
+        "deployment": model,
+        "api_version": "v1beta",
+        "response_id": "",
+    }
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return ({}, usage_meta)
+    content_parts = (candidates[0].get("content") or {}).get("parts") or []
+    text = content_parts[0].get("text") if content_parts else ""
+    return (_extract_json_object(str(text or "")), usage_meta)
 
 
 def _azure_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -375,8 +448,9 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     if cached is not None:
         return dict(cached)
 
+    _rewrite_fn = _gemini_chat_rewrite if _llm_provider() == "gemini" else _azure_chat_rewrite
     try:
-        rewritten, usage_meta = _azure_chat_rewrite(context)
+        rewritten, usage_meta = _rewrite_fn(context)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
         error_class = "network_or_decode_error"
         _safe_note_failure(

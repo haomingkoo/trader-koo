@@ -539,9 +539,9 @@ def fetch_price_daily(
         Tuple of (DataFrame with columns: date, open, high, low, close, volume, data source name)
     """
     from trader_koo.db.sources import get_data_source_manager
-    
-    # Use multi-source manager for fetching
+
     manager = get_data_source_manager()
+    # PriceFetchError propagates to caller — ticker gets marked "failed"
     result = manager.fetch_ticker_data(
         ticker=ticker,
         start=start,
@@ -549,17 +549,11 @@ def fetch_price_daily(
         auto_adjust=auto_adjust,
         timeout_sec=timeout_sec,
     )
-    
-    # Log the source used
+
     LOG.info(
         f"Fetched {ticker} from {result.source.value}: "
-        f"{len(result.data)} rows, success={result.success}"
+        f"{len(result.data)} rows"
     )
-    
-    if not result.success or result.data.empty:
-        LOG.warning(f"All data sources failed for {ticker}: {result.error}")
-        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"]), "none"
-    
     return result.data, result.source.value
 
 

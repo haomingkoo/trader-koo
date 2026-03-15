@@ -1,6 +1,6 @@
 pandas>=2.1
 requests>=2.31
-yfinance>=0.2.40
+yfinance>=1.2.0
 finviz>=1.4.6
 lxml>=5.0
 fastapi>=0.111
