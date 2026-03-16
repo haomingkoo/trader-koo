@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import math
 import os
+import logging
 import smtplib
 import sqlite3
 import ssl
@@ -20,6 +21,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+LOG = logging.getLogger(__name__)
 
 from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.debate_engine import build_setup_debate

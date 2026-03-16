@@ -646,7 +646,7 @@ async def lifespan(_app: FastAPI):
     _scheduler.shutdown(wait=False)
 
 
-_ALLOWED_ORIGIN = os.getenv("TRADER_KOO_ALLOWED_ORIGIN", "*")
+_ALLOWED_ORIGIN = os.getenv("TRADER_KOO_ALLOWED_ORIGIN", "https://trader.kooexperience.com")
 ADMIN_API_PREFIX = "/api/admin/"
 
 app = FastAPI(
@@ -3748,7 +3748,7 @@ def health() -> dict[str, Any]:
     db_exists = DB_PATH.exists()
     payload = {"ok": db_exists, "db_exists": db_exists}
     if EXPOSE_STATUS_INTERNAL:
-        payload["db_path"] = str(DB_PATH)
+        payload["db_name"] = DB_PATH.name
     # Sanitize response to ensure no secrets are exposed
     return sanitize_public_response(payload)
 
@@ -5120,7 +5120,6 @@ def admin_database_stats() -> dict[str, Any]:
     
     Returns:
         Dictionary containing:
-        - db_path: Path to database file
         - db_exists: Whether database file exists
         - db_size_mb: Database file size in MB
         - tables: Statistics for each table
@@ -5129,23 +5128,22 @@ def admin_database_stats() -> dict[str, Any]:
     if not DB_PATH.exists():
         return {
             "ok": False,
-            "db_path": str(DB_PATH),
             "db_exists": False,
             "error": "Database file not found"
         }
-    
+
     try:
         import os
         db_size_bytes = os.path.getsize(DB_PATH)
         db_size_mb = round(db_size_bytes / (1024 * 1024), 2)
-        
+
         conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
-        
+
         # Get all tables
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         tables = [row[0] for row in cursor.fetchall()]
-        
+
         table_stats = {}
         for table in tables:
             try:
@@ -5154,12 +5152,12 @@ def admin_database_stats() -> dict[str, Any]:
                 table_stats[table] = {"row_count": count}
             except Exception as e:
                 table_stats[table] = {"error": str(e)}
-        
+
         # Get detailed price_daily stats
         price_stats = {}
         try:
             cursor.execute("""
-                SELECT 
+                SELECT
                     COUNT(DISTINCT ticker) as ticker_count,
                     COUNT(*) as total_rows,
                     MIN(date) as earliest_date,
@@ -5174,7 +5172,7 @@ def admin_database_stats() -> dict[str, Any]:
                     "earliest_date": row[2],
                     "latest_date": row[3]
                 }
-                
+
             # Get per-ticker stats
             cursor.execute("""
                 SELECT ticker, COUNT(*) as row_count, MIN(date) as first_date, MAX(date) as last_date
@@ -5193,23 +5191,21 @@ def admin_database_stats() -> dict[str, Any]:
             price_stats["by_ticker"] = ticker_stats
         except Exception as e:
             price_stats["error"] = str(e)
-        
+
         conn.close()
-        
+
         return {
             "ok": True,
-            "db_path": str(DB_PATH),
             "db_exists": True,
             "db_size_mb": db_size_mb,
             "tables": table_stats,
             "price_data": price_stats,
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat()
         }
-        
+
     except Exception as e:
         return {
             "ok": False,
-            "db_path": str(DB_PATH),
             "db_exists": True,
             "error": str(e),
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat()
@@ -5302,7 +5298,7 @@ def admin_audit_logs_export(
                 content=result,
                 media_type="text/csv",
                 headers={
-                    "Content-Disposition": f"attachment; filename=audit_logs_{dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+                    "Content-Disposition": f"attachment; filename=audit_logs_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
                 },
             )
         
@@ -5396,7 +5392,7 @@ def admin_audit_logs_retention(
     try:
         if dry_run:
             # Count records that would be deleted
-            cutoff_date = dt.datetime.utcnow() - dt.timedelta(days=retention_days)
+            cutoff_date = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=retention_days)
             cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
             
             cursor = conn.execute(
@@ -5597,7 +5593,7 @@ def status() -> dict[str, Any]:
         "db_exists": DB_PATH.exists(),
     }
     if EXPOSE_STATUS_INTERNAL:
-        base["db_path"] = str(DB_PATH)
+        base["db_name"] = DB_PATH.name
         base["process"] = {
             "pid": os.getpid(),
             "rss_mb": None if rss_now is None else round(rss_now, 2),
@@ -6066,7 +6062,7 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
 @app.post("/api/admin/paper-trades/close")
 @require_admin_auth
 def admin_close_paper_trade(
-    request: Request,
+    request: Request,  # noqa: used by @require_admin_auth
     trade_id: int = Query(..., ge=1),
     exit_price: float | None = Query(default=None),
     exit_reason: str = Query(default="manual_close"),
@@ -6089,7 +6085,7 @@ def admin_close_paper_trade(
 
 @app.post("/api/admin/paper-trades/mtm")
 @require_admin_auth
-def admin_trigger_mtm(request: Request) -> dict[str, Any]:
+def admin_trigger_mtm(request: Request) -> dict[str, Any]:  # noqa: request used by @require_admin_auth
     """Trigger mark-to-market on all open paper trades."""
     conn = get_conn()
     try:

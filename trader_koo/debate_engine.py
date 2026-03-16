@@ -277,10 +277,25 @@ def _risk_role(row: dict[str, Any]) -> dict[str, Any]:
     if stretch in {"extended_up", "extended_down"}:
         score -= 0.12
         risks.append(stretch.replace("_", " "))
+    elif stretch == "normal":
+        score += 0.08
+        evidence.append("no stretch risk")
 
     level_context = str(row.get("level_context") or "mid_range").lower()
     if level_context in {"at_support", "at_resistance"}:
         evidence.append(f"decision zone: {level_context}")
+
+    # Positive signals: low-risk environment favors conviction
+    actionable = actionability in {"actionable", "strong"}
+    no_conflict = not bool(row.get("yolo_direction_conflict"))
+    fresh_context = yolo_recency in {"fresh", "recent"}
+
+    if actionable and no_conflict:
+        score += 0.2
+        evidence.append("clean actionability, no conflict")
+    if fresh_context and no_conflict:
+        score += 0.1
+        evidence.append("fresh context aligned")
 
     if score <= -0.25:
         stance = "bearish"
@@ -312,7 +327,7 @@ def _bull_researcher(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[s
         role_evidence = role.get("evidence") or []
         
         if stance == "bullish":
-            score += conf * _to_float(role.get("weight")) or 0.0
+            score += conf * (_to_float(role.get("weight")) or 0.0)
             evidence.extend(role_evidence[:2])
     
     # Bull researcher is optimistic - amplify positive signals
@@ -339,7 +354,7 @@ def _bear_researcher(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[s
         role_risks = role.get("risk_flags") or []
         
         if stance == "bearish":
-            score += conf * _to_float(role.get("weight")) or 0.0
+            score += conf * (_to_float(role.get("weight")) or 0.0)
             risks.extend(role_risks[:2])
         elif len(role_risks) > 0:
             # Bear researcher is skeptical - even neutral roles with risks matter

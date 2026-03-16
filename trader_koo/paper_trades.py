@@ -486,7 +486,9 @@ def _update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
     ).fetchone()[0]
 
     closed_rows = conn.execute(
-        "SELECT pnl_pct, r_multiple FROM paper_trades WHERE status != 'open' AND pnl_pct IS NOT NULL"
+        "SELECT pnl_pct, r_multiple FROM paper_trades "
+        "WHERE status != 'open' AND pnl_pct IS NOT NULL "
+        "ORDER BY exit_date, id"
     ).fetchall()
 
     total_closed = len(closed_rows)

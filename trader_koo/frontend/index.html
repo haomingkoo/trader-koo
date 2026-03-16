@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plot.ly; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.kooexperience.com">
     <title>trader_koo</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -341,7 +342,13 @@
         color: var(--text);
         padding: 10px 12px;
         border-radius: 10px;
-        outline: none;
+      }
+      input:focus-visible,
+      select:focus-visible,
+      button:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--accent, #4a9eff);
+        outline-offset: 2px;
       }
       textarea {
         min-height: 110px;
@@ -2325,7 +2332,10 @@
         color: var(--text);
         font-weight: 600;
         font-size: 0.86rem;
-        outline: none;
+      }
+      .guide summary:focus-visible {
+        outline: 2px solid var(--accent, #4a9eff);
+        outline-offset: 2px;
       }
       .guide details p,
       .guide details ul {
@@ -5227,7 +5237,7 @@
 
       function renderRegimeContext(regime) {
         const makeCard = (label, val) =>
-          `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
+          `<div class="card"><div class="label">${escHtml(label)}</div><div class="value">${escHtml(val ?? "—")}</div></div>`;
         const safeRegime = regime && typeof regime === "object" ? regime : {};
         const vix =
           safeRegime.vix && typeof safeRegime.vix === "object"
@@ -6324,10 +6334,10 @@
 
         const parts = [];
         if (processed !== null && total !== null) {
-          parts.push(`<span class="pm-label">progress </span><span class="pm-val">${processed}/${total}</span>`);
+          parts.push(`<span class="pm-label">progress </span><span class="pm-val">${escHtml(processed)}/${escHtml(total)}</span>`);
         }
-        parts.push(`<span class="pm-label">tickers </span><span class="pm-val">${tickers}</span>`);
-        parts.push(`<span class="pm-label">price age </span><span class="pm-val">${priceAge}d</span>`);
+        parts.push(`<span class="pm-label">tickers </span><span class="pm-val">${escHtml(tickers)}</span>`);
+        parts.push(`<span class="pm-label">price age </span><span class="pm-val">${escHtml(priceAge)}d</span>`);
         meta.innerHTML = parts.join("&nbsp;&nbsp;");
       }
 
@@ -6478,7 +6488,7 @@
         const bd = data.by_direction || {};
         let dirHtml = "";
         for (const [d, v] of Object.entries(bd)) {
-          dirHtml += `<div style="margin-bottom:4px"><b style="text-transform:capitalize">${d}</b>: ${v.total} trades, ${v.win_rate_pct}% win, avg ${v.avg_pnl_pct > 0 ? "+" : ""}${v.avg_pnl_pct}%</div>`;
+          dirHtml += `<div style="margin-bottom:4px"><b style="text-transform:capitalize">${escHtml(d)}</b>: ${escHtml(v.total)} trades, ${escHtml(v.win_rate_pct)}% win, avg ${v.avg_pnl_pct > 0 ? "+" : ""}${escHtml(v.avg_pnl_pct)}%</div>`;
         }
         $("ptByDirection").innerHTML = dirHtml || "No closed trades yet";
 
@@ -6487,7 +6497,7 @@
         let exitHtml = "";
         for (const [r, cnt] of Object.entries(be)) {
           const label = r.replace(/_/g, " ");
-          exitHtml += `<div style="margin-bottom:4px"><b style="text-transform:capitalize">${label}</b>: ${cnt}</div>`;
+          exitHtml += `<div style="margin-bottom:4px"><b style="text-transform:capitalize">${escHtml(label)}</b>: ${escHtml(cnt)}</div>`;
         }
         $("ptByExitReason").innerHTML = exitHtml || "No closed trades yet";
       }
@@ -6511,20 +6521,20 @@
         body.innerHTML = trades.map(t => {
           const pnl = t.status === "open" ? t.unrealized_pnl_pct : t.pnl_pct;
           const pnlClass = pnl != null ? (pnl > 0 ? "positive" : pnl < 0 ? "negative" : "") : "";
-          const statusClass = t.status.replace(" ", "_");
+          const statusClass = escHtml(String(t.status || "").replace(" ", "_"));
           return `<tr>
-            <td><b>${t.ticker}</b></td>
-            <td><span class="pt-dir ${t.direction}">${t.direction.toUpperCase()}</span></td>
+            <td><b>${escHtml(t.ticker)}</b></td>
+            <td><span class="pt-dir ${escHtml(t.direction)}">${escHtml(String(t.direction || "").toUpperCase())}</span></td>
             <td>${fmtP(t.entry_price)}</td>
             <td>${fmtP(t.current_price)}</td>
             <td>${fmtP(t.stop_loss)}</td>
             <td>${fmtP(t.target_price)}</td>
             <td><span class="pt-pnl ${pnlClass}">${fmtPnl(pnl)}</span></td>
             <td>${t.r_multiple != null ? t.r_multiple.toFixed(2) + "R" : "—"}</td>
-            <td><span class="pt-status ${statusClass}">${t.status.replace(/_/g, " ")}</span></td>
-            <td>${t.setup_family || "—"}</td>
-            <td>${t.setup_tier || "—"}</td>
-            <td>${t.entry_date || "—"}</td>
+            <td><span class="pt-status ${statusClass}">${escHtml(String(t.status || "").replace(/_/g, " "))}</span></td>
+            <td>${escHtml(t.setup_family || "—")}</td>
+            <td>${escHtml(t.setup_tier || "—")}</td>
+            <td>${escHtml(t.entry_date || "—")}</td>
           </tr>`;
         }).join("");
       }
@@ -6631,7 +6641,7 @@
           ? viewRows
               .map((r, idx) => {
                 const cls = clickable ? "clickable" : "";
-                return `<tr class="${cls}" data-idx="${idx}">${colDefs.map(({ key }) => `<td>${formatTableValue(key, r[key])}</td>`).join("")}</tr>`;
+                return `<tr class="${cls}" data-idx="${idx}">${colDefs.map(({ key }) => `<td>${escHtml(formatTableValue(key, r[key]))}</td>`).join("")}</tr>`;
               })
               .join("")
           : `<tr><td colspan="${colDefs.length}">No data</td></tr>`;
@@ -8631,7 +8641,7 @@
             String(latest.generated_ts || "").trim() || null;
 
           const makeCard = (label, val) =>
-            `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
+            `<div class="card"><div class="label">${escHtml(label)}</div><div class="value">${escHtml(val ?? "—")}</div></div>`;
 
           $("reportSummaryCards").innerHTML = [
             makeCard(
@@ -9069,11 +9079,11 @@
           const moveThresh = breadth.large_move_threshold_pct ?? "—";
           const moveCount = breadth.large_move_count ?? 0;
           $("reportBreadthSummary").innerHTML =
-            `Breadth: <b>${adv}</b> up / <b>${dec}</b> down / <b>${unch}</b> flat` +
-            ` • Advancing: <b>${pctAdv}%</b>` +
-            ` • Avg move: <b>${avgMove}%</b>` +
-            ` • Median move: <b>${medianMove}%</b>` +
-            ` • |move| >= ${moveThresh}%: <b>${moveCount}</b>`;
+            `Breadth: <b>${escHtml(adv)}</b> up / <b>${escHtml(dec)}</b> down / <b>${escHtml(unch)}</b> flat` +
+            ` • Advancing: <b>${escHtml(pctAdv)}%</b>` +
+            ` • Avg move: <b>${escHtml(avgMove)}%</b>` +
+            ` • Median move: <b>${escHtml(medianMove)}%</b>` +
+            ` • |move| >= ${escHtml(moveThresh)}%: <b>${escHtml(moveCount)}</b>`;
 
           renderSimpleTable(
             "reportMoversUpTable",
@@ -9233,7 +9243,7 @@
           $("earningsStatus").textContent =
             payload.detail || `As of ${payload.market_date || "—"}`;
           const makeCard = (label, val) =>
-            `<div class="card"><div class="label">${label}</div><div class="value">${val ?? "—"}</div></div>`;
+            `<div class="card"><div class="label">${escHtml(label)}</div><div class="value">${escHtml(val ?? "—")}</div></div>`;
           $("earningsSummaryCards").innerHTML = [
             makeCard("Window", `${days}d`),
             makeCard("Matches", payload.count ?? 0),
