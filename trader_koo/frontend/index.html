@@ -118,6 +118,149 @@
         font-family: "Inter", sans-serif;
         word-break: break-word;
       }
+
+      /* ── Pipeline Status Widget ── */
+      .pipeline-widget {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 14px;
+        padding: 10px 16px;
+        font-family: "Inter", sans-serif;
+        flex-shrink: 0;
+      }
+      .pipeline-stage {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: var(--muted);
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+      .pipeline-stage.active {
+        color: var(--amber);
+      }
+      .pipeline-stage.done {
+        color: var(--green);
+      }
+      .pipeline-stage.error {
+        color: var(--red);
+      }
+      .pipeline-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #2a3654;
+        flex-shrink: 0;
+      }
+      .pipeline-stage.done .pipeline-dot {
+        background: var(--green);
+        box-shadow: 0 0 6px rgba(56, 211, 159, 0.4);
+      }
+      .pipeline-stage.active .pipeline-dot {
+        background: var(--amber);
+        animation: pipelinePulse 1.6s ease-in-out infinite;
+      }
+      .pipeline-stage.error .pipeline-dot {
+        background: var(--red);
+        box-shadow: 0 0 6px rgba(255, 107, 107, 0.4);
+      }
+      .pipeline-arrow {
+        color: #2a3654;
+        font-size: 10px;
+        margin: 0 8px;
+        flex-shrink: 0;
+        transition: color 0.3s ease;
+      }
+      .pipeline-arrow.lit {
+        color: var(--green);
+      }
+      .pipeline-meta {
+        font-size: 10.5px;
+        color: var(--muted);
+        margin-left: 14px;
+        padding-left: 14px;
+        border-left: 1px solid var(--line);
+        line-height: 1.5;
+        white-space: nowrap;
+      }
+      .pipeline-meta .pm-label {
+        color: #5a7099;
+      }
+      .pipeline-meta .pm-val {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .pipeline-offline {
+        color: var(--red);
+        font-size: 11.5px;
+        font-weight: 600;
+      }
+      @keyframes pipelinePulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.35; }
+      }
+
+      /* ── Card Animations ── */
+      @keyframes fadeSlideUp {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .setup-compact-card {
+        animation: fadeSlideUp 0.3s ease both;
+      }
+
+      /* ── Signal Funnel ── */
+      .signal-funnel {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        padding: 12px 16px;
+        margin-bottom: 12px;
+        border: 1px solid var(--line);
+        background: linear-gradient(135deg, rgba(18, 25, 39, 0.9), rgba(15, 22, 36, 0.9));
+        border-radius: 14px;
+        font-family: "Inter", sans-serif;
+        overflow-x: auto;
+      }
+      .funnel-stage {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      .funnel-count {
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--text);
+        line-height: 1;
+      }
+      .funnel-label {
+        font-size: 10.5px;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        line-height: 1.3;
+      }
+      .funnel-reduction {
+        font-size: 9px;
+        color: var(--green);
+        font-weight: 700;
+      }
+      .funnel-arrow {
+        margin: 0 12px;
+        color: #2a3654;
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+      .funnel-stage.active .funnel-count {
+        color: var(--green);
+      }
       input,
       select,
       button,
@@ -169,6 +312,15 @@
         border-radius: 10px;
         cursor: pointer;
         font-weight: 700;
+        transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+      }
+      .tab-btn:hover:not(.active) {
+        background: #161e30;
+        color: var(--text);
+        border-color: rgba(106, 169, 255, 0.25);
+      }
+      .tab-btn:active {
+        transform: scale(0.97);
       }
       .tab-btn.active {
         color: white;
@@ -1078,6 +1230,7 @@
       .setup-compact-card {
         appearance: none;
         border: 1px solid rgba(142, 160, 189, 0.16);
+        border-left: 3px solid rgba(142, 160, 189, 0.16);
         border-radius: 14px;
         background: #0f1624;
         padding: 12px;
@@ -1087,6 +1240,25 @@
         font: inherit;
         cursor: pointer;
         font-family: "Inter", sans-serif;
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+      }
+      .setup-compact-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+        border-color: rgba(106, 169, 255, 0.3);
+      }
+      .setup-compact-card[data-tier="1"] {
+        border-left-color: var(--green);
+      }
+      .setup-compact-card[data-tier="2"] {
+        border-left-color: var(--blue);
+      }
+      .setup-compact-card[data-tier="3"] {
+        border-left-color: var(--amber);
+      }
+      .setup-compact-card[data-tier="4"],
+      .setup-compact-card[data-tier="5"] {
+        border-left-color: var(--muted);
       }
       .setup-compact-head {
         display: grid;
@@ -1769,6 +1941,28 @@
           width: 100%;
           border-radius: 10px;
         }
+        .pipeline-widget {
+          width: 100%;
+          border-radius: 10px;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .pipeline-meta {
+          margin-left: 0;
+          padding-left: 0;
+          border-left: none;
+          padding-top: 6px;
+          border-top: 1px solid var(--line);
+          width: 100%;
+        }
+        .signal-funnel {
+          flex-wrap: wrap;
+          gap: 4px;
+          padding: 10px 12px;
+        }
+        .funnel-arrow {
+          margin: 0 6px;
+        }
         nav {
           flex-wrap: wrap;
           gap: 10px;
@@ -2132,7 +2326,21 @@
             screening, and after-close signals.
           </p>
         </div>
-        <div id="serviceStatus" class="status-pill">Connecting...</div>
+        <div id="pipelineWidget" class="pipeline-widget">
+          <div id="pStageIngest" class="pipeline-stage">
+            <span class="pipeline-dot"></span>Ingest
+          </div>
+          <span class="pipeline-arrow">&#9656;</span>
+          <div id="pStageYolo" class="pipeline-stage">
+            <span class="pipeline-dot"></span>YOLO
+          </div>
+          <span class="pipeline-arrow">&#9656;</span>
+          <div id="pStageReport" class="pipeline-stage">
+            <span class="pipeline-dot"></span>Report
+          </div>
+          <div id="pipelineMeta" class="pipeline-meta"></div>
+        </div>
+        <div id="serviceStatus" class="status-pill" style="display:none"></div>
       </section>
       <div
         id="globalStatus"
@@ -2151,6 +2359,22 @@
       </div>
 
       <section id="tabOp" class="panel hidden">
+        <div id="signalFunnel" class="signal-funnel" style="display:none">
+          <div class="funnel-stage">
+            <div><span id="funnelTotal" class="funnel-count">—</span></div>
+            <div><div class="funnel-label">Tracked</div></div>
+          </div>
+          <span class="funnel-arrow">&#9656;</span>
+          <div class="funnel-stage">
+            <div><span id="funnelFiltered" class="funnel-count">—</span></div>
+            <div><div class="funnel-label">Filtered</div><div id="funnelFilteredDelta" class="funnel-reduction"></div></div>
+          </div>
+          <span class="funnel-arrow">&#9656;</span>
+          <div class="funnel-stage active">
+            <div><span id="funnelQualified" class="funnel-count">—</span></div>
+            <div><div class="funnel-label">Shown</div><div id="funnelQualifiedDelta" class="funnel-reduction"></div></div>
+          </div>
+        </div>
         <div id="opFilterHelp" class="op-help">
           Default is full S&P500 universe. Use presets for quick screens, then
           sort/search table.
@@ -4122,14 +4346,16 @@
           return;
         }
         el.innerHTML = rows
-          .map((row) => {
+          .map((row, idx) => {
             const biasTone = earningsToneClass(row.signal_bias_label);
             const agreementScore = formatAgreementScore(row);
+            const tier = row.setup_tier || "-";
+            const delay = Math.min(idx * 0.04, 0.6);
             return (
-              `<button type="button" class="setup-compact-card" data-setup-load="${escHtml(row.ticker)}">` +
+              `<button type="button" class="setup-compact-card" data-setup-load="${escHtml(row.ticker)}" data-tier="${escHtml(tier)}" style="animation-delay:${delay}s">` +
               `<div class="setup-compact-head">` +
               `<div class="setup-compact-title">${escHtml(row.ticker)}</div>` +
-              `<div class="setup-compact-score">${escHtml(formatTableValue("score", row.score))} • Tier ${escHtml(row.setup_tier || "-")} • Agree ${escHtml(agreementScore)}</div>` +
+              `<div class="setup-compact-score">${escHtml(formatTableValue("score", row.score))} • Tier ${escHtml(tier)} • Agree ${escHtml(agreementScore)}</div>` +
               `</div>` +
               `<div class="setup-compact-meta">` +
               `<span class="setup-compact-badge">${escHtml(row.setup_family_label)}</span>` +
@@ -5773,6 +5999,34 @@
           .join("");
       }
 
+      function updateSignalFunnel(universe, eligible, shown) {
+        const el = $("signalFunnel");
+        if (!el) return;
+        if (universe === null && eligible === null) {
+          el.style.display = "none";
+          return;
+        }
+        el.style.display = "flex";
+        const u = universe ?? "—";
+        const e = eligible ?? "—";
+        const s = shown ?? "—";
+        $("funnelTotal").textContent = u;
+        $("funnelFiltered").textContent = e;
+        $("funnelQualified").textContent = s;
+        const deltaFilt = $("funnelFilteredDelta");
+        const deltaQual = $("funnelQualifiedDelta");
+        if (deltaFilt && typeof u === "number" && typeof e === "number") {
+          deltaFilt.textContent = `−${u - e}`;
+        } else if (deltaFilt) {
+          deltaFilt.textContent = "";
+        }
+        if (deltaQual && typeof e === "number" && typeof s === "number") {
+          deltaQual.textContent = e > s ? `−${e - s}` : "";
+        } else if (deltaQual) {
+          deltaQual.textContent = "";
+        }
+      }
+
       function normalizeBase(base) {
         return String(base || "")
           .trim()
@@ -5853,17 +6107,103 @@
         el.style.color = bad ? "#ff8a8a" : "#8ea0bd";
       }
 
+      function setPipelineStage(stageId, state) {
+        const el = $(stageId);
+        if (!el) return;
+        el.classList.remove("done", "active", "error");
+        if (state) el.classList.add(state);
+      }
+
+      function updatePipelineWidget(payload) {
+        const widget = $("pipelineWidget");
+        if (!widget) return;
+
+        const pipe = payload.pipeline || {};
+        const run = payload.latest_run || {};
+        const stage = (pipe.stage || payload.pipeline_stage || "idle").toLowerCase();
+        const runStatus = (run.status || "").toLowerCase();
+
+        const ingestStages = ["price_daily", "price_seed", "fundamentals", "ingest"];
+        const yoloStages = ["yolo", "yolo_batch", "patterns"];
+        const reportStages = ["report", "narrative", "scoring", "daily_report"];
+
+        let ingestState = "", yoloState = "", reportState = "";
+
+        if (runStatus === "running" || runStatus === "in_progress") {
+          if (ingestStages.some(s => stage.includes(s))) {
+            ingestState = "active";
+          } else if (yoloStages.some(s => stage.includes(s))) {
+            ingestState = "done";
+            yoloState = "active";
+          } else if (reportStages.some(s => stage.includes(s))) {
+            ingestState = "done";
+            yoloState = "done";
+            reportState = "active";
+          } else {
+            ingestState = "active";
+          }
+        } else if (runStatus === "completed" || runStatus === "done") {
+          ingestState = "done";
+          yoloState = "done";
+          reportState = "done";
+        } else if (runStatus === "failed") {
+          if (reportStages.some(s => stage.includes(s))) {
+            ingestState = "done";
+            yoloState = "done";
+            reportState = "error";
+          } else if (yoloStages.some(s => stage.includes(s))) {
+            ingestState = "done";
+            yoloState = "error";
+          } else {
+            ingestState = "error";
+          }
+        }
+
+        setPipelineStage("pStageIngest", ingestState);
+        setPipelineStage("pStageYolo", yoloState);
+        setPipelineStage("pStageReport", reportState);
+
+        const arrows = widget.querySelectorAll(".pipeline-arrow");
+        if (arrows[0]) arrows[0].classList.toggle("lit", ingestState === "done");
+        if (arrows[1]) arrows[1].classList.toggle("lit", yoloState === "done");
+
+        const meta = $("pipelineMeta");
+        if (!meta) return;
+
+        const processed = run.tickers_processed ?? null;
+        const total = run.tickers_total ?? null;
+        const tickers = payload.counts?.tracked_tickers ?? "—";
+        const priceAge = payload.freshness?.price_age_days ?? "—";
+
+        const parts = [];
+        if (processed !== null && total !== null) {
+          parts.push(`<span class="pm-label">progress </span><span class="pm-val">${processed}/${total}</span>`);
+        }
+        parts.push(`<span class="pm-label">tickers </span><span class="pm-val">${tickers}</span>`);
+        parts.push(`<span class="pm-label">price age </span><span class="pm-val">${priceAge}d</span>`);
+        meta.innerHTML = parts.join("&nbsp;&nbsp;");
+      }
+
       async function refreshServiceStatus() {
         if (document.visibilityState === "hidden") return;
         const base = getApiBase();
         if (!base) {
           setServiceStatus("Service status: missing API base", true);
+          setPipelineStage("pStageIngest", "");
+          setPipelineStage("pStageYolo", "");
+          setPipelineStage("pStageReport", "");
+          const wNoApi = $("pipelineWidget");
+          if (wNoApi) wNoApi.querySelectorAll(".pipeline-arrow").forEach(a => a.classList.remove("lit"));
+          const metaNoApi = $("pipelineMeta");
+          if (metaNoApi) metaNoApi.innerHTML = `<span class="pipeline-offline">No API</span>`;
           return;
         }
         try {
           const resp = await apiFetch(`${base}/api/status`);
           if (!resp.ok) throw new Error(`${resp.status}`);
           const payload = await resp.json();
+          updatePipelineWidget(payload);
+
           const run = payload.latest_run || {};
           const pipe = payload.pipeline || {};
           const processed = run.tickers_processed ?? null;
@@ -5885,6 +6225,13 @@
           setServiceStatus(txt, false);
         } catch (err) {
           setServiceStatus(`Offline (${err.message})`, true);
+          setPipelineStage("pStageIngest", "");
+          setPipelineStage("pStageYolo", "");
+          setPipelineStage("pStageReport", "");
+          const wOff = $("pipelineWidget");
+          if (wOff) wOff.querySelectorAll(".pipeline-arrow").forEach(a => a.classList.remove("lit"));
+          const metaOff = $("pipelineMeta");
+          if (metaOff) metaOff.innerHTML = `<span class="pipeline-offline">Offline</span>`;
         }
       }
 
@@ -7431,6 +7778,11 @@
             { sortable: true, searchInputId: "opSearch" },
           );
           renderOpStatus(payload, view, rows.length);
+          updateSignalFunnel(
+            payload.universe_count ?? null,
+            payload.eligible_count ?? null,
+            rows.length,
+          );
           setGlobalStatus("Opportunities loaded");
         } catch (err) {
           console.error(err);
