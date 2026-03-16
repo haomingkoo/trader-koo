@@ -11,7 +11,7 @@ function PipelineDot({ state }: { state: "idle" | "active" | "done" | "error" })
   return <div className={`h-2.5 w-2.5 rounded-full ${colors[state]}`} />;
 }
 
-function derivePipelineStates(data: { pipeline: { stage: string }; latest_run: { status: string } }) {
+function derivePipelineStates(data: { pipeline: { stage: string }; latest_run: { status: string } | null }) {
   const stage = (data.pipeline?.stage ?? "idle").toLowerCase();
   const runStatus = (data.latest_run?.status ?? "").toLowerCase();
 

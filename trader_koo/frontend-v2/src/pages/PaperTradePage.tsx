@@ -1,30 +1,152 @@
 import { useState, lazy, Suspense } from "react";
 import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
-import type { PaperTradeSummaryOverall } from "../api/types";
+import type { PaperTrade, PaperTradeSummaryOverall } from "../api/types";
 import Card from "../components/ui/Card";
+import Badge, { tierVariant } from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
 import Table from "../components/ui/Table";
 
 const Plot = lazy(() => import("react-plotly.js"));
 
+const fmtPct = (v: number | null | undefined, suffix: string = "%"): string =>
+  v != null ? `${v.toFixed(2)}${suffix}` : "\u2014";
+
+const fmtPrice = (v: number | null | undefined): string =>
+  v != null ? `$${v.toFixed(2)}` : "\u2014";
+
+const pnlColor = (v: number | null | undefined): string => {
+  if (v == null) return "";
+  if (v > 0) return "text-[var(--green)]";
+  if (v < 0) return "text-[var(--red)]";
+  return "";
+};
+
 const tradeColumns = [
-  { key: "ticker" as const, label: "Ticker" },
-  { key: "direction" as const, label: "Dir" },
-  { key: "entry_price" as const, label: "Entry" },
-  { key: "current_price" as const, label: "Current" },
-  { key: "stop_loss" as const, label: "Stop" },
-  { key: "target_price" as const, label: "Target" },
-  { key: "status" as const, label: "Status" },
-  { key: "setup_family" as const, label: "Setup" },
-  { key: "setup_tier" as const, label: "Tier" },
-  { key: "entry_date" as const, label: "Entry Date" },
+  {
+    key: "ticker" as const,
+    label: "Ticker",
+    render: (v: unknown) => (
+      <span className="font-semibold text-[var(--text)]">
+        {String(v ?? "\u2014")}
+      </span>
+    ),
+  },
+  {
+    key: "direction" as const,
+    label: "Dir",
+    render: (v: unknown) => {
+      const dir = String(v ?? "").toLowerCase();
+      const variant =
+        dir === "long" ? "green" : dir === "short" ? "red" : "muted";
+      return (
+        <Badge variant={variant}>
+          {String(v ?? "\u2014").toUpperCase()}
+        </Badge>
+      );
+    },
+  },
+  {
+    key: "entry_price" as const,
+    label: "Entry",
+    render: (v: unknown) => fmtPrice(v as number | null),
+  },
+  {
+    key: "current_price" as const,
+    label: "Current",
+    render: (v: unknown) => fmtPrice(v as number | null),
+  },
+  {
+    key: "stop_loss" as const,
+    label: "Stop",
+    render: (v: unknown) => fmtPrice(v as number | null),
+  },
+  {
+    key: "target_price" as const,
+    label: "Target",
+    render: (v: unknown) => fmtPrice(v as number | null),
+  },
+  {
+    key: "pnl_pct" as const,
+    label: "P&L %",
+    render: (_v: unknown, row: unknown) => {
+      const trade = row as PaperTrade;
+      const pnl =
+        trade.status === "open" ? trade.unrealized_pnl_pct : trade.pnl_pct;
+      if (pnl == null) return "\u2014";
+      return (
+        <span className={`font-medium ${pnlColor(pnl)}`}>
+          {pnl > 0 ? "+" : ""}
+          {pnl.toFixed(2)}%
+        </span>
+      );
+    },
+  },
+  {
+    key: "r_multiple" as const,
+    label: "R",
+    render: (v: unknown) => {
+      const n = v as number | null;
+      if (n == null) return "\u2014";
+      return (
+        <span className={pnlColor(n)}>
+          {n > 0 ? "+" : ""}
+          {n.toFixed(2)}R
+        </span>
+      );
+    },
+  },
+  {
+    key: "status" as const,
+    label: "Status",
+    render: (v: unknown) => {
+      const s = String(v ?? "").toLowerCase();
+      const variant =
+        s === "open" ? "blue" : s === "closed" ? "muted" : "default";
+      return (
+        <Badge variant={variant}>
+          {String(v ?? "\u2014").replace(/_/g, " ").toUpperCase()}
+        </Badge>
+      );
+    },
+  },
+  {
+    key: "exit_reason" as const,
+    label: "Exit",
+    render: (v: unknown) => {
+      const val = v as string | null;
+      return val ? val.replace(/_/g, " ") : "\u2014";
+    },
+  },
+  {
+    key: "setup_family" as const,
+    label: "Setup",
+    render: (v: unknown) => String(v ?? "\u2014"),
+  },
+  {
+    key: "setup_tier" as const,
+    label: "Tier",
+    render: (v: unknown) => {
+      const tier = v as string | null;
+      return tier ? (
+        <Badge variant={tierVariant(tier)}>{tier}</Badge>
+      ) : (
+        "\u2014"
+      );
+    },
+  },
+  {
+    key: "entry_date" as const,
+    label: "Entry Date",
+    render: (v: unknown) => String(v ?? "\u2014"),
+  },
 ];
 
 export default function PaperTradePage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [dirFilter, setDirFilter] = useState("all");
 
-  const { data: summary, isLoading: summaryLoading } = usePaperTradeSummary();
+  const { data: summary, isLoading: summaryLoading } =
+    usePaperTradeSummary();
   const {
     data: tradesData,
     isLoading: tradesLoading,
@@ -41,35 +163,83 @@ export default function PaperTradePage() {
     );
   }
 
-  const overall: PaperTradeSummaryOverall = summary?.overall ?? { total_trades: null, win_rate_pct: null, avg_pnl_pct: null, total_pnl_pct: null, avg_r_multiple: null };
+  const overall: PaperTradeSummaryOverall = summary?.overall ?? {
+    total_trades: 0,
+    open_count: 0,
+    win_rate_pct: null,
+    avg_pnl_pct: null,
+    total_pnl_pct: null,
+    avg_r_multiple: null,
+  };
   const trades = tradesData?.trades ?? [];
   const equityCurve = summary?.equity_curve ?? [];
-
-  const fmtPct = (v: number | null | undefined, suffix: string = "%"): string =>
-    v != null ? `${v.toFixed(2)}${suffix}` : "\u2014";
+  const latestEquity =
+    equityCurve.length > 0
+      ? equityCurve[equityCurve.length - 1].equity_index
+      : null;
+  const maxDrawdown = (() => {
+    if (equityCurve.length < 2) return null;
+    let peak = equityCurve[0].equity_index;
+    let maxDd = 0;
+    for (const point of equityCurve) {
+      if (point.equity_index > peak) peak = point.equity_index;
+      const dd = ((peak - point.equity_index) / peak) * 100;
+      if (dd > maxDd) maxDd = dd;
+    }
+    return maxDd;
+  })();
 
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold tracking-tight">Paper Trades</h2>
 
-      {/* Summary cards */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Card label="Total Trades" value={overall.total_trades ?? "\u2014"} />
-        <Card label="Win Rate" value={fmtPct(overall.win_rate_pct)} />
-        <Card label="Avg P&L" value={fmtPct(overall.avg_pnl_pct)} />
-        <Card label="Total P&L" value={fmtPct(overall.total_pnl_pct)} />
+      {/* Summary KPI cards */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         <Card
-          label="Avg R"
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Total Trades"
+          value={overall.total_trades}
+        />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Win Rate"
+          value={fmtPct(overall.win_rate_pct)}
+        />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Avg P&L"
+          value={fmtPct(overall.avg_pnl_pct)}
+        />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Total P&L"
+          value={fmtPct(overall.total_pnl_pct)}
+        />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Avg R-Multiple"
           value={
             overall.avg_r_multiple != null
               ? `${overall.avg_r_multiple.toFixed(2)}R`
               : "\u2014"
           }
         />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Max Drawdown"
+          value={
+            maxDrawdown != null ? `${maxDrawdown.toFixed(2)}%` : "\u2014"
+          }
+        />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Equity Index"
+          value={latestEquity != null ? latestEquity.toFixed(2) : "\u2014"}
+        />
       </div>
 
-      {/* Equity curve */}
-      {equityCurve.length > 1 && (
+      {/* Equity curve chart */}
+      {equityCurve.length > 1 ? (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
           <Suspense fallback={<Spinner className="py-12" />}>
             <Plot
@@ -121,83 +291,165 @@ export default function PaperTradePage() {
             />
           </Suspense>
         </div>
+      ) : (
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
+          No equity curve data available. Equity curve requires 2+ data
+          points.
+        </div>
       )}
 
-      {/* Direction / exit breakdown */}
+      {/* By-direction and By-exit-reason panels */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card label="By Direction">
-          {summary?.by_direction && Object.keys(summary.by_direction).length > 0 ? (
-            <div className="mt-1 space-y-1 text-xs text-[var(--muted)]">
-              {Object.entries(summary.by_direction).map(([dir, stats]) => (
-                <div key={dir}>
-                  <strong className="capitalize text-[var(--text)]">
-                    {dir}
-                  </strong>
-                  : {stats.total} trades, {stats.win_rate_pct}% win, avg{" "}
-                  {stats.avg_pnl_pct > 0 ? "+" : ""}
-                  {stats.avg_pnl_pct}%
-                </div>
-              ))}
+          {summary?.by_direction &&
+          Object.keys(summary.by_direction).length > 0 ? (
+            <div className="mt-2 overflow-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                    <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">
+                      Direction
+                    </th>
+                    <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">
+                      Trades
+                    </th>
+                    <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">
+                      Wins
+                    </th>
+                    <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">
+                      Win Rate
+                    </th>
+                    <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">
+                      Avg P&L
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(summary.by_direction).map(([dir, stats]) => (
+                    <tr
+                      key={dir}
+                      className="border-b border-[var(--line)] last:border-b-0"
+                    >
+                      <td className="px-2 py-1.5">
+                        <Badge
+                          variant={
+                            dir === "long"
+                              ? "green"
+                              : dir === "short"
+                                ? "red"
+                                : "muted"
+                          }
+                        >
+                          {dir.toUpperCase()}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-1.5 text-[var(--text)]">
+                        {stats.total}
+                      </td>
+                      <td className="px-2 py-1.5 text-[var(--text)]">
+                        {stats.wins}
+                      </td>
+                      <td className="px-2 py-1.5 text-[var(--text)]">
+                        {stats.win_rate_pct.toFixed(1)}%
+                      </td>
+                      <td
+                        className={`px-2 py-1.5 ${pnlColor(stats.avg_pnl_pct)}`}
+                      >
+                        {stats.avg_pnl_pct > 0 ? "+" : ""}
+                        {stats.avg_pnl_pct.toFixed(2)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : (
             <p className="mt-1 text-xs text-[var(--muted)]">
-              No closed trades yet
+              No closed trades yet.
             </p>
           )}
         </Card>
+
         <Card label="By Exit Reason">
           {summary?.by_exit_reason &&
           Object.keys(summary.by_exit_reason).length > 0 ? (
-            <div className="mt-1 space-y-1 text-xs text-[var(--muted)]">
-              {Object.entries(summary.by_exit_reason).map(([reason, count]) => (
-                <div key={reason}>
-                  <strong className="capitalize text-[var(--text)]">
-                    {reason.replace(/_/g, " ")}
-                  </strong>
-                  : {count}
-                </div>
-              ))}
+            <div className="mt-2 overflow-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                    <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">
+                      Reason
+                    </th>
+                    <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">
+                      Count
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(summary.by_exit_reason).map(
+                    ([reason, count]) => (
+                      <tr
+                        key={reason}
+                        className="border-b border-[var(--line)] last:border-b-0"
+                      >
+                        <td className="px-2 py-1.5 capitalize text-[var(--text)]">
+                          {reason.replace(/_/g, " ")}
+                        </td>
+                        <td className="px-2 py-1.5 text-[var(--text)]">
+                          {count}
+                        </td>
+                      </tr>
+                    ),
+                  )}
+                </tbody>
+              </table>
             </div>
           ) : (
             <p className="mt-1 text-xs text-[var(--muted)]">
-              No closed trades yet
+              No closed trades yet.
             </p>
           )}
         </Card>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">
-        <label>
+      <div className="flex flex-wrap items-center gap-4 text-xs text-[var(--muted)]">
+        <label className="flex items-center gap-1.5">
           Status:
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="ml-1 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-[var(--text)]"
+            className="rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-[var(--text)]"
           >
             <option value="all">All</option>
             <option value="open">Open</option>
             <option value="closed">Closed</option>
+            <option value="stopped_out">Stopped Out</option>
+            <option value="target_hit">Target Hit</option>
+            <option value="expired">Expired</option>
           </select>
         </label>
-        <label>
+        <label className="flex items-center gap-1.5">
           Direction:
           <select
             value={dirFilter}
             onChange={(e) => setDirFilter(e.target.value)}
-            className="ml-1 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-[var(--text)]"
+            className="rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-[var(--text)]"
           >
             <option value="all">All</option>
             <option value="long">Long</option>
             <option value="short">Short</option>
           </select>
         </label>
+        <span className="text-[var(--muted)]">
+          Showing {trades.length} trade(s)
+        </span>
       </div>
 
-      {/* Trade log */}
+      {/* Trade log table */}
       <Table
         columns={tradeColumns}
-        data={trades as unknown as Record<string, unknown>[]}
+        data={trades}
         sortable
       />
     </div>

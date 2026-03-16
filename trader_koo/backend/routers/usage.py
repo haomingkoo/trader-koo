@@ -256,7 +256,8 @@ def _record_setup_feedback(conn: sqlite3.Connection, payload: dict[str, Any]) ->
     if isinstance(context_json, (dict, list)):
         try:
             context_text = json.dumps(context_json, ensure_ascii=True)[:2000]
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            LOG.debug("Failed to serialize context_json for feedback: %s", exc)
             context_text = None
     elif context_json is not None:
         context_text = _clean_feedback_text(context_json, max_len=2000)
@@ -535,13 +536,12 @@ async def usage_session(request: Request) -> dict[str, Any]:
 
 @router.post("/api/feedback/setup")
 async def setup_feedback(request: Request) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
     try:
         payload = await request.json()
-    except Exception:
-        payload = {}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {exc}") from exc
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Invalid payload.")
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object.")
     if not payload.get("client_ip"):
         payload["client_ip"] = _client_ip(request)
     if not payload.get("user_agent"):

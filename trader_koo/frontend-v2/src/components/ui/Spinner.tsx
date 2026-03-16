@@ -11,10 +11,11 @@ const sizes = {
 
 export default function Spinner({ size = "md", className = "" }: SpinnerProps) {
   return (
-    <div className={`flex items-center justify-center ${className}`}>
+    <div className={`flex items-center justify-center ${className}`} role="status" aria-label="Loading">
       <div
         className={`animate-spin rounded-full border-[var(--line)] border-t-[var(--accent)] ${sizes[size]}`}
       />
+      <span className="sr-only">Loading...</span>
     </div>
   );
 }

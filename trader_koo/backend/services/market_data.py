@@ -245,7 +245,8 @@ def read_latest_ingest_run(db_path: Path | None = None) -> dict[str, Any] | None
             completed = int(out.get("tickers_ok") or 0) + int(out.get("tickers_failed") or 0)
             out["tickers_processed"] = completed or int(out.get("tickers_total") or 0)
         return out
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Failed to read latest ingest run: %s", exc)
         return None
     finally:
         conn.close()

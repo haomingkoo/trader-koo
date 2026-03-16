@@ -271,6 +271,7 @@ async def email_subscribe(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()
     except Exception:
+        # Allow empty body -- email can come from query params
         payload = {}
     email = str(payload.get("email") or request.query_params.get("email") or "").strip().lower()
     if not is_valid_email(email):
@@ -373,6 +374,7 @@ async def email_unsubscribe_request(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()
     except Exception:
+        # Allow empty body -- email can come from query params
         payload = {}
     email = str(payload.get("email") or request.query_params.get("email") or "").strip().lower()
     if not is_valid_email(email):

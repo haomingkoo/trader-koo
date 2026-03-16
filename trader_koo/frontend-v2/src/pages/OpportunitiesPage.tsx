@@ -1,19 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useOpportunities } from "../api/hooks";
+import type { OpportunityRow } from "../api/types";
 import Card from "../components/ui/Card";
+import Badge from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
 import Table from "../components/ui/Table";
-
-const opportunityColumns = [
-  { key: "ticker" as const, label: "Ticker" },
-  { key: "price" as const, label: "Price" },
-  { key: "pe" as const, label: "P/E" },
-  { key: "peg" as const, label: "PEG" },
-  { key: "target_price" as const, label: "Target" },
-  { key: "discount_pct" as const, label: "Discount %" },
-  { key: "valuation_label" as const, label: "Valuation" },
-  { key: "eps_growth_5y" as const, label: "EPS Growth 5Y" },
-];
 
 type View = "all" | "undervalued" | "deep_value" | "overvalued";
 
@@ -24,10 +15,137 @@ const viewLabels: Record<View, string> = {
   overvalued: "Overvalued",
 };
 
+const valuationBadgeVariant = (
+  label: string | null | undefined,
+): "green" | "amber" | "red" | "muted" => {
+  const lower = (label ?? "").toLowerCase();
+  if (lower.includes("under")) return "green";
+  if (lower.includes("fair")) return "amber";
+  if (lower.includes("over")) return "red";
+  return "muted";
+};
+
+const formatTimestamp = (ts: string | null | undefined): string => {
+  if (!ts) return "\u2014";
+  try {
+    const d = new Date(ts);
+    const local = d.toLocaleString();
+    const ny = d.toLocaleString("en-US", { timeZone: "America/New_York" });
+    return `${local} (NY: ${ny})`;
+  } catch {
+    return ts;
+  }
+};
+
+const opportunityColumns = [
+  {
+    key: "ticker" as const,
+    label: "Ticker",
+    render: (v: unknown) => (
+      <span className="font-semibold text-[var(--text)]">
+        {String(v ?? "\u2014")}
+      </span>
+    ),
+  },
+  {
+    key: "price" as const,
+    label: "Price",
+    render: (v: unknown) => {
+      const n = v as number | null;
+      return n != null ? `$${n.toFixed(2)}` : "\u2014";
+    },
+  },
+  {
+    key: "pe" as const,
+    label: "P/E",
+    render: (v: unknown) => {
+      const n = v as number | null;
+      return n != null ? n.toFixed(1) : "\u2014";
+    },
+  },
+  {
+    key: "peg" as const,
+    label: "PEG",
+    render: (v: unknown) => {
+      const n = v as number | null;
+      if (n == null) return "\u2014";
+      const color =
+        n <= 1 ? "text-[var(--green)]" : n <= 2 ? "text-[var(--amber)]" : "text-[var(--red)]";
+      return <span className={color}>{n.toFixed(2)}</span>;
+    },
+  },
+  {
+    key: "target_price" as const,
+    label: "Target",
+    render: (v: unknown) => {
+      const n = v as number | null;
+      return n != null ? `$${n.toFixed(2)}` : "\u2014";
+    },
+  },
+  {
+    key: "discount_pct" as const,
+    label: "Discount %",
+    render: (v: unknown) => {
+      const n = v as number | null;
+      if (n == null) return "\u2014";
+      const color =
+        n > 0 ? "text-[var(--green)]" : n < 0 ? "text-[var(--red)]" : "";
+      return (
+        <span className={`font-medium ${color}`}>
+          {n > 0 ? "+" : ""}
+          {n.toFixed(1)}%
+        </span>
+      );
+    },
+  },
+  {
+    key: "valuation_label" as const,
+    label: "Valuation",
+    render: (v: unknown) => {
+      const label = v as string | null;
+      if (!label) return "\u2014";
+      return (
+        <Badge variant={valuationBadgeVariant(label)}>
+          {label}
+        </Badge>
+      );
+    },
+  },
+  {
+    key: "eps_growth_5y" as const,
+    label: "EPS Growth 5Y",
+    render: (v: unknown) => {
+      const n = v as number | null;
+      if (n == null) return "\u2014";
+      const color = n > 0 ? "text-[var(--green)]" : n < 0 ? "text-[var(--red)]" : "";
+      return (
+        <span className={color}>
+          {n > 0 ? "+" : ""}
+          {n.toFixed(1)}%
+        </span>
+      );
+    },
+  },
+];
+
 export default function OpportunitiesPage() {
   const [view, setView] = useState<View>("all");
   const apiView = view === "deep_value" ? "undervalued" : view;
-  const { data, isLoading, error } = useOpportunities({ view: apiView });
+  const { data, isLoading, error } = useOpportunities({
+    view: apiView,
+    limit: 1000,
+  });
+
+  const rows = useMemo(() => {
+    const allRows = data?.rows ?? [];
+    if (view === "deep_value") {
+      return allRows.filter(
+        (r: OpportunityRow) =>
+          r.peg != null && r.peg <= 1 && r.discount_pct != null && r.discount_pct > 20,
+      );
+    }
+    return allRows;
+  }, [data?.rows, view]);
 
   if (isLoading) return <Spinner className="mt-12" />;
   if (error) {
@@ -38,12 +156,12 @@ export default function OpportunitiesPage() {
     );
   }
 
-  const rows = data?.rows ?? [];
-
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-bold tracking-tight">Opportunities</h2>
+        <h2 className="text-xl font-bold tracking-tight">
+          PEG Screening &middot; Opportunities
+        </h2>
         <div className="flex gap-1">
           {(Object.keys(viewLabels) as View[]).map((v) => (
             <button
@@ -61,15 +179,36 @@ export default function OpportunitiesPage() {
         </div>
       </div>
 
+      {/* Funnel cards */}
       <div className="grid gap-3 sm:grid-cols-3">
-        <Card label="Universe" value={data?.universe_count ?? "\u2014"} />
-        <Card label="Eligible" value={data?.eligible_count ?? "\u2014"} />
-        <Card label="Showing" value={rows.length} />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Universe"
+          value={data?.universe_count ?? "\u2014"}
+        />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Eligible"
+          value={data?.eligible_count ?? "\u2014"}
+        />
+        <Card
+          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          label="Showing"
+          value={rows.length}
+        />
       </div>
 
+      {/* Snapshot timestamp */}
+      {data?.snapshot_ts && (
+        <div className="text-xs text-[var(--muted)]">
+          Snapshot: {formatTimestamp(data.snapshot_ts)}
+        </div>
+      )}
+
+      {/* Main table */}
       <Table
         columns={opportunityColumns}
-        data={rows as unknown as Record<string, unknown>[]}
+        data={rows}
         sortable
       />
     </div>

@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import logging
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -556,7 +557,8 @@ def _build_chart_commentary_payload(
     if fund.get("raw_json"):
         try:
             raw_json = json.loads(str(fund.get("raw_json") or ""))
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            LOG.debug("Failed to parse fund raw_json for %s: %s", ticker, exc)
             raw_json = None
     if isinstance(raw_json, dict):
         sector = str(raw_json.get("Sector") or raw_json.get("sector") or "Unknown").strip() or "Unknown"
@@ -605,8 +607,9 @@ def _build_chart_commentary_payload(
     llm_meta: dict[str, Any] = {}
     try:
         llm_meta = llm_status()
-    except Exception:
-        llm_meta = {}
+    except Exception as exc:
+        LOG.warning("Failed to get LLM status for chart commentary: %s", exc)
+        llm_meta = {"error": str(exc)}
     row["narrative_source"] = "rule"
     if isinstance(setup_override, dict) and setup_override:
         override = dict(setup_override)

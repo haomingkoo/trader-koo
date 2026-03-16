@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import logging
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from trader_koo.backend.services.market_data import parse_iso_utc
@@ -26,7 +27,8 @@ def _load_json_file(path: Path) -> dict[str, Any] | None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Failed to parse JSON file %s: %s", path.name, exc)
         return None
 
 
@@ -46,7 +48,8 @@ def _tail_text_file(
             f.seek(max(0, size - read_size))
             data = f.read().decode("utf-8", errors="replace")
         return data.splitlines()[-lines:]
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Failed to tail file %s: %s", path.name, exc)
         return []
 
 
@@ -244,9 +247,9 @@ def daily_report_history(
 def daily_report_response(
     *,
     report_dir: Path,
-    get_conn_fn: Any,
-    build_regime_context_fn: Any,
-    pipeline_status_fn: Any,
+    get_conn_fn: Callable[[], Any],
+    build_regime_context_fn: Callable[[Any], dict[str, Any]],
+    pipeline_status_fn: Callable[..., dict[str, Any]],
     limit: int,
     include_markdown: bool,
     include_internal_paths: bool,
@@ -293,7 +296,8 @@ def daily_report_response(
                 conn = get_conn_fn()
                 try:
                     live_regime = build_regime_context_fn(conn)
-                except Exception:
+                except Exception as exc:
+                    LOG.warning("Failed to build live regime context: %s", exc)
                     live_regime = {}
                 finally:
                     conn.close()
@@ -358,7 +362,8 @@ def daily_report_response(
     if include_markdown and latest_md_path.exists():
         try:
             md_text = latest_md_path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as exc:
+            LOG.warning("Failed to read markdown file %s: %s", latest_md_path.name, exc)
             md_text = ""
 
     history = daily_report_history(report_dir, limit=limit)

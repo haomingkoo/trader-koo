@@ -399,7 +399,7 @@ def status() -> dict[str, Any]:
                 "last_completed_line": pipeline_snap.get("last_completed_line"),
                 "last_completed_ts": pipeline_snap.get("last_completed_ts"),
                 "post_ingest_resume": resume_candidate,
-                "run_log_path": str(RUN_LOG_PATH),
+                **({"run_log_path": str(RUN_LOG_PATH)} if EXPOSE_STATUS_INTERNAL else {}),
             },
             "freshness": {
                 "price_age_days": None if price_age_days is None else round(price_age_days, 2),

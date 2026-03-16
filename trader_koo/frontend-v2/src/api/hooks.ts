@@ -41,7 +41,7 @@ export function usePaperTrades(status: string = "all", direction: string = "all"
     queryKey: ["paper-trades", status, direction],
     queryFn: () =>
       apiFetch<PaperTradeList>(
-        `/api/paper-trades?status=${status}&direction=${direction}&limit=100`,
+        `/api/paper-trades?status=${status}&direction=${direction}&limit=500`,
       ),
     staleTime: 2 * 60 * 1000,
   });
@@ -55,7 +55,7 @@ export function useOpportunities(params: {
   overvalued_threshold?: number;
 }) {
   const qs = new URLSearchParams({
-    limit: String(params.limit ?? 500),
+    limit: String(params.limit ?? 1000),
     min_discount: String(params.min_discount ?? 10),
     max_peg: String(params.max_peg ?? 2),
     overvalued_threshold: String(params.overvalued_threshold ?? -10),
@@ -69,7 +69,7 @@ export function useOpportunities(params: {
 }
 
 export function useEarnings(days: number = 21, tickers?: string) {
-  const qs = new URLSearchParams({ days: String(days), limit: "250" });
+  const qs = new URLSearchParams({ days: String(days), limit: "1000" });
   if (tickers) qs.set("tickers", tickers);
   return useQuery({
     queryKey: ["earnings", days, tickers],

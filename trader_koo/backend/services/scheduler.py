@@ -13,7 +13,10 @@ import resource
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from apscheduler.schedulers.background import BackgroundScheduler
 
 LOG = logging.getLogger("trader_koo.services.scheduler")
 
@@ -289,7 +292,7 @@ def _run_weekly_yolo() -> None:
 # Scheduler factory
 # ---------------------------------------------------------------------------
 
-def create_scheduler() -> Any:
+def create_scheduler() -> BackgroundScheduler:
     """Create and configure the APScheduler instance with daily + weekly jobs.
 
     Returns the scheduler (not started -- caller should call ``.start()``).

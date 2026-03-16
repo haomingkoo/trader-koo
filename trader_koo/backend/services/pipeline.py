@@ -15,7 +15,10 @@ import secrets
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from apscheduler.schedulers.background import BackgroundScheduler
 
 from trader_koo.backend.services.database import DB_PATH, table_exists
 from trader_koo.backend.services.market_data import parse_iso_utc, read_latest_ingest_run
@@ -531,7 +534,7 @@ def post_ingest_resume_candidate(
 
 
 def queue_post_ingest_resume(
-    scheduler: Any,
+    scheduler: BackgroundScheduler,
     source: str = "startup",
 ) -> dict[str, Any]:
     """Conditionally schedule a post-ingest resume job on *scheduler*.

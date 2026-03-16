@@ -122,7 +122,8 @@ def _load_json_file(path: Path) -> dict[str, Any] | None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Failed to parse JSON file %s: %s", path.name, exc)
         return None
 
 
@@ -561,8 +562,9 @@ def smtp_health() -> dict[str, Any]:
     llm_health: dict[str, Any] = {}
     try:
         llm_health = llm_health_summary(DB_PATH, recent_limit=10)
-    except Exception:
-        llm_health = {}
+    except Exception as exc:
+        LOG.warning("Failed to load LLM health summary for smtp-health: %s", exc)
+        llm_health = {"error": str(exc)}
     missing: list[str] = []
     if transport == "resend":
         if not resend["api_key"]:
@@ -692,7 +694,7 @@ def admin_database_stats() -> dict[str, Any]:
         table_stats: dict[str, Any] = {}
         for tbl in tables:
             try:
-                cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
+                cursor.execute(f'SELECT COUNT(*) FROM "{tbl}"')
                 count = cursor.fetchone()[0]
                 table_stats[tbl] = {"row_count": count}
             except Exception as exc:
@@ -1352,7 +1354,8 @@ def email_latest_report(
     if latest_md_path.exists():
         try:
             md_text = latest_md_path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as exc:
+            LOG.warning("Failed to read markdown report: %s", exc)
             md_text = ""
     generated = str(
         latest_payload.get("generated_ts")
