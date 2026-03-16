@@ -294,6 +294,15 @@ def _gemini_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any]
             "temperature": _llm_temperature(),
             "maxOutputTokens": _llm_max_tokens(),
             "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "observation": {"type": "STRING"},
+                    "action": {"type": "STRING"},
+                    "risk_note": {"type": "STRING"},
+                },
+                "required": ["observation", "action", "risk_note"],
+            },
         },
     }
     req = urllib.request.Request(
