@@ -45,6 +45,10 @@ id_ed25519.pub
 *.sqlite3
 *.pt
 
+# Frontend v2 build artifacts
+dist-v2/
+trader_koo/frontend-v2/node_modules/
+
 # Local planning artifacts (not for git)
 planning/
 memory/
