@@ -83,6 +83,62 @@
         color: var(--text);
       }
 
+      /* ── Clock Strip ── */
+      .clock-strip {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 6px 12px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 10px;
+        font-family: "Inter", sans-serif;
+        font-size: 11.5px;
+        color: var(--muted);
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+      .clock-strip .tz-block {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+      }
+      .clock-strip .tz-label {
+        font-weight: 600;
+        color: var(--text);
+        opacity: 0.7;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .clock-strip .tz-time {
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+      }
+      .clock-strip .tz-sep {
+        color: var(--line);
+      }
+      .clock-strip .market-badge {
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 6px;
+        letter-spacing: 0.03em;
+      }
+      .clock-strip .market-badge.open {
+        background: rgba(56, 211, 159, 0.15);
+        color: var(--green);
+      }
+      .clock-strip .market-badge.closed {
+        background: rgba(255, 107, 107, 0.12);
+        color: var(--red);
+      }
+      .clock-strip .market-badge.pre {
+        background: rgba(248, 194, 78, 0.15);
+        color: var(--amber);
+      }
+
       /* ── Hero ── */
       .hero {
         display: flex;
@@ -2422,6 +2478,19 @@
         </div>
         <div id="serviceStatus" class="status-pill" style="display:none"></div>
       </section>
+      <div id="clockStrip" class="clock-strip">
+        <div class="tz-block">
+          <span class="tz-label" id="localTzLabel">Local</span>
+          <span class="tz-time" id="localTime">--:--</span>
+        </div>
+        <span class="tz-sep">|</span>
+        <div class="tz-block">
+          <span class="tz-label">New York</span>
+          <span class="tz-time" id="nyTime">--:--</span>
+        </div>
+        <span class="tz-sep">|</span>
+        <span class="market-badge closed" id="marketBadge">CLOSED</span>
+      </div>
       <div
         id="globalStatus"
         class="status"
@@ -3885,6 +3954,79 @@
       let USAGE_TIMER = null;
       const REGIME_COMPARE_CACHE = new Map();
       const REGIME_COMPARE_INFLIGHT = new Map();
+
+      /* ── Clock + Timezone helpers ── */
+      const NY_TZ = "America/New_York";
+      const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+      function fmtTz(date, tz) {
+        return date.toLocaleString("en-US", {
+          timeZone: tz,
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
+      }
+
+      function getMarketStatus(now) {
+        // NYSE hours: 9:30-16:00 ET, Mon-Fri
+        const nyStr = now.toLocaleString("en-US", {
+          timeZone: NY_TZ,
+          hour: "2-digit", minute: "2-digit",
+          hour12: false, weekday: "short",
+        });
+        const [dayPart, timePart] = nyStr.split(" ");
+        const day = dayPart.replace(",", "");
+        if (["Sat", "Sun"].includes(day)) return "closed";
+        const [h, m] = timePart.split(":").map(Number);
+        const mins = h * 60 + m;
+        if (mins >= 570 && mins < 960) return "open";     // 9:30–16:00
+        if (mins >= 240 && mins < 570) return "pre";       // 4:00–9:30
+        if (mins >= 960 && mins < 1200) return "after";    // 16:00–20:00
+        return "closed";
+      }
+
+      function updateClock() {
+        const now = new Date();
+        const localEl = $("localTime");
+        const nyEl = $("nyTime");
+        const badge = $("marketBadge");
+        const label = $("localTzLabel");
+        if (!localEl || !nyEl) return;
+
+        localEl.textContent = fmtTz(now, LOCAL_TZ);
+        nyEl.textContent = fmtTz(now, NY_TZ);
+
+        // Show the user's timezone name
+        const shortTz = now.toLocaleString("en-US", { timeZone: LOCAL_TZ, timeZoneName: "short" }).split(" ").pop();
+        label.textContent = shortTz || "Local";
+
+        const status = getMarketStatus(now);
+        const labels = { open: "MARKET OPEN", closed: "CLOSED", pre: "PRE-MARKET", after: "AFTER HOURS" };
+        const classes = { open: "open", closed: "closed", pre: "pre", after: "pre" };
+        badge.textContent = labels[status];
+        badge.className = "market-badge " + classes[status];
+      }
+      updateClock();
+      setInterval(updateClock, 1000);
+
+      /**
+       * Convert a UTC ISO timestamp to both local and NY time strings.
+       * Returns { local: "Mon Mar 17, 22:30", ny: "Mon Mar 17, 18:30 EDT" }
+       */
+      function formatUtcTimestamp(utcStr) {
+        if (!utcStr) return { local: "—", ny: "—" };
+        const d = new Date(utcStr.endsWith("Z") ? utcStr : utcStr + "Z");
+        if (Number.isNaN(d.getTime())) return { local: "—", ny: "—" };
+        const opts = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false };
+        const local = d.toLocaleString("en-US", { ...opts, timeZone: LOCAL_TZ });
+        const ny = d.toLocaleString("en-US", { ...opts, timeZone: NY_TZ, timeZoneName: "short" });
+        return { local, ny };
+      }
 
       function fmt(v, d = 2) {
         if (
@@ -6119,27 +6261,11 @@
       function renderOpStatus(payload, view, rowCount) {
         const el = $("opStatus");
         if (!el) return;
-        const snapRaw = payload.snapshot_ts || "";
-        const snapDate = snapRaw ? new Date(snapRaw) : null;
-        const hasSnap = snapDate && !Number.isNaN(snapDate.getTime());
-        const snapUtc = hasSnap
-          ? snapDate.toISOString().slice(0, 16).replace("T", " ") + " UTC"
-          : snapRaw || "-";
-        const snapLocal = hasSnap
-          ? snapDate.toLocaleString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-              hour12: false,
-              timeZoneName: "short",
-            })
-          : "-";
+        const snapTs = formatUtcTimestamp(payload.snapshot_ts);
         const sc = payload.source_counts || {};
         const chips = [
-          ["Snapshot (UTC)", snapUtc],
-          ["Local Time", snapLocal],
+          ["Snapshot", snapTs.local],
+          ["NY Time", snapTs.ny],
           ["View", view],
           ["Shown", rowCount ?? 0],
           ["Eligible", payload.eligible_count ?? "-"],
@@ -8645,8 +8771,12 @@
 
           $("reportSummaryCards").innerHTML = [
             makeCard(
-              "Generated (UTC)",
-              (latest.generated_ts || "—").slice(0, 16).replace("T", " "),
+              "Generated",
+              formatUtcTimestamp(latest.generated_ts).local,
+            ),
+            makeCard(
+              "NY Time",
+              formatUtcTimestamp(latest.generated_ts).ny,
             ),
             makeCard("Tracked Tickers", counts.tracked_tickers ?? "—"),
             makeCard("Price Rows", (counts.price_rows ?? 0).toLocaleString()),
@@ -9176,7 +9306,8 @@
             { sortable: false },
           );
 
-          const asOf = `As of ${(latest.generated_ts || "").slice(0, 16).replace("T", " ")} UTC`;
+          const genTs = formatUtcTimestamp(latest.generated_ts);
+          const asOf = `As of ${genTs.local} (NY: ${genTs.ny})`;
           const warnList = Array.isArray(latest.warnings)
             ? latest.warnings
             : [];
