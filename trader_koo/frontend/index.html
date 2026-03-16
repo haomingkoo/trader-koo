@@ -215,6 +215,76 @@
       }
 
       /* ── Signal Funnel ── */
+      /* ── Paper Trades ─────────────────────────────── */
+      .paper-summary-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .paper-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 14px;
+        text-align: center;
+      }
+      .paper-card-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .paper-card-value {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .paper-card-value.positive { color: var(--green, #22c55e); }
+      .paper-card-value.negative { color: var(--red, #ef4444); }
+      .paper-trade-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+      }
+      .paper-trade-table th {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 2px solid var(--border);
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+      }
+      .paper-trade-table td {
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--line, rgba(255,255,255,0.06));
+        white-space: nowrap;
+      }
+      .paper-trade-table tbody tr:hover {
+        background: rgba(255,255,255,0.03);
+      }
+      .pt-status {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 600;
+      }
+      .pt-status.open { background: rgba(59,130,246,0.15); color: #60a5fa; }
+      .pt-status.target_hit { background: rgba(34,197,94,0.15); color: #22c55e; }
+      .pt-status.stopped_out { background: rgba(239,68,68,0.15); color: #ef4444; }
+      .pt-status.expired { background: rgba(156,163,175,0.15); color: #9ca3af; }
+      .pt-status.closed { background: rgba(168,85,247,0.15); color: #a855f7; }
+      .pt-dir { font-weight: 600; }
+      .pt-dir.long { color: #22c55e; }
+      .pt-dir.short { color: #ef4444; }
+      .pt-pnl.positive { color: #22c55e; font-weight: 600; }
+      .pt-pnl.negative { color: #ef4444; font-weight: 600; }
+
       .signal-funnel {
         display: flex;
         align-items: center;
@@ -2356,6 +2426,7 @@
         <button id="tabEarningsBtn" class="tab-btn">Earnings Calendar</button>
         <button id="tabChartBtn" class="tab-btn">Chart + Levels</button>
         <button id="tabOpBtn" class="tab-btn">Opportunities (PEG)</button>
+        <button id="tabPaperBtn" class="tab-btn">Paper Trades</button>
       </div>
 
       <section id="tabOp" class="panel hidden">
@@ -3405,6 +3476,80 @@
         </div>
       </section>
 
+      <section id="tabPaper" class="panel hidden">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:8px">
+          <h3 style="margin:0">Paper Trading Performance</h3>
+          <div style="display:flex; gap:8px">
+            <select id="paperStatusFilter" style="background:var(--bg-card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:0.85rem">
+              <option value="all">All Status</option>
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+              <option value="stopped_out">Stopped Out</option>
+              <option value="target_hit">Target Hit</option>
+              <option value="expired">Expired</option>
+            </select>
+            <select id="paperDirFilter" style="background:var(--bg-card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:0.85rem">
+              <option value="">All Directions</option>
+              <option value="long">Long</option>
+              <option value="short">Short</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Summary cards -->
+        <div id="paperSummaryCards" class="paper-summary-cards">
+          <div class="paper-card"><div class="paper-card-label">Total Trades</div><div id="ptTotalTrades" class="paper-card-value">—</div></div>
+          <div class="paper-card"><div class="paper-card-label">Win Rate</div><div id="ptWinRate" class="paper-card-value">—</div></div>
+          <div class="paper-card"><div class="paper-card-label">Avg P&L</div><div id="ptAvgPnl" class="paper-card-value">—</div></div>
+          <div class="paper-card"><div class="paper-card-label">Total P&L</div><div id="ptTotalPnl" class="paper-card-value">—</div></div>
+          <div class="paper-card"><div class="paper-card-label">Avg R</div><div id="ptAvgR" class="paper-card-value">—</div></div>
+          <div class="paper-card"><div class="paper-card-label">Sharpe</div><div id="ptSharpe" class="paper-card-value">—</div></div>
+          <div class="paper-card"><div class="paper-card-label">Profit Factor</div><div id="ptProfitFactor" class="paper-card-value">—</div></div>
+          <div class="paper-card"><div class="paper-card-label">Max DD</div><div id="ptMaxDD" class="paper-card-value">—</div></div>
+        </div>
+
+        <!-- Equity curve chart -->
+        <div id="paperEquityChart" style="width:100%; height:260px; margin:16px 0; background:var(--bg-card); border-radius:8px"></div>
+
+        <!-- Breakdown row -->
+        <div id="paperBreakdown" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px">
+          <div style="background:var(--bg-card); border-radius:8px; padding:12px">
+            <div style="font-weight:600; margin-bottom:8px; color:var(--text)">By Direction</div>
+            <div id="ptByDirection" style="font-size:0.85rem; color:var(--muted)">—</div>
+          </div>
+          <div style="background:var(--bg-card); border-radius:8px; padding:12px">
+            <div style="font-weight:600; margin-bottom:8px; color:var(--text)">By Exit Reason</div>
+            <div id="ptByExitReason" style="font-size:0.85rem; color:var(--muted)">—</div>
+          </div>
+        </div>
+
+        <!-- Trade table -->
+        <div style="overflow-x:auto">
+          <table id="paperTradeTable" class="paper-trade-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Dir</th>
+                <th>Entry</th>
+                <th>Current</th>
+                <th>Stop</th>
+                <th>Target</th>
+                <th>P&L %</th>
+                <th>R</th>
+                <th>Status</th>
+                <th>Family</th>
+                <th>Tier</th>
+                <th>Entry Date</th>
+              </tr>
+            </thead>
+            <tbody id="paperTradeBody"></tbody>
+          </table>
+        </div>
+        <div id="paperNoData" style="display:none; color:var(--muted); padding:20px 0; text-align:center">
+          No paper trades yet. Trades are automatically created from qualifying daily report setups.
+        </div>
+      </section>
+
       <section id="tabGuide" class="panel">
         <div class="guide">
           <div class="guide-callout">
@@ -3698,12 +3843,14 @@
       const tabReportBtn = $("tabReportBtn");
       const tabRegimeBtn = $("tabRegimeBtn");
       const tabEarningsBtn = $("tabEarningsBtn");
+      const tabPaperBtn = $("tabPaperBtn");
       const tabOp = $("tabOp");
       const tabChart = $("tabChart");
       const tabGuide = $("tabGuide");
       const tabReport = $("tabReport");
       const tabRegime = $("tabRegime");
       const tabEarnings = $("tabEarnings");
+      const tabPaper = $("tabPaper");
       const API_BASE_STORAGE_KEY = "trader_koo_api_base";
       const WATCHLIST_STORAGE_KEY = "trader_koo_watchlist";
       const USAGE_VISITOR_KEY = "trader_koo_usage_visitor";
@@ -6245,6 +6392,7 @@
           report: [tabReportBtn, tabReport],
           regime: [tabRegimeBtn, tabRegime],
           earnings: [tabEarningsBtn, tabEarnings],
+          paper: [tabPaperBtn, tabPaper],
         };
         for (const [k, [btn, sec]] of Object.entries(all)) {
           if (k === which) {
@@ -6260,6 +6408,7 @@
         if ((which === "report" || which === "regime") && !skipReportReload)
           loadReport();
         if (which === "earnings") loadEarnings();
+        if (which === "paper") loadPaperTrades();
         if (which === "chart" && focusChartEntry) {
           scrollChartEntryIntoView();
           window.requestAnimationFrame(() =>
@@ -6275,6 +6424,141 @@
       tabReportBtn.addEventListener("click", () => activateTab("report"));
       tabRegimeBtn.addEventListener("click", () => activateTab("regime"));
       tabEarningsBtn.addEventListener("click", () => activateTab("earnings"));
+      tabPaperBtn.addEventListener("click", () => activateTab("paper"));
+
+      // ── Paper Trades ─────────────────────────────────────
+      let _paperLoaded = false;
+      async function loadPaperTrades() {
+        const base = getApiBase();
+        try {
+          const [summaryRes, tradesRes] = await Promise.all([
+            fetch(`${base}/api/paper-trades/summary`),
+            fetch(`${base}/api/paper-trades?status=${$("paperStatusFilter").value}&direction=${$("paperDirFilter").value}&limit=100`),
+          ]);
+          const summary = await summaryRes.json();
+          const trades = await tradesRes.json();
+          renderPaperSummary(summary);
+          renderPaperTrades(trades);
+          if (summary.equity_curve && summary.equity_curve.length > 1) {
+            renderPaperEquityChart(summary.equity_curve);
+          }
+          _paperLoaded = true;
+        } catch (e) {
+          console.warn("Paper trades load failed:", e);
+          $("paperNoData").style.display = "block";
+        }
+      }
+
+      function renderPaperSummary(data) {
+        const o = data.overall || {};
+        const fmt = (v, suffix) => v == null ? "—" : `${v}${suffix || ""}`;
+        const setVal = (id, val, suffix, invert) => {
+          const el = $(id);
+          if (!el) return;
+          el.textContent = fmt(val, suffix);
+          el.className = "paper-card-value";
+          if (val != null && typeof val === "number") {
+            if (invert ? val < 0 : val > 0) el.classList.add("positive");
+            else if (invert ? val > 0 : val < 0) el.classList.add("negative");
+          }
+        };
+        setVal("ptTotalTrades", o.total_trades);
+        setVal("ptWinRate", o.win_rate_pct, "%");
+        setVal("ptAvgPnl", o.avg_pnl_pct, "%");
+        setVal("ptTotalPnl", o.total_pnl_pct, "%");
+        setVal("ptAvgR", o.avg_r_multiple, "R");
+        // Sharpe and profit factor from latest snapshot
+        const eq = data.equity_curve || [];
+        const latest = eq.length ? eq[eq.length - 1] : null;
+        setVal("ptSharpe", data.overall ? null : null);
+        setVal("ptProfitFactor", null);
+        setVal("ptMaxDD", null, "%", true);
+
+        // By direction
+        const bd = data.by_direction || {};
+        let dirHtml = "";
+        for (const [d, v] of Object.entries(bd)) {
+          dirHtml += `<div style="margin-bottom:4px"><b style="text-transform:capitalize">${d}</b>: ${v.total} trades, ${v.win_rate_pct}% win, avg ${v.avg_pnl_pct > 0 ? "+" : ""}${v.avg_pnl_pct}%</div>`;
+        }
+        $("ptByDirection").innerHTML = dirHtml || "No closed trades yet";
+
+        // By exit reason
+        const be = data.by_exit_reason || {};
+        let exitHtml = "";
+        for (const [r, cnt] of Object.entries(be)) {
+          const label = r.replace(/_/g, " ");
+          exitHtml += `<div style="margin-bottom:4px"><b style="text-transform:capitalize">${label}</b>: ${cnt}</div>`;
+        }
+        $("ptByExitReason").innerHTML = exitHtml || "No closed trades yet";
+      }
+
+      function renderPaperTrades(data) {
+        const trades = data.trades || [];
+        const body = $("paperTradeBody");
+        const noData = $("paperNoData");
+        if (!trades.length) {
+          body.innerHTML = "";
+          noData.style.display = "block";
+          return;
+        }
+        noData.style.display = "none";
+        const fmtP = (v) => v == null ? "—" : v.toFixed(2);
+        const fmtPnl = (v) => {
+          if (v == null) return "—";
+          const s = v > 0 ? `+${v.toFixed(2)}%` : `${v.toFixed(2)}%`;
+          return s;
+        };
+        body.innerHTML = trades.map(t => {
+          const pnl = t.status === "open" ? t.unrealized_pnl_pct : t.pnl_pct;
+          const pnlClass = pnl != null ? (pnl > 0 ? "positive" : pnl < 0 ? "negative" : "") : "";
+          const statusClass = t.status.replace(" ", "_");
+          return `<tr>
+            <td><b>${t.ticker}</b></td>
+            <td><span class="pt-dir ${t.direction}">${t.direction.toUpperCase()}</span></td>
+            <td>${fmtP(t.entry_price)}</td>
+            <td>${fmtP(t.current_price)}</td>
+            <td>${fmtP(t.stop_loss)}</td>
+            <td>${fmtP(t.target_price)}</td>
+            <td><span class="pt-pnl ${pnlClass}">${fmtPnl(pnl)}</span></td>
+            <td>${t.r_multiple != null ? t.r_multiple.toFixed(2) + "R" : "—"}</td>
+            <td><span class="pt-status ${statusClass}">${t.status.replace(/_/g, " ")}</span></td>
+            <td>${t.setup_family || "—"}</td>
+            <td>${t.setup_tier || "—"}</td>
+            <td>${t.entry_date || "—"}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      function renderPaperEquityChart(curve) {
+        const el = $("paperEquityChart");
+        if (!el || !curve.length) return;
+        const dates = curve.map(c => c.date);
+        const values = curve.map(c => c.equity_index);
+        const trace = {
+          x: dates, y: values, type: "scatter", mode: "lines",
+          fill: "tozeroy",
+          line: { color: "#22c55e", width: 2 },
+          fillcolor: "rgba(34,197,94,0.08)",
+          name: "Equity Index",
+        };
+        const baseline = { x: [dates[0], dates[dates.length - 1]], y: [100, 100],
+          type: "scatter", mode: "lines", line: { color: "#6b7280", width: 1, dash: "dot" }, name: "Baseline (100)" };
+        const layout = {
+          paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+          margin: { t: 20, r: 16, b: 40, l: 50 },
+          font: { color: "#9ca3af", size: 11 },
+          xaxis: { gridcolor: "rgba(255,255,255,0.04)" },
+          yaxis: { gridcolor: "rgba(255,255,255,0.06)", title: { text: "Equity", font: { size: 11 } } },
+          legend: { orientation: "h", y: 1.12, x: 0.5, xanchor: "center", font: { size: 10 } },
+          showlegend: true,
+        };
+        if (window.Plotly) {
+          Plotly.newPlot(el, [trace, baseline], layout, { responsive: true, displayModeBar: false });
+        }
+      }
+
+      $("paperStatusFilter").addEventListener("change", loadPaperTrades);
+      $("paperDirFilter").addEventListener("change", loadPaperTrades);
 
       function fillCards(payload) {
         const f = payload.fundamentals || {};

@@ -37,6 +37,11 @@ from trader_koo.llm_health import (
     should_send_llm_alert,
 )
 from trader_koo.llm_narrative import llm_enabled, llm_max_setups, llm_status, maybe_rewrite_setup_copy
+from trader_koo.paper_trades import (
+    PAPER_TRADE_ENABLED,
+    create_paper_trades_from_report,
+    mark_to_market,
+)
 from trader_koo.report_email import (
     build_report_email_bodies,
     build_report_email_subject,
@@ -5388,6 +5393,39 @@ def fetch_report_payload(
             payload["signals"]["setup_evaluation"] = eval_summary
         else:
             payload["signals"]["setup_evaluation"] = {"enabled": False, "reason": "disabled_by_env"}
+
+        # ── Paper Trade Integration ─────────────────────────────────
+        paper_trade_result: dict[str, Any] = {"enabled": PAPER_TRADE_ENABLED}
+        if PAPER_TRADE_ENABLED:
+            try:
+                asof_date_pt = str((payload.get("latest_data") or {}).get("price_date") or "").strip()
+                setup_rows_pt = (
+                    (payload.get("signals") or {}).get("setup_quality_top")
+                    if isinstance((payload.get("signals") or {}).get("setup_quality_top"), list)
+                    else []
+                )
+                generated_ts_pt = str(payload.get("generated_ts") or "")
+                if asof_date_pt and setup_rows_pt:
+                    inserted_pt = create_paper_trades_from_report(
+                        conn,
+                        setup_rows=setup_rows_pt,
+                        report_date=asof_date_pt,
+                        generated_ts=generated_ts_pt,
+                    )
+                    conn.commit()
+                    paper_trade_result["inserted"] = inserted_pt
+                else:
+                    paper_trade_result["inserted"] = 0
+                    paper_trade_result["skipped_reason"] = "no_date_or_setups"
+
+                mtm_result = mark_to_market(conn)
+                conn.commit()
+                paper_trade_result["mtm"] = mtm_result
+            except Exception:
+                conn.rollback()
+                paper_trade_result["error"] = "paper_trade_failed"
+                LOG.exception("Paper trade integration failed")
+        payload["paper_trades"] = paper_trade_result
         market_date_raw = str((payload.get("market_session") or {}).get("market_date") or "").strip()
         market_date_obj: dt.date | None = None
         try:

@@ -52,6 +52,13 @@ from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
 from trader_koo.llm_narrative import llm_status, maybe_rewrite_setup_copy
+from trader_koo.paper_trades import (
+    ensure_paper_trade_schema,
+    list_paper_trades,
+    manually_close_trade,
+    mark_to_market,
+    paper_trade_summary,
+)
 from trader_koo.llm_health import (
     llm_alert_cooldown_min,
     llm_alert_enabled,
@@ -603,6 +610,8 @@ async def lifespan(_app: FastAPI):
         try:
             ensure_audit_schema(conn)
             LOG.info("Audit logging schema initialized")
+            ensure_paper_trade_schema(conn)
+            LOG.info("Paper trade schema initialized")
         finally:
             conn.close()
     else:
@@ -5972,6 +5981,121 @@ def opportunities(
                 "limit": "Maximum rows returned",
             },
         }
+    finally:
+        conn.close()
+
+
+# ── Paper Trade Endpoints ─────────────────────────────────────────
+
+
+@app.get("/api/paper-trades")
+def api_paper_trades(
+    status: str = Query(default="all", pattern="^(all|open|closed|stopped_out|target_hit|expired)$"),
+    ticker: str | None = Query(default=None),
+    direction: str | None = Query(default=None, pattern="^(long|short)$"),
+    family: str | None = Query(default=None),
+    from_date: str | None = Query(default=None),
+    to_date: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """List paper trades with optional filters."""
+    conn = get_conn()
+    try:
+        trades = list_paper_trades(
+            conn,
+            status=status,
+            ticker=ticker,
+            direction=direction,
+            family=family,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+        )
+        return {"ok": True, "count": len(trades), "trades": trades}
+    finally:
+        conn.close()
+
+
+@app.get("/api/paper-trades/summary")
+def api_paper_trade_summary(
+    window_days: int = Query(default=180, ge=7, le=730),
+) -> dict[str, Any]:
+    """Paper trading performance summary with metrics and equity curve."""
+    conn = get_conn()
+    try:
+        summary = paper_trade_summary(conn, window_days=window_days)
+        return {"ok": True, **summary}
+    finally:
+        conn.close()
+
+
+@app.get("/api/paper-trades/{trade_id}")
+def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
+    """Get a single paper trade by ID."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT id, report_date, ticker, direction, entry_price, entry_date,
+                   target_price, stop_loss, atr_at_entry, exit_price, exit_date,
+                   exit_reason, status, current_price, unrealized_pnl_pct,
+                   pnl_pct, r_multiple, high_water_mark, low_water_mark,
+                   setup_family, setup_tier, score, signal_bias, actionability,
+                   observation, action_text, risk_note, yolo_pattern, yolo_recency,
+                   debate_agreement_score, last_mtm_date, created_ts, updated_ts
+            FROM paper_trades WHERE id = ?
+            """,
+            (trade_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Paper trade {trade_id} not found")
+        keys = [
+            "id", "report_date", "ticker", "direction", "entry_price", "entry_date",
+            "target_price", "stop_loss", "atr_at_entry", "exit_price", "exit_date",
+            "exit_reason", "status", "current_price", "unrealized_pnl_pct",
+            "pnl_pct", "r_multiple", "high_water_mark", "low_water_mark",
+            "setup_family", "setup_tier", "score", "signal_bias", "actionability",
+            "observation", "action_text", "risk_note", "yolo_pattern", "yolo_recency",
+            "debate_agreement_score", "last_mtm_date", "created_ts", "updated_ts",
+        ]
+        return {"ok": True, "trade": dict(zip(keys, row))}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/paper-trades/close")
+@require_admin_auth
+def admin_close_paper_trade(
+    request: Request,
+    trade_id: int = Query(..., ge=1),
+    exit_price: float | None = Query(default=None),
+    exit_reason: str = Query(default="manual_close"),
+) -> dict[str, Any]:
+    """Manually close an open paper trade."""
+    conn = get_conn()
+    try:
+        result = manually_close_trade(
+            conn,
+            trade_id=trade_id,
+            exit_price=exit_price,
+            exit_reason=exit_reason,
+        )
+        return {"ok": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/paper-trades/mtm")
+@require_admin_auth
+def admin_trigger_mtm(request: Request) -> dict[str, Any]:
+    """Trigger mark-to-market on all open paper trades."""
+    conn = get_conn()
+    try:
+        result = mark_to_market(conn)
+        conn.commit()
+        return {"ok": True, **result}
     finally:
         conn.close()
 
