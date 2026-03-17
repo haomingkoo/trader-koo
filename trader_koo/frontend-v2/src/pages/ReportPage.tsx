@@ -276,7 +276,7 @@ function VixRegimeWidget({ regime }: { regime: RegimeContext | null }) {
           </span>
         </div>
         <Link
-          to="/v2/vix"
+          to="/vix"
           className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
         >
           Full VIX Analysis &rarr;
@@ -369,7 +369,7 @@ function SetupQualitySection({
       label: "Ticker",
       render: (row) => (
         <Link
-          to={`/v2/chart?t=${row.ticker}`}
+          to={`/chart?t=${row.ticker}`}
           className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
         >
           {row.ticker}

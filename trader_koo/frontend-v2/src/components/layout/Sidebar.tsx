@@ -8,14 +8,14 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { to: "/v2", label: "Guide", icon: "\uD83D\uDCD6" },
-  { to: "/v2/report", label: "Report", icon: "\uD83D\uDCCB" },
-  { to: "/v2/vix", label: "VIX Analysis", icon: "\uD83C\uDF21\uFE0F" },
-  { to: "/v2/earnings", label: "Earnings", icon: "\uD83D\uDCC5" },
-  { to: "/v2/chart", label: "Chart", icon: "\uD83D\uDCC8" },
-  { to: "/v2/crypto", label: "Crypto", icon: "\u20BF" },
-  { to: "/v2/opportunities", label: "Opportunities", icon: "\uD83D\uDD0D" },
-  { to: "/v2/paper-trades", label: "Paper Trades", icon: "\uD83D\uDCB0" },
+  { to: "/", label: "Guide", icon: "\uD83D\uDCD6" },
+  { to: "/report", label: "Report", icon: "\uD83D\uDCCB" },
+  { to: "/vix", label: "VIX Analysis", icon: "\uD83C\uDF21\uFE0F" },
+  { to: "/earnings", label: "Earnings", icon: "\uD83D\uDCC5" },
+  { to: "/chart", label: "Chart", icon: "\uD83D\uDCC8" },
+  { to: "/crypto", label: "Crypto", icon: "\u20BF" },
+  { to: "/opportunities", label: "Opportunities", icon: "\uD83D\uDD0D" },
+  { to: "/paper-trades", label: "Paper Trades", icon: "\uD83D\uDCB0" },
 ];
 
 export default function Sidebar({
@@ -72,7 +72,7 @@ export default function Sidebar({
           <NavLink
             key={item.to}
             to={item.to}
-            end={item.to === "/v2"}
+            end={item.to === "/"}
             onClick={onMobileClose}
             className={({ isActive }) =>
               `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${

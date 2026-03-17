@@ -47,7 +47,7 @@ const opportunityColumns = [
       if (!ticker) return "\u2014";
       return (
         <Link
-          to={`/v2/chart?t=${ticker}`}
+          to={`/chart?t=${ticker}`}
           className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
         >
           {ticker}

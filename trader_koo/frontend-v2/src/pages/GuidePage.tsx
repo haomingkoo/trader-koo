@@ -9,43 +9,43 @@ interface FeatureCard {
 
 const features: FeatureCard[] = [
   {
-    to: "/v2/report",
+    to: "/report",
     title: "Daily Report",
     description:
       "Setup quality rankings with tier scoring, bias labels, YOLO context, and level events across the tracked universe. Includes risk filters and key changes.",
   },
   {
-    to: "/v2/chart",
+    to: "/chart",
     title: "Chart Analysis",
     description:
       "Interactive candlestick chart with support/resistance levels, gap zones, trendlines, pattern overlays, multi-angle debate commentary, and fundamentals.",
   },
   {
-    to: "/v2/vix",
+    to: "/vix",
     title: "VIX / Regime",
     description:
       "Regime context dashboard with VIX levels, MA matrix, market health scoring, participation bias, drivers, warnings, and LLM commentary.",
   },
   {
-    to: "/v2/earnings",
+    to: "/earnings",
     title: "Earnings Calendar",
     description:
       "Upcoming earnings events with schedule quality, recommendation state, setup scores, bias, risk analysis, and calendar/table views per ticker.",
   },
   {
-    to: "/v2/opportunities",
+    to: "/opportunities",
     title: "Opportunities",
     description:
       "Valuation screener with P/E, PEG, and discount-to-target filtering. View undervalued, overvalued, deep value, or all tickers.",
   },
   {
-    to: "/v2/paper-trades",
+    to: "/paper-trades",
     title: "Paper Trades",
     description:
       "Simulated trade log with equity curve tracking, P&L analysis, win rates, R-multiples, direction breakdowns, and exit reason statistics.",
   },
   {
-    to: "/v2/crypto",
+    to: "/crypto",
     title: "Crypto",
     description:
       "Live BTC and ETH prices via Binance WebSocket feed with 1-minute candlestick charts, 24h volume, and real-time price change tracking.",

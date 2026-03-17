@@ -51,7 +51,7 @@ const earningsColumns = [
       if (!ticker) return "\u2014";
       return (
         <Link
-          to={`/v2/chart?t=${ticker}`}
+          to={`/chart?t=${ticker}`}
           className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
         >
           {ticker}
@@ -195,7 +195,7 @@ function CalendarCard({ row }: { row: EarningsRow }) {
     >
       <div className="flex items-center justify-between gap-2">
         <Link
-          to={`/v2/chart?t=${row.ticker}`}
+          to={`/chart?t=${row.ticker}`}
           className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
           onClick={(e) => e.stopPropagation()}
         >
