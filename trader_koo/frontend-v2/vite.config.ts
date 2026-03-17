@@ -14,5 +14,6 @@ export default defineConfig({
   build: {
     outDir: "../../dist-v2",
     emptyOutDir: true,
+    sourcemap: true,
   },
 });
