@@ -209,7 +209,8 @@ The app is designed for a single Railway service with a persistent `/data` volum
 | `TRADER_KOO_PRICE_RETRY_ATTEMPTS`           | yfinance retry attempts per ticker (default `3`)                                         |
 | `TRADER_KOO_YOLO_MAX_SECS_PER_TICKER`       | Per-ticker fail-safe timeout for YOLO (default `180`)                                    |
 | `TRADER_KOO_PIPELINE_STALE_SEC`             | Max age for pipeline stage log line before status auto-resets to idle (default `1200`)   |
-| `TRADER_KOO_ALPHA_VANTAGE_KEY`              | Optional Alpha Vantage key for the earnings calendar feed                                |
+| `TRADER_KOO_ALPHA_VANTAGE_KEY`              | Optional Alpha Vantage key for the earnings calendar feed and external news sentiment    |
+| `TRADER_KOO_SENTIMENT_CACHE_TTL_SEC`        | Cache TTL for external news sentiment requests in seconds (default `900`)                |
 | `TRADER_KOO_ANALYTICS_ENABLED`              | Enable first-party usage/session tracking for control-center rollups (default `1`)       |
 | `TRADER_KOO_ANALYTICS_MAX_SESSION_AGE_DAYS` | Prune stored session records older than this many days (default `180`)                   |
 | `TRADER_KOO_SMTP_HOST`                      | SMTP host (e.g. `smtp.gmail.com`)                                                        |

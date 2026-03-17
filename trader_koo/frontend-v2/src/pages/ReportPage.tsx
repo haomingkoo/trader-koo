@@ -16,8 +16,7 @@ import type {
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
-// Fear & Greed removed — our computed index differs from CNN's, user found it confusing
-// import FearGreedGauge from "../components/FearGreedGauge";
+import FearGreedGauge from "../components/FearGreedGauge";
 
 /* ── Helpers ── */
 
@@ -1013,8 +1012,6 @@ export default function ReportPage() {
 
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
 
-      {/* Fear & Greed Index — removed, our computed index differs from CNN's */}
-
       {/* 1. Summary KPI cards */}
       <SummaryKpiRow
         generatedTs={latest.generated_ts}
@@ -1035,8 +1032,11 @@ export default function ReportPage() {
       {/* 3. Key Changes */}
       <KeyChangesSection changes={signals.tonight_key_changes ?? []} />
 
-      {/* 4. VIX Regime Context */}
-      <VixRegimeWidget regime={signals.regime_context} />
+      {/* 4. Macro context */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+        <FearGreedGauge />
+        <VixRegimeWidget regime={signals.regime_context} />
+      </div>
 
       {/* 5. YOLO Detection */}
       <YoloDetectionCards yolo={yoloBlock} />

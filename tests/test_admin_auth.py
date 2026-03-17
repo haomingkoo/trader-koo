@@ -4,6 +4,7 @@ Requirements:
 - 5.5: Include automated test coverage for authentication on every admin endpoint
 """
 
+import importlib
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -153,7 +154,7 @@ class TestAdminEndpointAuthentication:
     - 5.5: Include automated test coverage for authentication on every admin endpoint
     """
     
-    def test_all_admin_endpoints_require_auth(self):
+    def test_all_admin_endpoints_require_auth(self, monkeypatch):
         """Test that all /api/admin/* endpoints require authentication.
         
         This test verifies that:
@@ -161,10 +162,13 @@ class TestAdminEndpointAuthentication:
         2. All admin endpoints have authentication applied
         3. Unauthenticated requests are rejected with 401
         """
-        # Import the main app
-        from trader_koo.backend.main import app
-        
-        client = TestClient(app)
+        monkeypatch.setenv("ADMIN_STRICT_API_KEY", "1")
+        monkeypatch.setenv("TRADER_KOO_API_KEY", "t" * 32)
+
+        import trader_koo.backend.main as main_module
+
+        importlib.reload(main_module)
+        app = main_module.app
         
         # Get all admin routes
         admin_routes = []
@@ -178,63 +182,66 @@ class TestAdminEndpointAuthentication:
         assert len(admin_routes) > 0, "No admin routes found"
         
         # Test each admin endpoint without authentication
-        for method, path in admin_routes:
-            # Skip the /api/admin/routes endpoint itself (it's being tested)
-            if path == "/api/admin/routes":
-                continue
-            
-            # Make request without X-API-Key header
-            if method == "GET":
-                response = client.get(path)
-            elif method == "POST":
-                response = client.post(path, json={})
-            elif method == "PUT":
-                response = client.put(path, json={})
-            elif method == "DELETE":
-                response = client.delete(path)
-            elif method == "PATCH":
-                response = client.patch(path, json={})
-            else:
-                continue
-            
-            # Should be rejected with 401 or 503 (if API key not configured)
-            assert response.status_code in [401, 503], (
-                f"{method} {path} should require authentication, "
-                f"but returned {response.status_code}"
-            )
-    
-    def test_admin_routes_endpoint(self):
+        with TestClient(app) as client:
+            for method, path in admin_routes:
+                # Skip the /api/admin/routes endpoint itself (it's being tested)
+                if path == "/api/admin/routes":
+                    continue
+
+                # Make request without X-API-Key header
+                if method == "GET":
+                    response = client.get(path)
+                elif method == "POST":
+                    response = client.post(path, json={})
+                elif method == "PUT":
+                    response = client.put(path, json={})
+                elif method == "DELETE":
+                    response = client.delete(path)
+                elif method == "PATCH":
+                    response = client.patch(path, json={})
+                else:
+                    continue
+
+                assert response.status_code in [401, 429], (
+                    f"{method} {path} should require authentication, "
+                    f"but returned {response.status_code}"
+                )
+
+    def test_admin_routes_endpoint(self, monkeypatch):
         """Test the /api/admin/routes endpoint returns route information."""
-        from trader_koo.backend.main import app, API_KEY
-        
-        client = TestClient(app)
-        
-        # Make authenticated request
-        headers = {}
-        if API_KEY:
-            headers["X-API-Key"] = API_KEY
-        
-        response = client.get("/api/admin/routes", headers=headers)
-        
-        # Should succeed (or fail with 401/503 if not authenticated)
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Verify response structure
-            assert "total" in data
-            assert "protected" in data
-            assert "unprotected" in data
-            assert "all_protected" in data
-            assert "routes" in data
-            
-            # Verify routes list
-            assert isinstance(data["routes"], list)
-            assert data["total"] == len(data["routes"])
-            
-            # Each route should have required fields
-            for route in data["routes"]:
-                assert "method" in route
-                assert "path" in route
-                assert "has_auth" in route
-                assert "key" in route
-                assert route["path"].startswith("/api/admin/")
+        monkeypatch.setenv("ADMIN_STRICT_API_KEY", "1")
+        monkeypatch.setenv("TRADER_KOO_API_KEY", "r" * 32)
+
+        import trader_koo.backend.main as main_module
+
+        importlib.reload(main_module)
+        app = main_module.app
+        api_key = main_module.API_KEY
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/admin/routes",
+                headers={"X-API-Key": api_key},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify response structure
+        assert "total" in data
+        assert "protected" in data
+        assert "unprotected" in data
+        assert "all_protected" in data
+        assert "routes" in data
+
+        # Verify routes list
+        assert isinstance(data["routes"], list)
+        assert data["total"] == len(data["routes"])
+
+        # Each route should have required fields
+        for route in data["routes"]:
+            assert "method" in route
+            assert "path" in route
+            assert "has_auth" in route
+            assert "key" in route
+            assert route["path"].startswith("/api/admin/")

@@ -546,15 +546,23 @@ app.include_router(streaming_router)
 
 if DIST_V2.exists() and DIST_V2.is_dir():
     _v2_index = DIST_V2 / "index.html"
+    _v2_assets = DIST_V2 / "assets"
 
-    # Serve static assets (JS, CSS, fonts, maps)
-    app.mount("/v2/assets", StaticFiles(directory=str(DIST_V2 / "assets")), name="v2-assets")
+    # Only mount hashed assets when the build output is fully present.
+    if _v2_assets.is_dir():
+        app.mount("/v2/assets", StaticFiles(directory=str(_v2_assets)), name="v2-assets")
 
-    # Catch-all for SPA routing — any /v2/* path that isn't an asset serves index.html
-    @app.get("/v2/{rest_of_path:path}", include_in_schema=False)
-    def v2_spa_fallback(rest_of_path: str = "") -> Any:
-        # Serve static files if they exist (favicon, etc.)
-        static_file = DIST_V2 / rest_of_path
-        if rest_of_path and static_file.is_file():
-            return FileResponse(str(static_file))
-        return FileResponse(str(_v2_index))
+    if _v2_index.is_file():
+        @app.get("/v2", include_in_schema=False)
+        @app.get("/v2/", include_in_schema=False)
+        def v2_index() -> Any:
+            return FileResponse(str(_v2_index))
+
+        # Catch-all for SPA routing — any /v2/* path that isn't an asset serves index.html
+        @app.get("/v2/{rest_of_path:path}", include_in_schema=False)
+        def v2_spa_fallback(rest_of_path: str = "") -> Any:
+            # Serve static files if they exist (favicon, etc.)
+            static_file = DIST_V2 / rest_of_path
+            if rest_of_path and static_file.is_file():
+                return FileResponse(str(static_file))
+            return FileResponse(str(_v2_index))

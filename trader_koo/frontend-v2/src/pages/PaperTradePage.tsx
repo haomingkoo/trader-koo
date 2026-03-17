@@ -1,13 +1,12 @@
-import { useState, lazy, Suspense } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTrade, PaperTradeSummaryOverall } from "../api/types";
 import Card from "../components/ui/Card";
 import Badge, { tierVariant } from "../components/ui/Badge";
+import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
 import Table from "../components/ui/Table";
-
-const Plot = lazy(() => import("react-plotly.js"));
 
 const fmtPct = (v: number | null | undefined, suffix: string = "%", sign: boolean = false): string =>
   typeof v === "number" ? `${sign && v > 0 ? "+" : ""}${v.toFixed(2)}${suffix}` : "\u2014";
@@ -255,55 +254,53 @@ export default function PaperTradePage() {
       {/* Equity curve chart */}
       {equityCurve.length > 1 ? (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
-          <Suspense fallback={<Spinner className="py-12" />}>
-            <Plot
-              data={[
-                {
-                  x: equityCurve.map((p) => p.date),
-                  y: equityCurve.map((p) => p.equity_index),
-                  type: "scatter" as const,
-                  mode: "lines" as const,
-                  fill: "tozeroy",
-                  line: { color: "#22c55e", width: 2 },
-                  fillcolor: "rgba(34,197,94,0.08)",
-                  name: "Equity Index",
-                },
-                {
-                  x: [
-                    equityCurve[0].date,
-                    equityCurve[equityCurve.length - 1].date,
-                  ],
-                  y: [100, 100],
-                  type: "scatter" as const,
-                  mode: "lines" as const,
-                  line: { color: "#6b7280", width: 1, dash: "dot" },
-                  name: "Baseline (100)",
-                },
-              ]}
-              layout={{
-                paper_bgcolor: "transparent",
-                plot_bgcolor: "transparent",
-                margin: { t: 20, r: 16, b: 40, l: 50 },
-                font: { color: "#9ca3af", size: 11 },
-                xaxis: { gridcolor: "rgba(255,255,255,0.04)" },
-                yaxis: {
-                  gridcolor: "rgba(255,255,255,0.06)",
-                  title: { text: "Equity", font: { size: 11 } },
-                },
-                legend: {
-                  orientation: "h",
-                  y: 1.12,
-                  x: 0.5,
-                  xanchor: "center",
-                  font: { size: 10 },
-                },
-                showlegend: true,
-                height: 280,
-              }}
-              config={{ responsive: true, displayModeBar: false }}
-              style={{ width: "100%", height: 280 }}
-            />
-          </Suspense>
+          <PlotlyWrapper
+            data={[
+              {
+                x: equityCurve.map((p) => p.date),
+                y: equityCurve.map((p) => p.equity_index),
+                type: "scatter" as const,
+                mode: "lines" as const,
+                fill: "tozeroy",
+                line: { color: "#22c55e", width: 2 },
+                fillcolor: "rgba(34,197,94,0.08)",
+                name: "Equity Index",
+              },
+              {
+                x: [
+                  equityCurve[0].date,
+                  equityCurve[equityCurve.length - 1].date,
+                ],
+                y: [100, 100],
+                type: "scatter" as const,
+                mode: "lines" as const,
+                line: { color: "#6b7280", width: 1, dash: "dot" },
+                name: "Baseline (100)",
+              },
+            ]}
+            layout={{
+              paper_bgcolor: "transparent",
+              plot_bgcolor: "transparent",
+              margin: { t: 20, r: 16, b: 40, l: 50 },
+              font: { color: "#9ca3af", size: 11 },
+              xaxis: { gridcolor: "rgba(255,255,255,0.04)" },
+              yaxis: {
+                gridcolor: "rgba(255,255,255,0.06)",
+                title: { text: "Equity", font: { size: 11 } },
+              },
+              legend: {
+                orientation: "h",
+                y: 1.12,
+                x: 0.5,
+                xanchor: "center",
+                font: { size: 10 },
+              },
+              showlegend: true,
+              height: 280,
+            }}
+            config={{ responsive: true, displayModeBar: false }}
+            style={{ width: "100%", height: 280 }}
+          />
         </div>
       ) : (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">

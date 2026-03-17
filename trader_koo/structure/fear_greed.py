@@ -1,4 +1,4 @@
-"""Fear & Greed Index -- composite market sentiment gauge.
+"""Market sentiment composite gauge.
 
 Computes a 0-100 score from five market indicators:
 1. Market Momentum (SPY vs 125-day MA)
@@ -22,7 +22,22 @@ import math
 import sqlite3
 from typing import Any
 
+from trader_koo.news_sentiment import get_external_news_sentiment
+
 logger = logging.getLogger(__name__)
+
+_METHODOLOGY_BASIS = [
+    "SPY vs 125-day moving average",
+    "VIX level",
+    "Advancers vs decliners",
+    "52-week strength",
+    "Put/call ratio",
+]
+
+_METHODOLOGY_SUMMARY = (
+    "Internal market-data composite built from trend, volatility, breadth, "
+    "price strength, and options positioning. No social or news scraping."
+)
 
 # ---------------------------------------------------------------------------
 # Zone definitions
@@ -56,6 +71,20 @@ def _signal_for_score(score: float) -> str:
     if score < 75:
         return "Greed"
     return "Extreme Greed"
+
+
+def _blended_sentiment(
+    internal_score: int | None,
+    external_news: dict[str, Any],
+) -> tuple[int | None, str | None, str | None, str | None]:
+    news_score = external_news.get("score")
+    news_available = bool(external_news.get("available"))
+    if internal_score is None or not news_available or not isinstance(news_score, int | float):
+        return None, None, None, None
+    blended_score = round(internal_score * 0.75 + float(news_score) * 0.25)
+    blended_label, blended_color = _label_for_score(blended_score)
+    blended_summary = "75% internal market composite + 25% external news sentiment"
+    return blended_score, blended_label, blended_color, blended_summary
 
 
 # ---------------------------------------------------------------------------
@@ -410,9 +439,10 @@ def _compute_historical_score(
 # ---------------------------------------------------------------------------
 
 def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Compute a 0-100 Fear & Greed index from multiple market indicators."""
+    """Compute a 0-100 market sentiment score from multiple market indicators."""
     components: list[dict[str, Any]] = []
     valid_scores: list[float] = []
+    external_news = get_external_news_sentiment()
 
     # 1. Market Momentum
     score, detail = _score_market_momentum(conn)
@@ -471,6 +501,10 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
 
     # Compute overall score
     if not valid_scores:
+        blended_score, blended_label, blended_color, blended_summary = _blended_sentiment(
+            None,
+            external_news,
+        )
         return {
             "score": None,
             "label": "Unavailable",
@@ -478,11 +512,24 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
             "previous_close": None,
             "one_week_ago": None,
             "one_month_ago": None,
+            "methodology": "internal_market_composite",
+            "summary": _METHODOLOGY_SUMMARY,
+            "basis": _METHODOLOGY_BASIS,
+            "uses_social_sentiment": False,
+            "external_news": external_news,
+            "blended_score": blended_score,
+            "blended_label": blended_label,
+            "blended_color": blended_color,
+            "blended_summary": blended_summary,
             "components": components,
         }
 
     overall = round(sum(valid_scores) / len(valid_scores))
     label, color = _label_for_score(overall)
+    blended_score, blended_label, blended_color, blended_summary = _blended_sentiment(
+        overall,
+        external_news,
+    )
 
     # Historical comparisons
     try:
@@ -517,5 +564,14 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
         "previous_close": previous_close,
         "one_week_ago": one_week_ago,
         "one_month_ago": one_month_ago,
+        "methodology": "internal_market_composite",
+        "summary": _METHODOLOGY_SUMMARY,
+        "basis": _METHODOLOGY_BASIS,
+        "uses_social_sentiment": False,
+        "external_news": external_news,
+        "blended_score": blended_score,
+        "blended_label": blended_label,
+        "blended_color": blended_color,
+        "blended_summary": blended_summary,
         "components": components,
     }

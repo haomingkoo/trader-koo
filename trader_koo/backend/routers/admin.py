@@ -361,7 +361,12 @@ def trigger_update(
             "run_log_path": pipeline.get("run_log_path"),
             "reconciled_stale_runs": reconcile.get("reconciled", 0),
         }
-    scheduler = request.app.state.scheduler
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Scheduler unavailable. Restart the app before triggering updates.",
+        )
     now_utc = dt.datetime.now(dt.timezone.utc)
     manual_job_id = f"manual_daily_update_{now_utc.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
     scheduler.add_job(

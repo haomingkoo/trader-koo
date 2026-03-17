@@ -155,13 +155,14 @@ def market_summary(days: int = Query(90, ge=7, le=365)) -> Any:
 
 
 @router.get("/api/fear-greed")
+@router.get("/api/market-sentiment")
 def fear_greed_index() -> dict[str, Any]:
-    """Composite Fear & Greed Index (0-100) from multiple market indicators."""
+    """Market sentiment payload with internal composite and optional external news pulse."""
     conn = get_conn()
     try:
         return {"ok": True, **compute_fear_greed_index(conn)}
     except Exception as exc:
-        LOG.error("Failed to compute Fear & Greed index: %s", exc)
-        return {"ok": False, "error": "Fear & Greed computation failed"}
+        LOG.error("Failed to compute market sentiment: %s", exc)
+        return {"ok": False, "error": "Market sentiment computation failed"}
     finally:
         conn.close()

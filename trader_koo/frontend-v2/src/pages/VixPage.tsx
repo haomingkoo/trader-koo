@@ -74,9 +74,10 @@ function VixGauge({ vixClose }: { vixClose: number }) {
     return { d: vixDescribeArc(cx, cy, r, a1, a2), color };
   });
 
-  // Needle rotation (CSS: 0 deg = up, so 180 = left, 360 = right)
+  // SVG rotation is anchored on the vertical needle where 0deg points up.
+  // Convert the left->right semicircle into that coordinate system.
   const clampedVix = Math.max(0, Math.min(vixClose, GAUGE_MAX));
-  const needleRotation = vixToAngle(clampedVix);
+  const needleRotation = vixToAngle(clampedVix) - 270;
 
   // Current zone
   const currentZone = GAUGE_ZONES.find(

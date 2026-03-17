@@ -1,7 +1,32 @@
 import { lazy, Suspense } from "react";
 import Spinner from "./ui/Spinner";
 
-const Plot = lazy(() => import("react-plotly.js"));
+type PlotComponentModule = {
+  default?: unknown;
+};
+
+function isRenderablePlotComponent(
+  value: unknown,
+): value is React.ComponentType<Record<string, unknown>> {
+  return (
+    typeof value === "function" ||
+    (typeof value === "object" &&
+      value !== null &&
+      "$$typeof" in value)
+  );
+}
+
+const Plot = lazy(async () => {
+  const mod = (await import("react-plotly.js")) as PlotComponentModule;
+  const nestedDefault = (mod.default as PlotComponentModule | undefined)?.default;
+  const resolved = nestedDefault ?? mod.default;
+
+  if (!isRenderablePlotComponent(resolved)) {
+    throw new Error("Unable to resolve react-plotly.js component export");
+  }
+
+  return { default: resolved };
+});
 
 interface PlotlyWrapperProps {
   data: Array<Record<string, unknown>>;

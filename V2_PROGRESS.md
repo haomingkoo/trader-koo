@@ -53,39 +53,41 @@
 - [x] Number formatting: +/- signs on P&L, consistent $XX.XX / XX.XX%
 
 ### Quality: Testing
-- [x] 87 new tests (500 total passing)
+- [x] 87+ new tests landed across the v2 rollout
 - [x] Service unit tests: database, market_data, pipeline, scheduler
-- [x] Router integration tests: system, dashboard, report, paper_trades
-- [ ] 25 router test failures need fixture updates for refactored code
+- [x] Router integration tests: system, dashboard, report, paper_trades, admin auth
+- [x] Local pytest baseline restored: `546 passed`
 
 ### Infrastructure
 - [x] v2 mount point: `/v2` → `StaticFiles(dist-v2/)`
+- [x] SPA fallback verified for `/v2`, `/v2/`, and nested React routes
 - [x] `railway.toml` updated: Node.js 22 installed via nodesource in build
 - [x] Build verified on Railway (npm ci + npm run build succeeds)
 - [x] `.gitignore` for dist-v2/ and node_modules/
+- [x] Safe route-level lazy loading/code splitting restored after Plotly interop fix
 
 ---
 
 ## TODO — Next Up
 
-### Priority 1: HMM Regime Detection
-- [ ] Install `hmmlearn` library
-- [ ] Build `trader_koo/structure/hmm_regime.py` — train 3-state Gaussian HMM on VIX features
-- [ ] Features: VIX returns, percentile, BB width, MA state, compression, participation bias
-- [ ] States: Low Vol/Risk-On, Moderate/Neutral, High Vol/Risk-Off
-- [ ] Add regime state + probabilities to daily report payload
-- [ ] Chart overlay: colored background shading (green=bull, red=bear, gray=sideways)
-- [ ] Regime probability sub-pane below candlestick chart
-- [ ] Viterbi sequence visualization (last 20 days state path)
+### Priority 1: HMM Hardening
+- [ ] Reduce / eliminate sklearn numerical warnings during dashboard tests
+- [ ] Add feature clipping / validation around unstable HMM fit inputs
+- [ ] Confirm production dependency parity for `hmmlearn` across local + Railway
+- [ ] Consider caching / fallback strategy when HMM fit is unstable
 
-### Priority 2: More Crypto Features
-- [ ] Add more pairs: SOL, XRP, DOGE (just add to KLINE_STREAMS in binance_ws.py)
-- [ ] Technical indicators on crypto charts (MAs already exist, add RSI, MACD)
+### Priority 2: Market Sentiment Expansion
+- [x] Restore widget as clearly labeled internal "Market Sentiment"
+- [x] Add optional external Alpha Vantage news sentiment as a separate source
+- [x] Keep external news sentiment visibly separated from the internal market composite
+- [ ] Add methodology/version metadata to the report if the model evolves
+
+### Priority 3: More Crypto Features
 - [ ] Crypto correlation panel (BTC vs SPY)
 - [ ] 5-min and 1-hour bar aggregation from 1-min stream
-- [ ] Persist crypto bars to SQLite (currently in-memory only, lost on restart)
+- [ ] Crypto market structure panel (dominance, volatility regime, cross-asset context)
 
-### Priority 3: IBKR Integration (waiting for Lite → Pro upgrade)
+### Priority 4: IBKR Integration (waiting for Lite → Pro upgrade)
 - [ ] Install `ibind` library (OAuth headless, no gateway needed)
 - [ ] Replace yfinance with IBKR historical data
 - [ ] Add real-time streaming for top 50 tickers (WebSocket)
@@ -93,17 +95,15 @@
 - [ ] Add live trading UI in v2 (limit/stop/bracket orders)
 - [ ] Portfolio positions + P&L from IBKR account
 
-### Priority 4: Enhanced Features
+### Priority 5: Enhanced Features
 - [ ] Calibration accuracy chart (setup tier predicted vs actual outcomes)
-- [ ] Keyboard shortcuts (1-7 page nav, `/` ticker search, `R` refresh)
+- [x] Keyboard shortcuts (1-7 page nav, `/` ticker search, `R` refresh)
 - [ ] Widget linking (change ticker in chart → report highlights row)
-- [ ] News/sentiment feed with scrolling cards
+- [ ] Expand the news/sentiment feed beyond the Market Sentiment widget into standalone scrolling cards
 - [ ] Pipeline WebSocket (push status changes instead of polling)
 
-### Priority 5: Polish + Cutover
-- [ ] Fix remaining 25 test failures (router test fixtures)
-- [ ] Performance profiling (Plotly 4.6MB bundle — consider Lightweight Charts)
-- [ ] Code splitting for route-level lazy loading
+### Priority 6: Polish + Cutover
+- [ ] Performance profiling (Plotly still ships as a very large chunk; consider Lightweight Charts where candlesticks are sufficient)
 - [ ] Full mobile responsiveness audit (375px/768px/1024px)
 - [ ] Final cutover: `/` = React, `/v1` = old HTML
 

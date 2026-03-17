@@ -1,9 +1,8 @@
-import { useState, useMemo, lazy, Suspense } from "react";
+import { useState, useMemo } from "react";
 import { useCryptoSummary, useCryptoHistory, useCryptoIndicators } from "../api/hooks";
 import type { CryptoPrice, CryptoBar, CryptoIndicators } from "../api/types";
+import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
-
-const Plot = lazy(() => import("react-plotly.js"));
 
 /* ── Constants ── */
 
@@ -620,18 +619,16 @@ export default function CryptoPage() {
       {historyLoading && <Spinner className="mt-8" />}
       {!historyLoading && chartResult && (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
-          <Suspense fallback={<Spinner className="py-24" />}>
-            <Plot
-              data={chartResult.traces as unknown as Record<string, unknown>[]}
-              layout={chartResult.layout as unknown as Record<string, unknown>}
-              config={{
-                responsive: true,
-                displayModeBar: true,
-                scrollZoom: true,
-              }}
-              style={{ width: "100%", height: 500 }}
-            />
-          </Suspense>
+          <PlotlyWrapper
+            data={chartResult.traces as unknown as Record<string, unknown>[]}
+            layout={chartResult.layout as unknown as Record<string, unknown>}
+            config={{
+              responsive: true,
+              displayModeBar: true,
+              scrollZoom: true,
+            }}
+            style={{ width: "100%", height: 500 }}
+          />
         </div>
       )}
       {!historyLoading && !chartResult && connected && (

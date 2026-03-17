@@ -141,8 +141,8 @@ export function useVixMetrics() {
 
 export function useFearGreed() {
   return useQuery({
-    queryKey: ["fear-greed"],
-    queryFn: () => apiFetch<FearGreedPayload>("/api/fear-greed"),
+    queryKey: ["market-sentiment"],
+    queryFn: () => apiFetch<FearGreedPayload>("/api/market-sentiment"),
     staleTime: 5 * 60 * 1000,
   });
 }

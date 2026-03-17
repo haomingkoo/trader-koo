@@ -54,8 +54,8 @@ class TestAppFactory:
         assert "/" in routes
 
     def test_has_middleware(self):
-        """The app should have middleware in the stack (CORS, audit, etc.)."""
-        assert self.app.middleware_stack is not None
+        """The app should register middleware even before the first request."""
+        assert len(self.app.user_middleware) > 0
 
     def test_minimum_route_count(self):
         """With 8 routers + root, expect at least 15 routes."""

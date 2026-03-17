@@ -7,7 +7,8 @@ Live at: trader.kooexperience.com
 
 ## Stack
 - **Backend**: FastAPI + APScheduler, SQLite at `/data/trader_koo.db` (Railway persistent volume)
-- **Frontend**: Single `trader_koo/frontend/index.html` — vanilla JS + Plotly.js, no build step
+- **Frontend v1**: `trader_koo/frontend/index.html` — legacy vanilla JS dashboard at `/`
+- **Frontend v2**: `trader_koo/frontend-v2/` — React 19 + Vite 8 + TypeScript served at `/v2`
 - **AI**: YOLOv8 (`foduucom/stockmarket-pattern-detection-yolov8`) batch-run nightly
 - **Data**: yfinance (primary) + Finviz (fundamentals) + optional Alpha Vantage
 - **Deploy**: Railway asia-southeast1, nixpacks build, persistent `/data` volume
@@ -15,13 +16,15 @@ Live at: trader.kooexperience.com
 ## Key Files
 | File | Purpose |
 |------|---------|
-| `trader_koo/backend/main.py` | All FastAPI endpoints + APScheduler (~6000 lines) |
-| `trader_koo/frontend/index.html` | Entire frontend (~1644 lines) |
+| `trader_koo/backend/main.py` | Slim app factory + middleware + static mounts (~550 lines) |
+| `trader_koo/frontend/index.html` | Legacy v1 frontend |
+| `trader_koo/frontend-v2/src/App.tsx` | v2 route definitions + safe lazy loading |
+| `trader_koo/frontend-v2/src/components/PlotlyWrapper.tsx` | Safe `react-plotly.js` interop wrapper |
 | `trader_koo/scripts/daily_update.sh` | Nightly orchestrator: ingest → YOLO → report |
 | `trader_koo/scripts/run_yolo_patterns.py` | YOLOv8 batch detection |
 | `trader_koo/scripts/update_market_db.py` | yfinance + Finviz ingestion |
 | `trader_koo/scripts/generate_daily_report.py` | Daily report generation |
-| `trader_koo/data/schema.py` | SQLite schema helpers |
+| `trader_koo/structure/fear_greed.py` | Internal market sentiment composite + optional external news blend |
 
 ## Coding Rules
 
@@ -65,7 +68,10 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - `data_source` column: old DB rows (pre-migration) have NULL — fixed via ALTER TABLE migration in `ensure_schema()`
 - `audit_logs` table: initialised at startup via `ensure_audit_schema(conn)` — if missing on prod, redeploy to trigger startup hook
 - LLM validation failures: fixed — sanitize before validate in `llm_narrative.py`
+- HMM regime fitting can emit sklearn numerical warnings during tests; feature works but still needs stability hardening
+- Market Sentiment widget now supports optional Alpha Vantage news sentiment, but it still does not use Twitter/Reddit social scraping
 
 ## Testing
 Run tests with: `python -m pytest tests/ -v`
+Current baseline: `546 passed` locally, with 4 non-fatal sklearn/joblib warnings.
 All tests must pass locally before pushing. Test files live in `tests/`.

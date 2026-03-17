@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useChart } from "../api/hooks";
 import { apiFetch } from "../api/client";
@@ -18,11 +18,10 @@ import type {
   EquityTick,
 } from "../api/types";
 import Card from "../components/ui/Card";
+import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
-
-const Plot = lazy(() => import("react-plotly.js"));
 
 /* ── Helpers ── */
 
@@ -1413,18 +1412,16 @@ export default function ChartPage() {
             <div className="flex-1 min-w-0">
               {chartResult ? (
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
-                  <Suspense fallback={<Spinner className="py-24" />}>
-                    <Plot
-                      data={chartResult.traces as unknown as Record<string, unknown>[]}
-                      layout={chartResult.layout as unknown as Record<string, unknown>}
-                      config={{
-                        responsive: true,
-                        displayModeBar: true,
-                        scrollZoom: true,
-                      }}
-                      style={{ width: "100%", height: (chartResult.layout as Record<string, unknown>).height as number ?? 580 }}
-                    />
-                  </Suspense>
+                  <PlotlyWrapper
+                    data={chartResult.traces as unknown as Record<string, unknown>[]}
+                    layout={chartResult.layout as unknown as Record<string, unknown>}
+                    config={{
+                      responsive: true,
+                      displayModeBar: true,
+                      scrollZoom: true,
+                    }}
+                    style={{ width: "100%", height: ((chartResult.layout as Record<string, unknown>).height as number) ?? 580 }}
+                  />
                 </div>
               ) : (
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--muted)]">

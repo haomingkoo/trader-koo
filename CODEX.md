@@ -1,92 +1,124 @@
-# CODEX.md — Help Wanted / Delegation Tasks
+# CODEX.md — Current Tracker
 
-Tasks that could benefit from focused, parallel work sessions.
-Ordered by priority. Each task is self-contained with clear inputs/outputs.
+## Resolved: React #306 on Chart & Crypto
 
----
+### Actual Root Cause
+React 19 minified error `#306` was **not** an "object as React child" error in this app. The real issue was an invalid element type caused by `lazy(() => import("react-plotly.js"))` resolving the wrong CJS/ESM export shape when Chart/Crypto/PaperTrade mounted Plotly.
 
-## High Priority
+### Fix Applied
+1. `PlotlyWrapper` now unwraps the real Plotly component safely
+2. Chart, Crypto, and Paper Trades render Plotly through that wrapper
+3. Route-level lazy loading/code splitting is restored safely
+4. SPA routing explicitly serves `index.html` for `/v2`, `/v2/`, and nested routes
+5. VIX + sentiment gauge needle math corrected
+6. Report page sentiment widget restored as clearly labeled **Market Sentiment**
+7. Optional Alpha Vantage news sentiment source added as a separate external input with a clearly labeled blended view
 
-### 1. Fix silent `except Exception: pass` in generate_daily_report.py
-**File**: `trader_koo/scripts/generate_daily_report.py` (6248 lines)
-**Problem**: 13+ `except Exception: pass` blocks silently discard errors in core report sections (YOLO deltas, volatility, breadth, candlestick patterns, fundamentals, sector heatmap). If any fail, the report ships with missing data and no alert.
-**Goal**: Add `LOG.warning(...)` to every silent except block. For critical sections (fundamentals, YOLO patterns), raise the error instead of swallowing it. Add a `warnings` list to the report payload that tracks which sections failed.
-**Constraint**: Do NOT change the report output schema — only add logging and the warnings field.
-
-### 2. Remove dead code in LLM modules
-**Files**: `trader_koo/llm/fallback.py`, `trader_koo/llm/validator.py`
-**Problem**: `fallback.py` has two functions (`generate_template_narrative`, `generate_rule_based_pattern_explanation`) that are never imported by any production code. `validator.py` has two functions (`generate_fallback_pattern_explanation`, `generate_fallback_regime_analysis`) only used in tests, never in production.
-**Goal**: Either wire them up properly or remove them. If removing, update any test files that reference them.
-
-### 3. Backend router import verification
-**Files**: All files in `trader_koo/backend/routers/` and `trader_koo/backend/services/`
-**Problem**: The routers were extracted from a 6140-line monolith by an AI agent. Some imports may reference functions that don't exist in the extracted services, or import from the wrong module.
-**Goal**: Run `python -c "from trader_koo.backend.routers import admin, dashboard, email, opportunities, paper_trades, report, system, usage"` and fix every ImportError. Then run `python -m pytest tests/ -v` to verify.
-**Constraint**: Do not change endpoint behavior — only fix imports.
-
-### 4. Frontend type accuracy audit
-**File**: `trader_koo/frontend-v2/src/api/types.ts`
-**Problem**: TypeScript interfaces were inferred from the v1 frontend code. Some fields may be typed as `Record<string, unknown>` when they could be more specific. Some optional fields may be missing.
-**Goal**: Compare each interface against the actual backend router response shapes. Make types exactly match reality. Run `npm run build` to verify.
+### Verification
+- `npm run build` succeeds
+- `.venv/bin/pytest tests -q` → `546 passed`
+- FastAPI `TestClient` verifies `/v2`, `/v2/`, `/v2/chart`, `/v2/crypto` all serve the React app
 
 ---
 
-## Medium Priority
+## Current Loose Ends
 
-### 5. HMM regime overlay on chart
-**File**: `trader_koo/frontend-v2/src/pages/ChartPage.tsx`
-**Problem**: The chart shows price data but doesn't visualize market regime (bull/bear/sideways).
-**Goal**: Add colored background shading on the candlestick chart based on VIX regime data. Green = bullish, Red = bearish, Gray = sideways. Data source: `regime_context` from the daily report API.
-**Depends on**: VIX regime data being available in the dashboard payload (may need a backend change to include it).
+### Priority 1: HMM Stability
+- HMM regime detection is already implemented
+- Remaining work is hardening fit stability and reducing sklearn warnings
 
-### 6. Calibration accuracy chart
-**File**: New component in `trader_koo/frontend-v2/src/pages/ReportPage.tsx`
-**Problem**: Setup scoring (tier A/B/C) has no calibration visualization — users can't see if Tier A setups actually outperform.
-**Goal**: Add a chart showing predicted probability (setup score) vs actual outcome (paper trade P&L). Inspired by the Polymarket bot's calibration chart.
-**Depends on**: Enough paper trade history to compute actual outcomes per tier.
+### Priority 2: Market Sentiment Direction
+- Current widget now supports an optional Alpha Vantage external news pulse in addition to the internal composite
+- It still does **not** use Twitter or Reddit social scraping
+- Any future social/news sources should remain clearly separated from the internal market-data score
 
-### 7. Crypto data integration (BTC/ETH)
-**Files**: New service + router
-**Problem**: Dashboard only supports S&P 500 equities. User wants BTC/ETH.
-**Goal**: Add a crypto data pipeline using Binance API (free, no key needed for public data). Create `services/crypto_data.py` with functions to fetch OHLCV for BTC/ETH. Add to the dashboard endpoint with a `CRYPTO:BTC` ticker prefix.
-**Constraint**: Crypto trades 24/7 — no market hours concept. Schema needs to handle this.
+### Priority 3: Performance + UX
+- Plotly is still a heavy chunk; profile whether Lightweight Charts or a mixed charting stack would improve UX
+- Add browser-level regression coverage for Chart, Crypto, and Earnings calendar toggle
+- Consider widget linking and pipeline WebSocket after core stability work
 
-### 8. WebSocket for real-time pipeline status
-**File**: New router in `trader_koo/backend/routers/`
-**Problem**: Pipeline status (Ingest → YOLO → Report) currently polls every 120 seconds.
-**Goal**: Add a WebSocket endpoint at `/ws/pipeline` that pushes status changes to connected React clients. Frontend `Header.tsx` subscribes on mount.
-**Constraint**: Must gracefully handle connection drops and reconnect.
+### How to Debug
+1. Run locally: `cd trader_koo/frontend-v2 && npm run dev`
+2. Start backend: `.venv/bin/python -m uvicorn trader_koo.backend.main:app --reload --port 8000`
+3. Open `http://localhost:3000/v2/crypto` in Chrome
+4. The dev server shows UNMINIFIED errors with exact file:line
+5. If Plotly regresses again, inspect the lazy import/export shape first
+
+### Files to Check
+- `trader_koo/frontend-v2/src/pages/ChartPage.tsx` (~1400 lines) — massive file, renders Plotly chart with overlays, commentary sidebar, pattern tables, YOLO audit
+- `trader_koo/frontend-v2/src/pages/CryptoPage.tsx` (~665 lines) — Plotly chart, indicator cards, price tiles
+- `trader_koo/frontend-v2/src/components/layout/Header.tsx` — WebSocket hooks for crypto/equity prices
+
+### Dangerous Patterns to Search For
+```
+{someVariable}  // where someVariable could be an object
+{data?.field}   // where field is typed as string but API returns object
+{error}         // Error objects are not valid React children
+{v as string}   // TypeScript cast erased at runtime, object passes through
+```
+
+### The API Responses to Verify
+```bash
+# Check what the crypto API actually returns
+curl https://trader.kooexperience.com/api/crypto/summary | python3 -m json.tool
+curl https://trader.kooexperience.com/api/crypto/indicators/BTC-USD | python3 -m json.tool
+curl https://trader.kooexperience.com/api/crypto/history/BTC-USD?interval=1m&limit=60 | python3 -m json.tool
+
+# Check dashboard API
+curl "https://trader.kooexperience.com/api/dashboard/SPY?months=0" | python3 -m json.tool | head -50
+```
+
+Compare each field against the TypeScript interfaces in `src/api/types.ts`. If any field returns `{"key": "value"}` where the type says `string`, that's the bug.
 
 ---
 
-## Low Priority
+## Other Tasks
 
-### 9. Keyboard shortcuts
-**File**: `trader_koo/frontend-v2/src/` (new hook)
-**Problem**: Bloomberg-terminal users expect keyboard navigation.
-**Goal**: Add keyboard shortcuts: `1-7` for page navigation, `/` for ticker search, `Esc` to close modals, `R` to refresh data. Create a `useKeyboardShortcuts` hook.
-
-### 10. Widget linking (OpenBB pattern)
-**Problem**: Changing ticker in the chart doesn't update the report page's highlighted row.
-**Goal**: When user navigates from report setup table to chart, the chart loads that ticker. When user changes ticker in chart, navigating back to report highlights that ticker's row.
-**Implementation**: Use Zustand `chartStore.ticker` as the linking mechanism.
-
-### 11. Mobile responsiveness audit
-**Files**: All page components in `trader_koo/frontend-v2/src/pages/`
-**Problem**: Pages are designed for desktop. Sidebar collapses but tables may overflow on mobile.
-**Goal**: Test every page at 375px, 768px, 1024px widths. Fix overflow issues, stack grids vertically, ensure touch targets are 44px minimum.
-
-### 12. Performance profiling
-**Files**: All pages, especially ChartPage (Plotly is heavy)
-**Problem**: Plotly.js bundle is 4.6MB gzipped to 1.4MB. First load may be slow.
-**Goal**: Profile with Lighthouse. Implement code splitting for Plotly (already lazy-loaded). Consider using Lightweight Charts for the main candlestick and Plotly only for analytics charts.
+### Earnings Grid
+- EarningsPage already has the 5-day horizontal calendar grid
+- Keep browser coverage on the Calendar/Table toggle because this is a UI-heavy path
 
 ---
 
-## Notes
+## Architecture Quick Reference
 
-- All work should be on branch `feat/v2-react-frontend`
-- Follow conventions in `.claude/rules/` (Python: snake_case, type hints; Frontend: functional components, strict TS)
-- NO hidden fallbacks — fail explicitly
-- NO arbitrary data limits — show all data or paginate with user control
-- Conventional commits: `feat:`, `fix:`, `refactor:`, etc.
+```
+Backend: trader_koo/backend/main.py (~550 lines)
+├── 9 routers in trader_koo/backend/routers/
+├── 6 services in trader_koo/backend/services/
+├── Crypto WS: trader_koo/crypto/ (Binance, 5 pairs)
+├── Equity WS: trader_koo/streaming/ (Finnhub, SPY/QQQ + on-demand)
+└── DB: SQLite at /data/trader_koo.db
+
+Frontend: trader_koo/frontend-v2/
+├── React 19 + TypeScript strict + Vite 8 + Tailwind CSS v4
+├── 9 pages in src/pages/
+├── API hooks in src/api/hooks.ts
+├── Types in src/api/types.ts (867 lines)
+└── Build: npm run build → ../../dist-v2/
+
+Deployment: Railway (asia-southeast1)
+├── URL: trader.kooexperience.com
+├── v1: / (vanilla JS)
+├── v2: /v2/ (React)
+└── Auto-deploy on push to main
+```
+
+## Environment Variables (Railway)
+- `TRADER_KOO_API_KEY` — admin auth
+- `FINNHUB_API_KEY` — real-time equity streaming
+- `TRADER_KOO_LLM_PROVIDER` — azure_openai
+- `TRADER_KOO_LLM_ENABLED` — 1
+- `TRADER_KOO_ALLOWED_ORIGIN` — https://trader.kooexperience.com
+
+## Running Locally
+```bash
+# Backend
+cd /Users/koohaoming/dev/trader-koo
+.venv/bin/python -m uvicorn trader_koo.backend.main:app --reload --port 8000
+
+# Frontend (separate terminal)
+cd trader_koo/frontend-v2
+npm run dev
+# Open http://localhost:3000/v2/
+```

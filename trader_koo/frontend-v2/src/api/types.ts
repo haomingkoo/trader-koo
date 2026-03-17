@@ -845,12 +845,37 @@ export interface VixMetricsPayload {
   error?: string;
 }
 
-/* ── Fear & Greed Index ── */
+/* ── Market Sentiment ── */
 export interface FearGreedComponent {
   name: string;
   score: number | null;
   signal: string;
   detail: string;
+}
+
+export interface ExternalSentimentHeadline {
+  title: string;
+  source: string | null;
+  url: string | null;
+  time_published: string | null;
+  score: number | null;
+  label: string | null;
+}
+
+export interface ExternalNewsSentiment {
+  provider: string;
+  source_type: string;
+  available: boolean;
+  score: number | null;
+  raw_score: number | null;
+  label: string | null;
+  article_count: number;
+  updated_at: string | null;
+  lookback_hours: number;
+  tickers: string[];
+  topics: string[];
+  note: string;
+  headlines: ExternalSentimentHeadline[];
 }
 
 export interface FearGreedPayload {
@@ -861,6 +886,15 @@ export interface FearGreedPayload {
   previous_close: number | null;
   one_week_ago: number | null;
   one_month_ago: number | null;
+  methodology: string;
+  summary: string;
+  basis: string[];
+  uses_social_sentiment: boolean;
+  external_news: ExternalNewsSentiment;
+  blended_score: number | null;
+  blended_label: string | null;
+  blended_color: string | null;
+  blended_summary: string | null;
   components: FearGreedComponent[];
   error?: string;
 }
