@@ -11,83 +11,173 @@ const ZONES: Array<[number, number, string, string]> = [
   [75, 100, "Extreme Greed", "#1b5e20"],
 ];
 
+/* ── SVG arc helpers ── */
+function fgPolarToCartesian(
+  cx: number,
+  cy: number,
+  r: number,
+  angleDeg: number,
+) {
+  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+
+function fgDescribeArc(
+  cx: number,
+  cy: number,
+  r: number,
+  startAngle: number,
+  endAngle: number,
+) {
+  const start = fgPolarToCartesian(cx, cy, r, endAngle);
+  const end = fgPolarToCartesian(cx, cy, r, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
+}
+
 /* ── SVG Semicircular Gauge ── */
-function GaugeSvg({ score }: { score: number }) {
+function GaugeSvg({ score, scoreColor }: { score: number; scoreColor: string }) {
   const cx = 150;
-  const cy = 140;
-  const r = 110;
-  const startAngle = Math.PI; // left (180 deg)
-  const totalArc = Math.PI;
+  const cy = 155;
+  const r = 120;
+  const arcWidth = 14;
 
-  // Build zone arcs
+  // Semicircle: 180 deg (left) to 360 deg (right)
+  // Score 0 -> 180 deg, score 100 -> 360 deg
+  const scoreToAngle = (v: number) => 180 + (v / 100) * 180;
+
+  // Build zone arc paths
   const zoneArcs = ZONES.map(([lo, hi, , color]) => {
-    const a1 = startAngle - (lo / 100) * totalArc;
-    const a2 = startAngle - (hi / 100) * totalArc;
-    const x1 = cx + r * Math.cos(a1);
-    const y1 = cy - r * Math.sin(a1);
-    const x2 = cx + r * Math.cos(a2);
-    const y2 = cy - r * Math.sin(a2);
-    const largeArc = Math.abs(a1 - a2) > Math.PI ? 1 : 0;
-    const d = `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 0 ${x2} ${y2}`;
-    return { d, color, lo };
+    const a1 = scoreToAngle(lo);
+    const a2 = scoreToAngle(hi);
+    return { d: fgDescribeArc(cx, cy, r, a1, a2), color };
   });
 
-  // Needle position
+  // Needle rotation
   const clamped = Math.max(0, Math.min(score, 100));
-  const needleAngle = startAngle - (clamped / 100) * totalArc;
-  const needleLen = r - 15;
-  const nx = cx + needleLen * Math.cos(needleAngle);
-  const ny = cy - needleLen * Math.sin(needleAngle);
+  const needleRotation = scoreToAngle(clamped);
 
-  // Zone labels along the arc
-  const labelR = r + 20;
-  const zoneLabels = ZONES.map(([lo, hi, label]) => {
-    const mid = (lo + hi) / 2;
-    const angle = startAngle - (mid / 100) * totalArc;
-    const lx = cx + labelR * Math.cos(angle);
-    const ly = cy - labelR * Math.sin(angle);
-    return { lx, ly, label, angle };
-  });
+  // Current zone
+  const currentZone = ZONES.find(
+    ([lo, hi]) => score >= lo && score < hi,
+  ) ?? ZONES[ZONES.length - 1];
+  const zoneLabel = currentZone[2];
+  const zoneColor = currentZone[3];
+
+  const needleLen = r - arcWidth / 2 - 6;
 
   return (
-    <svg viewBox="0 0 300 175" className="w-full max-w-[340px]">
-      {/* Zone arcs */}
-      {zoneArcs.map((arc) => (
+    <svg viewBox="0 0 300 180" className="w-full max-w-[340px]">
+      {/* Dim background track */}
+      <path
+        d={fgDescribeArc(cx, cy, r, 180, 360)}
+        fill="none"
+        stroke="var(--panel-hover)"
+        strokeWidth={arcWidth + 4}
+        strokeLinecap="round"
+        opacity={0.3}
+      />
+
+      {/* Colored zone arcs */}
+      {zoneArcs.map((arc, i) => (
         <path
-          key={arc.lo}
+          key={i}
           d={arc.d}
           fill="none"
           stroke={arc.color}
-          strokeWidth={18}
+          strokeWidth={arcWidth}
           strokeLinecap="butt"
         />
       ))}
-      {/* Zone labels */}
-      {zoneLabels.map(({ lx, ly, label, angle }) => (
-        <text
-          key={label}
-          x={lx}
-          y={ly}
-          textAnchor="middle"
-          fontSize={7}
-          fill="var(--muted)"
-          transform={`rotate(${(-angle * 180) / Math.PI + 90}, ${lx}, ${ly})`}
-        >
-          {label}
-        </text>
-      ))}
-      {/* Needle */}
+
+      {/* Round caps at the ends of the full arc */}
+      {(() => {
+        const leftCap = fgPolarToCartesian(cx, cy, r, 180);
+        const rightCap = fgPolarToCartesian(cx, cy, r, 360);
+        return (
+          <>
+            <circle
+              cx={leftCap.x}
+              cy={leftCap.y}
+              r={arcWidth / 2}
+              fill={ZONES[0][3]}
+            />
+            <circle
+              cx={rightCap.x}
+              cy={rightCap.y}
+              r={arcWidth / 2}
+              fill={ZONES[ZONES.length - 1][3]}
+            />
+          </>
+        );
+      })()}
+
+      {/* Scale labels: 0 and 100 */}
+      <text
+        x={cx - r}
+        y={cy + 18}
+        textAnchor="middle"
+        fontSize={9}
+        fill="var(--muted)"
+        opacity={0.6}
+      >
+        0
+      </text>
+      <text
+        x={cx + r}
+        y={cy + 18}
+        textAnchor="middle"
+        fontSize={9}
+        fill="var(--muted)"
+        opacity={0.6}
+      >
+        100
+      </text>
+
+      {/* Needle -- rotated from center */}
       <line
         x1={cx}
         y1={cy}
-        x2={nx}
-        y2={ny}
+        x2={cx}
+        y2={cy - needleLen}
         stroke="var(--text)"
-        strokeWidth={2.5}
+        strokeWidth={2}
         strokeLinecap="round"
+        transform={`rotate(${needleRotation}, ${cx}, ${cy})`}
       />
+
       {/* Center dot */}
-      <circle cx={cx} cy={cy} r={5} fill="var(--text)" />
+      <circle cx={cx} cy={cy} r={6} fill="var(--panel-hover)" />
+      <circle cx={cx} cy={cy} r={3} fill="var(--text)" />
+
+      {/* Score -- large centered */}
+      <text
+        x={cx}
+        y={cy - 24}
+        textAnchor="middle"
+        fontSize={34}
+        fontWeight={800}
+        fill={scoreColor}
+        style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
+      >
+        {score}
+      </text>
+
+      {/* Zone label below score */}
+      <text
+        x={cx}
+        y={cy - 2}
+        textAnchor="middle"
+        fontSize={11}
+        fontWeight={700}
+        fill={zoneColor}
+        style={{
+          textTransform: "uppercase" as const,
+          letterSpacing: "0.12em",
+        }}
+      >
+        {zoneLabel}
+      </text>
     </svg>
   );
 }
@@ -205,7 +295,7 @@ export default function FearGreedGauge() {
     );
   }
 
-  const { score, label, color, previous_close, one_week_ago, one_month_ago, components } = data;
+  const { score, color, previous_close, one_week_ago, one_month_ago, components } = data;
 
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
@@ -215,22 +305,7 @@ export default function FearGreedGauge() {
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
             Fear & Greed Index
           </div>
-          <GaugeSvg score={score!} />
-          {/* Score + label below gauge */}
-          <div className="mt-2 text-center">
-            <div
-              className="text-4xl font-bold tabular-nums"
-              style={{ color }}
-            >
-              {typeof score === "number" ? score : String(score ?? "\u2014")}
-            </div>
-            <div
-              className="mt-0.5 text-sm font-semibold"
-              style={{ color }}
-            >
-              {String(label ?? "")}
-            </div>
-          </div>
+          <GaugeSvg score={score!} scoreColor={color} />
         </div>
 
         {/* Right: Historical comparisons */}
