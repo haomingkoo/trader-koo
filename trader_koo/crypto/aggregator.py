@@ -1,8 +1,8 @@
 """Server-side multi-interval candle aggregator.
 
-Receives 1m ticks from Binance and maintains forming candles for
-all supported intervals. On interval boundary, finalizes the candle
-and persists to SQLite.
+Receives 1m kline updates from Binance and maintains forming candles for
+all supported intervals. On interval boundary, finalizes the candle and
+persists to SQLite.
 """
 from __future__ import annotations
 
@@ -41,12 +41,41 @@ class FormingCandle:
     close: float
     volume: float
     tick_count: int = 0
+    minute_bars: dict[dt.datetime, CryptoBar] = field(default_factory=dict, repr=False)
 
-    def update(self, price: float, volume: float) -> None:
-        self.high = max(self.high, price)
-        self.low = min(self.low, price)
-        self.close = price
-        self.volume += volume
+    @classmethod
+    def from_bar(
+        cls,
+        *,
+        symbol: str,
+        interval: str,
+        bucket_start: dt.datetime,
+        bar: CryptoBar,
+    ) -> "FormingCandle":
+        candle = cls(
+            symbol=symbol,
+            interval=interval,
+            bucket_start=bucket_start,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            tick_count=1,
+        )
+        candle.minute_bars[bar.timestamp] = bar
+        return candle
+
+    def update_from_bar(self, bar: CryptoBar) -> None:
+        self.minute_bars[bar.timestamp] = bar
+        ordered = sorted(self.minute_bars.values(), key=lambda item: item.timestamp)
+        first = ordered[0]
+        last = ordered[-1]
+        self.open = first.open
+        self.high = max(item.high for item in ordered)
+        self.low = min(item.low for item in ordered)
+        self.close = last.close
+        self.volume = sum(item.volume for item in ordered)
         self.tick_count += 1
 
     def to_bar(self) -> CryptoBar:
@@ -114,41 +143,34 @@ class CandleAggregator:
     _latest_price: dict[str, float] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def on_tick(
-        self,
-        symbol: str,
-        price: float,
-        volume: float,
-        timestamp: dt.datetime,
-    ) -> None:
+    def on_bar_update(self, bar: CryptoBar) -> None:
         """Called on every 1m kline update (forming or closed) from Binance.
 
-        Updates forming candles for ALL intervals >= 1m.
+        The incoming ``bar`` represents the current cumulative state of the
+        active 1m candle. Higher-interval forming candles are rebuilt from the
+        latest 1m bucket states so volume is not double-counted across
+        repeated websocket updates.
         """
         with self._lock:
-            self._latest_price[symbol] = price
+            symbol = bar.symbol
+            self._latest_price[symbol] = bar.close
             if symbol not in self._forming:
                 self._forming[symbol] = {}
 
             for interval in INTERVALS:
                 minutes = INTERVAL_MINUTES[interval]
-                bucket = _floor_timestamp(timestamp, minutes)
+                bucket = _floor_timestamp(bar.timestamp, minutes)
                 forming = self._forming[symbol].get(interval)
 
                 if forming is None or forming.bucket_start != bucket:
-                    # New bucket -- start fresh forming candle
-                    self._forming[symbol][interval] = FormingCandle(
+                    self._forming[symbol][interval] = FormingCandle.from_bar(
                         symbol=symbol,
                         interval=interval,
                         bucket_start=bucket,
-                        open=price,
-                        high=price,
-                        low=price,
-                        close=price,
-                        volume=volume,
+                        bar=bar,
                     )
                 else:
-                    forming.update(price, volume)
+                    forming.update_from_bar(bar)
 
     def on_candle_close(self, symbol: str, bar: CryptoBar) -> None:
         """Called when a 1m candle closes.

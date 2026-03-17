@@ -1093,12 +1093,18 @@ interface WsMessage {
 function useCryptoSubscription(
   symbol: string,
   interval: IntervalValue,
-): { formingCandle: FormingCandleData | null; wsConnected: boolean } {
+): {
+  formingCandle: FormingCandleData | null;
+  closedBar: CryptoBar | null;
+  wsConnected: boolean;
+} {
   const [formingCandle, setFormingCandle] = useState<FormingCandleData | null>(null);
+  const [closedBar, setClosedBar] = useState<CryptoBar | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoff = useRef(1000);
+  const disposedRef = useRef(false);
   const currentSub = useRef({ symbol, interval });
 
   // Keep ref in sync so callbacks can access latest values
@@ -1124,7 +1130,11 @@ function useCryptoSubscription(
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data) as WsMessage;
-        if (msg.type === "forming" && msg.symbol === currentSub.current.symbol) {
+        if (
+          msg.type === "forming" &&
+          msg.symbol === currentSub.current.symbol &&
+          msg.interval === currentSub.current.interval
+        ) {
           setFormingCandle({
             timestamp: msg.timestamp ?? "",
             open: msg.open ?? 0,
@@ -1134,6 +1144,16 @@ function useCryptoSubscription(
             volume: msg.volume ?? 0,
             progress_pct: msg.progress_pct ?? 0,
           });
+          return;
+        }
+        if (
+          msg.type === "candle_close" &&
+          msg.symbol === currentSub.current.symbol &&
+          msg.interval === currentSub.current.interval &&
+          msg.bar
+        ) {
+          setClosedBar(msg.bar);
+          setFormingCandle(null);
         }
       } catch { /* malformed message */ }
     };
@@ -1141,7 +1161,13 @@ function useCryptoSubscription(
     ws.onclose = () => {
       setWsConnected(false);
       wsRef.current = null;
+      if (disposedRef.current) {
+        return;
+      }
       reconnectTimer.current = setTimeout(() => {
+        if (disposedRef.current) {
+          return;
+        }
         backoff.current = Math.min(backoff.current * 2, 30000);
         connect();
       }, backoff.current);
@@ -1152,8 +1178,10 @@ function useCryptoSubscription(
   }, [sendSubscribe]);
 
   useEffect(() => {
+    disposedRef.current = false;
     connect();
     return () => {
+      disposedRef.current = true;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
@@ -1165,10 +1193,34 @@ function useCryptoSubscription(
     if (ws && ws.readyState === WebSocket.OPEN) {
       sendSubscribe(ws, symbol, interval);
       setFormingCandle(null); // Clear stale forming candle
+      setClosedBar(null);
     }
   }, [symbol, interval, sendSubscribe]);
 
-  return { formingCandle, wsConnected };
+  return { formingCandle, closedBar, wsConnected };
+}
+
+function mergeClosedBarIntoHistory(
+  bars: CryptoBar[],
+  closedBar: CryptoBar | null,
+): CryptoBar[] {
+  if (!closedBar) {
+    return bars;
+  }
+  if (bars.length === 0) {
+    return [closedBar];
+  }
+
+  const nextBars = [...bars];
+  const existingIndex = nextBars.findIndex((bar) => bar.timestamp === closedBar.timestamp);
+  if (existingIndex >= 0) {
+    nextBars[existingIndex] = closedBar;
+    return nextBars;
+  }
+
+  nextBars.push(closedBar);
+  nextBars.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+  return nextBars;
 }
 
 /* ── Main page ── */
@@ -1197,7 +1249,10 @@ export default function CryptoPage() {
   const { data: cryptoMarketStructure } = useCryptoMarketStructure("1h", 168);
 
   // Subscribe to real-time forming candle updates via WebSocket
-  const { formingCandle: wsFormingCandle } = useCryptoSubscription(selectedSymbol, selectedInterval);
+  const {
+    formingCandle: wsFormingCandle,
+    closedBar: wsClosedBar,
+  } = useCryptoSubscription(selectedSymbol, selectedInterval);
 
   // Merge WS forming candle with API forming_candle: WS takes priority if present
   const effectiveFormingCandle = useMemo((): FormingCandleData | null => {
@@ -1227,19 +1282,24 @@ export default function CryptoPage() {
   const indicators: CryptoIndicators | null =
     indicatorsData?.indicators ?? null;
 
+  const effectiveBars = useMemo(
+    () => mergeClosedBarIntoHistory(historyData?.bars ?? [], wsClosedBar),
+    [historyData?.bars, wsClosedBar],
+  );
+
   const chartResult = useMemo(() => {
-    if (!historyData || !historyData.bars || historyData.bars.length === 0)
+    if (effectiveBars.length === 0)
       return null;
     return buildCandlestickChart(
-      historyData.bars,
+      effectiveBars,
       selectedSymbol,
       structureData ?? null,
       overlays,
       effectiveFormingCandle,
     );
-  }, [historyData, selectedSymbol, structureData, overlays, effectiveFormingCandle]);
+  }, [effectiveBars, selectedSymbol, structureData, overlays, effectiveFormingCandle]);
 
-  const availableBarCount = historyData?.bars?.length ?? 0;
+  const availableBarCount = effectiveBars.length;
   const shortHistory = historyData != null && availableBarCount < interval.limit;
 
   const connected = summary?.connected ?? false;

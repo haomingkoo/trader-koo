@@ -240,6 +240,17 @@ function nyDateStringFromIso(value: string | null | undefined): string | null {
   return `${year}-${month}-${day}`;
 }
 
+function mondayWeekKey(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const raw = value.length <= 10 ? `${value}T00:00:00Z` : value;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  const utcDay = date.getUTCDay();
+  const deltaToMonday = utcDay === 0 ? -6 : 1 - utcDay;
+  date.setUTCDate(date.getUTCDate() + deltaToMonday);
+  return date.toISOString().slice(0, 10);
+}
+
 function applyLivePriceToPayload(
   payload: DashboardPayload | undefined,
   livePrice: EquityTick | null,
@@ -298,7 +309,7 @@ function buildChartData(
   liveCandle?: LiveCandle | null,
 ) {
   const rawChart = payload.chart ?? [];
-  const chart = isWeekly ? resampleToWeekly(rawChart) : rawChart;
+  const baseChart = isWeekly ? resampleToWeekly(rawChart) : rawChart;
   const levels = payload.levels ?? [];
   const gaps = payload.gaps ?? [];
   const yoloPatterns = payload.yolo_patterns ?? [];
@@ -307,14 +318,6 @@ function buildChartData(
   const hmmRegime = payload.hmm_regime ?? null;
   const ticker = payload.ticker ?? "N/A";
 
-  const x = chart.map((r) => r.date);
-  const open = chart.map((r) => r.open);
-  const high = chart.map((r) => r.high);
-  const low = chart.map((r) => r.low);
-  const close = chart.map((r) => r.close);
-  const vol = chart.map((r) => r.volume);
-
-  // Append live/forming candle as a ghost bar if present and valid
   const hasLiveCandle =
     typeof liveCandle === "object" &&
     liveCandle !== null &&
@@ -330,9 +333,45 @@ function buildChartData(
     ? nyDateStringFromIso(liveCandle.timestamp) ?? liveCandle.timestamp
     : null;
 
-  // Only append if it doesn't duplicate the last historical bar
+  const chart = [...baseChart];
+  let ghostLiveCandle: LiveCandle | null = hasLiveCandle ? liveCandle : null;
+
+  if (hasLiveCandle && chart.length > 0) {
+    const lastRow = chart[chart.length - 1];
+    const sameWeeklyBucket =
+      isWeekly &&
+      mondayWeekKey(lastRow.date) !== null &&
+      mondayWeekKey(lastRow.date) === mondayWeekKey(liveCandle.timestamp);
+
+    if (sameWeeklyBucket) {
+      chart[chart.length - 1] = {
+        ...lastRow,
+        date: liveDate ?? lastRow.date,
+        high: Math.max(lastRow.high, liveCandle.high),
+        low: Math.min(lastRow.low, liveCandle.low),
+        close: liveCandle.close,
+        volume: lastRow.volume + (Number.isFinite(liveCandle.volume) ? liveCandle.volume : 0),
+      };
+      ghostLiveCandle = null;
+    }
+  }
+
+  const x = chart.map((r) => r.date);
+  const open = chart.map((r) => r.open);
+  const high = chart.map((r) => r.high);
+  const low = chart.map((r) => r.low);
+  const close = chart.map((r) => r.close);
+  const vol = chart.map((r) => r.volume);
+
+  const lastX = x[x.length - 1] ?? null;
   const shouldAppendLive =
-    hasLiveCandle && liveDate !== null && liveDate !== x[x.length - 1];
+    ghostLiveCandle !== null && liveDate !== null && liveDate !== lastX;
+  const liveBadgeX = shouldAppendLive ? liveDate : lastX;
+  const liveBadgeY = shouldAppendLive
+    ? ghostLiveCandle?.high ?? null
+    : high.length > 0
+      ? high[high.length - 1]
+      : null;
 
   const traces: PlotlyTrace[] = [
     {
@@ -373,41 +412,42 @@ function buildChartData(
 
   // Render the live candle as a separate semi-transparent candlestick trace
   if (shouldAppendLive && liveDate !== null) {
-    const lc = liveCandle;
-    traces.push({
-      type: "candlestick",
-      x: [liveDate],
-      open: [lc.open],
-      high: [lc.high],
-      low: [lc.low],
-      close: [lc.close],
-      name: "Live",
-      xaxis: "x",
-      yaxis: "y",
-      increasing: {
-        line: { color: "rgba(56,211,159,0.4)" },
-        fillcolor: "rgba(56,211,159,0.25)",
-      },
-      decreasing: {
-        line: { color: "rgba(255,107,107,0.4)" },
-        fillcolor: "rgba(255,107,107,0.25)",
-      },
-    });
-    // Live candle volume bar (ghost style)
-    traces.push({
-      type: "bar",
-      x: [liveDate],
-      y: [typeof lc.volume === "number" ? lc.volume : 0],
-      name: "Live Vol",
-      marker: {
-        color:
-          lc.close >= lc.open
-            ? "rgba(56,211,159,0.25)"
-            : "rgba(255,107,107,0.25)",
-      },
-      xaxis: "x",
-      yaxis: "y2",
-    });
+    const lc = ghostLiveCandle;
+    if (lc) {
+      traces.push({
+        type: "candlestick",
+        x: [liveDate],
+        open: [lc.open],
+        high: [lc.high],
+        low: [lc.low],
+        close: [lc.close],
+        name: "Live",
+        xaxis: "x",
+        yaxis: "y",
+        increasing: {
+          line: { color: "rgba(56,211,159,0.4)" },
+          fillcolor: "rgba(56,211,159,0.25)",
+        },
+        decreasing: {
+          line: { color: "rgba(255,107,107,0.4)" },
+          fillcolor: "rgba(255,107,107,0.25)",
+        },
+      });
+      traces.push({
+        type: "bar",
+        x: [liveDate],
+        y: [typeof lc.volume === "number" ? lc.volume : 0],
+        name: "Live Vol",
+        marker: {
+          color:
+            lc.close >= lc.open
+              ? "rgba(56,211,159,0.25)"
+              : "rgba(255,107,107,0.25)",
+        },
+        xaxis: "x",
+        yaxis: "y2",
+      });
+    }
   }
 
   if (overlays.ma20) {
@@ -837,13 +877,12 @@ function buildChartData(
     });
   }
 
-  // "LIVE" badge annotation near the last bar
-  if (shouldAppendLive && liveDate !== null) {
+  if (hasLiveCandle && liveBadgeX !== null && typeof liveBadgeY === "number") {
     annotations.push({
       xref: "x",
       yref: "y",
-      x: liveDate,
-      y: liveCandle.high,
+      x: liveBadgeX,
+      y: liveBadgeY,
       text: "LIVE",
       showarrow: false,
       xanchor: "center",

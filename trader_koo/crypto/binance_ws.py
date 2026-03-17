@@ -57,6 +57,7 @@ class BinanceWSClient:
     def __init__(
         self,
         on_tick: Callable[[CryptoTick], None] | None = None,
+        on_bar_update: Callable[[CryptoBar], None] | None = None,
         on_candle_close: Callable[[CryptoBar], None] | None = None,
     ) -> None:
         self._lock = threading.Lock()
@@ -65,6 +66,7 @@ class BinanceWSClient:
         self._ws: websocket.WebSocketApp | None = None
         self._thread: threading.Thread | None = None
         self._on_tick = on_tick
+        self._on_bar_update = on_bar_update
         self._on_candle_close = on_candle_close
 
         # Latest tick per symbol
@@ -310,22 +312,29 @@ class BinanceWSClient:
             except Exception as exc:
                 LOG.debug("on_tick callback error: %s", exc)
 
+        bar_ts = dt.datetime.fromtimestamp(
+            int(kline["t"]) / 1000, tz=dt.timezone.utc,
+        )
+        bar = CryptoBar(
+            symbol=display_symbol,
+            timestamp=bar_ts,
+            interval="1m",
+            open=open_price,
+            high=high_price,
+            low=low_price,
+            close=close_price,
+            volume=volume,
+        )
+
+        if self._on_bar_update is not None:
+            try:
+                self._on_bar_update(bar)
+            except Exception as exc:
+                LOG.debug("on_bar_update callback error: %s", exc)
+
         with self._lock:
             # If this kline bar is closed, append to bar buffer
             if is_closed:
-                bar_ts = dt.datetime.fromtimestamp(
-                    int(kline["t"]) / 1000, tz=dt.timezone.utc,
-                )
-                bar = CryptoBar(
-                    symbol=display_symbol,
-                    timestamp=bar_ts,
-                    interval="1m",
-                    open=open_price,
-                    high=high_price,
-                    low=low_price,
-                    close=close_price,
-                    volume=volume,
-                )
                 self._bars[display_symbol].append(bar)
                 self._pending_bars.append(bar)
 

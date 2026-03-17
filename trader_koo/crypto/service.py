@@ -149,19 +149,7 @@ def _broadcast_tick(tick: CryptoTick) -> None:
 
     Called from the Binance WS thread — puts into asyncio queues which
     are drained by the FastAPI WebSocket handlers on the event loop.
-
-    Also feeds the tick into the aggregator so forming candles stay
-    up-to-date for all intervals.
     """
-    # Feed the aggregator (before broadcasting so forming candles are fresh)
-    if _aggregator is not None:
-        _aggregator.on_tick(
-            symbol=tick.symbol,
-            price=tick.price,
-            volume=tick.volume_24h,
-            timestamp=tick.timestamp,
-        )
-
     tick_payload = {
         "type": "tick",
         "symbol": tick.symbol,
@@ -260,6 +248,12 @@ def _on_candle_finalized(candle: CryptoBar) -> None:
         for sub_id in dead:
             _subscribers.pop(sub_id, None)
             LOG.warning("Dropped slow subscriber: %s", sub_id)
+
+
+def _on_binance_bar_update(bar: CryptoBar) -> None:
+    """Feed the current 1m kline state into the multi-interval aggregator."""
+    if _aggregator is not None:
+        _aggregator.on_bar_update(bar)
 
 
 def _flush_loop() -> None:
@@ -460,6 +454,7 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
 
     _client = BinanceWSClient(
         on_tick=_broadcast_tick,
+        on_bar_update=_on_binance_bar_update,
         on_candle_close=_on_binance_candle_close,
     )
 
