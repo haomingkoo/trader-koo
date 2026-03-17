@@ -1,5 +1,7 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import Card from "../components/ui/Card";
+import PipelineOpsPanel from "../components/PipelineOpsPanel";
 
 interface FeatureCard {
   to: string;
@@ -53,6 +55,13 @@ const features: FeatureCard[] = [
 ];
 
 export default function GuidePage() {
+  const [opsOpen, setOpsOpen] = useState(false);
+
+  /* Expand by default on desktop (>= 768px), collapsed on mobile */
+  useEffect(() => {
+    setOpsOpen(window.matchMedia("(min-width: 768px)").matches);
+  }, []);
+
   return (
     <div className="mx-auto max-w-5xl space-y-8">
       {/* Header */}
@@ -68,42 +77,7 @@ export default function GuidePage() {
         </p>
       </div>
 
-      {/* Feature cards grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {features.map((feature) => (
-          <Link
-            key={feature.to}
-            to={feature.to}
-            className="group block rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5 transition-all hover:border-[var(--accent)] hover:bg-[var(--panel-hover)]"
-          >
-            <div className="mb-2 text-sm font-semibold text-[var(--accent)] transition-colors group-hover:text-[var(--blue)]">
-              {feature.title}
-            </div>
-            <p className="text-xs leading-relaxed text-[var(--muted)]">
-              {feature.description}
-            </p>
-          </Link>
-        ))}
-      </div>
-
-      {/* Data freshness disclaimer */}
-      <Card label="Data Freshness">
-        <div className="mt-1 space-y-1.5 text-xs text-[var(--muted)]">
-          <p>
-            All data is processed nightly via an automated pipeline:
-            <span className="ml-1 font-medium text-[var(--text)]">
-              Ingest &rarr; YOLO Detection &rarr; Report Generation
-            </span>
-          </p>
-          <p>
-            Market data refreshes Monday through Friday at 22:00 UTC.
-            Weekend snapshots include weekly timeframe YOLO seed runs.
-            Data shown is always as of the most recent pipeline completion.
-          </p>
-        </div>
-      </Card>
-
-      {/* Disclaimer banner */}
+      {/* NFA disclaimer — prominent placement */}
       <div className="rounded-xl border-2 border-[var(--amber)]/40 bg-[rgba(248,194,78,0.08)] p-5">
         <div className="flex items-start gap-3">
           <span className="mt-0.5 text-lg text-[var(--amber)]" aria-hidden="true">
@@ -131,6 +105,61 @@ export default function GuidePage() {
           </div>
         </div>
       </div>
+
+      {/* Feature cards grid */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {features.map((feature) => (
+          <Link
+            key={feature.to}
+            to={feature.to}
+            className="group block rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5 transition-all hover:border-[var(--accent)] hover:bg-[var(--panel-hover)]"
+          >
+            <div className="mb-2 text-sm font-semibold text-[var(--accent)] transition-colors group-hover:text-[var(--blue)]">
+              {feature.title}
+            </div>
+            <p className="text-xs leading-relaxed text-[var(--muted)]">
+              {feature.description}
+            </p>
+          </Link>
+        ))}
+      </div>
+
+      {/* Pipeline & Operations — collapsible */}
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+        <button
+          onClick={() => setOpsOpen((p) => !p)}
+          className="flex w-full items-center justify-between px-5 py-3 text-left transition-colors hover:bg-[var(--panel-hover)]"
+        >
+          <span className="text-sm font-semibold text-[var(--muted)]">
+            Pipeline &amp; Operations
+          </span>
+          <span className="text-xs text-[var(--muted)]">
+            {opsOpen ? "\u25B2" : "\u25BC"}
+          </span>
+        </button>
+        {opsOpen && (
+          <div className="border-t border-[var(--line)] px-5 py-4">
+            <PipelineOpsPanel />
+          </div>
+        )}
+      </div>
+
+      {/* Data freshness disclaimer */}
+      <Card label="Data Freshness">
+        <div className="mt-1 space-y-1.5 text-xs text-[var(--muted)]">
+          <p>
+            All data is processed nightly via an automated pipeline:
+            <span className="ml-1 font-medium text-[var(--text)]">
+              Ingest &rarr; YOLO Detection &rarr; Report Generation
+            </span>
+          </p>
+          <p>
+            Market data refreshes Monday through Friday at 22:00 UTC.
+            Weekend snapshots include weekly timeframe YOLO seed runs.
+            Data shown is always as of the most recent pipeline completion.
+          </p>
+        </div>
+      </Card>
 
       {/* Quick links footer */}
       <div className="flex flex-wrap gap-3 text-xs">

@@ -1,10 +1,12 @@
 """Tests for the slim app factory in trader_koo.backend.main."""
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 
 class TestAppFactory:
@@ -52,6 +54,30 @@ class TestAppFactory:
         routes = [getattr(r, "path", "") for r in self.app.routes]
 
         assert "/" in routes
+
+    def test_v2_shell_routes_disable_caching(self):
+        routes_by_path = {
+            getattr(route, "path", ""): route
+            for route in self.app.routes
+        }
+
+        v2_route = routes_by_path["/v2"]
+        v2_response = v2_route.endpoint()
+
+        assert isinstance(v2_response, FileResponse)
+        assert v2_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+        assert v2_response.headers["pragma"] == "no-cache"
+        assert v2_response.headers["expires"] == "0"
+        assert Path(v2_response.path).name == "index.html"
+
+        v2_fallback = routes_by_path["/v2/{rest_of_path:path}"]
+        fallback_response = v2_fallback.endpoint("chart")
+
+        assert isinstance(fallback_response, FileResponse)
+        assert fallback_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+        assert fallback_response.headers["pragma"] == "no-cache"
+        assert fallback_response.headers["expires"] == "0"
+        assert Path(fallback_response.path).name == "index.html"
 
     def test_has_middleware(self):
         """The app should register middleware even before the first request."""

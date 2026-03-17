@@ -17,6 +17,7 @@ import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
 import FearGreedGauge from "../components/FearGreedGauge";
+import { PipelineStatusInline } from "../components/PipelineOpsPanel";
 
 /* ── Helpers ── */
 
@@ -1009,6 +1010,9 @@ export default function ReportPage() {
         <strong>Research only. Not financial advice.</strong> This dashboard can be wrong, stale, or incomplete.
         Treat it as a decision-support tool, not an instruction to buy or sell. Past performance does not guarantee future results.
       </div>
+
+      {/* Pipeline status inline */}
+      <PipelineStatusInline />
 
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
 

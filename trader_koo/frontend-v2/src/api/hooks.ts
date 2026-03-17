@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
   DailyReportPayload,
@@ -183,5 +183,29 @@ export function useFearGreed() {
     queryKey: ["market-sentiment"],
     queryFn: () => apiFetch<FearGreedPayload>("/api/market-sentiment"),
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useTriggerUpdate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ mode, apiKey }: { mode: "full" | "yolo" | "report"; apiKey: string }) => {
+      const result = await apiFetch<{ ok: boolean; detail?: string; message?: string }>(
+        `/api/admin/trigger-update?mode=${encodeURIComponent(mode)}`,
+        {
+          method: "POST",
+          headers: { "X-API-Key": apiKey },
+        },
+      );
+      return typeof result.detail === "string"
+        ? result.detail
+        : typeof result.message === "string"
+          ? result.message
+          : "Triggered successfully";
+    },
+    onSuccess: () => {
+      // Auto-refresh pipeline status after triggering
+      void queryClient.invalidateQueries({ queryKey: ["pipeline-status"] });
+    },
   });
 }
