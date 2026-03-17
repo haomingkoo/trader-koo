@@ -4,7 +4,7 @@ This file is used by both Claude Code and Codex to communicate about ongoing wor
 avoid conflicts, and hand off tasks. Both tools should read this before starting work
 and update it after completing tasks.
 
-Last updated: 2026-03-18 by Codex
+Last updated: 2026-03-18 by Claude (pipeline ops panel + guide reorg)
 
 ---
 
@@ -20,12 +20,26 @@ Last updated: 2026-03-18 by Codex
 - Market sentiment — internal market composite + external news/social layers
 - Paper trade system — split into smaller backend modules behind a stable facade
 
-### What was just done (this session)
+### What was just done (latest Claude pass)
+1. **Pipeline Ops Panel** — New `PipelineOpsPanel.tsx` (446 lines) with:
+   - Pipeline state visualization (idle/running/completed/warning/error)
+   - Partial failures shown as amber warning, not red error
+   - Admin action buttons: full update, YOLO+report, report only
+   - API key input (localStorage, masked)
+   - Recent events/issue log from /api/status warnings
+   - Data freshness indicators
+   - `PipelineStatusInline` compact variant for ReportPage
+2. **Guide page reorganized** — NFA disclaimer moved to top, ops panel added as collapsible section
+3. **useTriggerUpdate()** mutation hook added to hooks.ts
+4. Did NOT touch Header.tsx (Codex owns pipeline badge)
+
+### What Codex did previously (for context)
 1. **Binance scaling architecture** — `crypto/aggregator.py` now builds forming/finalized higher-interval candles from one base 1m stream per symbol.
 2. **Live candle rendering** — equity chart now renders backend `live_candle`; crypto chart renders forming candles and patches just-closed bars.
-3. **Crypto runtime fixes** — forming candle volume no longer double-counts, websocket cleanup avoids reconnect loops, and crypto history lightly refetches to keep long intervals fresh.
+3. **Crypto runtime fixes** — forming candle volume, websocket cleanup, history refresh.
 4. **Paper-trade backend split** — `paper_trades.py` is now a facade over `paper_trade/{schema,decision,trading,summary}.py`.
-5. **Zoom / BB polish** — chart zoom now survives live updates, and Bollinger overlays are cleaner and more terminal-like.
+5. **Deploy-robust app shell** — chunk reload on lazy import failure, no-store headers.
+6. **Pipeline badge softening** — partial ingest failures shown as warning in header.
 
 ### Local WIP not yet committed
 1. **Deploy-robust app shell**
