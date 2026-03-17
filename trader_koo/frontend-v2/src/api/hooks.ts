@@ -9,6 +9,8 @@ import type {
   EarningsPayload,
   MarketSummary,
   PipelineStatus,
+  CryptoSummary,
+  CryptoHistoryPayload,
 } from "./types";
 
 export function useReport() {
@@ -92,5 +94,24 @@ export function usePipelineStatus() {
     queryFn: () => apiFetch<PipelineStatus>("/api/status"),
     refetchInterval: 30 * 1000,
     staleTime: 15 * 1000,
+  });
+}
+
+export function useCryptoSummary() {
+  return useQuery({
+    queryKey: ["crypto-summary"],
+    queryFn: () => apiFetch<CryptoSummary>("/api/crypto/summary"),
+    refetchInterval: 5000,
+  });
+}
+
+export function useCryptoHistory(symbol: string, interval = "1m", limit = 100) {
+  return useQuery({
+    queryKey: ["crypto-history", symbol, interval, limit],
+    queryFn: () =>
+      apiFetch<CryptoHistoryPayload>(
+        `/api/crypto/history/${symbol}?interval=${interval}&limit=${limit}`,
+      ),
+    staleTime: 10_000,
   });
 }

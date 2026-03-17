@@ -44,6 +44,12 @@ const features: FeatureCard[] = [
     description:
       "Simulated trade log with equity curve tracking, P&L analysis, win rates, R-multiples, direction breakdowns, and exit reason statistics.",
   },
+  {
+    to: "/v2/crypto",
+    title: "Crypto",
+    description:
+      "Live BTC and ETH prices via Binance WebSocket feed with 1-minute candlestick charts, 24h volume, and real-time price change tracking.",
+  },
 ];
 
 export default function GuidePage() {

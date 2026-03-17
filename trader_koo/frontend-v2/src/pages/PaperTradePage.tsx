@@ -1,4 +1,5 @@
 import { useState, lazy, Suspense } from "react";
+import { Link } from "react-router-dom";
 import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTrade, PaperTradeSummaryOverall } from "../api/types";
 import Card from "../components/ui/Card";
@@ -8,8 +9,8 @@ import Table from "../components/ui/Table";
 
 const Plot = lazy(() => import("react-plotly.js"));
 
-const fmtPct = (v: number | null | undefined, suffix: string = "%"): string =>
-  v != null ? `${v.toFixed(2)}${suffix}` : "\u2014";
+const fmtPct = (v: number | null | undefined, suffix: string = "%", sign: boolean = false): string =>
+  v != null ? `${sign && v > 0 ? "+" : ""}${v.toFixed(2)}${suffix}` : "\u2014";
 
 const fmtPrice = (v: number | null | undefined): string =>
   v != null ? `$${v.toFixed(2)}` : "\u2014";
@@ -25,11 +26,18 @@ const tradeColumns = [
   {
     key: "ticker" as const,
     label: "Ticker",
-    render: (v: unknown) => (
-      <span className="font-semibold text-[var(--text)]">
-        {String(v ?? "\u2014")}
-      </span>
-    ),
+    render: (v: unknown) => {
+      const ticker = String(v ?? "");
+      if (!ticker) return "\u2014";
+      return (
+        <Link
+          to={`/v2/chart?t=${ticker}`}
+          className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+        >
+          {ticker}
+        </Link>
+      );
+    },
   },
   {
     key: "direction" as const,
@@ -196,27 +204,27 @@ export default function PaperTradePage() {
       {/* Summary KPI cards */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Total Trades"
           value={overall.total_trades}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Win Rate"
           value={fmtPct(overall.win_rate_pct)}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Avg P&L"
-          value={fmtPct(overall.avg_pnl_pct)}
+          value={fmtPct(overall.avg_pnl_pct, "%", true)}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Total P&L"
-          value={fmtPct(overall.total_pnl_pct)}
+          value={fmtPct(overall.total_pnl_pct, "%", true)}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Avg R-Multiple"
           value={
             overall.avg_r_multiple != null
@@ -225,14 +233,14 @@ export default function PaperTradePage() {
           }
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Max Drawdown"
           value={
             maxDrawdown != null ? `${maxDrawdown.toFixed(2)}%` : "\u2014"
           }
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Equity Index"
           value={latestEquity != null ? latestEquity.toFixed(2) : "\u2014"}
         />
@@ -303,7 +311,7 @@ export default function PaperTradePage() {
         <Card label="By Direction">
           {summary?.by_direction &&
           Object.keys(summary.by_direction).length > 0 ? (
-            <div className="mt-2 overflow-auto">
+            <div className="mt-2 overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-[var(--line)] text-[var(--muted)]">
@@ -373,7 +381,7 @@ export default function PaperTradePage() {
         <Card label="By Exit Reason">
           {summary?.by_exit_reason &&
           Object.keys(summary.by_exit_reason).length > 0 ? (
-            <div className="mt-2 overflow-auto">
+            <div className="mt-2 overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-[var(--line)] text-[var(--muted)]">

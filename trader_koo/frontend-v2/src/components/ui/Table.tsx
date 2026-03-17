@@ -59,7 +59,7 @@ export default function Table<T extends object>({
   }
 
   return (
-    <div className={`overflow-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] ${className}`}>
+    <div className={`overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] ${className}`}>
       <table className="w-full border-collapse text-left text-sm">
         <thead>
           <tr className="border-b border-[var(--line)]">

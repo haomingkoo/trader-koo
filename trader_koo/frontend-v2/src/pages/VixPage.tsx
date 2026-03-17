@@ -3,15 +3,6 @@ import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
 
-const riskReadColor = (read: string): string => {
-  const lower = read.toLowerCase().replace(/_/g, " ");
-  if (lower.includes("risk off") || lower.includes("elevated") || lower.includes("above"))
-    return "text-[var(--red)]";
-  if (lower.includes("risk on") || lower.includes("relief") || lower.includes("below"))
-    return "text-[var(--green)]";
-  return "text-[var(--muted)]";
-};
-
 const riskReadBadgeVariant = (
   read: string,
 ): "green" | "red" | "amber" | "muted" => {
@@ -72,17 +63,17 @@ export default function VixPage() {
       {/* VIX KPI cards */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="VIX Close"
           value={vix.close != null ? vix.close.toFixed(2) : "\u2014"}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Risk State"
           value={formatState(vix.risk_state ?? "unknown")}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Percentile 1Y"
           value={
             vix.percentile_1y != null
@@ -91,7 +82,7 @@ export default function VixPage() {
           }
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="MA Cross State"
           value={formatState(vix.ma_cross_state ?? vix.ma_state ?? "unknown")}
         />
@@ -129,7 +120,7 @@ export default function VixPage() {
               <ul className="space-y-0.5 text-xs text-[var(--text)]">
                 {health.drivers.map((d: string, i: number) => (
                   <li key={i} className="flex items-start gap-1.5">
-                    <span className="mt-0.5 text-[var(--green)]">&#8226;</span>
+                    <span className="mt-0.5 text-[var(--green)]" aria-hidden="true">&#8226;</span>
                     {d}
                   </li>
                 ))}
@@ -145,8 +136,8 @@ export default function VixPage() {
               <ul className="space-y-0.5 text-xs text-[var(--red)]">
                 {health.warnings.map((w: string, i: number) => (
                   <li key={i} className="flex items-start gap-1.5">
-                    <span className="mt-0.5">&#9888;</span>
-                    {w}
+                    <span className="mt-0.5" aria-hidden="true">&#9888;</span>
+                    <span>Warning: {w}</span>
                   </li>
                 ))}
               </ul>
@@ -181,7 +172,7 @@ export default function VixPage() {
       {/* MA Matrix table */}
       <Card label="MA Matrix">
         {maMatrix.length > 0 ? (
-          <div className="mt-2 overflow-auto">
+          <div className="mt-2 overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-[var(--line)] text-[var(--muted)]">
@@ -210,7 +201,7 @@ export default function VixPage() {
                     </td>
                     <td className="px-3 py-2 tabular-nums text-[var(--text)]">
                       {row.value_pct != null
-                        ? `${row.value_pct.toFixed(2)}%`
+                        ? `${row.value_pct > 0 ? "+" : ""}${row.value_pct.toFixed(2)}%`
                         : "\u2014"}
                     </td>
                     <td className="px-3 py-2">
@@ -226,7 +217,7 @@ export default function VixPage() {
                         {formatState(row.state)}
                       </Badge>
                     </td>
-                    <td className={`px-3 py-2 ${riskReadColor(row.risk_read)}`}>
+                    <td className="px-3 py-2">
                       <Badge variant={riskReadBadgeVariant(row.risk_read)}>
                         {row.risk_read.replace(/_/g, " ")}
                       </Badge>

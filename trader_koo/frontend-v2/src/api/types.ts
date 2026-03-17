@@ -686,6 +686,37 @@ export interface PaperTradeSummary {
   recent_trades: PaperTrade[];
 }
 
+/* ── Crypto ── */
+export interface CryptoPrice {
+  symbol: string;
+  price: number;
+  volume_24h: number;
+  change_pct_24h: number;
+  timestamp: string;
+}
+
+export interface CryptoBar {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface CryptoSummary {
+  prices: Record<string, CryptoPrice>;
+  connected: boolean;
+}
+
+export interface CryptoHistoryPayload {
+  ok: boolean;
+  symbol: string;
+  interval: string;
+  count: number;
+  bars: CryptoBar[];
+}
+
 /* ── Market Summary ── */
 export interface MarketTickerSummary {
   price: number;

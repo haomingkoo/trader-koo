@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { useOpportunities } from "../api/hooks";
 import type { OpportunityRow } from "../api/types";
 import Card from "../components/ui/Card";
@@ -41,11 +42,18 @@ const opportunityColumns = [
   {
     key: "ticker" as const,
     label: "Ticker",
-    render: (v: unknown) => (
-      <span className="font-semibold text-[var(--text)]">
-        {String(v ?? "\u2014")}
-      </span>
-    ),
+    render: (v: unknown) => {
+      const ticker = String(v ?? "");
+      if (!ticker) return "\u2014";
+      return (
+        <Link
+          to={`/v2/chart?t=${ticker}`}
+          className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+        >
+          {ticker}
+        </Link>
+      );
+    },
   },
   {
     key: "price" as const,
@@ -182,17 +190,17 @@ export default function OpportunitiesPage() {
       {/* Funnel cards */}
       <div className="grid gap-3 sm:grid-cols-3">
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Universe"
           value={data?.universe_count ?? "\u2014"}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Eligible"
           value={data?.eligible_count ?? "\u2014"}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Showing"
           value={rows.length}
         />

@@ -7,6 +7,7 @@ import EarningsPage from "./pages/EarningsPage";
 import ChartPage from "./pages/ChartPage";
 import OpportunitiesPage from "./pages/OpportunitiesPage";
 import PaperTradePage from "./pages/PaperTradePage";
+import CryptoPage from "./pages/CryptoPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="chart" element={<ChartPage />} />
         <Route path="opportunities" element={<OpportunitiesPage />} />
         <Route path="paper-trades" element={<PaperTradePage />} />
+        <Route path="crypto" element={<CryptoPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

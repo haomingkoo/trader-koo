@@ -11,6 +11,7 @@ import logging
 import smtplib
 import sqlite3
 import ssl
+import traceback
 import urllib.error
 import urllib.request
 from urllib.parse import quote
@@ -23,6 +24,11 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 LOG = logging.getLogger(__name__)
+
+# Accumulates warnings from except blocks during report generation so the
+# frontend can surface which sections degraded.  Reset at the start of each
+# fetch_report_payload() call.
+_report_warnings: list[str] = []
 
 from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.debate_engine import build_setup_debate
@@ -76,7 +82,8 @@ from trader_koo.structure.vix_patterns import (
 MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
 try:
     MARKET_TZ = ZoneInfo(MARKET_TZ_NAME)
-except Exception:
+except Exception as exc:
+    LOG.warning("Failed to load market timezone %r, falling back to UTC: %s", MARKET_TZ_NAME, exc)
     MARKET_TZ = dt.timezone.utc
 MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
 TRUTHY_VALUES = {"1", "true", "yes", "on"}
@@ -272,7 +279,8 @@ def tail_text(path: Path, lines: int = 80, max_bytes: int = 96_000) -> list[str]
             f.seek(max(0, size - read_size))
             data = f.read().decode("utf-8", errors="replace")
         return data.splitlines()[-lines:]
-    except Exception:
+    except Exception as exc:
+        LOG.warning("tail_text failed for %s: %s", path, exc)
         return []
 
 
@@ -405,7 +413,8 @@ def send_report_email(
             fallback_raw=fallback_recipients,
             max_recipients=email_max_recipients(),
         )
-    except Exception:
+    except Exception as exc:
+        LOG.warning("Subscriber resolution failed, using env fallback: %s", exc)
         recipient_rows = [{"email": email, "source": "env", "unsubscribe_token": None} for email in parse_recipients(fallback_recipients)]
     if not recipient_rows:
         missing.append("TRADER_KOO_REPORT_EMAIL_TO or active subscribers")
@@ -432,8 +441,8 @@ def send_report_email(
                 if already_sent_generated_report(db_path, email=recipient, generated_ts=generated):
                     skipped_duplicate += 1
                     continue
-            except Exception:
-                pass
+            except Exception as exc:
+                LOG.warning("Duplicate-send check failed for %s: %s", recipient, exc)
         unsub_token = str(row.get("unsubscribe_token") or "").strip()
         manage_url = None
         if app_url and unsub_token:
@@ -490,8 +499,8 @@ def send_report_email(
                         transport=transport,
                         status="sent",
                     )
-            except Exception:
-                pass
+            except Exception as exc_rec:
+                LOG.warning("Failed to record successful delivery for %s: %s", recipient, exc_rec)
         except Exception as exc:
             failed += 1
             failures.append(f"{recipient}: {exc}")
@@ -505,8 +514,8 @@ def send_report_email(
                         status="failed",
                         error=str(exc),
                     )
-            except Exception:
-                pass
+            except Exception as exc_rec:
+                LOG.warning("Failed to record failed delivery for %s: %s", recipient, exc_rec)
     if sent == 0 and failed > 0:
         raise RuntimeError(f"Email send failed for all recipients: {failures[0]}")
     if sent == 0 and skipped_duplicate > 0:
@@ -890,8 +899,9 @@ def fetch_yolo_delta(
         delta["lost_patterns"] = [p for p in prev_pats if not find_match(p, today_pats)]
         delta["new_count"] = len(delta["new_patterns"])
         delta["lost_count"] = len(delta["lost_patterns"])
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.warning("YOLO delta computation failed (timeframe=%s): %s", tf or "all", exc)
+        _report_warnings.append(f"yolo_delta_failed:{tf or 'all'}")
     return delta
 
 
@@ -1251,7 +1261,8 @@ def _build_regime_llm_commentary(regime: dict[str, Any]) -> dict[str, Any]:
     source = "rule"
     try:
         llm_overrides = maybe_rewrite_setup_copy(row, source="regime_context")
-    except Exception:
+    except Exception as exc:
+        LOG.warning("LLM regime commentary rewrite failed: %s", exc)
         llm_overrides = {}
     if llm_overrides:
         row.update(llm_overrides)
@@ -1460,7 +1471,9 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                                 "source": str(lv.get("source") or "pivot_cluster"),  # Requirement 10.1, 10.3
                             }
                         )
-        except Exception:
+        except Exception as exc:
+            LOG.error("Level computation failed for ticker: %s", exc, exc_info=True)
+            _report_warnings.append("levels_computation_failed")
             levels_out = []
         if not levels_out:
             level_source = "rolling_window_fallback"
@@ -1542,8 +1555,8 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                         }
                     )
         except Exception as e:
-            # Log but don't fail if pattern detection has issues
-            pass
+            LOG.error("VIX trap/reclaim pattern detection failed: %s", e, exc_info=True)
+            _report_warnings.append("vix_trap_reclaim_detection_failed")
 
         regime["trap_reclaim_patterns"] = trap_reclaim_patterns
 
@@ -2169,8 +2182,8 @@ def _fetch_technical_context(conn: sqlite3.Connection) -> dict[str, dict[str, An
                     level_event = "resistance_reject"
                 elif breakout_state == "failed_breakdown_down":
                     level_event = "support_reclaim"
-        except Exception:
-            pass
+        except Exception as exc:
+            LOG.warning("Level context/breakout detection failed for %s: %s", ticker, exc)
 
         if (
             isinstance(recent_range_pct_10, (int, float))
@@ -3254,7 +3267,7 @@ def _apply_debate_payload(setup_rows: list[dict[str, Any]]) -> None:
             row["debate_v1"] = build_setup_debate(row)
         except Exception as e:
             ticker = row.get("ticker", "UNKNOWN")
-            print(f"[DEBATE] Error building debate for {ticker}: {type(e).__name__}: {e}")
+            LOG.warning("Debate engine failed for %s: %s: %s", ticker, type(e).__name__, e)
             row.setdefault("debate_v1", {"version": "v1", "mode": "error"})
 
 
@@ -3481,7 +3494,7 @@ def _to_float(value: Any) -> float | None:
         if value is None:
             return None
         return float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -4363,15 +4376,20 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     try:
         vol_by_ticker, vol_ctx = _fetch_volatility_inputs(conn)
         signals["volatility_context"] = vol_ctx
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.error("Volatility inputs fetch failed: %s", exc, exc_info=True)
+        _report_warnings.append("volatility_inputs_failed")
     try:
         signals["regime_context"] = _build_regime_context(conn)
-    except Exception:
+    except Exception as exc:
+        LOG.error("Regime context build failed: %s", exc, exc_info=True)
+        _report_warnings.append("regime_context_failed")
         signals["regime_context"] = {}
     try:
         technical_by_ticker = _fetch_technical_context(conn)
-    except Exception:
+    except Exception as exc:
+        LOG.error("Technical context fetch failed: %s", exc, exc_info=True)
+        _report_warnings.append("technical_context_failed")
         technical_by_ticker = {}
 
     # ── 52W high / low proximity ─────────────────────────────────────────────
@@ -4416,8 +4434,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                                   "pct_from_low": round(pct_from_low, 2)})
         signals["near_52w_high"] = sorted(near_high, key=lambda x: x["pct_from_high"])
         signals["near_52w_low"]  = sorted(near_low,  key=lambda x: x["pct_from_low"])
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.warning("52-week high/low proximity failed: %s", exc)
+        _report_warnings.append("52w_proximity_failed")
 
     # ── Large moves vs prior close + breadth snapshot ───────────────────────
     try:
@@ -4562,8 +4581,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             "large_move_count": len(signals["large_moves_today"]),
         }
         movers_all = movers
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.warning("Large moves / market breadth computation failed: %s", exc)
+        _report_warnings.append("market_breadth_failed")
 
     # ── Top YOLO patterns from today's run ───────────────────────────────────
     try:
@@ -4600,7 +4620,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             asof_date: dt.date | None = None
             try:
                 asof_date = dt.date.fromisoformat(str(latest_asof))
-            except Exception:
+            except (TypeError, ValueError) as exc:
+                LOG.warning("Failed to parse YOLO asof_date %r: %s", latest_asof, exc)
                 asof_date = None
             yolo_rows = conn.execute("""
                 SELECT ticker, timeframe, pattern,
@@ -4619,7 +4640,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     try:
                         x1_dt = dt.date.fromisoformat(str(x1_date)[:10])
                         age_days = max(0, (asof_date - x1_dt).days)
-                    except Exception:
+                    except (TypeError, ValueError) as exc:
+                        LOG.warning("Failed to parse YOLO x1_date %r: %s", x1_date, exc)
                         age_days = None
                 yolo_top_today.append(
                     {
@@ -4675,7 +4697,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     try:
                         x1_dt = dt.date.fromisoformat(str(x1_date)[:10])
                         age_days = max(0, (asof_date - x1_dt).days)
-                    except Exception:
+                    except (TypeError, ValueError) as exc:
+                        LOG.warning("Failed to parse YOLO x1_date %r for scoring: %s", x1_date, exc)
                         age_days = None
                 candidate = {
                     "ticker": ticker,
@@ -4715,8 +4738,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 )
                 if cand_daily == prev_daily and cand_rank > prev_rank:
                     yolo_by_ticker[ticker] = candidate
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.error("YOLO patterns section failed: %s", exc, exc_info=True)
+        _report_warnings.append("yolo_patterns_failed")
 
     # ── Fundamentals snapshot map (discount/PEG + sector/industry metadata) ─
     try:
@@ -4744,16 +4768,17 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                         if isinstance(raw_obj, dict):
                             sector = raw_obj.get("Sector") or raw_obj.get("sector")
                             industry = raw_obj.get("Industry") or raw_obj.get("industry")
-                    except Exception:
-                        pass
+                    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                        LOG.warning("Failed to parse fundamentals JSON for %s: %s", ticker, exc)
                 fundamentals_map[ticker] = {
                     "discount_pct": round(discount, 2) if discount is not None else None,
                     "peg": round(peg, 2) if peg is not None else None,
                     "sector": str(sector).strip() if sector else "Unknown",
                     "industry": str(industry).strip() if industry else None,
                 }
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.error("Fundamentals snapshot fetch failed: %s", exc, exc_info=True)
+        _report_warnings.append("fundamentals_snapshot_failed")
 
     # ── Sector heatmap + setup quality scoring ───────────────────────────────
     try:
@@ -5040,10 +5065,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             for r in setup_rows[:20]
         ]
     except Exception as e:
-        print(f"[ERROR] Setup quality scoring failed: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-        pass
+        LOG.error("Setup quality scoring failed: %s", e, exc_info=True)
+        _report_warnings.append("setup_quality_scoring_failed")
 
     # ── Candle patterns on latest close date ─────────────────────────────────
     try:
@@ -5089,8 +5112,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                                 "bias": str(r.get("bias", "neutral")),
                                 "confidence": round(float(r.get("confidence", 0.5)), 2),
                             })
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOG.warning("Candle pattern detection failed for %s: %s", ticker, exc)
 
             candle_signals.sort(key=lambda x: x["confidence"], reverse=True)
             signals["candle_patterns_today"] = candle_signals[:60]
@@ -5208,8 +5231,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     for row in setup_rows
                     if isinstance(row, dict) and row.get("ticker")
                 }
-    except Exception:
-        pass
+    except Exception as exc:
+        LOG.error("Candle patterns / setup scoring section failed: %s", exc, exc_info=True)
+        _report_warnings.append("candle_patterns_section_failed")
 
     return signals
 
@@ -5220,6 +5244,8 @@ def fetch_report_payload(
     tail_lines: int,
     report_kind: str = "daily",
 ) -> dict[str, Any]:
+    global _report_warnings
+    _report_warnings = []
     now = dt.datetime.now(dt.timezone.utc)
     report_kind_norm = _normalize_report_kind(report_kind)
     payload: dict[str, Any] = {
@@ -5387,7 +5413,9 @@ def fetch_report_payload(
                 eval_summary["inserted_calls"] = int(inserted_calls)
                 eval_summary["scored_this_run"] = int(scored_this_run)
                 eval_summary["calibration"] = calibration
-            except Exception:
+            except Exception as exc:
+                LOG.error("Setup evaluation failed: %s", exc, exc_info=True)
+                _report_warnings.append("setup_evaluation_failed")
                 conn.rollback()
                 eval_summary = {
                     "enabled": True,
@@ -5424,10 +5452,11 @@ def fetch_report_payload(
                 mtm_result = mark_to_market(conn)
                 conn.commit()
                 paper_trade_result["mtm"] = mtm_result
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
                 paper_trade_result["error"] = "paper_trade_failed"
                 LOG.exception("Paper trade integration failed")
+                _report_warnings.append("paper_trade_failed")
         payload["paper_trades"] = paper_trade_result
         market_date_raw = str((payload.get("market_session") or {}).get("market_date") or "").strip()
         market_date_obj: dt.date | None = None
@@ -5446,7 +5475,9 @@ def fetch_report_payload(
                     tickers=None,
                     setup_map=(payload.get("signals") or {}).get("setup_quality_lookup") or {},
                 )
-            except Exception:
+            except Exception as exc:
+                LOG.warning("Earnings catalysts build failed: %s", exc)
+                _report_warnings.append("earnings_catalysts_failed")
                 payload["signals"]["earnings_catalysts"] = {}
 
         # YOLO deltas and persistence by timeframe.
@@ -5463,13 +5494,16 @@ def fetch_report_payload(
             payload["signals"]["tonight_key_changes"] = build_tonight_key_changes(
                 payload["signals"], payload["yolo"]["delta"]
             )
-        except Exception:
+        except Exception as exc:
+            LOG.warning("Tonight key changes build failed: %s", exc)
+            _report_warnings.append("tonight_key_changes_failed")
             payload["signals"]["tonight_key_changes"] = []
 
         # Refresh LLM status after signal narrative pass so this snapshot reflects current runtime state.
         try:
             payload["meta"]["llm"] = llm_status()
-        except Exception:
+        except Exception as exc:
+            LOG.warning("LLM status refresh failed: %s", exc)
             payload["meta"]["llm"] = {}
 
         # Basic health guardrails.
@@ -5500,6 +5534,7 @@ def fetch_report_payload(
                 payload["warnings"].append("llm_degraded")
 
         payload["risk_filters"] = build_no_trade_conditions(payload)
+        payload["generation_warnings"] = list(_report_warnings)
         payload["ok"] = len(payload["warnings"]) == 0
         return payload
     finally:
@@ -6169,7 +6204,7 @@ def main() -> None:
             )
         except Exception as exc:
             email_meta["error"] = str(exc)
-            print(f"[EMAIL] failed {exc}")
+            LOG.error("Email dispatch failed: %s", exc)
     llm_alert_meta: dict[str, Any] = {"attempted": False, "reason": "not_checked"}
     try:
         llm_alert_meta = send_llm_failure_alert_email(
@@ -6191,7 +6226,7 @@ def main() -> None:
             "failed_count": 0,
             "error": str(exc),
         }
-        print(f"[LLM-ALERT] failed {exc}")
+        LOG.error("LLM failure alert email failed: %s", exc)
 
     report["llm_alert"] = llm_alert_meta
     report["email"] = email_meta

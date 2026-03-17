@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { useEarnings } from "../api/hooks";
 import type { EarningsRow, EarningsGroup, EarningsGroupSession } from "../api/types";
 import Card from "../components/ui/Card";
@@ -45,11 +46,18 @@ const earningsColumns = [
   {
     key: "ticker" as const,
     label: "Ticker",
-    render: (v: unknown) => (
-      <span className="font-semibold text-[var(--text)]">
-        {String(v ?? "\u2014")}
-      </span>
-    ),
+    render: (v: unknown) => {
+      const ticker = String(v ?? "");
+      if (!ticker) return "\u2014";
+      return (
+        <Link
+          to={`/v2/chart?t=${ticker}`}
+          className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+        >
+          {ticker}
+        </Link>
+      );
+    },
   },
   { key: "earnings_date" as const, label: "Date" },
   {
@@ -186,9 +194,13 @@ function CalendarCard({ row }: { row: EarningsRow }) {
       }}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold text-[var(--text)]">
+        <Link
+          to={`/v2/chart?t=${row.ticker}`}
+          className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+          onClick={(e) => e.stopPropagation()}
+        >
           {row.ticker}
-        </span>
+        </Link>
         <div className="flex flex-wrap gap-1">
           {row.recommendation_state && (
             <Badge variant={recStateBadgeVariant(row.recommendation_state)}>
@@ -425,37 +437,37 @@ export default function EarningsPage() {
       {/* Summary KPI cards */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Matches"
           value={data?.count ?? 0}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Setup Ready"
           value={summary.setup_ready}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Watch"
           value={summary.watch}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Calendar Only"
           value={summary.calendar_only}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Unverified"
           value={summary.unverified}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Market Date"
           value={data?.market_date ?? "\u2014"}
         />
         <Card
-          className="backdrop-blur-sm bg-[var(--panel)]/80"
+          glass
           label="Provider"
           value={data?.provider ?? "\u2014"}
         />
