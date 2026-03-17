@@ -33,7 +33,7 @@ def _create_test_db() -> sqlite3.Connection:
     """Create an in-memory SQLite DB with the minimal schema needed by
     the backend services.  This avoids hitting the real disk database.
     """
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript("""
         CREATE TABLE price_daily (

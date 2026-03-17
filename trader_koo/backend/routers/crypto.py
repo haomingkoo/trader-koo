@@ -1,5 +1,6 @@
-"""Crypto endpoints — real-time BTC and ETH data from Binance WebSocket.
+"""Crypto endpoints — real-time data from Binance WebSocket.
 
+Supports BTC, ETH, SOL, XRP, DOGE via 1-minute kline streams.
 Includes a browser-facing WebSocket at /ws/crypto that pushes live ticks
 directly from the Binance feed with sub-second latency.
 """
@@ -12,6 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
+from trader_koo.crypto.indicators import compute_all_indicators
 from trader_koo.crypto.service import (
     get_crypto_history,
     get_crypto_prices,
@@ -23,6 +25,21 @@ from trader_koo.crypto.service import (
 LOG = logging.getLogger("trader_koo.routers.crypto")
 
 router = APIRouter(tags=["crypto"])
+
+# Symbol aliases → canonical display name
+_SYMBOL_ALIASES: dict[str, str] = {
+    "BTC": "BTC-USD", "BTCUSD": "BTC-USD", "BTC-USD": "BTC-USD",
+    "ETH": "ETH-USD", "ETHUSD": "ETH-USD", "ETH-USD": "ETH-USD",
+    "SOL": "SOL-USD", "SOLUSDT": "SOL-USD", "SOL-USD": "SOL-USD", "SOLUSD": "SOL-USD",
+    "XRP": "XRP-USD", "XRPUSDT": "XRP-USD", "XRP-USD": "XRP-USD", "XRPUSD": "XRP-USD",
+    "DOGE": "DOGE-USD", "DOGEUSDT": "DOGE-USD", "DOGE-USD": "DOGE-USD", "DOGEUSD": "DOGE-USD",
+}
+
+
+def _normalise_symbol(raw: str) -> str:
+    """Normalise user-provided symbol to canonical display format."""
+    key = raw.upper().replace(" ", "")
+    return _SYMBOL_ALIASES.get(key, key)
 
 
 @router.get("/api/crypto/prices")
@@ -54,12 +71,7 @@ def crypto_history(
     limit: int = Query(100, ge=1, le=1440, description="Max bars to return"),
 ) -> dict[str, Any]:
     """Recent OHLCV bars for a crypto symbol."""
-    # Normalise symbol input: accept btc-usd, BTC-USD, btcusd, etc.
-    normalised = symbol.upper().replace(" ", "")
-    if normalised in ("BTCUSD", "BTC-USD", "BTC"):
-        normalised = "BTC-USD"
-    elif normalised in ("ETHUSD", "ETH-USD", "ETH"):
-        normalised = "ETH-USD"
+    normalised = _normalise_symbol(symbol)
 
     bars = get_crypto_history(normalised, interval=interval, limit=limit)
     return {
@@ -83,8 +95,42 @@ def crypto_history(
 
 @router.get("/api/crypto/summary")
 def crypto_summary() -> dict[str, Any]:
-    """Summary for header display: BTC + ETH price, 24h change."""
+    """Summary for all tracked crypto: price and 24h change."""
     return get_crypto_summary()
+
+
+@router.get("/api/crypto/indicators/{symbol}")
+def crypto_indicators(symbol: str) -> dict[str, Any]:
+    """Technical indicators computed from buffered 1-min bars."""
+    normalised = _normalise_symbol(symbol)
+    bars = get_crypto_history(normalised, interval="1m", limit=1440)
+    if not bars:
+        LOG.info("No bars available for indicators: %s", normalised)
+        return {
+            "ok": True,
+            "symbol": normalised,
+            "indicators": {
+                "sma_20": None,
+                "sma_50": None,
+                "rsi_14": None,
+                "macd": {"macd": None, "signal": None, "histogram": None},
+                "bollinger": {
+                    "upper": None,
+                    "middle": None,
+                    "lower": None,
+                    "width": None,
+                },
+                "vwap": None,
+            },
+            "bar_count": 0,
+        }
+    indicators = compute_all_indicators(bars)
+    return {
+        "ok": True,
+        "symbol": normalised,
+        "indicators": indicators,
+        "bar_count": len(bars),
+    }
 
 
 @router.websocket("/ws/crypto")

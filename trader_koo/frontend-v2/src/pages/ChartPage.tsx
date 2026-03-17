@@ -13,6 +13,7 @@ import type {
   YoloAuditRow,
   YoloPatternRow,
   ChartCommentary,
+  HmmRegime,
 } from "../api/types";
 import Card from "../components/ui/Card";
 import Spinner from "../components/ui/Spinner";
@@ -172,6 +173,7 @@ function buildChartData(
   const yoloPatterns = payload.yolo_patterns ?? [];
   const earningsMarkers = payload.earnings_markers ?? [];
   const candlePatterns = payload.candlestick_patterns ?? [];
+  const hmmRegime = payload.hmm_regime ?? null;
   const ticker = payload.ticker ?? "N/A";
 
   const x = chart.map((r) => r.date);
@@ -551,7 +553,98 @@ function buildChartData(
     renderYoloGroup(weeklyYolo, true);
   }
 
-  const layout = {
+  // HMM regime background shading + probability sub-pane
+  const hasHmm = hmmRegime !== null && hmmRegime.regimes.length > 0;
+
+  if (hasHmm) {
+    const regimes = hmmRegime.regimes;
+
+    // Background shading: group consecutive same-label days into spans
+    let spanStart = 0;
+    for (let i = 1; i <= regimes.length; i++) {
+      if (i === regimes.length || regimes[i].label !== regimes[spanStart].label) {
+        const startDate = regimes[spanStart].date;
+        const endDate = regimes[i - 1].date;
+        const color = regimes[spanStart].color;
+        shapes.push({
+          type: "rect",
+          xref: "x",
+          yref: "paper",
+          x0: startDate,
+          x1: endDate,
+          y0: 0,
+          y1: 1,
+          fillcolor: color.replace(")", ",0.08)").replace("rgb", "rgba").startsWith("rgba")
+            ? color.replace(")", ",0.08)").replace("rgb", "rgba")
+            : `${color}14`,  // 14 hex = ~8% opacity
+          line: { width: 0 },
+        });
+        spanStart = i;
+      }
+    }
+
+    // Regime probability stacked area traces
+    const regimeDates = regimes.map((r) => r.date);
+    const probLow = regimes.map((r) => r.prob_low);
+    const probNormal = regimes.map((r) => r.prob_normal);
+    const probHigh = regimes.map((r) => r.prob_high);
+
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: regimeDates,
+      y: probLow,
+      name: "P(Low Vol)",
+      line: { color: "#38d39f", width: 0.5 },
+      fill: "tozeroy",
+      fillcolor: "rgba(56,211,159,0.3)",
+      xaxis: "x",
+      yaxis: "y3",
+      hoverinfo: "text+x",
+      hovertext: probLow.map((p) => `Low Vol: ${(p * 100).toFixed(1)}%`),
+    });
+
+    // Stack normal on top of low
+    const probLowPlusNormal = probLow.map((p, i) => p + probNormal[i]);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: regimeDates,
+      y: probLowPlusNormal,
+      name: "P(Normal)",
+      line: { color: "#f8c24e", width: 0.5 },
+      fill: "tonexty",
+      fillcolor: "rgba(248,194,78,0.3)",
+      xaxis: "x",
+      yaxis: "y3",
+      hoverinfo: "text+x",
+      hovertext: probNormal.map((p) => `Normal: ${(p * 100).toFixed(1)}%`),
+    });
+
+    // Stack high on top of normal
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: regimeDates,
+      y: probLowPlusNormal.map((p, i) => p + probHigh[i]),
+      name: "P(High Vol)",
+      line: { color: "#ff6b6b", width: 0.5 },
+      fill: "tonexty",
+      fillcolor: "rgba(255,107,107,0.3)",
+      xaxis: "x",
+      yaxis: "y3",
+      hoverinfo: "text+x",
+      hovertext: probHigh.map((p) => `High Vol: ${(p * 100).toFixed(1)}%`),
+    });
+  }
+
+  // Layout domains shift when HMM pane is present
+  const priceDomain: [number, number] = hasHmm ? [0.36, 1] : [0.28, 1];
+  const volumeDomain: [number, number] = hasHmm ? [0.18, 0.30] : [0, 0.22];
+  const regimeDomain: [number, number] = [0, 0.14];
+  const chartHeight = hasHmm ? 660 : 580;
+
+  const layout: Record<string, unknown> = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
     font: { color: "#8ea0bd", size: 11 },
@@ -582,18 +675,29 @@ function buildChartData(
     },
     yaxis: {
       gridcolor: "rgba(255,255,255,0.06)",
-      domain: [0.28, 1],
+      domain: priceDomain,
       title: "Price",
     },
     yaxis2: {
       gridcolor: "rgba(255,255,255,0.04)",
-      domain: [0, 0.22],
+      domain: volumeDomain,
       title: "Volume",
     },
     shapes,
     annotations,
-    height: 580,
+    height: chartHeight,
   };
+
+  if (hasHmm) {
+    (layout as Record<string, unknown>).yaxis3 = {
+      gridcolor: "rgba(255,255,255,0.04)",
+      domain: regimeDomain,
+      title: "Regime",
+      range: [0, 1.05],
+      tickvals: [0, 0.5, 1],
+      ticktext: ["0%", "50%", "100%"],
+    };
+  }
 
   return { traces, layout };
 }
@@ -602,8 +706,10 @@ function buildChartData(
 
 function ChartCommentarySidebar({
   commentary,
+  hmmRegime,
 }: {
   commentary: ChartCommentary | null;
+  hmmRegime: HmmRegime | null;
 }) {
   if (!commentary) {
     return (
@@ -625,6 +731,24 @@ function ChartCommentarySidebar({
     debate?.consensus?.agreement_score ??
     null;
 
+  const regimeLabel = hmmRegime?.current_state ?? null;
+  const regimeProbs = hmmRegime?.current_probs ?? null;
+  const regimeDays = hmmRegime?.days_in_current ?? null;
+  const regimeConf = regimeProbs && regimeLabel ? regimeProbs[regimeLabel] : null;
+  const regimeVariant: "green" | "amber" | "red" | "muted" =
+    regimeLabel === "low_vol"
+      ? "green"
+      : regimeLabel === "normal"
+        ? "amber"
+        : regimeLabel === "high_vol"
+          ? "red"
+          : "muted";
+  const regimeDisplay: Record<string, string> = {
+    low_vol: "LOW VOL",
+    normal: "NORMAL",
+    high_vol: "HIGH VOL",
+  };
+
   return (
     <GlassCard>
       {/* Badges row */}
@@ -643,6 +767,15 @@ function ChartCommentarySidebar({
           <Badge variant="default">
             {commentary.actionability.toUpperCase()}
           </Badge>
+        )}
+        {regimeLabel ? (
+          <Badge variant={regimeVariant}>
+            HMM {regimeDisplay[regimeLabel] ?? regimeLabel.toUpperCase()}
+            {regimeConf != null && ` ${(regimeConf * 100).toFixed(0)}%`}
+            {regimeDays != null && ` (${regimeDays}d)`}
+          </Badge>
+        ) : (
+          <Badge variant="muted">REGIME N/A</Badge>
         )}
         {debateState && (
           <Badge
@@ -1188,7 +1321,7 @@ export default function ChartPage() {
                         displayModeBar: true,
                         scrollZoom: true,
                       }}
-                      style={{ width: "100%", height: 580 }}
+                      style={{ width: "100%", height: (chartResult.layout as Record<string, unknown>).height as number ?? 580 }}
                     />
                   </Suspense>
                 </div>
@@ -1214,7 +1347,7 @@ export default function ChartPage() {
                   >
                     &rsaquo;
                   </button>
-                  <ChartCommentarySidebar commentary={commentary} />
+                  <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
                 </div>
               ) : (
                 <button
@@ -1230,7 +1363,7 @@ export default function ChartPage() {
 
           {/* Commentary for mobile/tablet (below chart) */}
           <div className="lg:hidden">
-            <ChartCommentarySidebar commentary={commentary} />
+            <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
           </div>
 
           {/* Levels + Gaps summary */}

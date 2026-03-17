@@ -11,6 +11,7 @@ import type {
   PipelineStatus,
   CryptoSummary,
   CryptoHistoryPayload,
+  CryptoIndicatorsPayload,
 } from "./types";
 
 export function useReport() {
@@ -112,6 +113,16 @@ export function useCryptoHistory(symbol: string, interval = "1m", limit = 100) {
       apiFetch<CryptoHistoryPayload>(
         `/api/crypto/history/${symbol}?interval=${interval}&limit=${limit}`,
       ),
+    staleTime: 10_000,
+  });
+}
+
+export function useCryptoIndicators(symbol: string) {
+  return useQuery({
+    queryKey: ["crypto-indicators", symbol],
+    queryFn: () =>
+      apiFetch<CryptoIndicatorsPayload>(`/api/crypto/indicators/${symbol}`),
+    refetchInterval: 15_000,
     staleTime: 10_000,
   });
 }

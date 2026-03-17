@@ -13,3 +13,5 @@ pyjwt>=2.8.0
 bcrypt>=4.1.0
 redis>=5.0.0
 websocket-client>=1.7
+hmmlearn>=0.3
+scikit-learn>=1.5

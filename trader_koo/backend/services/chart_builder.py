@@ -47,6 +47,7 @@ from trader_koo.backend.services.database import (
     get_yolo_audit,
     get_yolo_patterns,
 )
+from trader_koo.structure.hmm_regime import predict_regimes as hmm_predict_regimes
 from trader_koo.backend.services.market_data import get_data_sources
 from trader_koo.backend.services.report_loader import latest_report_setup_for_ticker
 
@@ -918,6 +919,13 @@ def build_dashboard_payload(
         setup_override=setup_override,
     )
 
+    # HMM regime detection — fail gracefully, never fake data
+    hmm_regime = None
+    try:
+        hmm_regime = hmm_predict_regimes(prices, ticker=ticker)
+    except Exception as exc:
+        LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
+
     return {
         "ticker": ticker,
         "asof": chart_rows["date"].iloc[-1],
@@ -936,6 +944,7 @@ def build_dashboard_payload(
         "yolo_patterns": yolo_pats,
         "yolo_audit": yolo_aud,
         "chart_commentary": chart_commentary,
+        "hmm_regime": hmm_regime,
         "earnings_markers": earnings_markers,
         "report_generated_ts": report_generated_ts,
         "data_sources": get_data_sources(conn, ticker),

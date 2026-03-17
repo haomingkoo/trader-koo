@@ -65,6 +65,7 @@ from trader_koo.backend.services.pipeline import (
     queue_post_ingest_resume,
 )
 from trader_koo.crypto.service import start_crypto_feed, stop_crypto_feed
+from trader_koo.crypto.storage import ensure_crypto_schema
 
 # ---------------------------------------------------------------------------
 # Router imports
@@ -284,6 +285,8 @@ async def lifespan(_app: FastAPI):
             LOG.info("Audit logging schema initialized")
             ensure_paper_trade_schema(conn)
             LOG.info("Paper trade schema initialized")
+            ensure_crypto_schema(conn)
+            LOG.info("Crypto bars schema initialized")
         finally:
             conn.close()
     else:
@@ -315,9 +318,11 @@ async def lifespan(_app: FastAPI):
             )
 
     # Start real-time crypto feed (Binance WebSocket, daemon thread)
+    # Pass DB path so bars are persisted and history is restored on restart
+    crypto_db = str(DB_PATH) if DB_PATH.exists() else None
     try:
-        start_crypto_feed()
-        LOG.info("Crypto feed started (Binance WS for BTC/ETH)")
+        start_crypto_feed(db_path_str=crypto_db)
+        LOG.info("Crypto feed started (Binance WS for BTC/ETH/SOL/XRP/DOGE)")
     except Exception as exc:
         LOG.warning("Failed to start crypto feed: %s — continuing without it", exc)
 

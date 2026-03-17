@@ -147,6 +147,14 @@ function useCryptoWebSocket(): {
   return { prices, connected };
 }
 
+const CRYPTO_SYMBOLS = [
+  { key: "BTC-USD", label: "BTC" },
+  { key: "ETH-USD", label: "ETH" },
+  { key: "SOL-USD", label: "SOL" },
+  { key: "XRP-USD", label: "XRP" },
+  { key: "DOGE-USD", label: "DOGE" },
+] as const;
+
 function CryptoPriceStrip() {
   const { prices, connected } = useCryptoWebSocket();
 
@@ -163,16 +171,21 @@ function CryptoPriceStrip() {
     );
   }
 
-  const btc = prices["BTC-USD"] ?? null;
-  const eth = prices["ETH-USD"] ?? null;
+  const availableChips = CRYPTO_SYMBOLS.filter((s) => prices[s.key]);
 
   return (
-    <div className="flex items-center gap-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px]">
-      <CryptoPriceChip label="BTC" tick={btc} />
-      {btc && eth && <span className="text-[var(--line)]">|</span>}
-      <CryptoPriceChip label="ETH" tick={eth} />
+    <div className="flex items-center gap-3 overflow-x-auto rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px] scrollbar-none">
+      {availableChips.map((sym, i) => (
+        <span key={sym.key} className="flex items-center gap-3 whitespace-nowrap">
+          {i > 0 && <span className="text-[var(--line)]">|</span>}
+          <CryptoPriceChip label={sym.label} tick={prices[sym.key]} />
+        </span>
+      ))}
+      {availableChips.length === 0 && (
+        <span className="text-[10px] text-[var(--muted)]">No data</span>
+      )}
       {!connected && (
-        <span className="ml-1 h-1.5 w-1.5 rounded-full bg-[var(--red)]" title="Reconnecting..." />
+        <span className="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--red)]" title="Reconnecting..." />
       )}
     </div>
   );

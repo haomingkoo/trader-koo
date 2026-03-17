@@ -28,10 +28,19 @@ BINANCE_WS_URL = "wss://stream.binance.com:9443/ws"
 SYMBOL_MAP: dict[str, str] = {
     "btcusdt": "BTC-USD",
     "ethusdt": "ETH-USD",
+    "solusdt": "SOL-USD",
+    "xrpusdt": "XRP-USD",
+    "dogeusdt": "DOGE-USD",
 }
 
 # Streams to subscribe to
-KLINE_STREAMS: list[str] = ["btcusdt@kline_1m", "ethusdt@kline_1m"]
+KLINE_STREAMS: list[str] = [
+    "btcusdt@kline_1m",
+    "ethusdt@kline_1m",
+    "solusdt@kline_1m",
+    "xrpusdt@kline_1m",
+    "dogeusdt@kline_1m",
+]
 
 # Buffer size: 1440 bars = 24 hours of 1-minute candles
 MAX_BARS = 1440
@@ -61,19 +70,20 @@ class BinanceWSClient:
 
         # Bars buffer per symbol: deque of CryptoBar
         self._bars: dict[str, Deque[CryptoBar]] = {
-            "BTC-USD": deque(maxlen=MAX_BARS),
-            "ETH-USD": deque(maxlen=MAX_BARS),
+            sym: deque(maxlen=MAX_BARS) for sym in SYMBOL_MAP.values()
         }
 
         # 24h tracking for change_pct calculation
         self._open_24h: dict[str, float | None] = {
-            "BTC-USD": None,
-            "ETH-USD": None,
+            sym: None for sym in SYMBOL_MAP.values()
         }
         self._volume_24h: dict[str, float] = {
-            "BTC-USD": 0.0,
-            "ETH-USD": 0.0,
+            sym: 0.0 for sym in SYMBOL_MAP.values()
         }
+
+        # Pending closed bars awaiting DB flush
+        self._pending_bars: list[CryptoBar] = []
+        self._last_flush_ts: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API (thread-safe)
@@ -94,6 +104,43 @@ class BinanceWSClient:
             bars = list(buf)
         # Return the last ``limit`` bars
         return bars[-limit:]
+
+    def drain_pending_bars(self) -> list[CryptoBar]:
+        """Return and clear all pending closed bars (for DB flush)."""
+        with self._lock:
+            bars = list(self._pending_bars)
+            self._pending_bars.clear()
+        return bars
+
+    def prepend_bars(self, symbol: str, bars: list[CryptoBar]) -> None:
+        """Pre-fill the deque with historical bars loaded from DB.
+
+        Bars should be sorted oldest-first. Existing (live) bars are
+        kept at the end so there are no duplicates for overlapping
+        timestamps.
+        """
+        if not bars:
+            return
+        with self._lock:
+            existing = self._bars.get(symbol)
+            if existing is None:
+                return
+            existing_ts = {b.timestamp for b in existing}
+            new_bars = [b for b in bars if b.timestamp not in existing_ts]
+            if not new_bars:
+                return
+            # Re-create the deque: historical first, then live
+            combined = new_bars + list(existing)
+            combined.sort(key=lambda b: b.timestamp)
+            # Only keep MAX_BARS most recent
+            trimmed = combined[-MAX_BARS:]
+            self._bars[symbol] = deque(trimmed, maxlen=MAX_BARS)
+            LOG.info(
+                "Prepended %d historical bars for %s (total=%d)",
+                len(new_bars),
+                symbol,
+                len(self._bars[symbol]),
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -278,6 +325,7 @@ class BinanceWSClient:
                     volume=volume,
                 )
                 self._bars[display_symbol].append(bar)
+                self._pending_bars.append(bar)
 
     # ------------------------------------------------------------------
     # 24h reference reset

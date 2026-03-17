@@ -1,9 +1,26 @@
 import { useState, useMemo, lazy, Suspense } from "react";
-import { useCryptoSummary, useCryptoHistory } from "../api/hooks";
-import type { CryptoPrice, CryptoBar } from "../api/types";
+import { useCryptoSummary, useCryptoHistory, useCryptoIndicators } from "../api/hooks";
+import type { CryptoPrice, CryptoBar, CryptoIndicators } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 
 const Plot = lazy(() => import("react-plotly.js"));
+
+/* ── Constants ── */
+
+const ALL_SYMBOLS = [
+  "BTC-USD",
+  "ETH-USD",
+  "SOL-USD",
+  "XRP-USD",
+  "DOGE-USD",
+] as const;
+
+const INTERVALS = [
+  { value: "1m", label: "1m", limit: 60 },
+  { value: "1m", label: "5m", limit: 300 },
+  { value: "1m", label: "1h", limit: 720 },
+  { value: "1m", label: "24h", limit: 1440 },
+] as const;
 
 /* ── Helpers ── */
 
@@ -13,9 +30,14 @@ function formatPrice(price: number): string {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     });
+  if (price >= 1)
+    return price.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
   return price.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 6,
   });
 }
 
@@ -53,10 +75,19 @@ function GlassCard({
 
 /* ── Price card ── */
 
-function CryptoPriceCard({ tick }: { tick: CryptoPrice | undefined; symbol: string }) {
+function CryptoPriceCard({
+  tick,
+  selected,
+  onSelect,
+}: {
+  tick: CryptoPrice | undefined;
+  symbol: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   if (!tick) {
     return (
-      <GlassCard label="--">
+      <GlassCard label="--" className="cursor-pointer opacity-50">
         <div className="text-sm text-[var(--muted)]">No data</div>
       </GlassCard>
     );
@@ -65,30 +96,261 @@ function CryptoPriceCard({ tick }: { tick: CryptoPrice | undefined; symbol: stri
   const isPositive = tick.change_pct_24h >= 0;
   const changeColor = isPositive ? "text-[var(--green)]" : "text-[var(--red)]";
   const sign = isPositive ? "+" : "";
-  const borderClass = isPositive
-    ? "border-[rgba(56,211,159,0.3)]"
-    : "border-[rgba(255,107,107,0.3)]";
+  const borderClass = selected
+    ? "border-[var(--accent)] ring-1 ring-[var(--accent)]/30"
+    : isPositive
+      ? "border-[rgba(56,211,159,0.3)]"
+      : "border-[rgba(255,107,107,0.3)]";
 
   return (
-    <GlassCard label={tick.symbol} className={borderClass}>
-      <div className="text-2xl font-bold tabular-nums text-[var(--text)]">
-        ${formatPrice(tick.price)}
+    <button onClick={onSelect} className="w-full text-left">
+      <GlassCard label={tick.symbol} className={`${borderClass} transition-all`}>
+        <div className="text-2xl font-bold tabular-nums text-[var(--text)]">
+          ${formatPrice(tick.price)}
+        </div>
+        <div className="mt-1 flex items-center gap-3 text-xs">
+          <span className={`font-semibold tabular-nums ${changeColor}`}>
+            {sign}
+            {tick.change_pct_24h.toFixed(2)}% 24h
+          </span>
+          <span className="text-[var(--muted)]">
+            Vol: {formatVolume(tick.volume_24h)}
+          </span>
+        </div>
+      </GlassCard>
+    </button>
+  );
+}
+
+/* ── RSI gauge card ── */
+
+function RsiGauge({ value }: { value: number | null }) {
+  if (value === null) {
+    return (
+      <GlassCard label="RSI 14">
+        <div className="text-sm text-[var(--muted)]">Insufficient data</div>
+      </GlassCard>
+    );
+  }
+
+  const rounded = Math.round(value * 100) / 100;
+  let color = "text-[var(--text)]";
+  let label = "Neutral";
+  if (rounded >= 70) {
+    color = "text-[var(--red)]";
+    label = "Overbought";
+  } else if (rounded <= 30) {
+    color = "text-[var(--green)]";
+    label = "Oversold";
+  }
+
+  // Bar width as percentage (0..100)
+  const barPct = Math.min(100, Math.max(0, rounded));
+
+  return (
+    <GlassCard label="RSI 14">
+      <div className={`text-2xl font-bold tabular-nums ${color}`}>
+        {rounded.toFixed(1)}
       </div>
-      <div className="mt-1 flex items-center gap-3 text-xs">
-        <span className={`font-semibold tabular-nums ${changeColor}`}>
-          {sign}{tick.change_pct_24h.toFixed(2)}% 24h
-        </span>
-        <span className="text-[var(--muted)]">
-          Vol: {formatVolume(tick.volume_24h)}
-        </span>
+      <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">
+        {label}
+      </div>
+      <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--line)]">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{
+            width: `${barPct}%`,
+            background:
+              rounded >= 70
+                ? "var(--red)"
+                : rounded <= 30
+                  ? "var(--green)"
+                  : "var(--blue)",
+          }}
+        />
+      </div>
+      <div className="mt-0.5 flex justify-between text-[9px] text-[var(--muted)]">
+        <span>0</span>
+        <span>30</span>
+        <span>70</span>
+        <span>100</span>
       </div>
     </GlassCard>
   );
 }
 
-/* ── Candlestick chart builder ── */
+/* ── MACD card ── */
 
-function buildCandlestickChart(bars: CryptoBar[], symbol: string) {
+function MacdCard({
+  macd,
+}: {
+  macd: CryptoIndicators["macd"];
+}) {
+  const hasData =
+    macd.macd !== null || macd.signal !== null || macd.histogram !== null;
+
+  if (!hasData) {
+    return (
+      <GlassCard label="MACD (12, 26, 9)">
+        <div className="text-sm text-[var(--muted)]">Insufficient data</div>
+      </GlassCard>
+    );
+  }
+
+  const histColor =
+    macd.histogram !== null && macd.histogram >= 0
+      ? "text-[var(--green)]"
+      : "text-[var(--red)]";
+
+  return (
+    <GlassCard label="MACD (12, 26, 9)">
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            MACD
+          </div>
+          <div className="tabular-nums text-[var(--text)]">
+            {macd.macd !== null ? macd.macd.toFixed(4) : "--"}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            Signal
+          </div>
+          <div className="tabular-nums text-[var(--text)]">
+            {macd.signal !== null ? macd.signal.toFixed(4) : "--"}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            Histogram
+          </div>
+          <div className={`tabular-nums font-semibold ${histColor}`}>
+            {macd.histogram !== null ? macd.histogram.toFixed(4) : "--"}
+          </div>
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+/* ── Bollinger width card ── */
+
+function BollingerCard({
+  bollinger,
+}: {
+  bollinger: CryptoIndicators["bollinger"];
+}) {
+  const hasData = bollinger.width !== null;
+
+  if (!hasData) {
+    return (
+      <GlassCard label="Bollinger Bands (20, 2)">
+        <div className="text-sm text-[var(--muted)]">Insufficient data</div>
+      </GlassCard>
+    );
+  }
+
+  return (
+    <GlassCard label="Bollinger Bands (20, 2)">
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            Width
+          </div>
+          <div className="text-lg font-bold tabular-nums text-[var(--text)]">
+            {bollinger.width !== null
+              ? (bollinger.width * 100).toFixed(2) + "%"
+              : "--"}
+          </div>
+        </div>
+        <div className="space-y-1">
+          <div className="flex justify-between">
+            <span className="text-[9px] uppercase text-[var(--muted)]">
+              Upper
+            </span>
+            <span className="tabular-nums text-[var(--text)]">
+              {bollinger.upper !== null
+                ? formatPrice(bollinger.upper)
+                : "--"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-[9px] uppercase text-[var(--muted)]">
+              Mid
+            </span>
+            <span className="tabular-nums text-[var(--text)]">
+              {bollinger.middle !== null
+                ? formatPrice(bollinger.middle)
+                : "--"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-[9px] uppercase text-[var(--muted)]">
+              Lower
+            </span>
+            <span className="tabular-nums text-[var(--text)]">
+              {bollinger.lower !== null
+                ? formatPrice(bollinger.lower)
+                : "--"}
+            </span>
+          </div>
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+/* ── VWAP + SMA card ── */
+
+function VwapSmaCard({
+  vwap,
+  sma20,
+  sma50,
+}: {
+  vwap: number | null;
+  sma20: number | null;
+  sma50: number | null;
+}) {
+  return (
+    <GlassCard label="VWAP & SMA">
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            24h VWAP
+          </div>
+          <div className="tabular-nums text-[var(--text)]">
+            {vwap !== null ? formatPrice(vwap) : "--"}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            SMA 20
+          </div>
+          <div className="tabular-nums text-[var(--text)]">
+            {sma20 !== null ? formatPrice(sma20) : "--"}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            SMA 50
+          </div>
+          <div className="tabular-nums text-[var(--text)]">
+            {sma50 !== null ? formatPrice(sma50) : "--"}
+          </div>
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+/* ── Candlestick chart builder with overlays ── */
+
+function buildCandlestickChart(
+  bars: CryptoBar[],
+  symbol: string,
+  indicators: CryptoIndicators | null,
+) {
   const timestamps = bars.map((b) => b.timestamp);
   const open = bars.map((b) => b.open);
   const high = bars.map((b) => b.high);
@@ -96,7 +358,8 @@ function buildCandlestickChart(bars: CryptoBar[], symbol: string) {
   const close = bars.map((b) => b.close);
   const volume = bars.map((b) => b.volume);
 
-  const traces = [
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const traces: Record<string, any>[] = [
     {
       type: "candlestick",
       x: timestamps,
@@ -133,6 +396,70 @@ function buildCandlestickChart(bars: CryptoBar[], symbol: string) {
     },
   ];
 
+  // Compute SMA overlays (rolling averages from available bars)
+  if (bars.length >= 20) {
+    const sma20Values = computeRollingSma(close, 20);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: timestamps.slice(19),
+      y: sma20Values,
+      name: "SMA 20",
+      line: { color: "#f0c040", width: 1.2 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+  if (bars.length >= 50) {
+    const sma50Values = computeRollingSma(close, 50);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: timestamps.slice(49),
+      y: sma50Values,
+      name: "SMA 50",
+      line: { color: "#6baed6", width: 1.2 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+
+  // Bollinger Band overlays
+  if (indicators && indicators.bollinger.upper !== null && bars.length >= 20) {
+    const bbands = computeRollingBollinger(close, 20, 2);
+    const bbTimestamps = timestamps.slice(19);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: bbTimestamps,
+      y: bbands.upper,
+      name: "BB Upper",
+      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      xaxis: "x",
+      yaxis: "y",
+    });
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: bbTimestamps,
+      y: bbands.middle,
+      name: "BB Middle",
+      line: { color: "rgba(186,130,255,0.8)", width: 1 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: bbTimestamps,
+      y: bbands.lower,
+      name: "BB Lower",
+      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+
   const layout = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
@@ -165,14 +492,39 @@ function buildCandlestickChart(bars: CryptoBar[], symbol: string) {
   return { traces, layout };
 }
 
-/* ── Interval selector ── */
+/* ── Client-side rolling computations for chart overlays ── */
 
-const INTERVALS = [
-  { value: "1m", label: "1m", limit: 60 },
-  { value: "1m", label: "5m", limit: 300 },
-  { value: "1m", label: "1h", limit: 720 },
-  { value: "1m", label: "24h", limit: 1440 },
-] as const;
+function computeRollingSma(values: number[], period: number): number[] {
+  const result: number[] = [];
+  for (let i = period - 1; i < values.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += values[j];
+    result.push(sum / period);
+  }
+  return result;
+}
+
+function computeRollingBollinger(
+  values: number[],
+  period: number,
+  stdDev: number,
+): { upper: number[]; middle: number[]; lower: number[] } {
+  const upper: number[] = [];
+  const middle: number[] = [];
+  const lower: number[] = [];
+
+  for (let i = period - 1; i < values.length; i++) {
+    const window = values.slice(i - period + 1, i + 1);
+    const mean = window.reduce((a, b) => a + b, 0) / period;
+    const variance = window.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
+    const sd = Math.sqrt(variance);
+    middle.push(mean);
+    upper.push(mean + stdDev * sd);
+    lower.push(mean - stdDev * sd);
+  }
+
+  return { upper, middle, lower };
+}
 
 /* ── Main page ── */
 
@@ -181,6 +533,7 @@ export default function CryptoPage() {
   const [selectedInterval, setSelectedInterval] = useState(0);
 
   const { data: summary } = useCryptoSummary();
+  const { data: indicatorsData } = useCryptoIndicators(selectedSymbol);
 
   const interval = INTERVALS[selectedInterval];
   const { data: historyData, isLoading: historyLoading } = useCryptoHistory(
@@ -189,14 +542,15 @@ export default function CryptoPage() {
     interval.limit,
   );
 
+  const indicators: CryptoIndicators | null =
+    indicatorsData?.indicators ?? null;
+
   const chartResult = useMemo(() => {
     if (!historyData || !historyData.bars || historyData.bars.length === 0)
       return null;
-    return buildCandlestickChart(historyData.bars, selectedSymbol);
-  }, [historyData, selectedSymbol]);
+    return buildCandlestickChart(historyData.bars, selectedSymbol, indicators);
+  }, [historyData, selectedSymbol, indicators]);
 
-  const btc = summary?.prices?.["BTC-USD"];
-  const eth = summary?.prices?.["ETH-USD"];
   const connected = summary?.connected ?? false;
 
   return (
@@ -210,16 +564,23 @@ export default function CryptoPage() {
         </div>
       )}
 
-      {/* Price cards */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <CryptoPriceCard tick={btc} symbol="BTC-USD" />
-        <CryptoPriceCard tick={eth} symbol="ETH-USD" />
+      {/* Price cards — all 5 pairs */}
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+        {ALL_SYMBOLS.map((sym) => (
+          <CryptoPriceCard
+            key={sym}
+            tick={summary?.prices?.[sym]}
+            symbol={sym}
+            selected={selectedSymbol === sym}
+            onSelect={() => setSelectedSymbol(sym)}
+          />
+        ))}
       </div>
 
       {/* Chart controls */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex gap-1">
-          {(["BTC-USD", "ETH-USD"] as const).map((sym) => (
+          {ALL_SYMBOLS.map((sym) => (
             <button
               key={sym}
               onClick={() => setSelectedSymbol(sym)}
@@ -256,12 +617,8 @@ export default function CryptoPage() {
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
           <Suspense fallback={<Spinner className="py-24" />}>
             <Plot
-              data={
-                chartResult.traces as unknown as Record<string, unknown>[]
-              }
-              layout={
-                chartResult.layout as unknown as Record<string, unknown>
-              }
+              data={chartResult.traces as unknown as Record<string, unknown>[]}
+              layout={chartResult.layout as unknown as Record<string, unknown>}
               config={{
                 responsive: true,
                 displayModeBar: true,
@@ -281,6 +638,20 @@ export default function CryptoPage() {
       {!historyLoading && !chartResult && !connected && (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--red)]">
           Crypto feed disconnected — no chart data available.
+        </div>
+      )}
+
+      {/* Technical indicator cards */}
+      {indicators && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <RsiGauge value={indicators.rsi_14} />
+          <MacdCard macd={indicators.macd} />
+          <BollingerCard bollinger={indicators.bollinger} />
+          <VwapSmaCard
+            vwap={indicators.vwap}
+            sma20={indicators.sma_20}
+            sma50={indicators.sma_50}
+          />
         </div>
       )}
 

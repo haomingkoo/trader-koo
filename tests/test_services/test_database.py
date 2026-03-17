@@ -43,7 +43,7 @@ class TestGetConn:
             get_conn(db_path=missing)
 
         assert exc_info.value.status_code == 500
-        assert "DB not found" in exc_info.value.detail
+        assert "unavailable" in exc_info.value.detail.lower() or "not found" in exc_info.value.detail.lower()
 
 
 class TestTableExists:

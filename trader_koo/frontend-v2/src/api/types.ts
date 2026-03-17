@@ -300,6 +300,25 @@ export interface DailyReportPayload {
   latest_markdown?: string;
 }
 
+/* ── HMM Regime ── */
+export interface HmmRegimeDay {
+  date: string;
+  state: number;
+  label: string;
+  color: string;
+  prob_low: number;
+  prob_normal: number;
+  prob_high: number;
+}
+
+export interface HmmRegime {
+  regimes: HmmRegimeDay[];
+  current_state: string;
+  current_probs: Record<string, number>;
+  transition_matrix: number[][];
+  days_in_current: number;
+}
+
 /* ── Dashboard / Chart ── */
 export interface OhlcvRow {
   date: string;
@@ -501,6 +520,7 @@ export interface DashboardPayload {
   fundamentals: Fundamentals;
   options_summary: OptionsSummary;
   earnings_markers: EarningsMarker[];
+  hmm_regime: HmmRegime | null;
   cv_proxy_patterns?: PatternOverlayRow[];
   hybrid_cv_compare?: Record<string, unknown>[];
   data_sources?: Record<string, unknown>;
@@ -715,6 +735,31 @@ export interface CryptoHistoryPayload {
   interval: string;
   count: number;
   bars: CryptoBar[];
+}
+
+export interface CryptoIndicators {
+  sma_20: number | null;
+  sma_50: number | null;
+  rsi_14: number | null;
+  macd: {
+    macd: number | null;
+    signal: number | null;
+    histogram: number | null;
+  };
+  bollinger: {
+    upper: number | null;
+    middle: number | null;
+    lower: number | null;
+    width: number | null;
+  };
+  vwap: number | null;
+}
+
+export interface CryptoIndicatorsPayload {
+  ok: boolean;
+  symbol: string;
+  indicators: CryptoIndicators;
+  bar_count: number;
 }
 
 /* ── Market Summary ── */
