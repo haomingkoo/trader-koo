@@ -33,8 +33,22 @@ def _empty_lines() -> pd.DataFrame:
     )
 
 
+def _elapsed_days(values: pd.Series, origin: pd.Timestamp) -> np.ndarray:
+    delta = pd.to_datetime(values) - origin
+    return delta.dt.total_seconds().to_numpy(dtype=float) / 86400.0
+
+
+def _format_time_label(value: pd.Timestamp) -> str:
+    ts = pd.Timestamp(value)
+    if ts.hour == 0 and ts.minute == 0 and ts.second == 0 and ts.microsecond == 0:
+        return ts.strftime("%Y-%m-%d")
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return ts.isoformat().replace("+00:00", "Z")
+
+
 def _fit_line(points: pd.DataFrame, origin: pd.Timestamp) -> tuple[float, float] | None:
-    x = (pd.to_datetime(points["date"]) - origin).dt.days.to_numpy(dtype=float)
+    x = _elapsed_days(points["date"], origin)
     y = points["price"].to_numpy(dtype=float)
     if len(x) < 2 or np.unique(x).size < 2:
         return None
@@ -54,7 +68,7 @@ def _score_line(
     last_close: float,
     cfg: TrendlineConfig,
 ) -> tuple[int, float, pd.Timestamp | None]:
-    x = (pd.to_datetime(points_all["date"]) - origin).dt.days.to_numpy(dtype=float)
+    x = _elapsed_days(points_all["date"], origin)
     y = points_all["price"].to_numpy(dtype=float)
     pred = slope * x + intercept
     err = np.abs(y - pred)
@@ -65,7 +79,10 @@ def _score_line(
 
     touch_dates = pd.to_datetime(points_all.loc[touch_mask, "date"])
     last_touch = touch_dates.max()
-    age_days = max(int((pd.to_datetime(points_all["date"]).max() - last_touch).days), 0)
+    age_days = max(
+        float((pd.to_datetime(points_all["date"]).max() - last_touch).total_seconds()) / 86400.0,
+        0.0,
+    )
     recency_score = float(0.5 ** (age_days / max(cfg.recency_half_life_days, 1)))
     slope_pct = abs(slope) / max(last_close, 1e-6)
     if slope_pct > cfg.max_slope_pct_per_day:
@@ -92,8 +109,8 @@ def _build_side_lines(
     origin = pd.to_datetime(piv["date"]).min()
     x0_date = pd.Timestamp(piv["date"].min())
     x1_date = pd.Timestamp(piv["date"].max())
-    x0 = float((x0_date - origin).days)
-    x1 = float((x1_date - origin).days)
+    x0 = float((x0_date - origin).total_seconds()) / 86400.0
+    x1 = float((x1_date - origin).total_seconds()) / 86400.0
 
     candidates: list[dict] = []
     seen: set[tuple[float, float]] = set()
@@ -121,14 +138,14 @@ def _build_side_lines(
         candidates.append(
             {
                 "type": side,
-                "x0_date": x0_date.strftime("%Y-%m-%d"),
-                "x1_date": x1_date.strftime("%Y-%m-%d"),
+                "x0_date": _format_time_label(x0_date),
+                "x1_date": _format_time_label(x1_date),
                 "y0": float(slope * x0 + intercept),
                 "y1": float(slope * x1 + intercept),
                 "slope": float(slope),
                 "intercept": float(intercept),
                 "touch_count": touch_count,
-                "last_touch_date": pd.Timestamp(last_touch).strftime("%Y-%m-%d") if last_touch is not None else None,
+                "last_touch_date": _format_time_label(pd.Timestamp(last_touch)) if last_touch is not None else None,
                 "score": float(score),
             }
         )

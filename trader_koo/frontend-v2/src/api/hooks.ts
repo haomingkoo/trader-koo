@@ -12,6 +12,7 @@ import type {
   CryptoSummary,
   CryptoHistoryPayload,
   CryptoIndicatorsPayload,
+  CryptoStructurePayload,
   VixMetricsPayload,
   FearGreedPayload,
 } from "./types";
@@ -127,6 +128,17 @@ export function useCryptoIndicators(symbol: string) {
     queryFn: () =>
       apiFetch<CryptoIndicatorsPayload>(`/api/crypto/indicators/${symbol}`),
     refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
+}
+
+export function useCryptoStructure(symbol: string, interval = "1m", limit = 240) {
+  return useQuery({
+    queryKey: ["crypto-structure", symbol, interval, limit],
+    queryFn: () =>
+      apiFetch<CryptoStructurePayload>(
+        `/api/crypto/structure/${symbol}?interval=${interval}&limit=${limit}`,
+      ),
     staleTime: 10_000,
   });
 }

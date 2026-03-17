@@ -13,6 +13,7 @@ pre-fill the in-memory deque.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 import sqlite3
 import threading
@@ -46,6 +47,14 @@ MAX_WS_SUBSCRIBERS = 50
 
 # Flush interval in seconds (5 minutes)
 FLUSH_INTERVAL_SEC = 300
+_INTERVAL_TO_MINUTES: dict[str, int] = {
+    "1m": 1,
+    "5m": 5,
+    "15m": 15,
+    "1h": 60,
+    "4h": 240,
+    "1d": 1440,
+}
 
 
 def subscribe_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str | None:
@@ -142,6 +151,73 @@ def _load_history_from_db() -> None:
         LOG.error("Failed to load crypto history from DB: %s", exc)
 
 
+def _load_recent_bars_from_db(symbol: str, limit: int) -> list[CryptoBar]:
+    if not _db_path_str or limit <= 0:
+        return []
+    try:
+        conn = sqlite3.connect(_db_path_str)
+        try:
+            return load_recent_bars(conn, symbol, limit=limit)
+        finally:
+            conn.close()
+    except Exception as exc:
+        LOG.error("Failed to load recent crypto bars for %s: %s", symbol, exc)
+        return []
+
+
+def _merge_bars(primary: list[CryptoBar], secondary: list[CryptoBar]) -> list[CryptoBar]:
+    merged: dict[tuple[str, dt.datetime], CryptoBar] = {}
+    for bar in secondary:
+        merged[(bar.interval, bar.timestamp)] = bar
+    for bar in primary:
+        merged[(bar.interval, bar.timestamp)] = bar
+    return sorted(merged.values(), key=lambda bar: bar.timestamp)
+
+
+def _floor_timestamp(ts: dt.datetime, interval_minutes: int) -> dt.datetime:
+    bucket = interval_minutes * 60
+    floored = int(ts.timestamp()) // bucket * bucket
+    return dt.datetime.fromtimestamp(floored, tz=dt.timezone.utc)
+
+
+def _aggregate_bars(bars: list[CryptoBar], interval: str) -> list[CryptoBar]:
+    interval_minutes = _INTERVAL_TO_MINUTES.get(interval)
+    if interval_minutes is None or interval == "1m":
+        return list(bars)
+    if not bars:
+        return []
+
+    grouped: list[CryptoBar] = []
+    current: CryptoBar | None = None
+    current_bucket: dt.datetime | None = None
+
+    for bar in sorted(bars, key=lambda item: item.timestamp):
+        bucket = _floor_timestamp(bar.timestamp, interval_minutes)
+        if current is None or current_bucket != bucket:
+            if current is not None:
+                grouped.append(current)
+            current_bucket = bucket
+            current = CryptoBar(
+                symbol=bar.symbol,
+                timestamp=bucket,
+                interval=interval,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+            )
+            continue
+        current.high = max(current.high, bar.high)
+        current.low = min(current.low, bar.low)
+        current.close = bar.close
+        current.volume += bar.volume
+
+    if current is not None:
+        grouped.append(current)
+    return grouped
+
+
 def start_crypto_feed(db_path_str: str | None = None) -> None:
     """Start the Binance WebSocket feed in a background daemon thread.
 
@@ -212,14 +288,26 @@ def get_crypto_history(
     Currently only ``1m`` bars are stored; the ``interval`` parameter is
     accepted for forward-compatibility but only ``"1m"`` returns data.
     """
-    if _client is None:
+    interval_norm = str(interval or "1m").lower()
+    if interval_norm not in _INTERVAL_TO_MINUTES:
+        LOG.debug("Unsupported crypto interval requested: %s", interval)
         return []
-    if interval != "1m":
-        LOG.debug(
-            "Requested interval=%s but only 1m bars are buffered", interval,
-        )
-        return []
-    return _client.get_bars(symbol, limit=limit)
+
+    minutes = _INTERVAL_TO_MINUTES[interval_norm]
+    base_limit = limit if interval_norm == "1m" else max(limit * minutes + minutes, 240)
+
+    live_bars = _client.get_bars(symbol, limit=base_limit) if _client is not None else []
+    if len(live_bars) < base_limit:
+        db_bars = _load_recent_bars_from_db(symbol, limit=base_limit)
+        base_bars = _merge_bars(live_bars, db_bars)
+    else:
+        base_bars = live_bars
+
+    if interval_norm == "1m":
+        return base_bars[-limit:]
+
+    aggregated = _aggregate_bars(base_bars, interval_norm)
+    return aggregated[-limit:]
 
 
 def get_crypto_summary() -> dict[str, Any]:

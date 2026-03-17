@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from trader_koo.crypto.indicators import compute_all_indicators
+from trader_koo.crypto.structure import build_crypto_structure
 from trader_koo.crypto.service import (
     get_crypto_history,
     get_crypto_prices,
@@ -67,7 +68,7 @@ def crypto_prices() -> dict[str, Any]:
 @router.get("/api/crypto/history/{symbol}")
 def crypto_history(
     symbol: str,
-    interval: str = Query("1m", description="Bar interval (currently only 1m)"),
+    interval: str = Query("1m", description="Bar interval: 1m, 5m, 15m, 1h, 4h, 1d"),
     limit: int = Query(100, ge=1, le=1440, description="Max bars to return"),
 ) -> dict[str, Any]:
     """Recent OHLCV bars for a crypto symbol."""
@@ -90,6 +91,21 @@ def crypto_history(
             }
             for bar in bars
         ],
+    }
+
+
+@router.get("/api/crypto/structure/{symbol}")
+def crypto_structure(
+    symbol: str,
+    interval: str = Query("1m", description="Structure interval: 1m, 5m, 15m, 1h, 4h, 1d"),
+    limit: int = Query(240, ge=20, le=1440, description="Max bars to analyze"),
+) -> dict[str, Any]:
+    """Support/resistance zones, trendlines, and HMM regime context for crypto."""
+    normalised = _normalise_symbol(symbol)
+    bars = get_crypto_history(normalised, interval=interval, limit=limit)
+    return {
+        "ok": True,
+        **build_crypto_structure(normalised, bars, interval=interval),
     }
 
 

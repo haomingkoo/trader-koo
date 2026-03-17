@@ -358,6 +358,8 @@ export interface LevelRow {
   tier: string;
   touches: number;
   last_touch_date: string;
+  source?: string;
+  distance_pct?: number;
 }
 
 export interface GapRow {
@@ -369,6 +371,12 @@ export interface GapRow {
 
 export interface TrendlineRow {
   type: string;
+  x0_date?: string;
+  x1_date?: string;
+  y0?: number;
+  y1?: number;
+  slope?: number;
+  intercept?: number;
   touch_count: number;
   score: number;
   last_touch_date: string;
@@ -775,6 +783,37 @@ export interface CryptoIndicatorsPayload {
   symbol: string;
   indicators: CryptoIndicators;
   bar_count: number;
+}
+
+export interface CryptoStructureContext {
+  latest_close: number | null;
+  support_level: number | null;
+  support_zone_low: number | null;
+  support_zone_high: number | null;
+  resistance_level: number | null;
+  resistance_zone_low: number | null;
+  resistance_zone_high: number | null;
+  pct_to_support: number | null;
+  pct_to_resistance: number | null;
+  range_position: number | null;
+  level_context: string;
+  ma_trend: string;
+  ma20: number | null;
+  ma50: number | null;
+  atr_pct: number | null;
+  momentum_20: number | null;
+  realized_vol_20: number | null;
+}
+
+export interface CryptoStructurePayload {
+  ok: boolean;
+  symbol: string;
+  interval: string;
+  bar_count: number;
+  levels: LevelRow[];
+  trendlines: TrendlineRow[];
+  hmm_regime: HmmRegime | null;
+  context: CryptoStructureContext;
 }
 
 /* ── Equity Streaming ── */

@@ -56,7 +56,7 @@
 - [x] 87+ new tests landed across the v2 rollout
 - [x] Service unit tests: database, market_data, pipeline, scheduler
 - [x] Router integration tests: system, dashboard, report, paper_trades, admin auth
-- [x] Local pytest baseline restored: `546 passed`
+- [x] Local pytest baseline restored: `550 passed`
 
 ### Infrastructure
 - [x] v2 mount point: `/v2` → `StaticFiles(dist-v2/)`
@@ -71,10 +71,10 @@
 ## TODO — Next Up
 
 ### Priority 1: HMM Hardening
-- [ ] Reduce / eliminate sklearn numerical warnings during dashboard tests
-- [ ] Add feature clipping / validation around unstable HMM fit inputs
+- [x] Reduce / eliminate sklearn numerical warnings during dashboard tests
+- [x] Add feature clipping / validation around unstable HMM fit inputs
 - [ ] Confirm production dependency parity for `hmmlearn` across local + Railway
-- [ ] Consider caching / fallback strategy when HMM fit is unstable
+- [x] Consider caching / fallback strategy when HMM fit is unstable
 
 ### Priority 2: Market Sentiment Expansion
 - [x] Restore widget as clearly labeled internal "Market Sentiment"
@@ -84,7 +84,8 @@
 
 ### Priority 3: More Crypto Features
 - [ ] Crypto correlation panel (BTC vs SPY)
-- [ ] 5-min and 1-hour bar aggregation from 1-min stream
+- [x] 5-min and 1-hour bar aggregation from 1-min stream
+- [x] Auto-drawn crypto structure levels with support/resistance overlays and regime context
 - [ ] Crypto market structure panel (dominance, volatility regime, cross-asset context)
 
 ### Priority 4: IBKR Integration (waiting for Lite → Pro upgrade)

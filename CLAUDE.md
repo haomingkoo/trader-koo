@@ -68,10 +68,10 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - `data_source` column: old DB rows (pre-migration) have NULL — fixed via ALTER TABLE migration in `ensure_schema()`
 - `audit_logs` table: initialised at startup via `ensure_audit_schema(conn)` — if missing on prod, redeploy to trigger startup hook
 - LLM validation failures: fixed — sanitize before validate in `llm_narrative.py`
-- HMM regime fitting can emit sklearn numerical warnings during tests; feature works but still needs stability hardening
+- HMM regime fitting is now clipped/stabilized locally and the previous sklearn warnings no longer reproduce in the current pytest baseline
 - Market Sentiment widget now supports optional Alpha Vantage news sentiment, but it still does not use Twitter/Reddit social scraping
 
 ## Testing
 Run tests with: `python -m pytest tests/ -v`
-Current baseline: `546 passed` locally, with 4 non-fatal sklearn/joblib warnings.
+Current baseline: `550 passed` locally.
 All tests must pass locally before pushing. Test files live in `tests/`.

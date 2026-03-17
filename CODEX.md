@@ -16,7 +16,7 @@ React 19 minified error `#306` was **not** an "object as React child" error in t
 
 ### Verification
 - `npm run build` succeeds
-- `.venv/bin/pytest tests -q` → `546 passed`
+- `.venv/bin/pytest tests -q` → `550 passed`
 - FastAPI `TestClient` verifies `/v2`, `/v2/`, `/v2/chart`, `/v2/crypto` all serve the React app
 
 ---
@@ -24,8 +24,9 @@ React 19 minified error `#306` was **not** an "object as React child" error in t
 ## Current Loose Ends
 
 ### Priority 1: HMM Stability
-- HMM regime detection is already implemented
-- Remaining work is hardening fit stability and reducing sklearn warnings
+- HMM regime detection is implemented and now includes feature clipping plus a more stable covariance setup
+- Current local pytest baseline no longer emits the earlier sklearn HMM warnings
+- Remaining work is broader model experimentation, not basic numerical stabilization
 
 ### Priority 2: Market Sentiment Direction
 - Current widget now supports an optional Alpha Vantage external news pulse in addition to the internal composite
@@ -34,6 +35,7 @@ React 19 minified error `#306` was **not** an "object as React child" error in t
 
 ### Priority 3: Performance + UX
 - Plotly is still a heavy chunk; profile whether Lightweight Charts or a mixed charting stack would improve UX
+- Crypto now has backend structure analysis plus auto-drawn support/resistance overlays on the v2 chart
 - Add browser-level regression coverage for Chart, Crypto, and Earnings calendar toggle
 - Consider widget linking and pipeline WebSocket after core stability work
 

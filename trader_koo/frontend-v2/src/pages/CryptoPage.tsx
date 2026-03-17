@@ -1,6 +1,18 @@
 import { useState, useMemo } from "react";
-import { useCryptoSummary, useCryptoHistory, useCryptoIndicators } from "../api/hooks";
-import type { CryptoPrice, CryptoBar, CryptoIndicators } from "../api/types";
+import {
+  useCryptoSummary,
+  useCryptoHistory,
+  useCryptoIndicators,
+  useCryptoStructure,
+} from "../api/hooks";
+import type {
+  CryptoPrice,
+  CryptoBar,
+  CryptoIndicators,
+  CryptoStructurePayload,
+  LevelRow,
+  TrendlineRow,
+} from "../api/types";
 import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
 
@@ -15,10 +27,10 @@ const ALL_SYMBOLS = [
 ] as const;
 
 const INTERVALS = [
-  { value: "1m", label: "1m", limit: 60 },
-  { value: "1m", label: "5m", limit: 300 },
-  { value: "1m", label: "1h", limit: 720 },
-  { value: "1m", label: "24h", limit: 1440 },
+  { value: "1m", label: "1m", limit: 180 },
+  { value: "5m", label: "5m", limit: 288 },
+  { value: "1h", label: "1h", limit: 168 },
+  { value: "1d", label: "1D", limit: 30 },
 ] as const;
 
 /* ── Helpers ── */
@@ -45,6 +57,18 @@ function formatVolume(vol: number): string {
   if (vol >= 1_000_000) return `${(vol / 1_000_000).toFixed(2)}M`;
   if (vol >= 1_000) return `${(vol / 1_000).toFixed(1)}K`;
   return vol.toFixed(0);
+}
+
+function formatPct(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "--";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function formatLevelContext(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 /* ── Glassmorphism card ── */
@@ -343,12 +367,236 @@ function VwapSmaCard({
   );
 }
 
+function StructureCard({
+  structure,
+}: {
+  structure: CryptoStructurePayload | null | undefined;
+}) {
+  if (!structure) {
+    return (
+      <GlassCard label="Structure Engine">
+        <div className="text-sm text-[var(--muted)]">Waiting for enough bars to map support and resistance.</div>
+      </GlassCard>
+    );
+  }
+
+  const context = structure.context;
+  const regime = structure.hmm_regime;
+  const regimeLabel = regime?.current_state?.replaceAll("_", " ") ?? "unavailable";
+  const regimeConf = regime?.current_probs?.[regime.current_state] ?? null;
+
+  return (
+    <GlassCard label="Structure Engine">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            Level Context
+          </div>
+          <div className="mt-1 text-lg font-bold text-[var(--text)]">
+            {formatLevelContext(context.level_context)}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--muted)]">
+            Trend: {formatLevelContext(context.ma_trend)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            Nearest Support
+          </div>
+          <div className="mt-1 text-lg font-bold tabular-nums text-[var(--blue)]">
+            {context.support_level !== null ? `$${formatPrice(context.support_level)}` : "--"}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--muted)]">
+            Distance {formatPct(context.pct_to_support)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            Nearest Resistance
+          </div>
+          <div className="mt-1 text-lg font-bold tabular-nums text-[var(--red)]">
+            {context.resistance_level !== null ? `$${formatPrice(context.resistance_level)}` : "--"}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--muted)]">
+            Distance {formatPct(context.pct_to_resistance)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+            HMM Regime
+          </div>
+          <div className="mt-1 text-lg font-bold text-[var(--text)]">
+            {formatLevelContext(regimeLabel)}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--muted)]">
+            {regimeConf != null
+              ? `${(regimeConf * 100).toFixed(0)}% confidence · ${regime?.days_in_current ?? 0} bars`
+              : "Insufficient bars for stable regime fit"}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4 text-xs">
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="text-[9px] uppercase text-[var(--muted)]">Range Position</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {context.range_position != null ? `${(context.range_position * 100).toFixed(0)}%` : "--"}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="text-[9px] uppercase text-[var(--muted)]">ATR %</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {formatPct(context.atr_pct)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="text-[9px] uppercase text-[var(--muted)]">Momentum 20</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {formatPct(context.momentum_20)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="text-[9px] uppercase text-[var(--muted)]">Realized Vol 20</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {context.realized_vol_20 != null ? `${context.realized_vol_20.toFixed(2)}%` : "--"}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+            Auto Levels
+          </div>
+          <div className="space-y-2">
+            {structure.levels.length > 0 ? structure.levels.map((level) => (
+              <div key={`${level.type}-${level.level}`} className="flex items-center justify-between gap-3 text-xs">
+                <div>
+                  <span className={level.type === "support" ? "text-[var(--blue)]" : "text-[var(--red)]"}>
+                    {level.type.toUpperCase()}
+                  </span>
+                  <span className="ml-2 text-[var(--muted)]">
+                    {level.tier.toUpperCase()} · {level.source ?? "pivot_cluster"}
+                  </span>
+                </div>
+                <div className="font-semibold tabular-nums text-[var(--text)]">
+                  ${formatPrice(level.level)}
+                </div>
+              </div>
+            )) : (
+              <div className="text-sm text-[var(--muted)]">No nearby levels detected.</div>
+            )}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+            Trendlines
+          </div>
+          <div className="space-y-2">
+            {structure.trendlines.length > 0 ? structure.trendlines.map((line, idx) => (
+              <div key={`${line.type}-${idx}`} className="flex items-center justify-between gap-3 text-xs">
+                <div className="text-[var(--muted)]">
+                  {line.type.replaceAll("_", " ")}
+                </div>
+                <div className="font-semibold tabular-nums text-[var(--text)]">
+                  {line.touch_count} touches · {line.score.toFixed(2)}
+                </div>
+              </div>
+            )) : (
+              <div className="text-sm text-[var(--muted)]">No valid trendlines yet.</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
 /* ── Candlestick chart builder with overlays ── */
+
+function addLevelOverlays(
+  levels: LevelRow[],
+  annotations: Record<string, unknown>[],
+  shapes: Record<string, unknown>[],
+) {
+  levels.forEach((level) => {
+    if (!Number.isFinite(level.level)) return;
+    const color = level.type === "support" ? "#3f8cff" : "#ff7b5b";
+    const dash = level.tier === "primary" ? "solid" : level.tier === "secondary" ? "dot" : "dash";
+
+    if (Number.isFinite(level.zone_low) && Number.isFinite(level.zone_high)) {
+      shapes.push({
+        type: "rect",
+        xref: "paper",
+        yref: "y",
+        x0: 0,
+        x1: 1,
+        y0: Math.min(level.zone_low, level.zone_high),
+        y1: Math.max(level.zone_low, level.zone_high),
+        fillcolor: level.type === "support" ? "rgba(63,140,255,0.09)" : "rgba(255,123,91,0.09)",
+        line: { width: 0 },
+      });
+    }
+
+    shapes.push({
+      type: "line",
+      xref: "paper",
+      yref: "y",
+      x0: 0,
+      x1: 1,
+      y0: level.level,
+      y1: level.level,
+      line: { color, width: level.tier === "primary" ? 2 : 1, dash },
+    });
+
+    annotations.push({
+      xref: "paper",
+      yref: "y",
+      x: 1.0,
+      y: level.level,
+      text: `${level.type.toUpperCase()} ${formatPrice(level.level)}`,
+      showarrow: false,
+      xanchor: "left",
+      yanchor: "middle",
+      xshift: 4,
+      borderpad: 2,
+      bgcolor: "rgba(18,25,39,0.9)",
+      bordercolor: color,
+      font: { color, size: 10 },
+    });
+  });
+}
+
+function addTrendlineOverlays(
+  trendlines: TrendlineRow[],
+  shapes: Record<string, unknown>[],
+) {
+  trendlines.forEach((line) => {
+    if (
+      !line.x0_date || !line.x1_date ||
+      !Number.isFinite(line.y0) || !Number.isFinite(line.y1)
+    ) {
+      return;
+    }
+    const color = line.type === "support_line" ? "rgba(63,140,255,0.7)" : "rgba(255,123,91,0.7)";
+    shapes.push({
+      type: "line",
+      xref: "x",
+      yref: "y",
+      x0: line.x0_date,
+      x1: line.x1_date,
+      y0: line.y0,
+      y1: line.y1,
+      line: { color, width: 1.4, dash: "dash" },
+    });
+  });
+}
 
 function buildCandlestickChart(
   bars: CryptoBar[],
   symbol: string,
   indicators: CryptoIndicators | null,
+  structure: CryptoStructurePayload | null,
 ) {
   const timestamps = bars.map((b) => b.timestamp);
   const open = bars.map((b) => b.open);
@@ -459,6 +707,11 @@ function buildCandlestickChart(
     });
   }
 
+  const shapes: Record<string, unknown>[] = [];
+  const annotations: Record<string, unknown>[] = [];
+  addLevelOverlays(structure?.levels ?? [], annotations, shapes);
+  addTrendlineOverlays(structure?.trendlines ?? [], shapes);
+
   const layout = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
@@ -485,6 +738,8 @@ function buildCandlestickChart(
       domain: [0, 0.22],
       title: "Volume",
     },
+    shapes,
+    annotations,
     height: 500,
   };
 
@@ -540,6 +795,11 @@ export default function CryptoPage() {
     interval.value,
     interval.limit,
   );
+  const { data: structureData } = useCryptoStructure(
+    selectedSymbol,
+    interval.value,
+    interval.limit,
+  );
 
   const indicators: CryptoIndicators | null =
     indicatorsData?.indicators ?? null;
@@ -547,8 +807,13 @@ export default function CryptoPage() {
   const chartResult = useMemo(() => {
     if (!historyData || !historyData.bars || historyData.bars.length === 0)
       return null;
-    return buildCandlestickChart(historyData.bars, selectedSymbol, indicators);
-  }, [historyData, selectedSymbol, indicators]);
+    return buildCandlestickChart(
+      historyData.bars,
+      selectedSymbol,
+      indicators,
+      structureData ?? null,
+    );
+  }, [historyData, selectedSymbol, indicators, structureData]);
 
   const connected = summary?.connected ?? false;
 
@@ -643,6 +908,8 @@ export default function CryptoPage() {
         </div>
       )}
 
+      <StructureCard structure={structureData} />
+
       {/* Technical indicator cards */}
       {indicators && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -659,8 +926,8 @@ export default function CryptoPage() {
 
       {/* Info footer */}
       <div className="text-xs text-[var(--muted)]">
-        Data source: Binance WebSocket (public, no API key) &middot; 1-minute
-        bars &middot; Prices in USDT
+        Data source: Binance WebSocket (public, no API key) &middot; multi-timeframe
+        aggregation from persisted 1-minute bars &middot; prices in USDT
       </div>
     </div>
   );

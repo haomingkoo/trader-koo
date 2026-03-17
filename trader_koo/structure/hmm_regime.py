@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+import warnings
 from typing import Any
 
 import numpy as np
@@ -22,6 +23,18 @@ REGIME_COLORS = {"low_vol": "#38d39f", "normal": "#f8c24e", "high_vol": "#ff6b6b
 # Simple per-ticker model cache: {ticker: (model, scaler, state_order, ts)}
 _MODEL_CACHE: dict[str, tuple[GaussianHMM, StandardScaler, np.ndarray, float]] = {}
 _CACHE_TTL_SEC = 3600  # 1 hour
+
+
+def _clip_feature_series(series: pd.Series, *, lower: float, upper: float) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    valid = values.dropna()
+    if len(valid) < 10:
+        return values
+    lo = float(valid.quantile(lower))
+    hi = float(valid.quantile(upper))
+    if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+        return values.clip(lower=lo, upper=hi)
+    return values
 
 
 def extract_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -62,12 +75,23 @@ def extract_features(df: pd.DataFrame) -> pd.DataFrame:
         },
         index=df.index,
     )
+    features = features.replace([np.inf, -np.inf], np.nan)
+    features["log_return"] = _clip_feature_series(features["log_return"], lower=0.01, upper=0.99).clip(-0.2, 0.2)
+    features["realized_vol_20d"] = _clip_feature_series(
+        features["realized_vol_20d"], lower=0.01, upper=0.99,
+    ).clip(lower=0.0, upper=6.0)
+    features["return_zscore"] = _clip_feature_series(
+        features["return_zscore"], lower=0.01, upper=0.99,
+    ).clip(-6.0, 6.0)
+    features["volume_ratio"] = _clip_feature_series(features["volume_ratio"], lower=0.01, upper=0.99).clip(0.0, 20.0)
+    features["high_low_range"] = _clip_feature_series(
+        features["high_low_range"], lower=0.01, upper=0.99,
+    ).clip(lower=0.0, upper=0.5)
     return features.dropna()
 
 
 def _sort_states_by_volatility(
     model: GaussianHMM,
-    scaler: StandardScaler,
     vol_feature_idx: int = 1,
 ) -> np.ndarray:
     """Return an index array that sorts HMM states by mean realized volatility.
@@ -94,17 +118,45 @@ def fit_hmm(
     """
     scaler = StandardScaler()
     scaled = scaler.fit_transform(features)
+    scaled = np.asarray(scaled, dtype=float)
+    if scaled.ndim != 2 or scaled.shape[0] < 40:
+        raise ValueError("HMM regime: scaled feature matrix too small")
+    if not np.isfinite(scaled).all():
+        raise ValueError("HMM regime: scaled feature matrix contains non-finite values")
 
-    model = GaussianHMM(
-        n_components=n_states,
-        covariance_type="full",
-        n_iter=n_iter,
-        random_state=42,
-        tol=0.01,
-    )
-    model.fit(scaled)
-    state_order = _sort_states_by_volatility(model, scaler)
-    return model, scaler, state_order
+    best_model: GaussianHMM | None = None
+    best_score = float("-inf")
+    for seed in (42, 7, 123):
+        model = GaussianHMM(
+            n_components=n_states,
+            covariance_type="diag",
+            min_covar=1e-3,
+            n_iter=n_iter,
+            random_state=seed,
+            tol=0.01,
+            implementation="scaling",
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", RuntimeWarning)
+            model.fit(scaled)
+        if any(issubclass(w.category, RuntimeWarning) for w in caught):
+            LOG.debug("HMM regime: runtime warnings during fit for seed=%s", seed)
+            continue
+        try:
+            score = float(model.score(scaled))
+        except Exception:
+            continue
+        if not np.isfinite(score):
+            continue
+        if score > best_score:
+            best_score = score
+            best_model = model
+
+    if best_model is None:
+        raise ValueError("HMM regime: no stable fit found")
+
+    state_order = _sort_states_by_volatility(best_model)
+    return best_model, scaler, state_order
 
 
 def predict_regimes(
@@ -141,6 +193,11 @@ def predict_regimes(
         LOG.warning(
             "HMM regime: insufficient data (%d rows, need >= 60)", len(df)
         )
+        return None
+
+    closes = pd.to_numeric(df.get("close"), errors="coerce").dropna()
+    if closes.nunique() < 20:
+        LOG.warning("HMM regime: insufficient close variation (%d unique closes)", closes.nunique())
         return None
 
     # Extract features on full range
