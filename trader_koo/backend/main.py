@@ -70,8 +70,6 @@ from trader_koo.crypto.service import start_crypto_feed, stop_crypto_feed
 # Router imports
 # ---------------------------------------------------------------------------
 
-from trader_koo.backend.routers import (  # noqa: F401 — side-effect: modules exist
-)
 from trader_koo.backend.routers.system import router as system_router
 from trader_koo.backend.routers.dashboard import router as dashboard_router
 from trader_koo.backend.routers.report import router as report_router
