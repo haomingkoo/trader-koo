@@ -41,9 +41,14 @@ _PIVOT_WINDOWS: dict[str, tuple[int, int]] = {
     "1m": (4, 4),
     "5m": (4, 4),
     "15m": (4, 4),
+    "30m": (4, 4),
     "1h": (3, 3),
+    "2h": (3, 3),
     "4h": (3, 3),
+    "6h": (3, 3),
+    "12h": (2, 2),
     "1d": (2, 2),
+    "1w": (2, 2),
 }
 
 
@@ -180,6 +185,7 @@ def build_crypto_structure(
     bars: list[CryptoBar],
     *,
     interval: str = "1m",
+    include_hmm: bool = True,
 ) -> dict[str, Any]:
     if not bars:
         return {
@@ -221,12 +227,14 @@ def build_crypto_structure(
     levels = add_fallback_levels(model, levels, last_close, LEVEL_CFG)
     trendlines = detect_trendlines(model, last_close=last_close, cfg=TREND_CFG)
 
-    hmm_input = prices[["date", "open", "high", "low", "close", "volume"]].copy()
-    hmm_regime = predict_regimes(
-        hmm_input,
-        lookback_days=min(len(hmm_input), 720),
-        ticker=f"crypto:{symbol}:{interval}",
-    )
+    hmm_regime = None
+    if include_hmm:
+        hmm_input = prices[["date", "open", "high", "low", "close", "volume"]].copy()
+        hmm_regime = predict_regimes(
+            hmm_input,
+            lookback_days=min(len(hmm_input), 720),
+            ticker=f"crypto:{symbol}:{interval}",
+        )
 
     return {
         "symbol": symbol,

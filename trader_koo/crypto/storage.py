@@ -29,6 +29,10 @@ def ensure_crypto_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_crypto_bars_symbol_ts
         ON crypto_bars (symbol, timestamp DESC)
     """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_crypto_bars_symbol_interval_ts
+        ON crypto_bars (symbol, interval, timestamp DESC)
+    """)
     conn.commit()
     LOG.info("crypto_bars schema ensured")
 
@@ -68,6 +72,7 @@ def save_bars(conn: sqlite3.Connection, bars: list[CryptoBar]) -> int:
 def load_recent_bars(
     conn: sqlite3.Connection,
     symbol: str,
+    interval: str = "1m",
     limit: int = 1440,
 ) -> list[CryptoBar]:
     """Load most recent bars for a symbol from DB, oldest-first."""
@@ -75,11 +80,11 @@ def load_recent_bars(
         """
         SELECT symbol, timestamp, interval, open, high, low, close, volume
         FROM crypto_bars
-        WHERE symbol = ?
+        WHERE symbol = ? AND interval = ?
         ORDER BY timestamp DESC
         LIMIT ?
         """,
-        (symbol, limit),
+        (symbol, interval, limit),
     ).fetchall()
     bars: list[CryptoBar] = []
     for row in rows:
@@ -111,16 +116,34 @@ def prune_old_bars(
     conn: sqlite3.Connection,
     retention_days: int = 30,
 ) -> int:
-    """Delete bars older than retention_days. Returns count deleted."""
-    cutoff = (
-        dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=retention_days)
-    ).isoformat()
-    cursor = conn.execute(
-        "DELETE FROM crypto_bars WHERE timestamp < ?",
-        (cutoff,),
-    )
-    deleted = cursor.rowcount
+    """Delete old bars using interval-aware retention. Returns count deleted."""
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    retention_by_interval = {
+        "1m": retention_days,
+        "5m": max(retention_days, 90),
+        "15m": max(retention_days, 120),
+        "30m": max(retention_days, 180),
+        "1h": max(retention_days, 365),
+        "2h": max(retention_days, 540),
+        "4h": max(retention_days, 730),
+        "6h": max(retention_days, 1095),
+        "12h": max(retention_days, 1825),
+        "1d": max(retention_days, 3650),
+        "1w": max(retention_days, 3650),
+    }
+    deleted = 0
+    for interval, days in retention_by_interval.items():
+        cutoff = (now_utc - dt.timedelta(days=days)).isoformat()
+        cursor = conn.execute(
+            "DELETE FROM crypto_bars WHERE interval = ? AND timestamp < ?",
+            (interval, cutoff),
+        )
+        deleted += int(cursor.rowcount or 0)
     conn.commit()
     if deleted > 0:
-        LOG.info("Pruned %d crypto bars older than %d days", deleted, retention_days)
+        LOG.info(
+            "Pruned %d crypto bars using interval-aware retention (1m=%dd)",
+            deleted,
+            retention_days,
+        )
     return deleted

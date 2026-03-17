@@ -21,6 +21,7 @@ import time
 import uuid
 from typing import Any
 
+from trader_koo.crypto.binance_history import fetch_recent_klines
 from trader_koo.crypto.binance_ws import BinanceWSClient, SYMBOL_MAP
 from trader_koo.crypto.models import CryptoBar, CryptoTick
 from trader_koo.crypto.storage import (
@@ -37,6 +38,8 @@ _client: BinanceWSClient | None = None
 _db_path_str: str | None = None
 _flush_thread: threading.Thread | None = None
 _flush_running = False
+_backfill_lock = threading.Lock()
+_warm_backfill_thread: threading.Thread | None = None
 
 # Browser WebSocket subscribers: sub_id → asyncio.Queue
 _subscribers_lock = threading.Lock()
@@ -51,9 +54,30 @@ _INTERVAL_TO_MINUTES: dict[str, int] = {
     "1m": 1,
     "5m": 5,
     "15m": 15,
+    "30m": 30,
     "1h": 60,
+    "2h": 120,
     "4h": 240,
+    "6h": 360,
+    "12h": 720,
     "1d": 1440,
+    "1w": 10080,
+}
+_NATIVE_DB_INTERVALS = {
+    interval for interval in _INTERVAL_TO_MINUTES.keys() if interval != "1m"
+}
+_BACKFILL_TARGETS: dict[str, int] = {
+    "1m": 10080,   # ~7 days
+    "5m": 2016,    # ~7 days
+    "15m": 2880,   # ~30 days
+    "30m": 2160,   # ~45 days
+    "1h": 2160,    # ~90 days
+    "2h": 2160,    # ~180 days
+    "4h": 1440,    # ~240 days
+    "6h": 1440,    # ~360 days
+    "12h": 1095,   # ~1.5 years
+    "1d": 1825,    # ~5 years
+    "1w": 260,     # ~5 years
 }
 
 
@@ -142,7 +166,7 @@ def _load_history_from_db() -> None:
         conn = sqlite3.connect(_db_path_str)
         try:
             for display_symbol in SYMBOL_MAP.values():
-                bars = load_recent_bars(conn, display_symbol, limit=1440)
+                bars = load_recent_bars(conn, display_symbol, interval="1m", limit=1440)
                 if bars:
                     _client.prepend_bars(display_symbol, bars)
         finally:
@@ -151,18 +175,74 @@ def _load_history_from_db() -> None:
         LOG.error("Failed to load crypto history from DB: %s", exc)
 
 
-def _load_recent_bars_from_db(symbol: str, limit: int) -> list[CryptoBar]:
+def _load_recent_bars_from_db(symbol: str, limit: int, interval: str = "1m") -> list[CryptoBar]:
     if not _db_path_str or limit <= 0:
         return []
     try:
         conn = sqlite3.connect(_db_path_str)
         try:
-            return load_recent_bars(conn, symbol, limit=limit)
+            return load_recent_bars(conn, symbol, interval=interval, limit=limit)
         finally:
             conn.close()
     except Exception as exc:
-        LOG.error("Failed to load recent crypto bars for %s: %s", symbol, exc)
+        LOG.error("Failed to load recent crypto bars for %s [%s]: %s", symbol, interval, exc)
         return []
+
+
+def _backfill_history(symbol: str, interval: str, limit: int) -> list[CryptoBar]:
+    if not _db_path_str or limit <= 0:
+        return []
+
+    with _backfill_lock:
+        bars = fetch_recent_klines(symbol, interval, limit)
+        if not bars:
+            return []
+        try:
+            conn = sqlite3.connect(_db_path_str)
+            try:
+                ensure_crypto_schema(conn)
+                save_bars(conn, bars)
+                prune_old_bars(conn, retention_days=30)
+            finally:
+                conn.close()
+        except Exception as exc:
+            LOG.warning(
+                "Failed to persist crypto backfill for %s [%s]: %s",
+                symbol,
+                interval,
+                exc,
+            )
+            return []
+        LOG.info(
+            "Backfilled %d crypto bars for %s [%s]",
+            len(bars),
+            symbol,
+            interval,
+        )
+        return bars
+
+
+def _backfill_target_limit(interval: str, requested_limit: int) -> int:
+    return max(int(requested_limit), _BACKFILL_TARGETS.get(interval, int(requested_limit)))
+
+
+def _warm_backfill_history() -> None:
+    if _db_path_str is None:
+        return
+    for symbol in SYMBOL_MAP.values():
+        for interval, target_limit in (("1h", 2160), ("4h", 1440), ("12h", 1095), ("1d", 1825), ("1w", 260)):
+            existing = _load_recent_bars_from_db(symbol, limit=target_limit, interval=interval)
+            if len(existing) >= target_limit:
+                continue
+            try:
+                _backfill_history(symbol, interval, target_limit)
+            except Exception as exc:
+                LOG.debug(
+                    "Warm crypto backfill skipped for %s [%s]: %s",
+                    symbol,
+                    interval,
+                    exc,
+                )
 
 
 def _merge_bars(primary: list[CryptoBar], secondary: list[CryptoBar]) -> list[CryptoBar]:
@@ -224,7 +304,7 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
     If *db_path_str* is provided, bars are persisted to that SQLite DB
     and history is pre-loaded on startup.
     """
-    global _client, _db_path_str, _flush_thread, _flush_running
+    global _client, _db_path_str, _flush_thread, _flush_running, _warm_backfill_thread
     if _client is not None:
         LOG.warning("Crypto feed already started — ignoring duplicate call")
         return
@@ -237,6 +317,15 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
         _load_history_from_db()
 
     _client.start()
+
+    if _db_path_str:
+        _warm_backfill_thread = threading.Thread(
+            target=_warm_backfill_history,
+            name="crypto-history-backfill",
+            daemon=True,
+        )
+        _warm_backfill_thread.start()
+        LOG.info("Crypto history warm backfill started")
 
     # Start periodic DB flush thread
     if _db_path_str:
@@ -285,23 +374,51 @@ def get_crypto_history(
 ) -> list[CryptoBar]:
     """Return recent bars from the in-memory buffer.
 
-    Currently only ``1m`` bars are stored; the ``interval`` parameter is
-    accepted for forward-compatibility but only ``"1m"`` returns data.
+    ``1m`` bars come from the live Binance websocket and DB cache.
+    Longer intervals are served from native Binance REST backfills where
+    possible, with 1m aggregation fallback for intraday views.
     """
     interval_norm = str(interval or "1m").lower()
     if interval_norm not in _INTERVAL_TO_MINUTES:
         LOG.debug("Unsupported crypto interval requested: %s", interval)
         return []
 
+    if interval_norm in _NATIVE_DB_INTERVALS:
+        native_limit = _backfill_target_limit(interval_norm, limit)
+        native_bars = _load_recent_bars_from_db(symbol, limit=native_limit, interval=interval_norm)
+        if len(native_bars) < native_limit:
+            _backfill_history(symbol, interval_norm, native_limit)
+            native_bars = _load_recent_bars_from_db(symbol, limit=native_limit, interval=interval_norm)
+        if interval_norm != "1w":
+            minutes = _INTERVAL_TO_MINUTES[interval_norm]
+            patch_limit = max(minutes * 4, 240)
+            live_bars = _client.get_bars(symbol, limit=patch_limit) if _client is not None else []
+            if len(live_bars) < patch_limit:
+                recent_db_bars = _load_recent_bars_from_db(symbol, limit=patch_limit, interval="1m")
+                recent_base_bars = _merge_bars(live_bars, recent_db_bars)
+            else:
+                recent_base_bars = live_bars
+            if recent_base_bars:
+                patched_bars = _aggregate_bars(recent_base_bars, interval_norm)
+                native_bars = _merge_bars(patched_bars, native_bars)
+        if native_bars:
+            return native_bars[-limit:]
+
     minutes = _INTERVAL_TO_MINUTES[interval_norm]
     base_limit = limit if interval_norm == "1m" else max(limit * minutes + minutes, 240)
 
     live_bars = _client.get_bars(symbol, limit=base_limit) if _client is not None else []
     if len(live_bars) < base_limit:
-        db_bars = _load_recent_bars_from_db(symbol, limit=base_limit)
+        db_bars = _load_recent_bars_from_db(symbol, limit=base_limit, interval="1m")
         base_bars = _merge_bars(live_bars, db_bars)
     else:
         base_bars = live_bars
+
+    if len(base_bars) < base_limit and interval_norm in {"1m", "5m", "15m"}:
+        backfill_limit = _backfill_target_limit(interval_norm, base_limit)
+        _backfill_history(symbol, "1m", backfill_limit)
+        db_bars = _load_recent_bars_from_db(symbol, limit=backfill_limit, interval="1m")
+        base_bars = _merge_bars(live_bars, db_bars)
 
     if interval_norm == "1m":
         return base_bars[-limit:]

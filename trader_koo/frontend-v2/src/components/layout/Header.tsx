@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import ClockStrip from "./ClockStrip";
 import { usePipelineStatus } from "../../api/hooks";
-import type { CryptoPrice, EquityTick } from "../../api/types";
+import type { CryptoPrice, EquityTick, PipelineStatus } from "../../api/types";
 
 function PipelineDot({ state }: { state: "idle" | "active" | "done" | "error" }) {
   const colors: Record<string, string> = {
@@ -25,9 +25,13 @@ function PipelineDot({ state }: { state: "idle" | "active" | "done" | "error" })
   );
 }
 
-function derivePipelineStates(data: { pipeline: { stage: string }; latest_run: { status: string } | null }) {
+function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_run">) {
   const stage = (data.pipeline?.stage ?? "idle").toLowerCase();
   const runStatus = (data.latest_run?.status ?? "").toLowerCase();
+  const lastCompletedStage = (data.pipeline?.last_completed_stage ?? "").toLowerCase();
+  const lastCompletedStatus = (data.pipeline?.last_completed_status ?? "").toLowerCase();
+  const pipelineActive = Boolean(data.pipeline?.active);
+  const runningStale = Boolean(data.pipeline?.running_stale);
 
   const ingestStages = ["price_daily", "price_seed", "fundamentals", "ingest"];
   const yoloStages = ["yolo", "yolo_batch", "patterns"];
@@ -38,7 +42,22 @@ function derivePipelineStates(data: { pipeline: { stage: string }; latest_run: {
   let yolo: StageState = "idle";
   let report: StageState = "idle";
 
-  if (runStatus === "running" || runStatus === "in_progress") {
+  const markCompletedThrough = (completedStage: string) => {
+    if (reportStages.some((s) => completedStage.includes(s)) || completedStage.includes("daily_update")) {
+      ingest = "done";
+      yolo = "done";
+      report = "done";
+    } else if (yoloStages.some((s) => completedStage.includes(s))) {
+      ingest = "done";
+      yolo = "done";
+    } else if (ingestStages.some((s) => completedStage.includes(s))) {
+      ingest = "done";
+    }
+  };
+
+  if (runningStale || stage === "stale_running") {
+    ingest = "error";
+  } else if (pipelineActive || runStatus === "running" || runStatus === "in_progress") {
     if (ingestStages.some((s) => stage.includes(s))) {
       ingest = "active";
     } else if (yoloStages.some((s) => stage.includes(s))) {
@@ -51,21 +70,14 @@ function derivePipelineStates(data: { pipeline: { stage: string }; latest_run: {
     } else {
       ingest = "active";
     }
-  } else if (runStatus === "completed" || runStatus === "done") {
+  } else if (
+    lastCompletedStatus === "ok" ||
+    lastCompletedStatus === "completed" ||
+    lastCompletedStatus === "done"
+  ) {
+    markCompletedThrough(lastCompletedStage);
+  } else if (runStatus === "ok" || runStatus === "completed" || runStatus === "done") {
     ingest = "done";
-    yolo = "done";
-    report = "done";
-  } else if (runStatus === "failed") {
-    if (reportStages.some((s) => stage.includes(s))) {
-      ingest = "done";
-      yolo = "done";
-      report = "error";
-    } else if (yoloStages.some((s) => stage.includes(s))) {
-      ingest = "done";
-      yolo = "error";
-    } else {
-      ingest = "error";
-    }
   }
 
   return { ingest, yolo, report };
@@ -325,7 +337,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   let states: { ingest: "idle" | "active" | "done" | "error"; yolo: "idle" | "active" | "done" | "error"; report: "idle" | "active" | "done" | "error" } = { ingest: "idle", yolo: "idle", report: "idle" };
   try {
     if (data && typeof data === "object" && data.pipeline && typeof data.pipeline === "object") {
-      states = derivePipelineStates(data as { pipeline: { stage: string }; latest_run: { status: string } | null });
+      states = derivePipelineStates(data as PipelineStatus);
     }
   } catch {
     // Pipeline data shape mismatch — use idle defaults

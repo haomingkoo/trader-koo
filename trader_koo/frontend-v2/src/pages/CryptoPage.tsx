@@ -4,14 +4,17 @@ import {
   useCryptoHistory,
   useCryptoIndicators,
   useCryptoStructure,
+  useCryptoCorrelation,
+  useCryptoMarketStructure,
 } from "../api/hooks";
 import type {
   CryptoPrice,
   CryptoBar,
   CryptoIndicators,
   CryptoStructurePayload,
+  CryptoCorrelationPayload,
+  CryptoMarketStructurePayload,
   LevelRow,
-  TrendlineRow,
 } from "../api/types";
 import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
@@ -27,11 +30,46 @@ const ALL_SYMBOLS = [
 ] as const;
 
 const INTERVALS = [
-  { value: "1m", label: "1m", limit: 180 },
-  { value: "5m", label: "5m", limit: 288 },
-  { value: "1h", label: "1h", limit: 168 },
-  { value: "1d", label: "1D", limit: 30 },
+  { value: "1m", label: "1m", limit: 1440, targetWindow: "~1d" },
+  { value: "5m", label: "5m", limit: 2016, targetWindow: "~1w" },
+  { value: "15m", label: "15m", limit: 2880, targetWindow: "~30d" },
+  { value: "30m", label: "30m", limit: 2160, targetWindow: "~45d" },
+  { value: "1h", label: "1h", limit: 2160, targetWindow: "~90d" },
+  { value: "4h", label: "4h", limit: 1440, targetWindow: "~240d" },
+  { value: "12h", label: "12h", limit: 1095, targetWindow: "~1.5y" },
+  { value: "1d", label: "1D", limit: 1825, targetWindow: "~5y" },
+  { value: "1w", label: "1W", limit: 260, targetWindow: "~5y" },
 ] as const;
+
+const INTERVAL_TO_MINUTES = {
+  "1m": 1,
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "4h": 240,
+  "12h": 720,
+  "1d": 1440,
+  "1w": 10080,
+} as const;
+
+const OVERLAY_OPTIONS = [
+  { key: "sma20", label: "20 MA", minBars: 20 },
+  { key: "sma50", label: "50 MA", minBars: 50 },
+  { key: "sma200", label: "200 MA", minBars: 200 },
+  { key: "bollinger", label: "Bollinger", minBars: 20 },
+] as const;
+
+type IntervalValue = (typeof INTERVALS)[number]["value"];
+type OverlayKey = (typeof OVERLAY_OPTIONS)[number]["key"];
+type OverlayState = Record<OverlayKey, boolean>;
+
+const DEFAULT_OVERLAYS: OverlayState = {
+  sma20: true,
+  sma50: true,
+  sma200: false,
+  bollinger: false,
+};
 
 /* ── Helpers ── */
 
@@ -69,6 +107,26 @@ function formatLevelContext(value: string): string {
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatVisibleWindow(interval: IntervalValue, barCount: number): string {
+  if (!barCount) return "--";
+  const totalMinutes = barCount * INTERVAL_TO_MINUTES[interval];
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  if (totalMinutes < 1440) {
+    const hours = totalMinutes / 60;
+    return `${hours % 1 === 0 ? hours.toFixed(0) : hours.toFixed(1)}h`;
+  }
+  if (totalMinutes < 43200) {
+    const days = totalMinutes / 1440;
+    return `${days % 1 === 0 ? days.toFixed(0) : days.toFixed(1)}d`;
+  }
+  if (totalMinutes < 525600) {
+    const months = totalMinutes / 43200;
+    return `${months % 1 === 0 ? months.toFixed(0) : months.toFixed(1)}mo`;
+  }
+  const years = totalMinutes / 525600;
+  return `${years % 1 === 0 ? years.toFixed(0) : years.toFixed(1)}y`;
 }
 
 /* ── Glassmorphism card ── */
@@ -463,50 +521,223 @@ function StructureCard({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-          <div className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-            Auto Levels
+      <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+        <div className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+          Auto Levels
+        </div>
+        <div className="space-y-2">
+          {structure.levels.length > 0 ? structure.levels.map((level) => (
+            <div key={`${level.type}-${level.level}`} className="flex items-center justify-between gap-3 text-xs">
+              <div>
+                <span className={level.type === "support" ? "text-[var(--blue)]" : "text-[var(--red)]"}>
+                  {level.type.toUpperCase()}
+                </span>
+                <span className="ml-2 text-[var(--muted)]">
+                  {level.tier.toUpperCase()} · {level.source ?? "pivot_cluster"}
+                </span>
+              </div>
+              <div className="font-semibold tabular-nums text-[var(--text)]">
+                ${formatPrice(level.level)}
+              </div>
+            </div>
+          )) : (
+            <div className="text-sm text-[var(--muted)]">No nearby levels detected.</div>
+          )}
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+function BtcSpyCorrelationCard({
+  correlation,
+}: {
+  correlation: CryptoCorrelationPayload | null | undefined;
+}) {
+  if (!correlation) {
+    return (
+      <GlassCard label="BTC vs SPY">
+        <div className="text-sm text-[var(--muted)]">Waiting for aligned daily BTC and SPY closes.</div>
+      </GlassCard>
+    );
+  }
+
+  const windows = Object.entries(correlation.windows).sort(
+    ([a], [b]) => Number.parseInt(a, 10) - Number.parseInt(b, 10),
+  );
+
+  return (
+    <GlassCard label="BTC vs SPY Cross-Asset">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-lg font-bold text-[var(--text)]">
+            {formatLevelContext(correlation.relationship_label)}
           </div>
-          <div className="space-y-2">
-            {structure.levels.length > 0 ? structure.levels.map((level) => (
-              <div key={`${level.type}-${level.level}`} className="flex items-center justify-between gap-3 text-xs">
-                <div>
-                  <span className={level.type === "support" ? "text-[var(--blue)]" : "text-[var(--red)]"}>
-                    {level.type.toUpperCase()}
-                  </span>
-                  <span className="ml-2 text-[var(--muted)]">
-                    {level.tier.toUpperCase()} · {level.source ?? "pivot_cluster"}
-                  </span>
-                </div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            {correlation.sample_size} aligned sessions
+            {correlation.as_of ? ` · as of ${correlation.as_of}` : ""}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-right text-xs">
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">BTC</div>
+            <div className="font-semibold tabular-nums text-[var(--text)]">
+              ${correlation.latest.asset_close !== null ? formatPrice(correlation.latest.asset_close) : "--"}
+            </div>
+            <div className={correlation.latest.asset_change_1d_pct !== null && correlation.latest.asset_change_1d_pct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+              {formatPct(correlation.latest.asset_change_1d_pct)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">SPY</div>
+            <div className="font-semibold tabular-nums text-[var(--text)]">
+              ${correlation.latest.benchmark_close !== null ? formatPrice(correlation.latest.benchmark_close) : "--"}
+            </div>
+            <div className={correlation.latest.benchmark_change_1d_pct !== null && correlation.latest.benchmark_change_1d_pct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+              {formatPct(correlation.latest.benchmark_change_1d_pct)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        {windows.map(([label, window]) => (
+          <div key={label} className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/45 p-3 text-xs">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+              {label}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-[9px] uppercase text-[var(--muted)]">Corr</div>
                 <div className="font-semibold tabular-nums text-[var(--text)]">
-                  ${formatPrice(level.level)}
+                  {window.correlation !== null ? window.correlation.toFixed(2) : "--"}
                 </div>
               </div>
-            )) : (
-              <div className="text-sm text-[var(--muted)]">No nearby levels detected.</div>
-            )}
+              <div>
+                <div className="text-[9px] uppercase text-[var(--muted)]">Beta</div>
+                <div className="font-semibold tabular-nums text-[var(--text)]">
+                  {window.beta !== null ? window.beta.toFixed(2) : "--"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] uppercase text-[var(--muted)]">BTC Ret</div>
+                <div className="font-semibold tabular-nums text-[var(--text)]">
+                  {formatPct(window.asset_return_pct)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] uppercase text-[var(--muted)]">Spread</div>
+                <div className="font-semibold tabular-nums text-[var(--text)]">
+                  {formatPct(window.relative_performance_pct)}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 text-xs text-[var(--muted)]">{correlation.note}</div>
+    </GlassCard>
+  );
+}
+
+function CryptoBreadthCard({
+  market,
+}: {
+  market: CryptoMarketStructurePayload | null | undefined;
+}) {
+  if (!market) {
+    return (
+      <GlassCard label="Crypto Breadth">
+        <div className="text-sm text-[var(--muted)]">Waiting for enough 1h bars across tracked crypto pairs.</div>
+      </GlassCard>
+    );
+  }
+
+  const overview = market.overview;
+
+  return (
+    <GlassCard label="Crypto Breadth (1h)">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-lg font-bold text-[var(--text)]">
+            {formatLevelContext(overview.market_posture)}
+          </div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            Volatility regime: {formatLevelContext(overview.volatility_regime)}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.16em]">
+          {market.leaders.slice(0, 2).map((row) => (
+            <span
+              key={`leader-${row.symbol}`}
+              className="rounded-full border border-[var(--line)] bg-[rgba(56,211,159,0.1)] px-2 py-1 text-[var(--green)]"
+            >
+              Lead {row.symbol.replace("-USD", "")}
+            </span>
+          ))}
+          {market.laggards.slice(0, 1).map((row) => (
+            <span
+              key={`laggard-${row.symbol}`}
+              className="rounded-full border border-[var(--line)] bg-[rgba(255,107,107,0.1)] px-2 py-1 text-[var(--red)]"
+            >
+              Lag {row.symbol.replace("-USD", "")}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4 text-xs">
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="text-[9px] uppercase text-[var(--muted)]">Bullish Trend Breadth</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {overview.bullish_trend_count}/{overview.tracked_symbols}
           </div>
         </div>
         <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-          <div className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-            Trendlines
-          </div>
-          <div className="space-y-2">
-            {structure.trendlines.length > 0 ? structure.trendlines.map((line, idx) => (
-              <div key={`${line.type}-${idx}`} className="flex items-center justify-between gap-3 text-xs">
-                <div className="text-[var(--muted)]">
-                  {line.type.replaceAll("_", " ")}
-                </div>
-                <div className="font-semibold tabular-nums text-[var(--text)]">
-                  {line.touch_count} touches · {line.score.toFixed(2)}
-                </div>
-              </div>
-            )) : (
-              <div className="text-sm text-[var(--muted)]">No valid trendlines yet.</div>
-            )}
+          <div className="text-[9px] uppercase text-[var(--muted)]">Avg 24h Change</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {formatPct(overview.avg_change_pct_24h)}
           </div>
         </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="text-[9px] uppercase text-[var(--muted)]">Avg Momentum 20</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {formatPct(overview.avg_momentum_20)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
+          <div className="text-[9px] uppercase text-[var(--muted)]">Support / Resistance</div>
+          <div className="mt-1 font-semibold tabular-nums text-[var(--text)]">
+            {overview.at_support_count} / {overview.at_resistance_count}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {market.symbols.map((row) => (
+          <div
+            key={row.symbol}
+            className="grid grid-cols-[1.1fr_0.8fr_0.9fr_0.9fr] gap-3 rounded-lg border border-[var(--line)] bg-[var(--bg)]/35 p-3 text-xs"
+          >
+            <div>
+              <div className="font-semibold text-[var(--text)]">{row.symbol.replace("-USD", "")}</div>
+              <div className="text-[var(--muted)]">{formatLevelContext(row.level_context)}</div>
+            </div>
+            <div className="tabular-nums">
+              <div className="text-[9px] uppercase text-[var(--muted)]">24h</div>
+              <div className="font-semibold text-[var(--text)]">{formatPct(row.change_pct_24h)}</div>
+            </div>
+            <div className="tabular-nums">
+              <div className="text-[9px] uppercase text-[var(--muted)]">Trend</div>
+              <div className="font-semibold text-[var(--text)]">{formatLevelContext(row.ma_trend)}</div>
+            </div>
+            <div className="tabular-nums">
+              <div className="text-[9px] uppercase text-[var(--muted)]">ATR %</div>
+              <div className="font-semibold text-[var(--text)]">{formatPct(row.atr_pct)}</div>
+            </div>
+          </div>
+        ))}
       </div>
     </GlassCard>
   );
@@ -567,36 +798,11 @@ function addLevelOverlays(
   });
 }
 
-function addTrendlineOverlays(
-  trendlines: TrendlineRow[],
-  shapes: Record<string, unknown>[],
-) {
-  trendlines.forEach((line) => {
-    if (
-      !line.x0_date || !line.x1_date ||
-      !Number.isFinite(line.y0) || !Number.isFinite(line.y1)
-    ) {
-      return;
-    }
-    const color = line.type === "support_line" ? "rgba(63,140,255,0.7)" : "rgba(255,123,91,0.7)";
-    shapes.push({
-      type: "line",
-      xref: "x",
-      yref: "y",
-      x0: line.x0_date,
-      x1: line.x1_date,
-      y0: line.y0,
-      y1: line.y1,
-      line: { color, width: 1.4, dash: "dash" },
-    });
-  });
-}
-
 function buildCandlestickChart(
   bars: CryptoBar[],
   symbol: string,
-  indicators: CryptoIndicators | null,
   structure: CryptoStructurePayload | null,
+  overlays: OverlayState,
 ) {
   const timestamps = bars.map((b) => b.timestamp);
   const open = bars.map((b) => b.open);
@@ -644,7 +850,7 @@ function buildCandlestickChart(
   ];
 
   // Compute SMA overlays (rolling averages from available bars)
-  if (bars.length >= 20) {
+  if (overlays.sma20 && bars.length >= 20) {
     const sma20Values = computeRollingSma(close, 20);
     traces.push({
       type: "scatter",
@@ -657,7 +863,7 @@ function buildCandlestickChart(
       yaxis: "y",
     });
   }
-  if (bars.length >= 50) {
+  if (overlays.sma50 && bars.length >= 50) {
     const sma50Values = computeRollingSma(close, 50);
     traces.push({
       type: "scatter",
@@ -670,9 +876,22 @@ function buildCandlestickChart(
       yaxis: "y",
     });
   }
+  if (overlays.sma200 && bars.length >= 200) {
+    const sma200Values = computeRollingSma(close, 200);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: timestamps.slice(199),
+      y: sma200Values,
+      name: "SMA 200",
+      line: { color: "#d291ff", width: 1.3 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
 
   // Bollinger Band overlays
-  if (indicators && indicators.bollinger.upper !== null && bars.length >= 20) {
+  if (overlays.bollinger && bars.length >= 20) {
     const bbands = computeRollingBollinger(close, 20, 2);
     const bbTimestamps = timestamps.slice(19);
     traces.push({
@@ -710,7 +929,6 @@ function buildCandlestickChart(
   const shapes: Record<string, unknown>[] = [];
   const annotations: Record<string, unknown>[] = [];
   addLevelOverlays(structure?.levels ?? [], annotations, shapes);
-  addTrendlineOverlays(structure?.trendlines ?? [], shapes);
 
   const layout = {
     paper_bgcolor: "transparent",
@@ -784,12 +1002,14 @@ function computeRollingBollinger(
 
 export default function CryptoPage() {
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USD");
-  const [selectedInterval, setSelectedInterval] = useState(0);
+  const [selectedInterval, setSelectedInterval] = useState<IntervalValue>("1h");
+  const [overlays, setOverlays] = useState<OverlayState>(DEFAULT_OVERLAYS);
 
   const { data: summary } = useCryptoSummary();
   const { data: indicatorsData } = useCryptoIndicators(selectedSymbol);
 
-  const interval = INTERVALS[selectedInterval];
+  const interval =
+    INTERVALS.find((item) => item.value === selectedInterval) ?? INTERVALS[1];
   const { data: historyData, isLoading: historyLoading } = useCryptoHistory(
     selectedSymbol,
     interval.value,
@@ -800,6 +1020,8 @@ export default function CryptoPage() {
     interval.value,
     interval.limit,
   );
+  const { data: btcSpyCorrelation } = useCryptoCorrelation("BTC-USD", "SPY", 40);
+  const { data: cryptoMarketStructure } = useCryptoMarketStructure("1h", 168);
 
   const indicators: CryptoIndicators | null =
     indicatorsData?.indicators ?? null;
@@ -810,10 +1032,13 @@ export default function CryptoPage() {
     return buildCandlestickChart(
       historyData.bars,
       selectedSymbol,
-      indicators,
       structureData ?? null,
+      overlays,
     );
-  }, [historyData, selectedSymbol, indicators, structureData]);
+  }, [historyData, selectedSymbol, structureData, overlays]);
+
+  const availableBarCount = historyData?.bars?.length ?? 0;
+  const shortHistory = historyData != null && availableBarCount < interval.limit;
 
   const connected = summary?.connected ?? false;
 
@@ -847,37 +1072,86 @@ export default function CryptoPage() {
       </div>
 
       {/* Chart controls */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex gap-1">
-          {ALL_SYMBOLS.map((sym) => (
-            <button
-              key={sym}
-              onClick={() => setSelectedSymbol(sym)}
-              className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                selectedSymbol === sym
-                  ? "bg-[var(--accent)] text-white"
-                  : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-              }`}
-            >
-              {sym.split("-")[0]}
-            </button>
-          ))}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex gap-1">
+              {ALL_SYMBOLS.map((sym) => (
+                <button
+                  key={sym}
+                  onClick={() => setSelectedSymbol(sym)}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                    selectedSymbol === sym
+                      ? "bg-[var(--accent)] text-white"
+                      : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  {sym.split("-")[0]}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {INTERVALS.map((iv) => (
+                <button
+                  key={iv.label}
+                  onClick={() => setSelectedInterval(iv.value)}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                    selectedInterval === iv.value
+                      ? "bg-[var(--blue)] text-white"
+                      : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  {iv.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="text-right text-xs text-[var(--muted)]">
+            <div>
+              {availableBarCount > 0
+                ? `${availableBarCount} bars · ${formatVisibleWindow(interval.value, availableBarCount)} visible`
+                : `Target window ${interval.targetWindow}`}
+            </div>
+            <div>{selectedSymbol.replace("-USD", "")} from native Binance history with live 1-minute patching</div>
+          </div>
         </div>
-        <div className="flex gap-1">
-          {INTERVALS.map((iv, idx) => (
-            <button
-              key={iv.label}
-              onClick={() => setSelectedInterval(idx)}
-              className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                selectedInterval === idx
-                  ? "bg-[var(--blue)] text-white"
-                  : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-              }`}
-            >
-              {iv.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+            Indicators
+          </span>
+          {OVERLAY_OPTIONS.map((option) => {
+            const unavailable = availableBarCount > 0 && availableBarCount < option.minBars;
+            const active = overlays[option.key];
+            return (
+              <button
+                key={option.key}
+                type="button"
+                disabled={unavailable}
+                title={unavailable ? `Needs ${option.minBars} bars on this timeframe` : undefined}
+                onClick={() =>
+                  setOverlays((current) => ({
+                    ...current,
+                    [option.key]: !current[option.key],
+                  }))
+                }
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                  unavailable
+                    ? "cursor-not-allowed border-[var(--line)] bg-[var(--panel)]/50 text-[var(--muted)] opacity-45"
+                    : active
+                      ? "border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--text)]"
+                      : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+                }`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
         </div>
+        {shortHistory && (
+          <div className="text-xs text-[var(--muted)]">
+            Showing {availableBarCount} {interval.label} bars cached so far. Missing history is backfilled from Binance and then stored locally.
+          </div>
+        )}
       </div>
 
       {/* Candlestick chart */}
@@ -898,8 +1172,7 @@ export default function CryptoPage() {
       )}
       {!historyLoading && !chartResult && connected && (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--muted)]">
-          No chart data available yet. Bars accumulate as the feed runs (1 bar
-          per minute).
+          No chart data available yet. The app will backfill Binance history for this symbol and timeframe on demand.
         </div>
       )}
       {!historyLoading && !chartResult && !connected && (
@@ -909,6 +1182,11 @@ export default function CryptoPage() {
       )}
 
       <StructureCard structure={structureData} />
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <BtcSpyCorrelationCard correlation={btcSpyCorrelation} />
+        <CryptoBreadthCard market={cryptoMarketStructure} />
+      </div>
 
       {/* Technical indicator cards */}
       {indicators && (
@@ -927,7 +1205,8 @@ export default function CryptoPage() {
       {/* Info footer */}
       <div className="text-xs text-[var(--muted)]">
         Data source: Binance WebSocket (public, no API key) &middot; multi-timeframe
-        aggregation from persisted 1-minute bars &middot; prices in USDT
+        aggregation from persisted 1-minute bars &middot; longer higher-timeframe windows
+        depend on retained history &middot; prices in USDT
       </div>
     </div>
   );

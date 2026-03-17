@@ -107,7 +107,28 @@ class TestMarketSentimentEndpoint:
             "headlines": [],
         },
     )
-    def test_market_sentiment_exposes_methodology_metadata(self, _mock_news, test_app):
+    @patch(
+        "trader_koo.structure.fear_greed.get_social_sentiment",
+        return_value={
+            "provider": "reddit_public_json",
+            "source_type": "social",
+            "available": False,
+            "score": None,
+            "raw_score": None,
+            "label": None,
+            "post_count": 0,
+            "subreddit_count": 3,
+            "updated_at": "2026-03-17T12:00:00Z",
+            "lookback_hours": 24,
+            "subreddits": ["stocks", "investing", "wallstreetbets"],
+            "note": "No Reddit posts passed the engagement and keyword filters for the current window.",
+            "bullish_terms_total": 0,
+            "bearish_terms_total": 0,
+            "posts": [],
+            "source_breakdown": [],
+        },
+    )
+    def test_market_sentiment_exposes_methodology_metadata(self, _mock_social, _mock_news, test_app):
         response = test_app.get("/api/fear-greed")
 
         assert response.status_code == 200
@@ -117,13 +138,17 @@ class TestMarketSentimentEndpoint:
         assert data["methodology"] == "internal_market_composite"
         assert data["uses_social_sentiment"] is False
         assert isinstance(data["summary"], str)
-        assert "No social or news scraping".lower() in data["summary"].lower()
+        assert "External news and social pulses".lower() in data["summary"].lower()
         assert isinstance(data["basis"], list)
         assert "SPY vs 125-day moving average" in data["basis"]
         assert "VIX level" in data["basis"]
         assert "external_news" in data
+        assert "social_sentiment" in data
         assert data["external_news"]["provider"] == "alpha_vantage"
         assert data["external_news"]["source_type"] == "news"
+        assert data["social_sentiment"]["provider"] == "reddit_public_json"
+        assert "methodology_meta" in data
+        assert data["methodology_meta"]["version"] == "2026-03-17.market-sentiment-v2"
         assert data["blended_score"] is None
         assert isinstance(data["components"], list)
         assert len(data["components"]) == 5
@@ -146,7 +171,28 @@ class TestMarketSentimentEndpoint:
             "headlines": [],
         },
     )
-    def test_market_sentiment_alias_returns_200(self, _mock_news, test_app):
+    @patch(
+        "trader_koo.structure.fear_greed.get_social_sentiment",
+        return_value={
+            "provider": "reddit_public_json",
+            "source_type": "social",
+            "available": False,
+            "score": None,
+            "raw_score": None,
+            "label": None,
+            "post_count": 0,
+            "subreddit_count": 3,
+            "updated_at": "2026-03-17T12:00:00Z",
+            "lookback_hours": 24,
+            "subreddits": ["stocks", "investing", "wallstreetbets"],
+            "note": "No Reddit posts passed the engagement and keyword filters for the current window.",
+            "bullish_terms_total": 0,
+            "bearish_terms_total": 0,
+            "posts": [],
+            "source_breakdown": [],
+        },
+    )
+    def test_market_sentiment_alias_returns_200(self, _mock_social, _mock_news, test_app):
         response = test_app.get("/api/market-sentiment")
 
         assert response.status_code == 200

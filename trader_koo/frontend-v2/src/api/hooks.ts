@@ -13,6 +13,8 @@ import type {
   CryptoHistoryPayload,
   CryptoIndicatorsPayload,
   CryptoStructurePayload,
+  CryptoCorrelationPayload,
+  CryptoMarketStructurePayload,
   VixMetricsPayload,
   FearGreedPayload,
 } from "./types";
@@ -140,6 +142,30 @@ export function useCryptoStructure(symbol: string, interval = "1m", limit = 240)
         `/api/crypto/structure/${symbol}?interval=${interval}&limit=${limit}`,
       ),
     staleTime: 10_000,
+  });
+}
+
+export function useCryptoCorrelation(symbol = "BTC-USD", benchmark = "SPY", limit = 40) {
+  return useQuery({
+    queryKey: ["crypto-correlation", symbol, benchmark, limit],
+    queryFn: () =>
+      apiFetch<CryptoCorrelationPayload>(
+        `/api/crypto/correlation/${symbol}?benchmark=${benchmark}&limit=${limit}`,
+      ),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+}
+
+export function useCryptoMarketStructure(interval = "1h", limit = 168) {
+  return useQuery({
+    queryKey: ["crypto-market-structure", interval, limit],
+    queryFn: () =>
+      apiFetch<CryptoMarketStructurePayload>(
+        `/api/crypto/market-structure?interval=${interval}&limit=${limit}`,
+      ),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 }
 

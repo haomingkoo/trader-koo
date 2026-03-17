@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useChart } from "../api/hooks";
-import { apiFetch } from "../api/client";
 import { useChartStore } from "../stores/chartStore";
+import { useLiveEquityPrice } from "../hooks/useLiveEquityPrice";
 import type {
   DashboardPayload,
   LevelRow,
@@ -162,15 +162,143 @@ interface PlotlyAnnotation {
   align?: string;
 }
 
+const CHART_OVERLAY_OPTIONS = [
+  { key: "ma20", label: "20 MA", minBars: 20 },
+  { key: "ma50", label: "50 MA", minBars: 50 },
+  { key: "ma200", label: "200 MA", minBars: 200 },
+  { key: "bollinger", label: "Bollinger", minBars: 20 },
+] as const;
+
+type ChartOverlayKey = (typeof CHART_OVERLAY_OPTIONS)[number]["key"];
+type ChartOverlayState = Record<ChartOverlayKey, boolean>;
+
+const DEFAULT_CHART_OVERLAYS: ChartOverlayState = {
+  ma20: true,
+  ma50: true,
+  ma200: false,
+  bollinger: false,
+};
+
+function computeRollingBollinger(
+  values: number[],
+  period: number,
+  stdDev: number,
+): { upper: (number | null)[]; middle: (number | null)[]; lower: (number | null)[] } {
+  return values.map((_, idx) => {
+    if (idx < period - 1) {
+      return { upper: null, middle: null, lower: null };
+    }
+    const window = values.slice(idx - period + 1, idx + 1);
+    const mean = window.reduce((a, b) => a + b, 0) / period;
+    const variance =
+      window.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
+    const sd = Math.sqrt(variance);
+    return {
+      upper: mean + stdDev * sd,
+      middle: mean,
+      lower: mean - stdDev * sd,
+    };
+  }).reduce(
+    (acc, row) => {
+      acc.upper.push(row.upper);
+      acc.middle.push(row.middle);
+      acc.lower.push(row.lower);
+      return acc;
+    },
+    { upper: [] as (number | null)[], middle: [] as (number | null)[], lower: [] as (number | null)[] },
+  );
+}
+
+function defaultThreeMonthRange(dates: string[]): [string, string] | undefined {
+  if (dates.length === 0) return undefined;
+  const end = new Date(dates[dates.length - 1]);
+  if (Number.isNaN(end.getTime())) return undefined;
+  const start = new Date(end);
+  start.setMonth(start.getMonth() - 3);
+  const earliest = new Date(dates[0]);
+  if (!Number.isNaN(earliest.getTime()) && start < earliest) {
+    return [dates[0], dates[dates.length - 1]];
+  }
+  return [start.toISOString(), end.toISOString()];
+}
+
+function nyDateStringFromIso(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (!year || !month || !day) return null;
+  return `${year}-${month}-${day}`;
+}
+
+function applyLivePriceToPayload(
+  payload: DashboardPayload | undefined,
+  livePrice: EquityTick | null,
+): DashboardPayload | undefined {
+  if (!payload || !livePrice || livePrice.symbol !== payload.ticker) {
+    return payload;
+  }
+  const chart = payload.chart ?? [];
+  if (chart.length === 0) return payload;
+
+  const sessionDate =
+    nyDateStringFromIso(livePrice.timestamp) ?? chart[chart.length - 1]?.date;
+  if (!sessionDate) return payload;
+
+  const nextChart = [...chart];
+  const lastBar = nextChart[nextChart.length - 1];
+  if (lastBar.date === sessionDate) {
+    nextChart[nextChart.length - 1] = {
+      ...lastBar,
+      high: Math.max(lastBar.high, livePrice.price),
+      low: Math.min(lastBar.low, livePrice.price),
+      close: livePrice.price,
+    };
+  } else {
+    const open = livePrice.prev_price ?? lastBar.close;
+    nextChart.push({
+      date: sessionDate,
+      open,
+      high: Math.max(open, livePrice.price),
+      low: Math.min(open, livePrice.price),
+      close: livePrice.price,
+      volume: 0,
+      ma20: null,
+      ma50: null,
+      ma100: null,
+      ma200: null,
+      atr: null,
+      atr_pct: null,
+    });
+  }
+
+  return {
+    ...payload,
+    chart: nextChart,
+    fundamentals: {
+      ...payload.fundamentals,
+      price: livePrice.price,
+    },
+  };
+}
+
 function buildChartData(
   payload: DashboardPayload,
   isWeekly: boolean,
+  overlays: ChartOverlayState,
 ) {
   const rawChart = payload.chart ?? [];
   const chart = isWeekly ? resampleToWeekly(rawChart) : rawChart;
   const levels = payload.levels ?? [];
   const gaps = payload.gaps ?? [];
-  const trendlines = payload.trendlines ?? [];
   const yoloPatterns = payload.yolo_patterns ?? [];
   const earningsMarkers = payload.earnings_markers ?? [];
   const candlePatterns = payload.candlestick_patterns ?? [];
@@ -205,46 +333,6 @@ function buildChartData(
       },
     },
     {
-      type: "scatter",
-      mode: "lines",
-      x,
-      y: ma(close, 20),
-      name: "MA20",
-      line: { color: "#6aa9ff", width: 1.2 },
-      xaxis: "x",
-      yaxis: "y",
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x,
-      y: ma(close, 50),
-      name: "MA50",
-      line: { color: "#f8c24e", width: 1.2 },
-      xaxis: "x",
-      yaxis: "y",
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x,
-      y: ma(close, 100),
-      name: "MA100",
-      line: { color: "#38d39f", width: 1.2, dash: "dot" },
-      xaxis: "x",
-      yaxis: "y",
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x,
-      y: ma(close, 200),
-      name: "MA200",
-      line: { color: "#c07bff", width: 1.2, dash: "dot" },
-      xaxis: "x",
-      yaxis: "y",
-    },
-    {
       type: "bar",
       x,
       y: vol,
@@ -260,6 +348,76 @@ function buildChartData(
       yaxis: "y2",
     },
   ];
+
+  if (overlays.ma20) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: ma(close, 20),
+      name: "MA20",
+      line: { color: "#6aa9ff", width: 1.2 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+  if (overlays.ma50) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: ma(close, 50),
+      name: "MA50",
+      line: { color: "#f8c24e", width: 1.2 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+  if (overlays.ma200) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: ma(close, 200),
+      name: "MA200",
+      line: { color: "#c07bff", width: 1.2 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+  if (overlays.bollinger) {
+    const bb = computeRollingBollinger(close, 20, 2);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: bb.upper,
+      name: "BB Upper",
+      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      xaxis: "x",
+      yaxis: "y",
+    });
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: bb.middle,
+      name: "BB Mid",
+      line: { color: "rgba(186,130,255,0.85)", width: 1 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: bb.lower,
+      name: "BB Lower",
+      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
 
   // Candlestick pattern markers
   if (candlePatterns.length > 0) {
@@ -424,27 +582,6 @@ function buildChartData(
           ? "rgba(248,194,78,0.22)"
           : "rgba(106,169,255,0.20)",
       line: { width: 1, color: "rgba(142,160,189,0.6)" },
-    });
-  });
-
-  // Trendlines
-  trendlines.forEach((t) => {
-    const tAny = t as unknown as Record<string, unknown>;
-    const y0 = Number(tAny.y0);
-    const y1 = Number(tAny.y1);
-    if (Number.isNaN(y0) || Number.isNaN(y1)) return;
-    const color = String(t.type ?? "").includes("support")
-      ? "#38d39f"
-      : "#ff6b6b";
-    shapes.push({
-      type: "line",
-      xref: "x",
-      yref: "y",
-      x0: String(tAny.x0_date ?? ""),
-      x1: String(tAny.x1_date ?? ""),
-      y0,
-      y1,
-      line: { color, width: 1.6, dash: "dot" },
     });
   });
 
@@ -655,6 +792,7 @@ function buildChartData(
     xaxis: {
       gridcolor: "rgba(255,255,255,0.04)",
       rangeslider: { visible: false },
+      range: defaultThreeMonthRange(x),
       rangebreaks: isWeekly
         ? [{ bounds: ["sat", "mon"] }]
         : [{ bounds: ["sat", "mon"] }],
@@ -1159,11 +1297,10 @@ export default function ChartPage() {
   const [searchParams] = useSearchParams();
   const [inputValue, setInputValue] = useState(ticker);
   const [commentaryExpanded, setCommentaryExpanded] = useState(true);
-
-  // Real-time equity streaming state
-  const [livePrice, setLivePrice] = useState<EquityTick | null>(null);
-  const [streamingActive, setStreamingActive] = useState(false);
-  const prevTickerRef = useRef<string>("");
+  const [chartOverlays, setChartOverlays] = useState<ChartOverlayState>(
+    DEFAULT_CHART_OVERLAYS,
+  );
+  const { livePrice, streamingActive } = useLiveEquityPrice(ticker);
 
   // Pick up ticker from URL query param ?t=AAPL
   useEffect(() => {
@@ -1178,63 +1315,6 @@ export default function ChartPage() {
   }, [searchParams, setTicker, ticker]);
 
   const { data, isLoading, error, refetch } = useChart(ticker);
-
-  // Subscribe to real-time streaming when ticker changes
-  useEffect(() => {
-    if (!ticker) return;
-
-    // Unsubscribe previous ticker (fire-and-forget)
-    const prev = prevTickerRef.current;
-    if (prev && prev !== ticker) {
-      apiFetch(`/api/streaming/unsubscribe/${prev}`, { method: "POST" }).catch(() => {});
-    }
-    prevTickerRef.current = ticker;
-
-    // Subscribe to new ticker
-    setLivePrice(null);
-    setStreamingActive(false);
-    apiFetch<{ ok: boolean }>(`/api/streaming/subscribe/${ticker}`, { method: "POST" })
-      .then((res) => {
-        if (res.ok) setStreamingActive(true);
-      })
-      .catch(() => {
-        setStreamingActive(false);
-      });
-
-    // Poll for live price via GET endpoint (also auto-subscribes)
-    const interval = setInterval(() => {
-      apiFetch<{ ok: boolean; price?: number; volume?: number; timestamp?: string; prev_price?: number | null }>(
-        `/api/streaming/price/${ticker}`,
-      )
-        .then((res) => {
-          if (res.price != null) {
-            setLivePrice({
-              symbol: ticker,
-              price: res.price,
-              volume: res.volume ?? 0,
-              timestamp: res.timestamp ?? "",
-              prev_price: res.prev_price ?? null,
-            });
-            setStreamingActive(true);
-          }
-        })
-        .catch(() => {});
-    }, 3000);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [ticker]);
-
-  // Unsubscribe on unmount
-  useEffect(() => {
-    return () => {
-      const prev = prevTickerRef.current;
-      if (prev) {
-        apiFetch(`/api/streaming/unsubscribe/${prev}`, { method: "POST" }).catch(() => {});
-      }
-    };
-  }, []);
 
   const handleLoad = useCallback(() => {
     const clean = inputValue.trim().toUpperCase();
@@ -1257,14 +1337,25 @@ export default function ChartPage() {
     target_price: null,
     discount_pct: null,
   };
+  const currentPrice = livePrice?.price ?? fundamentals.price;
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
   const commentary = data?.chart_commentary ?? null;
   const isWeekly = timeframe === "weekly";
+  const livePayload = useMemo(
+    () => applyLivePriceToPayload(data, livePrice),
+    [data, livePrice],
+  );
 
   const chartResult = useMemo(() => {
-    if (!data || !data.chart || data.chart.length === 0) return null;
-    return buildChartData(data, isWeekly);
-  }, [data, isWeekly]);
+    if (!livePayload || !livePayload.chart || livePayload.chart.length === 0) {
+      return null;
+    }
+    return buildChartData(livePayload, isWeekly, chartOverlays);
+  }, [livePayload, isWeekly, chartOverlays]);
+
+  const chartBarCount = (
+    isWeekly ? resampleToWeekly(livePayload?.chart ?? []) : livePayload?.chart ?? []
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -1354,6 +1445,44 @@ export default function ChartPage() {
         </Link>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+          Indicators
+        </span>
+        {CHART_OVERLAY_OPTIONS.map((option) => {
+          const unavailable = chartBarCount > 0 && chartBarCount < option.minBars;
+          const active = chartOverlays[option.key];
+          return (
+            <button
+              key={option.key}
+              type="button"
+              disabled={unavailable}
+              title={unavailable ? `Needs ${option.minBars} bars on this timeframe` : undefined}
+              onClick={() =>
+                setChartOverlays((current) => ({
+                  ...current,
+                  [option.key]: !current[option.key],
+                }))
+              }
+              className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                unavailable
+                  ? "cursor-not-allowed border-[var(--line)] bg-[var(--panel)]/50 text-[var(--muted)] opacity-45"
+                  : active
+                    ? "border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--text)]"
+                    : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+        {chartBarCount > 0 && (
+          <span className="text-xs text-[var(--muted)]">
+            Default view opens on the latest 3 months.
+          </span>
+        )}
+      </div>
+
       {isLoading && <Spinner className="mt-12" />}
       {error && (
         <div className="mt-4 text-center text-sm text-[var(--red)]">
@@ -1367,7 +1496,7 @@ export default function ChartPage() {
           <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <GlassCard
               label="Price"
-              value={fundamentals.price != null ? `$${fundamentals.price.toFixed(2)}` : "\u2014"}
+              value={currentPrice != null ? `$${currentPrice.toFixed(2)}` : "\u2014"}
             />
             <GlassCard
               label="P/E"

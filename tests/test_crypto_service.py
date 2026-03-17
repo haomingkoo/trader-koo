@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 
 from trader_koo.crypto.models import CryptoBar
-from trader_koo.crypto.service import _aggregate_bars
+from trader_koo.crypto.service import _aggregate_bars, _backfill_target_limit, get_crypto_history
 
 
 def _bar(minute: int, open_: float, high: float, low: float, close: float, volume: float) -> CryptoBar:
@@ -43,3 +43,82 @@ def test_aggregate_bars_to_5m_ohlcv():
     second = aggregated[1]
     assert second.open == 103.5
     assert second.close == 104.0
+
+
+def test_backfill_target_limit_prefers_deeper_defaults():
+    assert _backfill_target_limit("1d", 90) == 1825
+    assert _backfill_target_limit("1w", 40) == 260
+    assert _backfill_target_limit("1h", 240) == 2160
+    assert _backfill_target_limit("30m", 500) == 2160
+    assert _backfill_target_limit("1m", 720) == 10080
+    assert _backfill_target_limit("1m", 12000) == 12000
+
+
+def test_get_crypto_history_uses_native_interval_backfill(monkeypatch):
+    bars = [
+        CryptoBar(
+            symbol="BTC-USD",
+            timestamp=dt.datetime(2026, 3, 17, 0, 0, tzinfo=dt.timezone.utc) + dt.timedelta(days=idx),
+            interval="1d",
+            open=100.0 + idx,
+            high=101.0 + idx,
+            low=99.0 + idx,
+            close=100.5 + idx,
+            volume=10.0 + idx,
+        )
+        for idx in range(5)
+    ]
+    calls: list[tuple[str, int, str]] = []
+
+    def fake_load(symbol: str, limit: int, interval: str = "1m") -> list[CryptoBar]:
+        calls.append((symbol, limit, interval))
+        if len(calls) == 1:
+            return []
+        return bars
+
+    monkeypatch.setattr("trader_koo.crypto.service._load_recent_bars_from_db", fake_load)
+    monkeypatch.setattr(
+        "trader_koo.crypto.service._backfill_history",
+        lambda symbol, interval, limit: bars,
+    )
+
+    result = get_crypto_history("BTC-USD", interval="1d", limit=5)
+
+    assert len(result) == 5
+    assert result[0].interval == "1d"
+    assert calls[0][2] == "1d"
+
+
+def test_get_crypto_history_supports_weekly_native_backfill(monkeypatch):
+    bars = [
+        CryptoBar(
+            symbol="BTC-USD",
+            timestamp=dt.datetime(2025, 1, 6, tzinfo=dt.timezone.utc) + dt.timedelta(weeks=idx),
+            interval="1w",
+            open=100.0 + idx,
+            high=101.0 + idx,
+            low=99.0 + idx,
+            close=100.5 + idx,
+            volume=10.0 + idx,
+        )
+        for idx in range(8)
+    ]
+    calls: list[tuple[str, int, str]] = []
+
+    def fake_load(symbol: str, limit: int, interval: str = "1m") -> list[CryptoBar]:
+        calls.append((symbol, limit, interval))
+        if interval == "1w" and len(calls) > 1:
+            return bars
+        return []
+
+    monkeypatch.setattr("trader_koo.crypto.service._load_recent_bars_from_db", fake_load)
+    monkeypatch.setattr(
+        "trader_koo.crypto.service._backfill_history",
+        lambda symbol, interval, limit: bars,
+    )
+
+    result = get_crypto_history("BTC-USD", interval="1w", limit=8)
+
+    assert len(result) == 8
+    assert result[0].interval == "1w"
+    assert calls[0][2] == "1w"

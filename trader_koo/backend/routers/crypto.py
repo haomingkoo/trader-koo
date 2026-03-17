@@ -13,7 +13,12 @@ from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
+from trader_koo.backend.services.database import get_conn
 from trader_koo.crypto.indicators import compute_all_indicators
+from trader_koo.crypto.market_insights import (
+    build_btc_spy_correlation,
+    build_crypto_market_structure,
+)
 from trader_koo.crypto.structure import build_crypto_structure
 from trader_koo.crypto.service import (
     get_crypto_history,
@@ -26,6 +31,8 @@ from trader_koo.crypto.service import (
 LOG = logging.getLogger("trader_koo.routers.crypto")
 
 router = APIRouter(tags=["crypto"])
+
+_TRACKED_SYMBOLS = ("BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD")
 
 # Symbol aliases → canonical display name
 _SYMBOL_ALIASES: dict[str, str] = {
@@ -68,8 +75,8 @@ def crypto_prices() -> dict[str, Any]:
 @router.get("/api/crypto/history/{symbol}")
 def crypto_history(
     symbol: str,
-    interval: str = Query("1m", description="Bar interval: 1m, 5m, 15m, 1h, 4h, 1d"),
-    limit: int = Query(100, ge=1, le=1440, description="Max bars to return"),
+    interval: str = Query("1m", description="Bar interval: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 1w"),
+    limit: int = Query(100, ge=1, le=5000, description="Max bars to return"),
 ) -> dict[str, Any]:
     """Recent OHLCV bars for a crypto symbol."""
     normalised = _normalise_symbol(symbol)
@@ -97,8 +104,8 @@ def crypto_history(
 @router.get("/api/crypto/structure/{symbol}")
 def crypto_structure(
     symbol: str,
-    interval: str = Query("1m", description="Structure interval: 1m, 5m, 15m, 1h, 4h, 1d"),
-    limit: int = Query(240, ge=20, le=1440, description="Max bars to analyze"),
+    interval: str = Query("1m", description="Structure interval: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 1w"),
+    limit: int = Query(240, ge=20, le=5000, description="Max bars to analyze"),
 ) -> dict[str, Any]:
     """Support/resistance zones, trendlines, and HMM regime context for crypto."""
     normalised = _normalise_symbol(symbol)
@@ -107,6 +114,51 @@ def crypto_structure(
         "ok": True,
         **build_crypto_structure(normalised, bars, interval=interval),
     }
+
+
+@router.get("/api/crypto/correlation/{symbol}")
+def crypto_correlation(
+    symbol: str,
+    benchmark: str = Query("SPY", description="Benchmark equity ticker from price_daily"),
+    limit: int = Query(40, ge=10, le=90, description="Max daily crypto bars to align"),
+) -> dict[str, Any]:
+    """Cross-asset correlation and relative-strength snapshot versus a benchmark."""
+    normalised = _normalise_symbol(symbol)
+    bars = get_crypto_history(normalised, interval="1d", limit=limit)
+    conn = get_conn()
+    try:
+        return {
+            "ok": True,
+            **build_btc_spy_correlation(
+                conn,
+                asset_symbol=normalised,
+                benchmark_symbol=str(benchmark or "SPY").upper(),
+                asset_bars=bars,
+            ),
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/api/crypto/market-structure")
+def crypto_market_structure(
+    interval: str = Query("1h", description="Structure interval: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 1w"),
+    limit: int = Query(240, ge=20, le=5000, description="Max bars to analyze per symbol"),
+) -> dict[str, Any]:
+    """Broad crypto breadth, volatility, and level-context snapshot."""
+    summaries = (get_crypto_summary() or {}).get("prices") or {}
+    structures = []
+    for symbol in _TRACKED_SYMBOLS:
+        bars = get_crypto_history(symbol, interval=interval, limit=limit)
+        structures.append(
+            build_crypto_structure(symbol, bars, interval=interval, include_hmm=False),
+        )
+    payload = build_crypto_market_structure(
+        interval=interval,
+        summaries=summaries,
+        structures=structures,
+    )
+    return payload
 
 
 @router.get("/api/crypto/summary")

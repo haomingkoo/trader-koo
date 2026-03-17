@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useFearGreed } from "../api/hooks";
-import type { ExternalNewsSentiment, FearGreedComponent } from "../api/types";
+import type {
+  ExternalNewsSentiment,
+  FearGreedComponent,
+  SocialSentiment,
+} from "../api/types";
 
 /* ── Zone definitions matching backend ── */
 const ZONES: Array<[number, number, string, string]> = [
@@ -18,7 +22,7 @@ function fgPolarToCartesian(
   r: number,
   angleDeg: number,
 ) {
-  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  const rad = (angleDeg * Math.PI) / 180;
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
 }
 
@@ -29,10 +33,10 @@ function fgDescribeArc(
   startAngle: number,
   endAngle: number,
 ) {
-  const start = fgPolarToCartesian(cx, cy, r, endAngle);
-  const end = fgPolarToCartesian(cx, cy, r, startAngle);
+  const start = fgPolarToCartesian(cx, cy, r, startAngle);
+  const end = fgPolarToCartesian(cx, cy, r, endAngle);
   const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
 }
 
 /* ── SVG Semicircular Gauge ── */
@@ -383,6 +387,94 @@ function NewsPulseCard({
   );
 }
 
+function SocialPulseCard({ social }: { social: SocialSentiment }) {
+  return (
+    <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg)]/55 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
+            Reddit Social Pulse
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">
+              {social.provider.replaceAll("_", " ")}
+            </span>
+            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] text-[var(--muted)]">
+              {social.lookback_hours}h window
+            </span>
+            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] text-[var(--muted)]">
+              {social.post_count} posts
+            </span>
+          </div>
+        </div>
+        {social.available && social.score !== null ? (
+          <div className="text-right">
+            <div className="text-2xl font-bold tabular-nums text-[var(--text)]">{social.score}</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+              {social.label ?? "Social pulse"}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <p className="mt-3 text-sm text-[var(--muted)]">{social.note}</p>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-3 text-xs">
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/75 p-3">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Subreddits</div>
+          <div className="mt-1 font-semibold text-[var(--text)]">{social.subreddit_count}</div>
+        </div>
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/75 p-3">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Bull Terms</div>
+          <div className="mt-1 font-semibold text-[var(--green)]">{social.bullish_terms_total}</div>
+        </div>
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/75 p-3">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Bear Terms</div>
+          <div className="mt-1 font-semibold text-[var(--red)]">{social.bearish_terms_total}</div>
+        </div>
+      </div>
+
+      {social.posts.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {social.posts.slice(0, 3).map((post) => (
+            <a
+              key={`${post.subreddit}-${post.title}`}
+              href={post.url ?? undefined}
+              target={post.url ? "_blank" : undefined}
+              rel={post.url ? "noreferrer" : undefined}
+              className="block rounded-xl border border-[var(--line)] bg-[var(--panel)]/70 p-3 transition-colors hover:border-[var(--accent)]"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-[var(--text)]">{post.title}</div>
+                  <div className="mt-1 text-[11px] text-[var(--muted)]">
+                    {`r/${post.subreddit} · ${post.upvotes} upvotes · ${post.num_comments} comments`}
+                  </div>
+                  {post.excerpt ? (
+                    <div className="mt-1 text-[11px] text-[var(--muted)]/90">
+                      {post.excerpt}
+                    </div>
+                  ) : null}
+                </div>
+                {post.sentiment_score !== null ? (
+                  <div className="shrink-0 text-right">
+                    <div className="text-sm font-semibold tabular-nums text-[var(--text)]">
+                      {post.sentiment_score}
+                    </div>
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
+                      {post.label ?? "Pulse"}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /* ── Main component ── */
 export default function FearGreedGauge() {
   const { data, isLoading, error } = useFearGreed();
@@ -426,10 +518,12 @@ export default function FearGreedGauge() {
     basis,
     uses_social_sentiment,
     external_news,
+    social_sentiment,
     blended_score,
     blended_label,
     blended_color,
     blended_summary,
+    methodology_meta,
   } = data;
 
   return (
@@ -457,10 +551,13 @@ export default function FearGreedGauge() {
                 Internal Composite
               </span>
               <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                {uses_social_sentiment ? "Social Signals" : "No Social Scraping"}
+                {uses_social_sentiment ? "Reddit Pulse Live" : "Social Pulse Optional"}
               </span>
               <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
                 {external_news.available ? "News Source Live" : "News Source Optional"}
+              </span>
+              <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                {methodology_meta.version}
               </span>
             </div>
             <p className="text-sm text-[var(--muted)]">{summary}</p>
@@ -492,6 +589,8 @@ export default function FearGreedGauge() {
             blendedSummary={blended_summary}
           />
 
+          <SocialPulseCard social={social_sentiment} />
+
           {/* Expand/collapse button for components */}
           <button
             onClick={() => setExpanded((p) => !p)}
@@ -513,7 +612,7 @@ export default function FearGreedGauge() {
 
       {/* NFA disclaimer */}
       <p className="mt-3 text-[10px] text-[var(--muted)]">
-        This market sentiment gauge is for educational purposes only. The core score is still our internal market-data composite. External news sentiment is optional, and Twitter/Reddit-style social scraping is not included yet.
+        This market sentiment gauge is for educational purposes only. The core score is still our internal market-data composite. External news and Reddit social sentiment are optional overlays and should be treated as context, not trade instructions.
       </p>
     </div>
   );

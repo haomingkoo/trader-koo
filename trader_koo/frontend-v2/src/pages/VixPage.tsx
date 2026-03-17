@@ -22,12 +22,14 @@ const formatState = (s: string): string =>
 
 /* ── Gauge zones: [lo, hi, label, color] ── */
 const GAUGE_ZONES: Array<[number, number, string, string]> = [
-  [0, 12, "Complacency", "#0d9f6e"],
-  [12, 18, "Calm", "#4caf50"],
-  [18, 24, "Caution", "#f8c24e"],
-  [24, 32, "Stress", "#ff9800"],
-  [32, 50, "Fear", "#ff6b6b"],
-  [50, 80, "Panic", "#d32f2f"],
+  [0, 12, "Complacency", "#00c853"],
+  [12, 16, "Calm", "#4caf50"],
+  [16, 20, "Normal", "#c0ca33"],
+  [20, 25, "Caution", "#fdd835"],
+  [25, 30, "Stress", "#ff9800"],
+  [30, 40, "Fear", "#f44336"],
+  [40, 60, "Extreme Fear", "#b71c1c"],
+  [60, 80, "Panic", "#5b1521"],
 ];
 
 const GAUGE_MAX = 80;
@@ -39,7 +41,7 @@ function vixPolarToCartesian(
   r: number,
   angleDeg: number,
 ) {
-  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  const rad = (angleDeg * Math.PI) / 180;
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
 }
 
@@ -50,10 +52,10 @@ function vixDescribeArc(
   startAngle: number,
   endAngle: number,
 ) {
-  const start = vixPolarToCartesian(cx, cy, r, endAngle);
-  const end = vixPolarToCartesian(cx, cy, r, startAngle);
+  const start = vixPolarToCartesian(cx, cy, r, startAngle);
+  const end = vixPolarToCartesian(cx, cy, r, endAngle);
   const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
 }
 
 /* ── SVG VIX Gauge ── */
@@ -63,8 +65,7 @@ function VixGauge({ vixClose }: { vixClose: number }) {
   const r = 120;
   const arcWidth = 14;
 
-  // Semicircle: 180 deg (left) to 360 deg (right)
-  // Map VIX 0 -> 180 deg, VIX 80 -> 360 deg
+  // Semicircle: 180 deg (left) to 360 deg (right), sweeping across the top.
   const vixToAngle = (v: number) => 180 + (v / GAUGE_MAX) * 180;
 
   // Build zone arc paths
@@ -82,9 +83,9 @@ function VixGauge({ vixClose }: { vixClose: number }) {
   // Current zone
   const currentZone = GAUGE_ZONES.find(
     ([lo, hi]) => vixClose >= lo && vixClose < hi,
-  );
-  const zoneLabel = currentZone ? currentZone[2] : "Panic";
-  const zoneColor = currentZone ? currentZone[3] : "#d32f2f";
+  ) ?? GAUGE_ZONES[GAUGE_ZONES.length - 1];
+  const zoneLabel = currentZone[2];
+  const zoneColor = currentZone[3];
 
   const needleLen = r - arcWidth / 2 - 6;
 
@@ -359,10 +360,10 @@ function TermStructureCard({ metrics }: { metrics: VixMetricsPayload }) {
 function PercentileCard({ metrics }: { metrics: VixMetricsPayload }) {
   const zone = metrics.percentile_zone;
   const variant: "green" | "red" | "amber" | "muted" =
-    zone === "extreme_high" || zone === "elevated"
+    zone === "extreme_high"
       ? "red"
-      : zone === "extreme_low" || zone === "low"
-        ? "green"
+      : zone === "elevated" || zone === "extreme_low" || zone === "low"
+        ? "amber"
         : "muted";
 
   return (
@@ -375,8 +376,8 @@ function PercentileCard({ metrics }: { metrics: VixMetricsPayload }) {
         {formatState(zone)}
       </Badge>
       {metrics.above_80th_pctile && (
-        <div className="mt-1 text-[10px] font-semibold text-[var(--amber)]">
-          Above 80th pctile -- historically optimal buy signal
+        <div className="mt-1 text-[10px] font-semibold text-[var(--blue)]">
+          Contrarian note: elevated VIX can improve forward entry conditions after price stabilizes.
         </div>
       )}
     </Card>

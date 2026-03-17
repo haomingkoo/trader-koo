@@ -816,6 +816,83 @@ export interface CryptoStructurePayload {
   context: CryptoStructureContext;
 }
 
+export interface CryptoCorrelationWindow {
+  window_days: number;
+  sample_size: number;
+  correlation: number | null;
+  beta: number | null;
+  asset_return_pct: number | null;
+  benchmark_return_pct: number | null;
+  relative_performance_pct: number | null;
+  ratio_zscore: number | null;
+}
+
+export interface CryptoCorrelationHistoryPoint {
+  date: string;
+  asset_close: number;
+  benchmark_close: number;
+  asset_rebased: number;
+  benchmark_rebased: number;
+}
+
+export interface CryptoCorrelationPayload {
+  ok: boolean;
+  symbol: string;
+  benchmark: string;
+  as_of: string | null;
+  sample_size: number;
+  relationship_label: string;
+  note: string;
+  latest: {
+    asset_close: number | null;
+    benchmark_close: number | null;
+    asset_change_1d_pct: number | null;
+    benchmark_change_1d_pct: number | null;
+  };
+  windows: Record<string, CryptoCorrelationWindow>;
+  aligned_history: CryptoCorrelationHistoryPoint[];
+}
+
+export interface CryptoMarketStructureSymbol {
+  symbol: string;
+  price: number | null;
+  change_pct_24h: number | null;
+  ma_trend: string;
+  level_context: string;
+  support_level: number | null;
+  resistance_level: number | null;
+  pct_to_support: number | null;
+  pct_to_resistance: number | null;
+  atr_pct: number | null;
+  realized_vol_20: number | null;
+  momentum_20: number | null;
+  range_position: number | null;
+  hmm_state: string | null;
+  hmm_confidence: number | null;
+}
+
+export interface CryptoMarketStructurePayload {
+  ok: boolean;
+  interval: string;
+  as_of: string | null;
+  overview: {
+    tracked_symbols: number;
+    bullish_trend_count: number;
+    bearish_or_mixed_count: number;
+    at_support_count: number;
+    at_resistance_count: number;
+    avg_change_pct_24h: number | null;
+    avg_momentum_20: number | null;
+    avg_atr_pct: number | null;
+    avg_realized_vol_20: number | null;
+    volatility_regime: string;
+    market_posture: string;
+  };
+  leaders: CryptoMarketStructureSymbol[];
+  laggards: CryptoMarketStructureSymbol[];
+  symbols: CryptoMarketStructureSymbol[];
+}
+
 /* ── Equity Streaming ── */
 export interface EquityTick {
   symbol: string;
@@ -917,6 +994,60 @@ export interface ExternalNewsSentiment {
   headlines: ExternalSentimentHeadline[];
 }
 
+export interface SocialSentimentPost {
+  title: string;
+  subreddit: string;
+  url: string | null;
+  upvotes: number;
+  num_comments: number;
+  created_at: string | null;
+  excerpt?: string | null;
+  raw_score: number;
+  sentiment_score: number | null;
+  label: string | null;
+  bullish_terms: number;
+  bearish_terms: number;
+  engagement: number;
+}
+
+export interface SocialSentimentBreakdown {
+  subreddit: string;
+  post_count: number;
+  avg_sentiment_score: number | null;
+  note: string | null;
+}
+
+export interface SocialSentiment {
+  provider: string;
+  source_type: string;
+  available: boolean;
+  score: number | null;
+  raw_score: number | null;
+  label: string | null;
+  post_count: number;
+  subreddit_count: number;
+  updated_at: string | null;
+  lookback_hours: number;
+  subreddits: string[];
+  note: string;
+  bullish_terms_total: number;
+  bearish_terms_total: number;
+  posts: SocialSentimentPost[];
+  source_breakdown: SocialSentimentBreakdown[];
+}
+
+export interface MethodologyMeta {
+  version: string;
+  internal_model: string;
+  configured_weights: Record<string, number>;
+  active_weights: Record<string, number>;
+  blend_formula: string | null;
+  optional_sources: {
+    external_news: string;
+    social_sentiment: string;
+  };
+}
+
 export interface FearGreedPayload {
   ok: boolean;
   score: number | null;
@@ -930,10 +1061,12 @@ export interface FearGreedPayload {
   basis: string[];
   uses_social_sentiment: boolean;
   external_news: ExternalNewsSentiment;
+  social_sentiment: SocialSentiment;
   blended_score: number | null;
   blended_label: string | null;
   blended_color: string | null;
   blended_summary: string | null;
+  methodology_meta: MethodologyMeta;
   components: FearGreedComponent[];
   error?: string;
 }

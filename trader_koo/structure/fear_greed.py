@@ -23,8 +23,16 @@ import sqlite3
 from typing import Any
 
 from trader_koo.news_sentiment import get_external_news_sentiment
+from trader_koo.social_sentiment import get_social_sentiment
 
 logger = logging.getLogger(__name__)
+
+_METHODOLOGY_VERSION = "2026-03-17.market-sentiment-v2"
+_CONFIGURED_BLEND_WEIGHTS = {
+    "internal": 0.65,
+    "external_news": 0.20,
+    "social_sentiment": 0.15,
+}
 
 _METHODOLOGY_BASIS = [
     "SPY vs 125-day moving average",
@@ -36,7 +44,8 @@ _METHODOLOGY_BASIS = [
 
 _METHODOLOGY_SUMMARY = (
     "Internal market-data composite built from trend, volatility, breadth, "
-    "price strength, and options positioning. No social or news scraping."
+    "price strength, and options positioning. External news and social pulses "
+    "are optional overlays, not replacements for the core score."
 )
 
 # ---------------------------------------------------------------------------
@@ -76,15 +85,71 @@ def _signal_for_score(score: float) -> str:
 def _blended_sentiment(
     internal_score: int | None,
     external_news: dict[str, Any],
-) -> tuple[int | None, str | None, str | None, str | None]:
+    social_sentiment: dict[str, Any],
+) -> tuple[int | None, str | None, str | None, str | None, dict[str, float]]:
+    if internal_score is None:
+        return None, None, None, None, {}
+
+    components: list[tuple[str, float]] = [("internal", float(internal_score))]
     news_score = external_news.get("score")
     news_available = bool(external_news.get("available"))
-    if internal_score is None or not news_available or not isinstance(news_score, int | float):
-        return None, None, None, None
-    blended_score = round(internal_score * 0.75 + float(news_score) * 0.25)
+    if news_available and isinstance(news_score, int | float):
+        components.append(("external_news", float(news_score)))
+
+    social_score = social_sentiment.get("score")
+    social_available = bool(social_sentiment.get("available"))
+    if social_available and isinstance(social_score, int | float):
+        components.append(("social_sentiment", float(social_score)))
+
+    if len(components) <= 1:
+        return None, None, None, None, {}
+
+    active_weights = {
+        name: _CONFIGURED_BLEND_WEIGHTS[name]
+        for name, _value in components
+    }
+    weight_total = sum(active_weights.values())
+    normalized_weights = {
+        name: round(weight / weight_total, 4)
+        for name, weight in active_weights.items()
+    }
+    blended_score = round(
+        sum(value * normalized_weights[name] for name, value in components),
+    )
     blended_label, blended_color = _label_for_score(blended_score)
-    blended_summary = "75% internal market composite + 25% external news sentiment"
-    return blended_score, blended_label, blended_color, blended_summary
+    part_labels = {
+        "internal": "internal market composite",
+        "external_news": "external news sentiment",
+        "social_sentiment": "Reddit social sentiment",
+    }
+    blended_summary = " + ".join(
+        f"{round(normalized_weights[name] * 100)}% {part_labels[name]}"
+        for name, _value in components
+    )
+    return blended_score, blended_label, blended_color, blended_summary, normalized_weights
+
+
+def _build_methodology_meta(
+    *,
+    external_news: dict[str, Any],
+    social_sentiment: dict[str, Any],
+    active_weights: dict[str, float],
+) -> dict[str, Any]:
+    return {
+        "version": _METHODOLOGY_VERSION,
+        "internal_model": "internal_market_composite",
+        "configured_weights": _CONFIGURED_BLEND_WEIGHTS,
+        "active_weights": active_weights,
+        "blend_formula": (
+            "weighted average of internal, news, and social sources using active weights"
+            if active_weights
+            else None
+        ),
+        "optional_sources": {
+            "external_news": str(external_news.get("provider") or "alpha_vantage"),
+            "social_sentiment": str(social_sentiment.get("provider") or "reddit_public_json"),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +508,7 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
     components: list[dict[str, Any]] = []
     valid_scores: list[float] = []
     external_news = get_external_news_sentiment()
+    social_sentiment = get_social_sentiment()
 
     # 1. Market Momentum
     score, detail = _score_market_momentum(conn)
@@ -501,9 +567,10 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
 
     # Compute overall score
     if not valid_scores:
-        blended_score, blended_label, blended_color, blended_summary = _blended_sentiment(
+        blended_score, blended_label, blended_color, blended_summary, active_weights = _blended_sentiment(
             None,
             external_news,
+            social_sentiment,
         )
         return {
             "score": None,
@@ -515,20 +582,27 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
             "methodology": "internal_market_composite",
             "summary": _METHODOLOGY_SUMMARY,
             "basis": _METHODOLOGY_BASIS,
-            "uses_social_sentiment": False,
+            "uses_social_sentiment": bool(social_sentiment.get("available")),
             "external_news": external_news,
+            "social_sentiment": social_sentiment,
             "blended_score": blended_score,
             "blended_label": blended_label,
             "blended_color": blended_color,
             "blended_summary": blended_summary,
+            "methodology_meta": _build_methodology_meta(
+                external_news=external_news,
+                social_sentiment=social_sentiment,
+                active_weights=active_weights,
+            ),
             "components": components,
         }
 
     overall = round(sum(valid_scores) / len(valid_scores))
     label, color = _label_for_score(overall)
-    blended_score, blended_label, blended_color, blended_summary = _blended_sentiment(
+    blended_score, blended_label, blended_color, blended_summary, active_weights = _blended_sentiment(
         overall,
         external_news,
+        social_sentiment,
     )
 
     # Historical comparisons
@@ -567,11 +641,17 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
         "methodology": "internal_market_composite",
         "summary": _METHODOLOGY_SUMMARY,
         "basis": _METHODOLOGY_BASIS,
-        "uses_social_sentiment": False,
+        "uses_social_sentiment": bool(social_sentiment.get("available")),
         "external_news": external_news,
+        "social_sentiment": social_sentiment,
         "blended_score": blended_score,
         "blended_label": blended_label,
         "blended_color": blended_color,
         "blended_summary": blended_summary,
+        "methodology_meta": _build_methodology_meta(
+            external_news=external_news,
+            social_sentiment=social_sentiment,
+            active_weights=active_weights,
+        ),
         "components": components,
     }
