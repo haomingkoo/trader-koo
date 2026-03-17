@@ -104,21 +104,29 @@ export default function GuidePage() {
       </Card>
 
       {/* Disclaimer banner */}
-      <div className="rounded-xl border border-[var(--amber)]/30 bg-[rgba(248,194,78,0.06)] p-4">
+      <div className="rounded-xl border-2 border-[var(--amber)]/40 bg-[rgba(248,194,78,0.08)] p-5">
         <div className="flex items-start gap-3">
-          <span className="mt-0.5 text-[var(--amber)]" aria-hidden="true">
+          <span className="mt-0.5 text-lg text-[var(--amber)]" aria-hidden="true">
             &#9888;
           </span>
-          <div className="space-y-1">
-            <div className="text-sm font-semibold text-[var(--amber)]">
-              Research only. Not financial advice.
+          <div className="space-y-2">
+            <div className="text-sm font-bold text-[var(--amber)]">
+              Not Financial Advice
             </div>
             <p className="text-xs leading-relaxed text-[var(--muted)]">
               This is a personal analysis tool for educational and research
               purposes only. No content on this dashboard constitutes a
-              recommendation to buy, sell, or hold any security. All investment
-              decisions carry risk and should be made with independent analysis
-              and professional guidance.
+              recommendation to buy, sell, or hold any security.
+            </p>
+            <p className="text-xs leading-relaxed text-[var(--muted)]">
+              Past performance does not guarantee future results. All data may
+              be delayed, inaccurate, or incomplete. AI-generated signals,
+              pattern detections, and commentary can be wrong.
+            </p>
+            <p className="text-xs leading-relaxed text-[var(--muted)]">
+              Do not make investment decisions based solely on this dashboard.
+              All investment decisions carry risk and should be made with
+              independent analysis and qualified professional guidance.
             </p>
           </div>
         </div>

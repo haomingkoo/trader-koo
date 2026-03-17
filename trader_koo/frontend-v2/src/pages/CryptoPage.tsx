@@ -555,6 +555,11 @@ export default function CryptoPage() {
 
   return (
     <div className="space-y-6">
+      {/* NFA disclaimer */}
+      <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
+        Cryptocurrency trading carries significant risk. Prices are from Binance and may differ from other exchanges.
+      </div>
+
       <h2 className="text-xl font-bold tracking-tight">Crypto</h2>
 
       {/* Connection status */}

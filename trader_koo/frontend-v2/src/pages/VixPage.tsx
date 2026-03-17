@@ -22,228 +22,162 @@ const formatState = (s: string): string =>
 
 /* ── Gauge zones: [lo, hi, label, color] ── */
 const GAUGE_ZONES: Array<[number, number, string, string]> = [
-  [0, 12, "Complacency", "#38d39f"],
-  [12, 18, "Calm", "#6dd5a0"],
+  [0, 12, "Complacency", "#0d9f6e"],
+  [12, 18, "Calm", "#4caf50"],
   [18, 24, "Caution", "#f8c24e"],
   [24, 32, "Stress", "#ff9800"],
   [32, 50, "Fear", "#ff6b6b"],
-  [50, 80, "Panic", "#e53935"],
+  [50, 80, "Panic", "#d32f2f"],
 ];
 
 const GAUGE_MAX = 80;
 
-/** Gradient stop colors for the smooth arc */
-const GRADIENT_STOPS: Array<{ offset: string; color: string }> = [
-  { offset: "0%", color: "#38d39f" },
-  { offset: "20%", color: "#6dd5a0" },
-  { offset: "35%", color: "#f8c24e" },
-  { offset: "50%", color: "#ff9800" },
-  { offset: "70%", color: "#ff6b6b" },
-  { offset: "100%", color: "#e53935" },
-];
+/* ── SVG arc helpers ── */
+function vixPolarToCartesian(
+  cx: number,
+  cy: number,
+  r: number,
+  angleDeg: number,
+) {
+  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
 
-/* ── SVG VIX Gauge (CNN Fear & Greed inspired) ── */
+function vixDescribeArc(
+  cx: number,
+  cy: number,
+  r: number,
+  startAngle: number,
+  endAngle: number,
+) {
+  const start = vixPolarToCartesian(cx, cy, r, endAngle);
+  const end = vixPolarToCartesian(cx, cy, r, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
+}
+
+/* ── SVG VIX Gauge ── */
 function VixGauge({ vixClose }: { vixClose: number }) {
   const cx = 150;
-  const cy = 150;
+  const cy = 155;
   const r = 120;
   const arcWidth = 14;
-  const startAngle = Math.PI;
-  const totalArc = Math.PI;
 
-  // Smooth background arc path (semicircle)
-  const arcStartX = cx + r * Math.cos(startAngle);
-  const arcStartY = cy - r * Math.sin(startAngle);
-  const arcEndX = cx + r * Math.cos(0);
-  const arcEndY = cy - r * Math.sin(0);
-  const arcPath = `M ${arcStartX} ${arcStartY} A ${r} ${r} 0 0 0 ${arcEndX} ${arcEndY}`;
+  // Semicircle: 180 deg (left) to 360 deg (right)
+  // Map VIX 0 -> 180 deg, VIX 80 -> 360 deg
+  const vixToAngle = (v: number) => 180 + (v / GAUGE_MAX) * 180;
 
-  // Track arc uses the same path as the colored arc
-  const trackPath = arcPath;
-
-  // Zone labels positioned along the outside of the arc
-  const labelR = r + 22;
-  const zoneLabels = GAUGE_ZONES.map(([lo, hi, label]) => {
-    const midVal = (lo + hi) / 2;
-    const angle = startAngle - (midVal / GAUGE_MAX) * totalArc;
-    const lx = cx + labelR * Math.cos(angle);
-    const ly = cy - labelR * Math.sin(angle);
-    return { label, x: lx, y: ly, angle };
+  // Build zone arc paths
+  const zoneArcs = GAUGE_ZONES.map(([lo, hi, , color]) => {
+    const a1 = vixToAngle(lo);
+    const a2 = vixToAngle(hi);
+    return { d: vixDescribeArc(cx, cy, r, a1, a2), color };
   });
 
-  // Tick marks at zone boundaries
-  const tickInner = r - arcWidth / 2 - 2;
-  const tickOuter = r + arcWidth / 2 + 2;
-  const tickMarks = GAUGE_ZONES.slice(1).map(([lo]) => {
-    const angle = startAngle - (lo / GAUGE_MAX) * totalArc;
-    return {
-      x1: cx + tickInner * Math.cos(angle),
-      y1: cy - tickInner * Math.sin(angle),
-      x2: cx + tickOuter * Math.cos(angle),
-      y2: cy - tickOuter * Math.sin(angle),
-    };
-  });
-
-  // Needle
+  // Needle rotation (CSS: 0 deg = up, so 180 = left, 360 = right)
   const clampedVix = Math.max(0, Math.min(vixClose, GAUGE_MAX));
-  const needleAngle = startAngle - (clampedVix / GAUGE_MAX) * totalArc;
-  const needleLen = r - arcWidth / 2 - 8;
-  const nx = cx + needleLen * Math.cos(needleAngle);
-  const ny = cy - needleLen * Math.sin(needleAngle);
-
-  // Needle tip glow position
-  const glowR = needleLen + 4;
-  const glowX = cx + glowR * Math.cos(needleAngle);
-  const glowY = cy - glowR * Math.sin(needleAngle);
+  const needleRotation = vixToAngle(clampedVix);
 
   // Current zone
   const currentZone = GAUGE_ZONES.find(
     ([lo, hi]) => vixClose >= lo && vixClose < hi,
   );
   const zoneLabel = currentZone ? currentZone[2] : "Panic";
-  const zoneColor = currentZone ? currentZone[3] : "#e53935";
+  const zoneColor = currentZone ? currentZone[3] : "#d32f2f";
 
-  const glowColor = zoneColor;
+  const needleLen = r - arcWidth / 2 - 6;
 
   return (
     <div className="flex flex-col items-center">
-      <svg viewBox="0 0 300 190" className="w-full max-w-[340px]">
-        <defs>
-          {/* Gradient along the arc */}
-          <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="0">
-            {GRADIENT_STOPS.map((s) => (
-              <stop key={s.offset} offset={s.offset} stopColor={s.color} />
-            ))}
-          </linearGradient>
-          {/* Needle tip glow */}
-          <filter id="needleGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          {/* Subtle shadow beneath arc */}
-          <filter id="arcShadow" x="-10%" y="-10%" width="120%" height="130%">
-            <feGaussianBlur stdDeviation="2" result="shadow" />
-            <feMerge>
-              <feMergeNode in="shadow" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-
-        {/* Dim track behind the colored arc */}
+      <svg viewBox="0 0 300 180" className="w-full max-w-[340px]">
+        {/* Dim background track */}
         <path
-          d={trackPath}
+          d={vixDescribeArc(cx, cy, r, 180, 360)}
           fill="none"
           stroke="var(--panel-hover)"
           strokeWidth={arcWidth + 4}
           strokeLinecap="round"
-          opacity={0.5}
+          opacity={0.3}
         />
 
-        {/* Colored gradient arc */}
-        <path
-          d={arcPath}
-          fill="none"
-          stroke="url(#gaugeGrad)"
-          strokeWidth={arcWidth}
-          strokeLinecap="round"
-          filter="url(#arcShadow)"
-        />
-
-        {/* Zone boundary tick marks */}
-        {tickMarks.map((t, i) => (
-          <line
+        {/* Colored zone arcs */}
+        {zoneArcs.map((arc, i) => (
+          <path
             key={i}
-            x1={t.x1}
-            y1={t.y1}
-            x2={t.x2}
-            y2={t.y2}
-            stroke="var(--bg)"
-            strokeWidth={1.5}
-            opacity={0.6}
+            d={arc.d}
+            fill="none"
+            stroke={arc.color}
+            strokeWidth={arcWidth}
+            strokeLinecap="butt"
           />
         ))}
 
-        {/* Zone labels along the outside */}
-        {zoneLabels.map((z) => {
-          const angleDeg = (z.angle * 180) / Math.PI;
-          // Rotate text to follow the arc, but keep readable
-          const textRotation = angleDeg > 90 ? angleDeg - 180 : angleDeg;
+        {/* Round caps at the ends of the full arc */}
+        {(() => {
+          const leftCap = vixPolarToCartesian(cx, cy, r, 180);
+          const rightCap = vixPolarToCartesian(cx, cy, r, 360);
           return (
-            <text
-              key={z.label}
-              x={z.x}
-              y={z.y}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={7}
-              fontWeight={600}
-              fill="var(--muted)"
-              opacity={0.7}
-              transform={`rotate(${-textRotation}, ${z.x}, ${z.y})`}
-            >
-              {z.label}
-            </text>
+            <>
+              <circle
+                cx={leftCap.x}
+                cy={leftCap.y}
+                r={arcWidth / 2}
+                fill={GAUGE_ZONES[0][3]}
+              />
+              <circle
+                cx={rightCap.x}
+                cy={rightCap.y}
+                r={arcWidth / 2}
+                fill={GAUGE_ZONES[GAUGE_ZONES.length - 1][3]}
+              />
+            </>
           );
-        })}
+        })()}
 
-        {/* Scale labels: 0 and GAUGE_MAX */}
+        {/* Scale labels: 0 and MAX */}
         <text
-          x={cx - r - 4}
-          y={cy + 14}
+          x={cx - r}
+          y={cy + 18}
           textAnchor="middle"
-          fontSize={8}
+          fontSize={9}
           fill="var(--muted)"
-          opacity={0.5}
+          opacity={0.6}
         >
           0
         </text>
         <text
-          x={cx + r + 4}
-          y={cy + 14}
+          x={cx + r}
+          y={cy + 18}
           textAnchor="middle"
-          fontSize={8}
+          fontSize={9}
           fill="var(--muted)"
-          opacity={0.5}
+          opacity={0.6}
         >
           {GAUGE_MAX}
         </text>
 
-        {/* Needle glow dot */}
-        <circle
-          cx={glowX}
-          cy={glowY}
-          r={4}
-          fill={glowColor}
-          opacity={0.6}
-          filter="url(#needleGlow)"
-        />
-
-        {/* Needle line */}
+        {/* Needle -- rotated from center */}
         <line
           x1={cx}
           y1={cy}
-          x2={nx}
-          y2={ny}
+          x2={cx}
+          y2={cy - needleLen}
           stroke="var(--text)"
-          strokeWidth={1.5}
+          strokeWidth={2}
           strokeLinecap="round"
-          style={{ filter: `drop-shadow(0 0 2px ${glowColor})` }}
+          transform={`rotate(${needleRotation}, ${cx}, ${cy})`}
         />
 
         {/* Center dot */}
-        <circle cx={cx} cy={cy} r={4} fill="var(--text)" />
-        <circle cx={cx} cy={cy} r={2} fill="var(--bg)" />
+        <circle cx={cx} cy={cy} r={6} fill="var(--panel-hover)" />
+        <circle cx={cx} cy={cy} r={3} fill="var(--text)" />
 
-        {/* VIX value (large, bold, centered below arc) */}
+        {/* VIX value -- large centered */}
         <text
           x={cx}
-          y={cy - 18}
+          y={cy - 24}
           textAnchor="middle"
-          fontSize={32}
+          fontSize={34}
           fontWeight={800}
           fill="var(--text)"
           style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
@@ -254,7 +188,7 @@ function VixGauge({ vixClose }: { vixClose: number }) {
         {/* Zone label below score */}
         <text
           x={cx}
-          y={cy + 2}
+          y={cy - 2}
           textAnchor="middle"
           fontSize={11}
           fontWeight={700}
@@ -525,6 +459,11 @@ export default function VixPage() {
           </Card>
         )}
       </div>
+
+      {/* Position sizing NFA disclaimer */}
+      <p className="text-[10px] text-[var(--muted)]">
+        Position sizing recommendations are for educational purposes only and should not be construed as financial advice.
+      </p>
 
       {/* Metrics cards row */}
       {metrics && (

@@ -1483,6 +1483,11 @@ export default function ChartPage() {
           <div className="text-xs text-[var(--muted)]">
             As of {data.asof ?? "\u2014"} &middot; {data.ticker}
           </div>
+
+          {/* NFA disclaimer */}
+          <p className="text-[10px] text-[var(--muted)]">
+            Technical analysis patterns and AI-generated signals are for research purposes only. They do not constitute buy or sell recommendations.
+          </p>
         </>
       )}
     </div>

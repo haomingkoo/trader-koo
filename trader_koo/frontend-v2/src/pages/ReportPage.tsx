@@ -1004,6 +1004,12 @@ export default function ReportPage() {
 
   return (
     <div className="space-y-6">
+      {/* NFA disclaimer banner */}
+      <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
+        <strong>Research only. Not financial advice.</strong> This dashboard can be wrong, stale, or incomplete.
+        Treat it as a decision-support tool, not an instruction to buy or sell. Past performance does not guarantee future results.
+      </div>
+
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
 
       {/* Fear & Greed Index */}

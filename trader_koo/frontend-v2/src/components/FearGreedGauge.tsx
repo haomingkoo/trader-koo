@@ -262,6 +262,11 @@ export default function FearGreedGauge() {
           ))}
         </div>
       )}
+
+      {/* NFA disclaimer */}
+      <p className="mt-3 text-[10px] text-[var(--muted)]">
+        The Fear &amp; Greed Index is a composite indicator for educational purposes only. It does not predict market direction.
+      </p>
     </div>
   );
 }

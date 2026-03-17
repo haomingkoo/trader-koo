@@ -28,6 +28,13 @@ export default function DashboardLayout() {
             <Outlet />
           </ErrorBoundary>
         </main>
+        <footer className="border-t border-[var(--line)] bg-[var(--bg)] px-4 py-2">
+          <p className="text-center text-[10px] text-[var(--muted)]">
+            Research tool only. Not financial advice. Past performance does not guarantee future results.
+            All data may be delayed, inaccurate, or incomplete. Do not make investment decisions based solely on this dashboard.
+            Always consult a qualified financial advisor.
+          </p>
+        </footer>
       </div>
       <KeyboardShortcutsModal
         open={shortcutsOpen}

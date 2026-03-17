@@ -200,6 +200,11 @@ export default function PaperTradePage() {
 
   return (
     <div className="space-y-6">
+      {/* NFA disclaimer */}
+      <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
+        Paper trades are simulated and do not represent real money. Simulated results may not reflect actual trading conditions.
+      </div>
+
       <h2 className="text-xl font-bold tracking-tight">Paper Trades</h2>
 
       {/* Summary KPI cards */}
