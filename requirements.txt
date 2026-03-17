@@ -6,3 +6,5 @@ lxml>=5.0
 fastapi>=0.111
 uvicorn>=0.30
 websocket-client>=1.7
+hmmlearn>=0.3
+scikit-learn>=1.5

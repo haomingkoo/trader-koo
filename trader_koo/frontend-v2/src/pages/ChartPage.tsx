@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import { useChart } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
 import type {
@@ -1252,6 +1252,12 @@ export default function ChartPage() {
         >
           Refresh
         </button>
+        <Link
+          to="/report"
+          className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-xs text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+        >
+          &larr; Back to Report
+        </Link>
       </div>
 
       {isLoading && <Spinner className="mt-12" />}

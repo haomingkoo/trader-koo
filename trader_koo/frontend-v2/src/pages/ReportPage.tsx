@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useReport } from "../api/hooks";
+import { useChartStore } from "../stores/chartStore";
 import type {
   SetupRow,
   RiskCondition,
@@ -319,9 +320,11 @@ function YoloDetectionCards({ yolo }: { yolo: YoloBlock }) {
 function SetupQualitySection({
   rows,
   debateMap,
+  activeTicker,
 }: {
   rows: SetupRow[];
   debateMap: Map<string, NonNullable<import("../api/types").ChartCommentary["debate_v1"]>>;
+  activeTicker: string;
 }) {
   const [sortCol, setSortCol] = useState<string>("setup_score");
   const [sortAsc, setSortAsc] = useState(false);
@@ -515,6 +518,7 @@ function SetupQualitySection({
                     columns={columns}
                     debate={debate}
                     isExpanded={isExpanded}
+                    isHighlighted={row.ticker === activeTicker}
                     onToggle={() =>
                       setExpandedTicker(isExpanded ? null : row.ticker)
                     }
@@ -534,6 +538,7 @@ function SetupTableRow({
   columns,
   debate,
   isExpanded,
+  isHighlighted,
   onToggle,
 }: {
   row: SetupRow;
@@ -544,13 +549,14 @@ function SetupTableRow({
   }>;
   debate?: NonNullable<import("../api/types").ChartCommentary["debate_v1"]>;
   isExpanded: boolean;
+  isHighlighted: boolean;
   onToggle: () => void;
 }) {
   const agreementScore = debate?.consensus?.agreement_score;
 
   return (
     <>
-      <tr className="border-b border-[var(--line)] last:border-b-0 hover:bg-[var(--panel-hover)] transition-colors">
+      <tr className={`border-b border-[var(--line)] last:border-b-0 hover:bg-[var(--panel-hover)] transition-colors ${isHighlighted ? "bg-[var(--accent)]/10 ring-1 ring-inset ring-[var(--accent)]/30" : ""}`}>
         {columns.map((col) => (
           <td key={col.key} className="px-3 py-2 text-[var(--text)]">
             {col.render ? col.render(row) : String(row[col.key as keyof SetupRow] ?? "\u2014")}
@@ -947,6 +953,7 @@ function ImprovementAction({ action }: { action: SetupEvalAction }) {
 
 export default function ReportPage() {
   const { data, isLoading, error } = useReport();
+  const activeTicker = useChartStore((s) => s.ticker);
 
   if (isLoading) return <Spinner className="mt-12" />;
   if (error) {
@@ -1025,7 +1032,7 @@ export default function ReportPage() {
       <YoloDetectionCards yolo={yoloBlock} />
 
       {/* 6 + 7. Setup Quality Table with Debate */}
-      <SetupQualitySection rows={setupRows} debateMap={debateMap} />
+      <SetupQualitySection rows={setupRows} debateMap={debateMap} activeTicker={activeTicker} />
 
       {/* 8. Setup Evaluation */}
       <SetupEvaluationPanel
