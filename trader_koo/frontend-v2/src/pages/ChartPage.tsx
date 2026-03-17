@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useChart } from "../api/hooks";
+import { apiFetch } from "../api/client";
 import { useChartStore } from "../stores/chartStore";
 import type {
   DashboardPayload,
@@ -14,6 +15,7 @@ import type {
   YoloPatternRow,
   ChartCommentary,
   HmmRegime,
+  EquityTick,
 } from "../api/types";
 import Card from "../components/ui/Card";
 import Spinner from "../components/ui/Spinner";
@@ -1159,6 +1161,11 @@ export default function ChartPage() {
   const [inputValue, setInputValue] = useState(ticker);
   const [commentaryExpanded, setCommentaryExpanded] = useState(true);
 
+  // Real-time equity streaming state
+  const [livePrice, setLivePrice] = useState<EquityTick | null>(null);
+  const [streamingActive, setStreamingActive] = useState(false);
+  const prevTickerRef = useRef<string>("");
+
   // Pick up ticker from URL query param ?t=AAPL
   useEffect(() => {
     const urlTicker = searchParams.get("t");
@@ -1172,6 +1179,63 @@ export default function ChartPage() {
   }, [searchParams, setTicker, ticker]);
 
   const { data, isLoading, error, refetch } = useChart(ticker);
+
+  // Subscribe to real-time streaming when ticker changes
+  useEffect(() => {
+    if (!ticker) return;
+
+    // Unsubscribe previous ticker (fire-and-forget)
+    const prev = prevTickerRef.current;
+    if (prev && prev !== ticker) {
+      apiFetch(`/api/streaming/unsubscribe/${prev}`, { method: "POST" }).catch(() => {});
+    }
+    prevTickerRef.current = ticker;
+
+    // Subscribe to new ticker
+    setLivePrice(null);
+    setStreamingActive(false);
+    apiFetch<{ ok: boolean }>(`/api/streaming/subscribe/${ticker}`, { method: "POST" })
+      .then((res) => {
+        if (res.ok) setStreamingActive(true);
+      })
+      .catch(() => {
+        setStreamingActive(false);
+      });
+
+    // Poll for live price via GET endpoint (also auto-subscribes)
+    const interval = setInterval(() => {
+      apiFetch<{ ok: boolean; price?: number; volume?: number; timestamp?: string; prev_price?: number | null }>(
+        `/api/streaming/price/${ticker}`,
+      )
+        .then((res) => {
+          if (res.price != null) {
+            setLivePrice({
+              symbol: ticker,
+              price: res.price,
+              volume: res.volume ?? 0,
+              timestamp: res.timestamp ?? "",
+              prev_price: res.prev_price ?? null,
+            });
+            setStreamingActive(true);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [ticker]);
+
+  // Unsubscribe on unmount
+  useEffect(() => {
+    return () => {
+      const prev = prevTickerRef.current;
+      if (prev) {
+        apiFetch(`/api/streaming/unsubscribe/${prev}`, { method: "POST" }).catch(() => {});
+      }
+    };
+  }, []);
 
   const handleLoad = useCallback(() => {
     const clean = inputValue.trim().toUpperCase();
@@ -1213,6 +1277,37 @@ export default function ChartPage() {
             <span className="ml-2 text-[var(--accent)]">{data.ticker}</span>
           )}
         </h2>
+        {livePrice && (
+          <span className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-xs">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--green)] animate-pulse" />
+            <span className="font-semibold text-[var(--text)] tabular-nums">
+              ${livePrice.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+            {livePrice.prev_price != null && livePrice.prev_price > 0 && (
+              <span
+                className={`text-[10px] font-semibold tabular-nums ${
+                  livePrice.price >= livePrice.prev_price
+                    ? "text-[var(--green)]"
+                    : "text-[var(--red)]"
+                }`}
+              >
+                {livePrice.price >= livePrice.prev_price ? "+" : ""}
+                {(((livePrice.price - livePrice.prev_price) / livePrice.prev_price) * 100).toFixed(2)}%
+              </span>
+            )}
+            <span className="text-[9px] font-semibold uppercase tracking-wider text-[var(--green)]">Live</span>
+          </span>
+        )}
+        {!livePrice && streamingActive && (
+          <span className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-[10px] text-[var(--amber)]">
+            Streaming...
+          </span>
+        )}
+        {!livePrice && !streamingActive && data?.ticker && (
+          <span className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-[10px] text-[var(--muted)]">
+            Delayed
+          </span>
+        )}
         <input
           type="text"
           value={inputValue}

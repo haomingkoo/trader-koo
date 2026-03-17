@@ -66,6 +66,7 @@ from trader_koo.backend.services.pipeline import (
 )
 from trader_koo.crypto.service import start_crypto_feed, stop_crypto_feed
 from trader_koo.crypto.storage import ensure_crypto_schema
+from trader_koo.streaming.service import start_equity_feed, stop_equity_feed
 
 # ---------------------------------------------------------------------------
 # Router imports
@@ -80,6 +81,7 @@ from trader_koo.backend.routers.email import router as email_router
 from trader_koo.backend.routers.usage import router as usage_router
 from trader_koo.backend.routers.admin import router as admin_router
 from trader_koo.backend.routers.crypto import router as crypto_router
+from trader_koo.backend.routers.streaming import router as streaming_router
 
 # Usage module helpers needed at startup
 from trader_koo.backend.routers.usage import (
@@ -326,10 +328,25 @@ async def lifespan(_app: FastAPI):
     except Exception as exc:
         LOG.warning("Failed to start crypto feed: %s — continuing without it", exc)
 
+    # Start real-time equity feed (Finnhub WebSocket, daemon thread)
+    finnhub_api_key = os.getenv("FINNHUB_API_KEY", "")
+    if finnhub_api_key:
+        try:
+            start_equity_feed(api_key=finnhub_api_key)
+            LOG.info("Equity feed started (Finnhub WS for SPY/QQQ + on-demand)")
+        except Exception as exc:
+            LOG.warning("Failed to start equity feed: %s — continuing without it", exc)
+    else:
+        LOG.warning(
+            "FINNHUB_API_KEY not set — equity streaming disabled. "
+            "Set the env var to enable real-time equity data."
+        )
+
     _scheduler.start()
     LOG.info("Scheduler started -- daily_update: 22:00 UTC Mon-Fri | weekly_yolo: 00:30 UTC Sat")
     LOG.info("Application startup complete - ready to serve requests")
     yield
+    stop_equity_feed()
     stop_crypto_feed()
     _scheduler.shutdown(wait=False)
 
@@ -521,6 +538,7 @@ app.include_router(email_router)
 app.include_router(usage_router)
 app.include_router(admin_router)
 app.include_router(crypto_router)
+app.include_router(streaming_router)
 
 # ---------------------------------------------------------------------------
 # v2 React frontend (served from dist-v2/)

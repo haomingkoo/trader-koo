@@ -777,6 +777,22 @@ export interface CryptoIndicatorsPayload {
   bar_count: number;
 }
 
+/* ── Equity Streaming ── */
+export interface EquityTick {
+  symbol: string;
+  price: number;
+  volume: number;
+  timestamp: string;
+  prev_price?: number | null;
+}
+
+export interface StreamingStatus {
+  connected: boolean;
+  subscribed_count: number;
+  max_symbols: number;
+  symbols: string[];
+}
+
 /* ── Market Summary ── */
 export interface MarketTickerSummary {
   price: number;

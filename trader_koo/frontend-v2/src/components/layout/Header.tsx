@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import ClockStrip from "./ClockStrip";
 import { usePipelineStatus } from "../../api/hooks";
-import type { CryptoPrice } from "../../api/types";
+import type { CryptoPrice, EquityTick } from "../../api/types";
 
 function PipelineDot({ state }: { state: "idle" | "active" | "done" | "error" }) {
   const colors: Record<string, string> = {
@@ -96,6 +96,32 @@ function CryptoPriceChip({ label, tick }: { label: string; tick: CryptoPrice | u
   );
 }
 
+function EquityPriceChip({ label, tick }: { label: string; tick: EquityTick | undefined | null }) {
+  if (!tick || typeof tick.price !== "number") return null;
+  const prev = tick.prev_price ?? tick.price;
+  const isPositive = tick.price >= prev;
+  const changeColor = tick.price === prev
+    ? "text-[var(--muted)]"
+    : isPositive ? "text-[var(--green)]" : "text-[var(--red)]";
+  const changePct = prev > 0 ? ((tick.price - prev) / prev) * 100 : 0;
+  const sign = changePct >= 0 ? "+" : "";
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text)] opacity-70">
+        {label}
+      </span>
+      <span className={`tabular-nums text-[var(--text)]`}>
+        ${formatPrice(tick.price)}
+      </span>
+      {tick.prev_price != null && (
+        <span className={`tabular-nums text-[10px] font-semibold ${changeColor}`}>
+          {sign}{changePct.toFixed(2)}%
+        </span>
+      )}
+    </div>
+  );
+}
+
 function useCryptoWebSocket(): {
   prices: Record<string, CryptoPrice>;
   connected: boolean;
@@ -147,6 +173,57 @@ function useCryptoWebSocket(): {
   return { prices, connected };
 }
 
+function useEquityWebSocket(): {
+  prices: Record<string, EquityTick>;
+  connected: boolean;
+} {
+  const [prices, setPrices] = useState<Record<string, EquityTick>>({});
+  const [connected, setConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backoff = useRef(1000);
+
+  const connect = useCallback(() => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${proto}//${window.location.host}/ws/equities`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      setConnected(true);
+      backoff.current = 1000;
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const tick = JSON.parse(event.data) as EquityTick;
+        setPrices((prev) => ({ ...prev, [tick.symbol]: tick }));
+      } catch { /* malformed message */ }
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+      wsRef.current = null;
+      reconnectTimer.current = setTimeout(() => {
+        backoff.current = Math.min(backoff.current * 2, 30000);
+        connect();
+      }, backoff.current);
+    };
+
+    ws.onerror = () => ws.close();
+    wsRef.current = ws;
+  }, []);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      wsRef.current?.close();
+    };
+  }, [connect]);
+
+  return { prices, connected };
+}
+
 const CRYPTO_SYMBOLS = [
   { key: "BTC-USD", label: "BTC" },
   { key: "ETH-USD", label: "ETH" },
@@ -154,6 +231,58 @@ const CRYPTO_SYMBOLS = [
   { key: "XRP-USD", label: "XRP" },
   { key: "DOGE-USD", label: "DOGE" },
 ] as const;
+
+const EQUITY_SYMBOLS = [
+  { key: "SPY", label: "SPY" },
+  { key: "QQQ", label: "QQQ" },
+] as const;
+
+function EquityPriceStrip() {
+  const { prices, connected } = useEquityWebSocket();
+  const hasData = Object.keys(prices).length > 0;
+
+  if (!connected && !hasData) {
+    return (
+      <div className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px]">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+          Equities
+        </span>
+        <span className="text-[10px] text-[var(--amber)]">
+          Market closed
+        </span>
+      </div>
+    );
+  }
+
+  const availableChips = EQUITY_SYMBOLS.filter((s) => prices[s.key]);
+
+  if (availableChips.length === 0 && connected) {
+    return (
+      <div className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px]">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+          Equities
+        </span>
+        <span className="text-[10px] text-[var(--amber)]">
+          Market closed
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 overflow-x-auto rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px] scrollbar-none">
+      {availableChips.map((sym, i) => (
+        <span key={sym.key} className="flex items-center gap-3 whitespace-nowrap">
+          {i > 0 && <span className="text-[var(--line)]">|</span>}
+          <EquityPriceChip label={sym.label} tick={prices[sym.key]} />
+        </span>
+      ))}
+      {!connected && (
+        <span className="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--red)]" title="Reconnecting..." />
+      )}
+    </div>
+  );
+}
 
 function CryptoPriceStrip() {
   const { prices, connected } = useCryptoWebSocket();
@@ -193,9 +322,14 @@ function CryptoPriceStrip() {
 
 export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   const { data } = usePipelineStatus();
-  const states = data
-    ? derivePipelineStates(data)
-    : { ingest: "idle" as const, yolo: "idle" as const, report: "idle" as const };
+  let states: { ingest: "idle" | "active" | "done" | "error"; yolo: "idle" | "active" | "done" | "error"; report: "idle" | "active" | "done" | "error" } = { ingest: "idle", yolo: "idle", report: "idle" };
+  try {
+    if (data && typeof data === "object" && data.pipeline && typeof data.pipeline === "object") {
+      states = derivePipelineStates(data as { pipeline: { stage: string }; latest_run: { status: string } | null });
+    }
+  } catch {
+    // Pipeline data shape mismatch — use idle defaults
+  }
 
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
@@ -222,6 +356,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
           trader_koo
         </h1>
         <ClockStrip />
+        <EquityPriceStrip />
         <CryptoPriceStrip />
       </div>
       <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
