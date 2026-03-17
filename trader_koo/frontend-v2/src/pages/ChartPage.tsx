@@ -5,6 +5,7 @@ import { useChartStore } from "../stores/chartStore";
 import { useLiveEquityPrice } from "../hooks/useLiveEquityPrice";
 import type {
   DashboardPayload,
+  LiveCandle,
   LevelRow,
   GapRow,
   OhlcvRow,
@@ -294,6 +295,7 @@ function buildChartData(
   payload: DashboardPayload,
   isWeekly: boolean,
   overlays: ChartOverlayState,
+  liveCandle?: LiveCandle | null,
 ) {
   const rawChart = payload.chart ?? [];
   const chart = isWeekly ? resampleToWeekly(rawChart) : rawChart;
@@ -311,6 +313,26 @@ function buildChartData(
   const low = chart.map((r) => r.low);
   const close = chart.map((r) => r.close);
   const vol = chart.map((r) => r.volume);
+
+  // Append live/forming candle as a ghost bar if present and valid
+  const hasLiveCandle =
+    typeof liveCandle === "object" &&
+    liveCandle !== null &&
+    typeof liveCandle.timestamp === "string" &&
+    typeof liveCandle.open === "number" &&
+    typeof liveCandle.high === "number" &&
+    typeof liveCandle.low === "number" &&
+    typeof liveCandle.close === "number" &&
+    Number.isFinite(liveCandle.open) &&
+    Number.isFinite(liveCandle.close);
+
+  const liveDate = hasLiveCandle
+    ? nyDateStringFromIso(liveCandle.timestamp) ?? liveCandle.timestamp
+    : null;
+
+  // Only append if it doesn't duplicate the last historical bar
+  const shouldAppendLive =
+    hasLiveCandle && liveDate !== null && liveDate !== x[x.length - 1];
 
   const traces: PlotlyTrace[] = [
     {
@@ -348,6 +370,45 @@ function buildChartData(
       yaxis: "y2",
     },
   ];
+
+  // Render the live candle as a separate semi-transparent candlestick trace
+  if (shouldAppendLive && liveDate !== null) {
+    const lc = liveCandle;
+    traces.push({
+      type: "candlestick",
+      x: [liveDate],
+      open: [lc.open],
+      high: [lc.high],
+      low: [lc.low],
+      close: [lc.close],
+      name: "Live",
+      xaxis: "x",
+      yaxis: "y",
+      increasing: {
+        line: { color: "rgba(56,211,159,0.4)" },
+        fillcolor: "rgba(56,211,159,0.25)",
+      },
+      decreasing: {
+        line: { color: "rgba(255,107,107,0.4)" },
+        fillcolor: "rgba(255,107,107,0.25)",
+      },
+    });
+    // Live candle volume bar (ghost style)
+    traces.push({
+      type: "bar",
+      x: [liveDate],
+      y: [typeof lc.volume === "number" ? lc.volume : 0],
+      name: "Live Vol",
+      marker: {
+        color:
+          lc.close >= lc.open
+            ? "rgba(56,211,159,0.25)"
+            : "rgba(255,107,107,0.25)",
+      },
+      xaxis: "x",
+      yaxis: "y2",
+    });
+  }
 
   if (overlays.ma20) {
     traces.push({
@@ -773,6 +834,25 @@ function buildChartData(
       yaxis: "y3",
       hoverinfo: "text+x",
       hovertext: probHigh.map((p) => `High Vol: ${(p * 100).toFixed(1)}%`),
+    });
+  }
+
+  // "LIVE" badge annotation near the last bar
+  if (shouldAppendLive && liveDate !== null) {
+    annotations.push({
+      xref: "x",
+      yref: "y",
+      x: liveDate,
+      y: liveCandle.high,
+      text: "LIVE",
+      showarrow: false,
+      xanchor: "center",
+      yanchor: "bottom",
+      yshift: 6,
+      bgcolor: "rgba(56,211,159,0.18)",
+      bordercolor: "rgba(56,211,159,0.5)",
+      borderpad: 2,
+      font: { color: "#38d39f", size: 9 },
     });
   }
 
@@ -1346,12 +1426,41 @@ export default function ChartPage() {
     [data, livePrice],
   );
 
+  // Build effective live candle: start from API live_candle, overlay WS price if newer
+  const effectiveLiveCandle = useMemo((): LiveCandle | null => {
+    const apiCandle =
+      typeof data?.live_candle === "object" && data.live_candle !== null
+        ? data.live_candle
+        : null;
+    if (!apiCandle) return null;
+
+    // If WS price exists and belongs to the same ticker, update close/high/low
+    if (
+      livePrice &&
+      typeof livePrice.price === "number" &&
+      Number.isFinite(livePrice.price) &&
+      livePrice.symbol === data?.ticker
+    ) {
+      const wsTime = livePrice.timestamp ? new Date(livePrice.timestamp).getTime() : 0;
+      const apiTime = apiCandle.timestamp ? new Date(apiCandle.timestamp).getTime() : 0;
+      if (wsTime > apiTime) {
+        return {
+          ...apiCandle,
+          close: livePrice.price,
+          high: Math.max(apiCandle.high, livePrice.price),
+          low: Math.min(apiCandle.low, livePrice.price),
+        };
+      }
+    }
+    return apiCandle;
+  }, [data?.live_candle, data?.ticker, livePrice]);
+
   const chartResult = useMemo(() => {
     if (!livePayload || !livePayload.chart || livePayload.chart.length === 0) {
       return null;
     }
-    return buildChartData(livePayload, isWeekly, chartOverlays);
-  }, [livePayload, isWeekly, chartOverlays]);
+    return buildChartData(livePayload, isWeekly, chartOverlays, effectiveLiveCandle);
+  }, [livePayload, isWeekly, chartOverlays, effectiveLiveCandle]);
 
   const chartBarCount = (
     isWeekly ? resampleToWeekly(livePayload?.chart ?? []) : livePayload?.chart ?? []

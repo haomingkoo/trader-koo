@@ -21,12 +21,14 @@ from trader_koo.crypto.market_insights import (
 )
 from trader_koo.crypto.structure import build_crypto_structure
 from trader_koo.crypto.service import (
+    get_aggregator,
     get_crypto_history,
     get_crypto_prices,
     get_crypto_summary,
     get_forming_candle,
     subscribe_ticks,
     unsubscribe_ticks,
+    update_subscription,
 )
 
 LOG = logging.getLogger("trader_koo.routers.crypto")
@@ -223,8 +225,19 @@ def crypto_indicators(symbol: str) -> dict[str, Any]:
 async def ws_crypto(websocket: WebSocket) -> None:
     """Push live crypto ticks to the browser as they arrive from Binance.
 
-    Zero polling — the Binance WS thread puts ticks into an asyncio.Queue
-    which this handler drains and forwards to the connected client.
+    Supports subscription-based fan-out. After connecting, a client may
+    send a JSON message to filter updates::
+
+        {"action": "subscribe", "symbol": "BTC-USD", "interval": "5m"}
+
+    If no subscribe message is sent, the client receives ALL ticks at 1m
+    (backward compatible with the old protocol).
+
+    Message types pushed to the client:
+
+    - ``tick``  — latest price for the subscribed symbol
+    - ``forming`` — current forming candle at the subscribed interval
+    - ``candle_close`` — finalized candle at the subscribed interval
     """
     await websocket.accept()
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=200)
@@ -233,10 +246,59 @@ async def ws_crypto(websocket: WebSocket) -> None:
         await websocket.close(code=1013, reason="Too many connections")
         return
     LOG.info("Browser WS connected (sub_id=%s)", sub_id)
-    try:
+
+    async def _reader() -> None:
+        """Read subscription messages from the client."""
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if msg.get("action") == "subscribe":
+                    symbol = msg.get("symbol")
+                    interval = msg.get("interval")
+                    if symbol:
+                        symbol = _normalise_symbol(symbol)
+                    update_subscription(sub_id, symbol, interval)
+                    LOG.debug(
+                        "WS sub_id=%s subscribed: symbol=%s interval=%s",
+                        sub_id,
+                        symbol,
+                        interval,
+                    )
+                    # Send immediate snapshot if aggregator is available
+                    agg = get_aggregator()
+                    if agg and symbol and interval:
+                        forming = agg.get_forming(symbol, interval)
+                        if forming:
+                            snapshot = {
+                                "type": "forming",
+                                "symbol": symbol,
+                                "interval": interval,
+                                **forming,
+                            }
+                            await websocket.send_text(json.dumps(snapshot))
+        except (WebSocketDisconnect, Exception):
+            pass  # Connection closed — _writer will also exit
+
+    async def _writer() -> None:
+        """Drain the queue and push to the client."""
         while True:
-            tick_data = await queue.get()
-            await websocket.send_text(json.dumps(tick_data))
+            data = await queue.get()
+            await websocket.send_text(json.dumps(data))
+
+    try:
+        # Run reader and writer concurrently; if either exits, cancel both
+        reader_task = asyncio.create_task(_reader())
+        writer_task = asyncio.create_task(_writer())
+        done, pending = await asyncio.wait(
+            {reader_task, writer_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
     except WebSocketDisconnect:
         LOG.info("Browser WS disconnected (sub_id=%s)", sub_id)
     except Exception as exc:

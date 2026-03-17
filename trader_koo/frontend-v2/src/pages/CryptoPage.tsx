@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   useCryptoSummary,
   useCryptoHistory,
@@ -803,6 +803,7 @@ function buildCandlestickChart(
   symbol: string,
   structure: CryptoStructurePayload | null,
   overlays: OverlayState,
+  formingCandle?: FormingCandleData | null,
 ) {
   const timestamps = bars.map((b) => b.timestamp);
   const open = bars.map((b) => b.open);
@@ -848,6 +849,46 @@ function buildCandlestickChart(
       yaxis: "y2",
     },
   ];
+
+  // Forming candle as a semi-transparent dashed-outline bar
+  if (formingCandle && formingCandle.timestamp) {
+    const fColor = formingCandle.close >= formingCandle.open
+      ? "rgba(56,211,159,0.35)"
+      : "rgba(255,107,107,0.35)";
+    const fLine = formingCandle.close >= formingCandle.open
+      ? "rgba(56,211,159,0.8)"
+      : "rgba(255,107,107,0.8)";
+    traces.push({
+      type: "candlestick",
+      x: [formingCandle.timestamp],
+      open: [formingCandle.open],
+      high: [formingCandle.high],
+      low: [formingCandle.low],
+      close: [formingCandle.close],
+      name: `Forming (${Math.round(formingCandle.progress_pct)}%)`,
+      xaxis: "x",
+      yaxis: "y",
+      increasing: {
+        line: { color: fLine, width: 1, dash: "dot" },
+        fillcolor: fColor,
+      },
+      decreasing: {
+        line: { color: fLine, width: 1, dash: "dot" },
+        fillcolor: fColor,
+      },
+    });
+    // Forming candle volume bar
+    traces.push({
+      type: "bar",
+      x: [formingCandle.timestamp],
+      y: [formingCandle.volume],
+      name: "Forming Vol",
+      marker: { color: fColor },
+      xaxis: "x",
+      yaxis: "y2",
+      showlegend: false,
+    });
+  }
 
   // Compute SMA overlays (rolling averages from available bars)
   if (overlays.sma20 && bars.length >= 20) {
@@ -930,6 +971,28 @@ function buildCandlestickChart(
   const annotations: Record<string, unknown>[] = [];
   addLevelOverlays(structure?.levels ?? [], annotations, shapes);
 
+  // "FORMING" badge annotation near the forming candle
+  if (formingCandle && formingCandle.timestamp) {
+    const pctLabel = typeof formingCandle.progress_pct === "number"
+      ? `${Math.round(formingCandle.progress_pct)}%`
+      : "";
+    annotations.push({
+      xref: "x",
+      yref: "y",
+      x: formingCandle.timestamp,
+      y: formingCandle.high,
+      text: pctLabel ? `FORMING ${pctLabel}` : "FORMING",
+      showarrow: false,
+      xanchor: "center",
+      yanchor: "bottom",
+      yshift: 6,
+      bgcolor: "rgba(56,211,159,0.18)",
+      bordercolor: "rgba(56,211,159,0.5)",
+      borderpad: 2,
+      font: { color: "#38d39f", size: 9 },
+    });
+  }
+
   const layout = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
@@ -998,6 +1061,116 @@ function computeRollingBollinger(
   return { upper, middle, lower };
 }
 
+/* ── WebSocket subscription hook for symbol+interval fan-out ── */
+
+interface FormingCandleData {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  progress_pct: number;
+}
+
+interface WsMessage {
+  type?: string;
+  symbol?: string;
+  interval?: string;
+  price?: number;
+  volume_24h?: number;
+  change_pct_24h?: number;
+  timestamp?: string;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  progress_pct?: number;
+  bar?: CryptoBar;
+}
+
+function useCryptoSubscription(
+  symbol: string,
+  interval: IntervalValue,
+): { formingCandle: FormingCandleData | null; wsConnected: boolean } {
+  const [formingCandle, setFormingCandle] = useState<FormingCandleData | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backoff = useRef(1000);
+  const currentSub = useRef({ symbol, interval });
+
+  // Keep ref in sync so callbacks can access latest values
+  currentSub.current = { symbol, interval };
+
+  const sendSubscribe = useCallback((ws: WebSocket, sym: string, iv: string) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action: "subscribe", symbol: sym, interval: iv }));
+    }
+  }, []);
+
+  const connect = useCallback(() => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${proto}//${window.location.host}/ws/crypto`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      setWsConnected(true);
+      backoff.current = 1000;
+      sendSubscribe(ws, currentSub.current.symbol, currentSub.current.interval);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data) as WsMessage;
+        if (msg.type === "forming" && msg.symbol === currentSub.current.symbol) {
+          setFormingCandle({
+            timestamp: msg.timestamp ?? "",
+            open: msg.open ?? 0,
+            high: msg.high ?? 0,
+            low: msg.low ?? 0,
+            close: msg.close ?? 0,
+            volume: msg.volume ?? 0,
+            progress_pct: msg.progress_pct ?? 0,
+          });
+        }
+      } catch { /* malformed message */ }
+    };
+
+    ws.onclose = () => {
+      setWsConnected(false);
+      wsRef.current = null;
+      reconnectTimer.current = setTimeout(() => {
+        backoff.current = Math.min(backoff.current * 2, 30000);
+        connect();
+      }, backoff.current);
+    };
+
+    ws.onerror = () => ws.close();
+    wsRef.current = ws;
+  }, [sendSubscribe]);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      wsRef.current?.close();
+    };
+  }, [connect]);
+
+  // Re-subscribe when symbol or interval changes
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      sendSubscribe(ws, symbol, interval);
+      setFormingCandle(null); // Clear stale forming candle
+    }
+  }, [symbol, interval, sendSubscribe]);
+
+  return { formingCandle, wsConnected };
+}
+
 /* ── Main page ── */
 
 export default function CryptoPage() {
@@ -1023,6 +1196,34 @@ export default function CryptoPage() {
   const { data: btcSpyCorrelation } = useCryptoCorrelation("BTC-USD", "SPY", 40);
   const { data: cryptoMarketStructure } = useCryptoMarketStructure("1h", 168);
 
+  // Subscribe to real-time forming candle updates via WebSocket
+  const { formingCandle: wsFormingCandle } = useCryptoSubscription(selectedSymbol, selectedInterval);
+
+  // Merge WS forming candle with API forming_candle: WS takes priority if present
+  const effectiveFormingCandle = useMemo((): FormingCandleData | null => {
+    // WS forming candle is realtime and takes precedence
+    if (wsFormingCandle) return wsFormingCandle;
+
+    // Fall back to API forming_candle from /api/crypto/history response
+    const apiForming =
+      typeof historyData?.forming_candle === "object" &&
+      historyData.forming_candle !== null
+        ? historyData.forming_candle
+        : null;
+    if (!apiForming) return null;
+
+    // Convert CryptoBar to FormingCandleData (progress_pct unknown from API, default 0)
+    return {
+      timestamp: apiForming.timestamp,
+      open: apiForming.open,
+      high: apiForming.high,
+      low: apiForming.low,
+      close: apiForming.close,
+      volume: apiForming.volume,
+      progress_pct: 0,
+    };
+  }, [wsFormingCandle, historyData?.forming_candle]);
+
   const indicators: CryptoIndicators | null =
     indicatorsData?.indicators ?? null;
 
@@ -1034,8 +1235,9 @@ export default function CryptoPage() {
       selectedSymbol,
       structureData ?? null,
       overlays,
+      effectiveFormingCandle,
     );
-  }, [historyData, selectedSymbol, structureData, overlays]);
+  }, [historyData, selectedSymbol, structureData, overlays, effectiveFormingCandle]);
 
   const availableBarCount = historyData?.bars?.length ?? 0;
   const shortHistory = historyData != null && availableBarCount < interval.limit;

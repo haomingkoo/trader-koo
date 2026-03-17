@@ -57,6 +57,7 @@ class BinanceWSClient:
     def __init__(
         self,
         on_tick: Callable[[CryptoTick], None] | None = None,
+        on_candle_close: Callable[[CryptoBar], None] | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._connected = False
@@ -64,6 +65,7 @@ class BinanceWSClient:
         self._ws: websocket.WebSocketApp | None = None
         self._thread: threading.Thread | None = None
         self._on_tick = on_tick
+        self._on_candle_close = on_candle_close
 
         # Latest tick per symbol
         self._ticks: dict[str, CryptoTick] = {}
@@ -326,6 +328,13 @@ class BinanceWSClient:
                 )
                 self._bars[display_symbol].append(bar)
                 self._pending_bars.append(bar)
+
+        # Notify candle close callback (outside the lock)
+        if is_closed and self._on_candle_close is not None:
+            try:
+                self._on_candle_close(bar)
+            except Exception as exc:
+                LOG.debug("on_candle_close callback error: %s", exc)
 
     # ------------------------------------------------------------------
     # 24h reference reset

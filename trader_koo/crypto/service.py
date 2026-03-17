@@ -6,6 +6,10 @@ guards its state with a ``threading.Lock``).
 The ``subscribe_ticks`` / ``unsubscribe_ticks`` functions allow the
 FastAPI WebSocket endpoint to receive real-time ticks via asyncio queues.
 
+Subscription-aware fan-out: each browser WebSocket can subscribe to a
+specific symbol+interval pair. The server pushes only relevant tick,
+forming-candle, and candle-close events to each client.
+
 Persistence: closed bars are periodically flushed to SQLite so history
 survives restarts. On startup, recent bars are loaded from the DB to
 pre-fill the in-memory deque.
@@ -19,8 +23,10 @@ import sqlite3
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
+from trader_koo.crypto.aggregator import CandleAggregator
 from trader_koo.crypto.binance_history import fetch_recent_klines
 from trader_koo.crypto.binance_ws import BinanceWSClient, SYMBOL_MAP
 from trader_koo.crypto.models import CryptoBar, CryptoTick
@@ -33,17 +39,28 @@ from trader_koo.crypto.storage import (
 
 LOG = logging.getLogger("trader_koo.crypto.service")
 
-# Module-level singleton
+# Module-level singletons
 _client: BinanceWSClient | None = None
+_aggregator: CandleAggregator | None = None
 _db_path_str: str | None = None
 _flush_thread: threading.Thread | None = None
 _flush_running = False
 _backfill_lock = threading.Lock()
 _warm_backfill_thread: threading.Thread | None = None
 
-# Browser WebSocket subscribers: sub_id → asyncio.Queue
+
+@dataclass
+class _Subscription:
+    """Tracks what a single browser WS client is subscribed to."""
+
+    queue: asyncio.Queue[dict[str, Any]]
+    symbol: str | None = None   # None = all symbols (backward compatible)
+    interval: str | None = None  # None = 1m default
+
+
+# Browser WebSocket subscribers: sub_id → _Subscription
 _subscribers_lock = threading.Lock()
-_subscribers: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+_subscribers: dict[str, _Subscription] = {}
 
 # Maximum concurrent browser WebSocket subscribers
 MAX_WS_SUBSCRIBERS = 50
@@ -86,13 +103,16 @@ def subscribe_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str | None:
 
     Returns a subscription ID used to unsubscribe later, or ``None``
     if the maximum subscriber limit has been reached.
+
+    By default the subscriber receives ALL ticks (backward compatible).
+    Call ``update_subscription`` to narrow to a specific symbol+interval.
     """
     sub_id = uuid.uuid4().hex[:12]
     with _subscribers_lock:
         if len(_subscribers) >= MAX_WS_SUBSCRIBERS:
             LOG.warning("Max WS subscribers reached (%d), rejecting", MAX_WS_SUBSCRIBERS)
             return None
-        _subscribers[sub_id] = queue
+        _subscribers[sub_id] = _Subscription(queue=queue)
     LOG.debug("Tick subscriber added: %s (total: %d)", sub_id, len(_subscribers))
     return sub_id
 
@@ -104,24 +124,137 @@ def unsubscribe_ticks(sub_id: str) -> None:
     LOG.debug("Tick subscriber removed: %s (total: %d)", sub_id, len(_subscribers))
 
 
+def update_subscription(sub_id: str, symbol: str | None, interval: str | None) -> None:
+    """Update the symbol+interval filter for an existing subscriber."""
+    with _subscribers_lock:
+        sub = _subscribers.get(sub_id)
+        if sub is not None:
+            sub.symbol = symbol
+            sub.interval = interval
+    LOG.debug(
+        "Subscription updated: %s → symbol=%s interval=%s",
+        sub_id,
+        symbol,
+        interval,
+    )
+
+
+def get_aggregator() -> CandleAggregator | None:
+    """Return the module-level aggregator (for WS endpoint access)."""
+    return _aggregator
+
+
 def _broadcast_tick(tick: CryptoTick) -> None:
     """Push a tick to all connected browser WebSocket subscribers.
 
     Called from the Binance WS thread — puts into asyncio queues which
     are drained by the FastAPI WebSocket handlers on the event loop.
+
+    Also feeds the tick into the aggregator so forming candles stay
+    up-to-date for all intervals.
     """
-    payload = {
+    # Feed the aggregator (before broadcasting so forming candles are fresh)
+    if _aggregator is not None:
+        _aggregator.on_tick(
+            symbol=tick.symbol,
+            price=tick.price,
+            volume=tick.volume_24h,
+            timestamp=tick.timestamp,
+        )
+
+    tick_payload = {
+        "type": "tick",
         "symbol": tick.symbol,
         "price": tick.price,
         "volume_24h": tick.volume_24h,
         "change_pct_24h": tick.change_pct_24h,
         "timestamp": tick.timestamp.isoformat(),
     }
+
     with _subscribers_lock:
         dead: list[str] = []
-        for sub_id, queue in _subscribers.items():
+        for sub_id, sub in _subscribers.items():
+            # Filter: if subscriber has a symbol filter, skip non-matching
+            if sub.symbol is not None and sub.symbol != tick.symbol:
+                continue
+
             try:
-                queue.put_nowait(payload)
+                sub.queue.put_nowait(tick_payload)
+            except asyncio.QueueFull:
+                dead.append(sub_id)
+
+            # Also push forming candle for the subscriber's interval
+            if _aggregator is not None and sub.interval is not None:
+                forming = _aggregator.get_forming(tick.symbol, sub.interval)
+                if forming is not None:
+                    forming_payload = {
+                        "type": "forming",
+                        "symbol": tick.symbol,
+                        "interval": sub.interval,
+                        **forming,
+                    }
+                    try:
+                        sub.queue.put_nowait(forming_payload)
+                    except asyncio.QueueFull:
+                        if sub_id not in dead:
+                            dead.append(sub_id)
+
+        for sub_id in dead:
+            _subscribers.pop(sub_id, None)
+            LOG.warning("Dropped slow subscriber: %s", sub_id)
+
+
+def _on_candle_finalized(candle: CryptoBar) -> None:
+    """Persist a finalized higher-interval candle and broadcast to subscribers."""
+    # Persist to DB
+    if _db_path_str:
+        try:
+            conn = sqlite3.connect(_db_path_str)
+            try:
+                save_bars(conn, [candle])
+            finally:
+                conn.close()
+            LOG.info(
+                "Persisted finalized %s candle for %s at %s",
+                candle.interval,
+                candle.symbol,
+                candle.timestamp.isoformat(),
+            )
+        except Exception as exc:
+            LOG.error(
+                "Failed to persist finalized candle %s [%s]: %s",
+                candle.symbol,
+                candle.interval,
+                exc,
+            )
+
+    # Broadcast candle_close to interested subscribers
+    close_payload = {
+        "type": "candle_close",
+        "symbol": candle.symbol,
+        "interval": candle.interval,
+        "bar": {
+            "timestamp": candle.timestamp.isoformat(),
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        },
+    }
+
+    with _subscribers_lock:
+        dead: list[str] = []
+        for sub_id, sub in _subscribers.items():
+            # Only send candle_close to clients that explicitly subscribed
+            if sub.interval is None:
+                continue
+            if sub.interval != candle.interval:
+                continue
+            if sub.symbol is not None and sub.symbol != candle.symbol:
+                continue
+            try:
+                sub.queue.put_nowait(close_payload)
             except asyncio.QueueFull:
                 dead.append(sub_id)
         for sub_id in dead:
@@ -298,19 +431,37 @@ def _aggregate_bars(bars: list[CryptoBar], interval: str) -> list[CryptoBar]:
     return grouped
 
 
+def _on_binance_candle_close(bar: CryptoBar) -> None:
+    """Called when Binance sends a closed 1m candle.
+
+    Forwards to the aggregator so it can finalize any higher-interval
+    candles whose boundaries have been crossed.
+    """
+    if _aggregator is not None:
+        _aggregator.on_candle_close(bar.symbol, bar)
+
+
 def start_crypto_feed(db_path_str: str | None = None) -> None:
     """Start the Binance WebSocket feed in a background daemon thread.
 
     If *db_path_str* is provided, bars are persisted to that SQLite DB
     and history is pre-loaded on startup.
     """
-    global _client, _db_path_str, _flush_thread, _flush_running, _warm_backfill_thread
+    global _client, _aggregator, _db_path_str, _flush_thread, _flush_running, _warm_backfill_thread
     if _client is not None:
         LOG.warning("Crypto feed already started — ignoring duplicate call")
         return
 
     _db_path_str = db_path_str
-    _client = BinanceWSClient(on_tick=_broadcast_tick)
+
+    # Create the multi-interval aggregator
+    _aggregator = CandleAggregator(on_candle_finalized=_on_candle_finalized)
+    LOG.info("CandleAggregator initialized")
+
+    _client = BinanceWSClient(
+        on_tick=_broadcast_tick,
+        on_candle_close=_on_binance_candle_close,
+    )
 
     # Pre-fill from DB before starting live feed
     if _db_path_str:
@@ -343,7 +494,7 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
 
 def stop_crypto_feed() -> None:
     """Gracefully stop the WebSocket feed and flush remaining bars."""
-    global _client, _flush_running, _flush_thread
+    global _client, _aggregator, _flush_running, _flush_thread
     _flush_running = False
 
     # Final flush before shutdown
@@ -353,6 +504,7 @@ def stop_crypto_feed() -> None:
         return
     _client.stop()
     _client = None
+    _aggregator = None
     _flush_thread = None
     LOG.info("Crypto feed stopped")
 
