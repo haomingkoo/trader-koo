@@ -844,3 +844,23 @@ export interface VixMetricsPayload {
   gauge_color: string;
   error?: string;
 }
+
+/* ── Fear & Greed Index ── */
+export interface FearGreedComponent {
+  name: string;
+  score: number | null;
+  signal: string;
+  detail: string;
+}
+
+export interface FearGreedPayload {
+  ok: boolean;
+  score: number | null;
+  label: string;
+  color: string;
+  previous_close: number | null;
+  one_week_ago: number | null;
+  one_month_ago: number | null;
+  components: FearGreedComponent[];
+  error?: string;
+}

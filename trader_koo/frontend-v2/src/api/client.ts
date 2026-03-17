@@ -13,8 +13,24 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     },
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "Unknown error");
-    throw new Error(`API ${res.status}: ${text}`);
+    // Always throw a proper Error with a string message
+    let msg = `API ${res.status}`;
+    try {
+      const body = await res.text();
+      // Try to parse as JSON and extract detail
+      try {
+        const json = JSON.parse(body);
+        msg =
+          typeof json.detail === "string"
+            ? json.detail
+            : `API ${res.status}: ${body.slice(0, 200)}`;
+      } catch {
+        msg = `API ${res.status}: ${body.slice(0, 200)}`;
+      }
+    } catch {
+      msg = `API ${res.status}: Unknown error`;
+    }
+    throw new Error(msg);
   }
   return res.json();
 }

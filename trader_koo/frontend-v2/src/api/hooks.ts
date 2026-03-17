@@ -13,6 +13,7 @@ import type {
   CryptoHistoryPayload,
   CryptoIndicatorsPayload,
   VixMetricsPayload,
+  FearGreedPayload,
 } from "./types";
 
 export function useReport() {
@@ -135,5 +136,13 @@ export function useVixMetrics() {
     queryKey: ["vix-metrics"],
     queryFn: () => apiFetch<VixMetricsPayload>("/api/vix-metrics"),
     staleTime: 2 * 60 * 1000,
+  });
+}
+
+export function useFearGreed() {
+  return useQuery({
+    queryKey: ["fear-greed"],
+    queryFn: () => apiFetch<FearGreedPayload>("/api/fear-greed"),
+    staleTime: 5 * 60 * 1000,
   });
 }

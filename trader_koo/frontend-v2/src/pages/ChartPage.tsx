@@ -1358,7 +1358,7 @@ export default function ChartPage() {
       {isLoading && <Spinner className="mt-12" />}
       {error && (
         <div className="mt-4 text-center text-sm text-[var(--red)]">
-          Failed to load chart: {(error as Error).message}
+          Failed to load chart: {String((error as Error)?.message ?? "Unknown error")}
         </div>
       )}
 

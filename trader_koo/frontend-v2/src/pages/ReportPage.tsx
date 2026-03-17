@@ -16,6 +16,7 @@ import type {
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
+import FearGreedGauge from "../components/FearGreedGauge";
 
 /* ── Helpers ── */
 
@@ -959,7 +960,7 @@ export default function ReportPage() {
   if (error) {
     return (
       <div className="mt-12 text-center text-sm text-[var(--red)]">
-        Failed to load report: {(error as Error).message}
+        Failed to load report: {String((error as Error)?.message ?? "Unknown error")}
       </div>
     );
   }
@@ -1004,6 +1005,9 @@ export default function ReportPage() {
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
+
+      {/* Fear & Greed Index */}
+      <FearGreedGauge />
 
       {/* 1. Summary KPI cards */}
       <SummaryKpiRow

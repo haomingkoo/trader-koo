@@ -166,7 +166,7 @@ export default function PaperTradePage() {
   if (error) {
     return (
       <div className="mt-12 text-center text-sm text-[var(--red)]">
-        Failed to load paper trades: {(error as Error).message}
+        Failed to load paper trades: {String((error as Error)?.message ?? "Unknown error")}
       </div>
     );
   }

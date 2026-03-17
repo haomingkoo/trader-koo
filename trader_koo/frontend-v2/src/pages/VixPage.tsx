@@ -22,100 +22,251 @@ const formatState = (s: string): string =>
 
 /* ── Gauge zones: [lo, hi, label, color] ── */
 const GAUGE_ZONES: Array<[number, number, string, string]> = [
-  [0, 12, "Complacency", "#00c853"],
-  [12, 16, "Calm", "#4caf50"],
-  [16, 20, "Normal", "#c0ca33"],
-  [20, 25, "Caution", "#fdd835"],
-  [25, 30, "Stress", "#ff9800"],
-  [30, 40, "Fear", "#f44336"],
-  [40, 60, "Extreme Fear", "#b71c1c"],
-  [60, 80, "Panic", "#212121"],
+  [0, 12, "Complacency", "#38d39f"],
+  [12, 18, "Calm", "#6dd5a0"],
+  [18, 24, "Caution", "#f8c24e"],
+  [24, 32, "Stress", "#ff9800"],
+  [32, 50, "Fear", "#ff6b6b"],
+  [50, 80, "Panic", "#e53935"],
 ];
 
 const GAUGE_MAX = 80;
 
-/* ── SVG VIX Gauge (semicircle speedometer) ── */
+/** Gradient stop colors for the smooth arc */
+const GRADIENT_STOPS: Array<{ offset: string; color: string }> = [
+  { offset: "0%", color: "#38d39f" },
+  { offset: "20%", color: "#6dd5a0" },
+  { offset: "35%", color: "#f8c24e" },
+  { offset: "50%", color: "#ff9800" },
+  { offset: "70%", color: "#ff6b6b" },
+  { offset: "100%", color: "#e53935" },
+];
+
+/* ── SVG VIX Gauge (CNN Fear & Greed inspired) ── */
 function VixGauge({ vixClose }: { vixClose: number }) {
   const cx = 150;
-  const cy = 140;
-  const r = 110;
-  const startAngle = Math.PI; // left (180deg)
+  const cy = 150;
+  const r = 120;
+  const arcWidth = 14;
+  const startAngle = Math.PI;
   const totalArc = Math.PI;
 
-  // Build zone arcs
-  const zoneArcs = GAUGE_ZONES.map(([lo, hi, label, color]) => {
-    const a1 = startAngle - (lo / GAUGE_MAX) * totalArc;
-    const a2 = startAngle - (Math.min(hi, GAUGE_MAX) / GAUGE_MAX) * totalArc;
-    const x1 = cx + r * Math.cos(a1);
-    const y1 = cy - r * Math.sin(a1);
-    const x2 = cx + r * Math.cos(a2);
-    const y2 = cy - r * Math.sin(a2);
-    const largeArc = Math.abs(a1 - a2) > Math.PI ? 1 : 0;
-    const d = `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 0 ${x2} ${y2}`;
-    return { d, color, label, lo, hi };
+  // Smooth background arc path (semicircle)
+  const arcStartX = cx + r * Math.cos(startAngle);
+  const arcStartY = cy - r * Math.sin(startAngle);
+  const arcEndX = cx + r * Math.cos(0);
+  const arcEndY = cy - r * Math.sin(0);
+  const arcPath = `M ${arcStartX} ${arcStartY} A ${r} ${r} 0 0 0 ${arcEndX} ${arcEndY}`;
+
+  // Track arc uses the same path as the colored arc
+  const trackPath = arcPath;
+
+  // Zone labels positioned along the outside of the arc
+  const labelR = r + 22;
+  const zoneLabels = GAUGE_ZONES.map(([lo, hi, label]) => {
+    const midVal = (lo + hi) / 2;
+    const angle = startAngle - (midVal / GAUGE_MAX) * totalArc;
+    const lx = cx + labelR * Math.cos(angle);
+    const ly = cy - labelR * Math.sin(angle);
+    return { label, x: lx, y: ly, angle };
   });
 
-  // Needle position
+  // Tick marks at zone boundaries
+  const tickInner = r - arcWidth / 2 - 2;
+  const tickOuter = r + arcWidth / 2 + 2;
+  const tickMarks = GAUGE_ZONES.slice(1).map(([lo]) => {
+    const angle = startAngle - (lo / GAUGE_MAX) * totalArc;
+    return {
+      x1: cx + tickInner * Math.cos(angle),
+      y1: cy - tickInner * Math.sin(angle),
+      x2: cx + tickOuter * Math.cos(angle),
+      y2: cy - tickOuter * Math.sin(angle),
+    };
+  });
+
+  // Needle
   const clampedVix = Math.max(0, Math.min(vixClose, GAUGE_MAX));
   const needleAngle = startAngle - (clampedVix / GAUGE_MAX) * totalArc;
-  const needleLen = r - 15;
+  const needleLen = r - arcWidth / 2 - 8;
   const nx = cx + needleLen * Math.cos(needleAngle);
   const ny = cy - needleLen * Math.sin(needleAngle);
 
-  // Find current zone label
+  // Needle tip glow position
+  const glowR = needleLen + 4;
+  const glowX = cx + glowR * Math.cos(needleAngle);
+  const glowY = cy - glowR * Math.sin(needleAngle);
+
+  // Current zone
   const currentZone = GAUGE_ZONES.find(
     ([lo, hi]) => vixClose >= lo && vixClose < hi,
   );
   const zoneLabel = currentZone ? currentZone[2] : "Panic";
-  const zoneColor = currentZone ? currentZone[3] : "#212121";
+  const zoneColor = currentZone ? currentZone[3] : "#e53935";
+
+  const glowColor = zoneColor;
 
   return (
     <div className="flex flex-col items-center">
-      <svg viewBox="0 0 300 170" className="w-full max-w-[340px]">
-        {/* Zone arcs */}
-        {zoneArcs.map((arc) => (
-          <path
-            key={arc.lo}
-            d={arc.d}
-            fill="none"
-            stroke={arc.color}
-            strokeWidth={18}
-            strokeLinecap="butt"
+      <svg viewBox="0 0 300 190" className="w-full max-w-[340px]">
+        <defs>
+          {/* Gradient along the arc */}
+          <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="0">
+            {GRADIENT_STOPS.map((s) => (
+              <stop key={s.offset} offset={s.offset} stopColor={s.color} />
+            ))}
+          </linearGradient>
+          {/* Needle tip glow */}
+          <filter id="needleGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          {/* Subtle shadow beneath arc */}
+          <filter id="arcShadow" x="-10%" y="-10%" width="120%" height="130%">
+            <feGaussianBlur stdDeviation="2" result="shadow" />
+            <feMerge>
+              <feMergeNode in="shadow" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Dim track behind the colored arc */}
+        <path
+          d={trackPath}
+          fill="none"
+          stroke="var(--panel-hover)"
+          strokeWidth={arcWidth + 4}
+          strokeLinecap="round"
+          opacity={0.5}
+        />
+
+        {/* Colored gradient arc */}
+        <path
+          d={arcPath}
+          fill="none"
+          stroke="url(#gaugeGrad)"
+          strokeWidth={arcWidth}
+          strokeLinecap="round"
+          filter="url(#arcShadow)"
+        />
+
+        {/* Zone boundary tick marks */}
+        {tickMarks.map((t, i) => (
+          <line
+            key={i}
+            x1={t.x1}
+            y1={t.y1}
+            x2={t.x2}
+            y2={t.y2}
+            stroke="var(--bg)"
+            strokeWidth={1.5}
+            opacity={0.6}
           />
         ))}
-        {/* Needle */}
+
+        {/* Zone labels along the outside */}
+        {zoneLabels.map((z) => {
+          const angleDeg = (z.angle * 180) / Math.PI;
+          // Rotate text to follow the arc, but keep readable
+          const textRotation = angleDeg > 90 ? angleDeg - 180 : angleDeg;
+          return (
+            <text
+              key={z.label}
+              x={z.x}
+              y={z.y}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={7}
+              fontWeight={600}
+              fill="var(--muted)"
+              opacity={0.7}
+              transform={`rotate(${-textRotation}, ${z.x}, ${z.y})`}
+            >
+              {z.label}
+            </text>
+          );
+        })}
+
+        {/* Scale labels: 0 and GAUGE_MAX */}
+        <text
+          x={cx - r - 4}
+          y={cy + 14}
+          textAnchor="middle"
+          fontSize={8}
+          fill="var(--muted)"
+          opacity={0.5}
+        >
+          0
+        </text>
+        <text
+          x={cx + r + 4}
+          y={cy + 14}
+          textAnchor="middle"
+          fontSize={8}
+          fill="var(--muted)"
+          opacity={0.5}
+        >
+          {GAUGE_MAX}
+        </text>
+
+        {/* Needle glow dot */}
+        <circle
+          cx={glowX}
+          cy={glowY}
+          r={4}
+          fill={glowColor}
+          opacity={0.6}
+          filter="url(#needleGlow)"
+        />
+
+        {/* Needle line */}
         <line
           x1={cx}
           y1={cy}
           x2={nx}
           y2={ny}
           stroke="var(--text)"
-          strokeWidth={2.5}
+          strokeWidth={1.5}
           strokeLinecap="round"
+          style={{ filter: `drop-shadow(0 0 2px ${glowColor})` }}
         />
+
         {/* Center dot */}
-        <circle cx={cx} cy={cy} r={5} fill="var(--text)" />
-        {/* VIX value */}
+        <circle cx={cx} cy={cy} r={4} fill="var(--text)" />
+        <circle cx={cx} cy={cy} r={2} fill="var(--bg)" />
+
+        {/* VIX value (large, bold, centered below arc) */}
         <text
           x={cx}
-          y={cy + 28}
+          y={cy - 18}
           textAnchor="middle"
-          fontSize={22}
-          fontWeight={700}
+          fontSize={32}
+          fontWeight={800}
           fill="var(--text)"
+          style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
         >
           {vixClose.toFixed(2)}
         </text>
-      </svg>
-      <div className="mt-1 flex items-center gap-2">
-        <span
-          className="inline-block h-3 w-3 rounded-full"
-          style={{ backgroundColor: zoneColor }}
-        />
-        <span className="text-sm font-semibold" style={{ color: zoneColor }}>
+
+        {/* Zone label below score */}
+        <text
+          x={cx}
+          y={cy + 2}
+          textAnchor="middle"
+          fontSize={11}
+          fontWeight={700}
+          fill={zoneColor}
+          style={{
+            textTransform: "uppercase" as const,
+            letterSpacing: "0.12em",
+          }}
+        >
           {zoneLabel}
-        </span>
-      </div>
+        </text>
+      </svg>
     </div>
   );
 }
@@ -310,7 +461,7 @@ export default function VixPage() {
   if (error) {
     return (
       <div className="mt-12 text-center text-sm text-[var(--red)]">
-        Failed to load VIX data: {(error as Error).message}
+        Failed to load VIX data: {String((error as Error)?.message ?? "Unknown error")}
       </div>
     );
   }
@@ -385,7 +536,7 @@ export default function VixPage() {
       )}
       {metricsError && (
         <div className="text-xs text-[var(--red)]">
-          Failed to load VIX metrics: {(metricsError as Error).message}
+          Failed to load VIX metrics: {String((metricsError as Error)?.message ?? "Unknown error")}
         </div>
       )}
 

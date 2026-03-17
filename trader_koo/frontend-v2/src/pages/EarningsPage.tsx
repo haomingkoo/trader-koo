@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useEarnings } from "../api/hooks";
-import type { EarningsRow, EarningsGroup, EarningsGroupSession } from "../api/types";
+import type { EarningsRow, EarningsGroup } from "../api/types";
 import Card from "../components/ui/Card";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
@@ -180,123 +180,154 @@ const earningsColumns = [
   },
 ];
 
-function CalendarCard({ row }: { row: EarningsRow }) {
+/** Session label mapping for compact badges */
+const sessionBadgeLabel = (session: string | null | undefined): string => {
+  const s = (session ?? "").toLowerCase();
+  if (s.includes("bmo") || s.includes("pre")) return "BMO";
+  if (s.includes("amc") || s.includes("after")) return "AMC";
+  return "TBD";
+};
+
+const sessionBadgeVariant = (
+  session: string | null | undefined,
+): "blue" | "amber" | "muted" => {
+  const s = (session ?? "").toLowerCase();
+  if (s.includes("bmo") || s.includes("pre")) return "blue";
+  if (s.includes("amc") || s.includes("after")) return "amber";
+  return "muted";
+};
+
+function CalendarTickerRow({ row }: { row: EarningsRow }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div
-      className="cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 transition-colors hover:bg-[var(--panel-hover)]"
-      onClick={() => setExpanded((prev) => !prev)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") setExpanded((prev) => !prev);
-      }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <Link
-          to={`/chart?t=${row.ticker}`}
-          className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {row.ticker}
-        </Link>
-        <div className="flex flex-wrap gap-1">
-          {row.recommendation_state && (
+    <>
+      <tr
+        className="cursor-pointer border-b border-[var(--line)] last:border-b-0 transition-colors hover:bg-[var(--panel-hover)]"
+        onClick={() => setExpanded((prev) => !prev)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") setExpanded((prev) => !prev);
+        }}
+      >
+        {/* Ticker */}
+        <td className="py-2 pl-3 pr-2">
+          <Link
+            to={`/chart?t=${row.ticker}`}
+            className="font-mono text-sm font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {row.ticker}
+          </Link>
+        </td>
+        {/* Session badge */}
+        <td className="px-2 py-2">
+          <Badge variant={sessionBadgeVariant(row.earnings_session)}>
+            {sessionBadgeLabel(row.earnings_session)}
+          </Badge>
+        </td>
+        {/* Recommendation state */}
+        <td className="px-2 py-2">
+          {row.recommendation_state ? (
             <Badge variant={recStateBadgeVariant(row.recommendation_state)}>
               {formatState(row.recommendation_state)}
             </Badge>
+          ) : (
+            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
           )}
-          {row.setup_tier && (
+        </td>
+        {/* Tier */}
+        <td className="px-2 py-2">
+          {row.setup_tier ? (
             <Badge variant={tierVariant(row.setup_tier)}>
               {row.setup_tier}
             </Badge>
+          ) : (
+            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
           )}
-        </div>
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-[var(--muted)]">
-        <span>
-          {row.earnings_session
-            ? row.earnings_session.toUpperCase()
-            : "TBD"}{" "}
-          &middot; {row.days_until != null ? `${row.days_until}d` : "\u2014"}
-        </span>
-        {row.score != null && <span>Score: {row.score}</span>}
-        {row.signal_bias && (
-          <span>
-            Bias:{" "}
-            <span
-              className={
-                row.signal_bias.toLowerCase().includes("bull")
-                  ? "text-[var(--green)]"
-                  : row.signal_bias.toLowerCase().includes("bear")
-                    ? "text-[var(--red)]"
-                    : ""
-              }
-            >
+        </td>
+        {/* Score */}
+        <td className="px-2 py-2 text-right tabular-nums text-xs font-semibold text-[var(--text)]">
+          {row.score != null ? row.score : "\u2014"}
+        </td>
+        {/* Bias */}
+        <td className="px-2 py-2">
+          {row.signal_bias ? (
+            <Badge variant={biasBadgeVariant(row.signal_bias)}>
               {formatState(row.signal_bias)}
-            </span>
-          </span>
-        )}
-        {row.earnings_risk && (
-          <span>
-            Risk:{" "}
-            <span
-              className={
-                row.earnings_risk.toLowerCase().includes("high")
-                  ? "text-[var(--red)]"
-                  : ""
-              }
-            >
+            </Badge>
+          ) : (
+            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
+          )}
+        </td>
+        {/* Risk */}
+        <td className="px-2 py-2">
+          {row.earnings_risk ? (
+            <Badge variant={riskBadgeVariant(row.earnings_risk)}>
               {formatState(row.earnings_risk)}
-            </span>
+            </Badge>
+          ) : (
+            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
+          )}
+        </td>
+        {/* Expand indicator */}
+        <td className="px-2 py-2 text-right text-[var(--muted)]">
+          <span
+            className={`inline-block text-xs transition-transform ${expanded ? "rotate-90" : ""}`}
+          >
+            &#9656;
           </span>
-        )}
-      </div>
+        </td>
+      </tr>
       {expanded && (
-        <div className="mt-3 space-y-2 border-t border-[var(--line)] pt-3 text-xs text-[var(--muted)]">
-          {row.observation && (
-            <p>
-              <strong className="text-[var(--text)]">Observation:</strong>{" "}
-              {String(row.observation)}
-            </p>
-          )}
-          {row.action && (
-            <p>
-              <strong className="text-[var(--text)]">Action:</strong>{" "}
-              {String(row.action)}
-            </p>
-          )}
-          {!row.observation && !row.action && (
-            <p>No observation or action available for this ticker.</p>
-          )}
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
-            {row.sector && <span>Sector: {String(row.sector)}</span>}
-            {row.price != null && <span>Price: ${row.price.toFixed(2)}</span>}
-            {row.peg != null && <span>PEG: {row.peg.toFixed(2)}</span>}
-            {row.yolo_pattern && <span>YOLO: {String(row.yolo_pattern)}</span>}
-          </div>
-        </div>
+        <tr className="border-b border-[var(--line)] last:border-b-0">
+          <td colSpan={8} className="px-3 pb-3 pt-1">
+            <div className="rounded-lg bg-[var(--bg)] p-3 text-xs text-[var(--muted)] space-y-2">
+              {row.observation && (
+                <p>
+                  <strong className="text-[var(--text)]">Observation:</strong>{" "}
+                  {String(row.observation)}
+                </p>
+              )}
+              {row.action && (
+                <p>
+                  <strong className="text-[var(--text)]">Action:</strong>{" "}
+                  {String(row.action)}
+                </p>
+              )}
+              {!row.observation && !row.action && (
+                <p>No observation or action available for this ticker.</p>
+              )}
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
+                {row.sector && <span>Sector: {String(row.sector)}</span>}
+                {row.price != null && (
+                  <span>Price: ${row.price.toFixed(2)}</span>
+                )}
+                {row.peg != null && <span>PEG: {row.peg.toFixed(2)}</span>}
+                {row.discount_pct != null && (
+                  <span
+                    className={
+                      row.discount_pct > 0
+                        ? "text-[var(--green)]"
+                        : row.discount_pct < 0
+                          ? "text-[var(--red)]"
+                          : ""
+                    }
+                  >
+                    Discount: {row.discount_pct > 0 ? "+" : ""}
+                    {row.discount_pct.toFixed(1)}%
+                  </span>
+                )}
+                {row.yolo_pattern && (
+                  <span>YOLO: {String(row.yolo_pattern)}</span>
+                )}
+              </div>
+            </div>
+          </td>
+        </tr>
       )}
-    </div>
-  );
-}
-
-function SessionLane({ session }: { session: EarningsGroupSession }) {
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-2 text-xs text-[var(--muted)]">
-        <span className="font-semibold text-[var(--text)]">
-          {session.label || session.session || "TBD"}
-        </span>
-        <Badge variant="muted">{session.rows.length}</Badge>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {session.rows.map((row, idx) => (
-          <CalendarCard key={`${row.ticker}-${idx}`} row={row} />
-        ))}
-      </div>
-    </div>
+    </>
   );
 }
 
@@ -310,34 +341,53 @@ function CalendarView({ groups }: { groups: EarningsGroup[] }) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {groups.map((group) => {
         const allRows = group.sessions.flatMap((s) => s.rows);
+        const rowCount = group.count ?? allRows.length;
         return (
-          <div key={group.date}>
-            <div className="mb-3 flex items-center gap-3">
-              <h3 className="text-sm font-semibold text-[var(--text)]">
+          <Card key={group.date} className="overflow-hidden">
+            {/* Date header */}
+            <div className="flex items-center gap-3 pb-3 border-b border-[var(--line)]">
+              <h3 className="text-sm font-bold text-[var(--text)]">
                 {group.display_date || group.date}
               </h3>
               <Badge variant="muted">
-                {group.count ?? allRows.length} event(s)
+                {rowCount} {rowCount === 1 ? "event" : "events"}
               </Badge>
             </div>
-            {group.sessions.length > 0 ? (
-              <div className="space-y-4">
-                {group.sessions.map((session) => (
-                  <SessionLane
-                    key={`${group.date}-${session.session}`}
-                    session={session}
-                  />
-                ))}
+
+            {allRows.length > 0 ? (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
+                      <th className="py-1.5 pl-3 pr-2 font-semibold">Ticker</th>
+                      <th className="px-2 py-1.5 font-semibold">Session</th>
+                      <th className="px-2 py-1.5 font-semibold">State</th>
+                      <th className="px-2 py-1.5 font-semibold">Tier</th>
+                      <th className="px-2 py-1.5 text-right font-semibold">Score</th>
+                      <th className="px-2 py-1.5 font-semibold">Bias</th>
+                      <th className="px-2 py-1.5 font-semibold">Risk</th>
+                      <th className="px-2 py-1.5 w-6" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allRows.map((row, idx) => (
+                      <CalendarTickerRow
+                        key={`${row.ticker}-${idx}`}
+                        row={row}
+                      />
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
-              <p className="text-xs text-[var(--muted)]">
+              <p className="mt-3 text-xs text-[var(--muted)]">
                 No events for this date.
               </p>
             )}
-          </div>
+          </Card>
         );
       })}
     </div>
@@ -374,7 +424,7 @@ export default function EarningsPage() {
   if (error) {
     return (
       <div className="mt-12 text-center text-sm text-[var(--red)]">
-        Failed to load earnings: {(error as Error).message}
+        Failed to load earnings: {String((error as Error)?.message ?? "Unknown error")}
       </div>
     );
   }

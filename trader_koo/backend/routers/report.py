@@ -20,6 +20,7 @@ from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.scripts.generate_daily_report import (
     _build_regime_context as _report_build_regime_context,
 )
+from trader_koo.structure.fear_greed import compute_fear_greed_index
 from trader_koo.structure.vix_metrics import compute_vix_metrics
 
 LOG = logging.getLogger(__name__)
@@ -149,5 +150,18 @@ def market_summary(days: int = Query(90, ge=7, le=365)) -> Any:
             if result["as_of"] is None:
                 result["as_of"] = history[-1]["date"]
         return result
+    finally:
+        conn.close()
+
+
+@router.get("/api/fear-greed")
+def fear_greed_index() -> dict[str, Any]:
+    """Composite Fear & Greed Index (0-100) from multiple market indicators."""
+    conn = get_conn()
+    try:
+        return {"ok": True, **compute_fear_greed_index(conn)}
+    except Exception as exc:
+        LOG.error("Failed to compute Fear & Greed index: %s", exc)
+        return {"ok": False, "error": str(exc)}
     finally:
         conn.close()
