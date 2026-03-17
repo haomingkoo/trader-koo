@@ -942,7 +942,8 @@ function buildCandlestickChart(
       x: bbTimestamps,
       y: bbands.upper,
       name: "BOLL Upper",
-      line: { color: "#f4c842", width: 1.4 },
+      line: { color: "#ffd21f", width: 1.8 },
+      showlegend: false,
       xaxis: "x",
       yaxis: "y",
     });
@@ -952,7 +953,8 @@ function buildCandlestickChart(
       x: bbTimestamps,
       y: bbands.middle,
       name: "BOLL Mid",
-      line: { color: "#f3b5d4", width: 1.3 },
+      line: { color: "#f6bed8", width: 1.6 },
+      showlegend: false,
       xaxis: "x",
       yaxis: "y",
     });
@@ -962,7 +964,8 @@ function buildCandlestickChart(
       x: bbTimestamps,
       y: bbands.lower,
       name: "BOLL Lower",
-      line: { color: "#22c4ff", width: 1.4 },
+      line: { color: "#16c7ff", width: 1.8 },
+      showlegend: false,
       xaxis: "x",
       yaxis: "y",
     });
@@ -971,6 +974,65 @@ function buildCandlestickChart(
   const shapes: Record<string, unknown>[] = [];
   const annotations: Record<string, unknown>[] = [];
   addLevelOverlays(structure?.levels ?? [], annotations, shapes);
+
+  if (overlays.bollinger && bars.length >= 20) {
+    const bbands = computeRollingBollinger(close, 20, 2);
+    const bbUpper = bbands.upper[bbands.upper.length - 1];
+    const bbMiddle = bbands.middle[bbands.middle.length - 1];
+    const bbLower = bbands.lower[bbands.lower.length - 1];
+    if (
+      Number.isFinite(bbUpper) &&
+      Number.isFinite(bbMiddle) &&
+      Number.isFinite(bbLower)
+    ) {
+      annotations.push(
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.015,
+          y: 0.985,
+          text: "BOLL",
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#e7edf7", size: 12 },
+        },
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.075,
+          y: 0.985,
+          text: `MID: ${formatPrice(bbMiddle)}`,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#f6bed8", size: 12 },
+        },
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.17,
+          y: 0.985,
+          text: `UPPER: ${formatPrice(bbUpper)}`,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#ffd21f", size: 12 },
+        },
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.315,
+          y: 0.985,
+          text: `LOWER: ${formatPrice(bbLower)}`,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#16c7ff", size: 12 },
+        },
+      );
+    }
+  }
 
   // "FORMING" badge annotation near the forming candle
   if (formingCandle && formingCandle.timestamp) {

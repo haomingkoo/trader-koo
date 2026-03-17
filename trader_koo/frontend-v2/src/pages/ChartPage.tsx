@@ -51,6 +51,16 @@ function ma(arr: number[], n: number): (number | null)[] {
   });
 }
 
+function lastFinite(values: Array<number | null | undefined>): number | null {
+  for (let i = values.length - 1; i >= 0; i -= 1) {
+    const value = values[i];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
 function resampleToWeekly(
   rows: OhlcvRow[],
 ): OhlcvRow[] {
@@ -127,6 +137,7 @@ interface PlotlyTrace {
   fillcolor?: string;
   hovertext?: string[];
   hoverinfo?: string;
+  showlegend?: boolean;
   xaxis: string;
   yaxis: string;
   increasing?: Record<string, unknown>;
@@ -494,7 +505,8 @@ function buildChartData(
       x,
       y: bb.upper,
       name: "BOLL Upper",
-      line: { color: "#f4c842", width: 1.4 },
+      line: { color: "#ffd21f", width: 1.8 },
+      showlegend: false,
       xaxis: "x",
       yaxis: "y",
     });
@@ -504,7 +516,8 @@ function buildChartData(
       x,
       y: bb.middle,
       name: "BOLL Mid",
-      line: { color: "#f3b5d4", width: 1.3 },
+      line: { color: "#f6bed8", width: 1.6 },
+      showlegend: false,
       xaxis: "x",
       yaxis: "y",
     });
@@ -514,7 +527,8 @@ function buildChartData(
       x,
       y: bb.lower,
       name: "BOLL Lower",
-      line: { color: "#22c4ff", width: 1.4 },
+      line: { color: "#16c7ff", width: 1.8 },
+      showlegend: false,
       xaxis: "x",
       yaxis: "y",
     });
@@ -570,6 +584,61 @@ function buildChartData(
 
   const shapes: PlotlyShape[] = [];
   const annotations: PlotlyAnnotation[] = [];
+
+  if (overlays.bollinger) {
+    const bb = computeRollingBollinger(close, 20, 2);
+    const bbUpper = lastFinite(bb.upper);
+    const bbMiddle = lastFinite(bb.middle);
+    const bbLower = lastFinite(bb.lower);
+    if (bbUpper !== null && bbMiddle !== null && bbLower !== null) {
+      annotations.push(
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.015,
+          y: 0.985,
+          text: "BOLL",
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#e7edf7", size: 12 },
+        },
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.075,
+          y: 0.985,
+          text: `MID: ${fmt(bbMiddle, 2)}`,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#f6bed8", size: 12 },
+        },
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.17,
+          y: 0.985,
+          text: `UPPER: ${fmt(bbUpper, 2)}`,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#ffd21f", size: 12 },
+        },
+        {
+          xref: "paper",
+          yref: "paper",
+          x: 0.315,
+          y: 0.985,
+          text: `LOWER: ${fmt(bbLower, 2)}`,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#16c7ff", size: 12 },
+        },
+      );
+    }
+  }
 
   // Support / Resistance levels
   levels.forEach((r) => {
