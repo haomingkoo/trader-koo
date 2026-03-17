@@ -70,12 +70,23 @@ const OVERLAY_OPTIONS = [
 type IntervalValue = (typeof INTERVALS)[number]["value"];
 type OverlayKey = (typeof OVERLAY_OPTIONS)[number]["key"];
 type OverlayState = Record<OverlayKey, boolean>;
+type AxisRangeValue = string | number;
+
+interface PersistedZoomState {
+  xRange: [AxisRangeValue, AxisRangeValue] | null;
+  yRange: [number, number] | null;
+}
 
 const DEFAULT_OVERLAYS: OverlayState = {
   sma20: true,
   sma50: true,
   sma200: false,
   bollinger: false,
+};
+
+const EMPTY_ZOOM_STATE: PersistedZoomState = {
+  xRange: null,
+  yRange: null,
 };
 
 /* ── Helpers ── */
@@ -115,6 +126,81 @@ function formatVisibleWindow(interval: IntervalValue, barCount: number): string 
   }
   const years = totalMinutes / 525600;
   return `${years % 1 === 0 ? years.toFixed(0) : years.toFixed(1)}y`;
+}
+
+function cryptoZoomStorageKey(symbol: string, interval: IntervalValue): string {
+  return `trader_koo_crypto_zoom:${symbol}:${interval}`;
+}
+
+function readZoomState(storageKey: string): PersistedZoomState {
+  if (typeof window === "undefined") {
+    return EMPTY_ZOOM_STATE;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(storageKey);
+    if (!raw) {
+      return EMPTY_ZOOM_STATE;
+    }
+    const parsed = JSON.parse(raw) as Partial<PersistedZoomState>;
+    const xRange = Array.isArray(parsed.xRange) && parsed.xRange.length === 2
+      ? [parsed.xRange[0], parsed.xRange[1]] as [AxisRangeValue, AxisRangeValue]
+      : null;
+    const yRange = Array.isArray(parsed.yRange) &&
+      parsed.yRange.length === 2 &&
+      Number.isFinite(parsed.yRange[0]) &&
+      Number.isFinite(parsed.yRange[1])
+      ? [Number(parsed.yRange[0]), Number(parsed.yRange[1])] as [number, number]
+      : null;
+    return { xRange, yRange };
+  } catch {
+    return EMPTY_ZOOM_STATE;
+  }
+}
+
+function writeZoomState(storageKey: string, value: PersistedZoomState): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(storageKey, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures and keep the zoom only in memory.
+  }
+}
+
+function readAxisRange(
+  eventData: Record<string, unknown>,
+  axis: "xaxis" | "yaxis",
+): [AxisRangeValue, AxisRangeValue] | null {
+  const direct = eventData[`${axis}.range`];
+  if (Array.isArray(direct) && direct.length === 2) {
+    return [direct[0] as AxisRangeValue, direct[1] as AxisRangeValue];
+  }
+
+  const left = eventData[`${axis}.range[0]`];
+  const right = eventData[`${axis}.range[1]`];
+  if ((typeof left === "string" || typeof left === "number") &&
+      (typeof right === "string" || typeof right === "number")) {
+    return [left, right];
+  }
+
+  return null;
+}
+
+function readNumericRange(
+  eventData: Record<string, unknown>,
+  axis: "xaxis" | "yaxis",
+): [number, number] | null {
+  const range = readAxisRange(eventData, axis);
+  if (!range) {
+    return null;
+  }
+  const left = Number(range[0]);
+  const right = Number(range[1]);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return null;
+  }
+  return [left, right];
 }
 
 /* ── Candlestick chart builder with overlays ── */
@@ -667,6 +753,11 @@ export default function CryptoPage() {
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USD");
   const [selectedInterval, setSelectedInterval] = useState<IntervalValue>("1h");
   const [overlays, setOverlays] = useState<OverlayState>(DEFAULT_OVERLAYS);
+  const zoomKey = useMemo(
+    () => cryptoZoomStorageKey(selectedSymbol, selectedInterval),
+    [selectedSymbol, selectedInterval],
+  );
+  const [zoomState, setZoomState] = useState<PersistedZoomState>(() => readZoomState(zoomKey));
 
   const { data: summary } = useCryptoSummary();
   const { data: indicatorsData } = useCryptoIndicators(selectedSymbol);
@@ -720,6 +811,10 @@ export default function CryptoPage() {
   const indicators: CryptoIndicators | null =
     indicatorsData?.indicators ?? null;
 
+  useEffect(() => {
+    setZoomState(readZoomState(zoomKey));
+  }, [zoomKey]);
+
   const effectiveBars = useMemo(
     () => mergeClosedBarIntoHistory(historyData?.bars ?? [], wsClosedBar),
     [historyData?.bars, wsClosedBar],
@@ -737,6 +832,67 @@ export default function CryptoPage() {
       `${selectedSymbol}-${selectedInterval}`,
     );
   }, [effectiveBars, selectedSymbol, selectedInterval, structureData, overlays, effectiveFormingCandle]);
+
+  const chartLayout = useMemo(() => {
+    if (!chartResult) {
+      return null;
+    }
+
+    const baseLayout = chartResult.layout as Record<string, unknown>;
+    const baseXAxis = (baseLayout.xaxis as Record<string, unknown> | undefined) ?? {};
+    const baseYAxis = (baseLayout.yaxis as Record<string, unknown> | undefined) ?? {};
+
+    return {
+      ...baseLayout,
+      xaxis: zoomState.xRange
+        ? {
+            ...baseXAxis,
+            range: zoomState.xRange,
+            autorange: false,
+          }
+        : {
+            ...baseXAxis,
+            autorange: true,
+          },
+      yaxis: zoomState.yRange
+        ? {
+            ...baseYAxis,
+            range: zoomState.yRange,
+            autorange: false,
+          }
+        : {
+            ...baseYAxis,
+            autorange: true,
+          },
+    };
+  }, [chartResult, zoomState]);
+
+  const handleChartRelayout = useCallback((eventData: Record<string, unknown>) => {
+    setZoomState((current) => {
+      let next = current;
+
+      if (eventData["xaxis.autorange"] === true) {
+        next = { ...next, xRange: null };
+      } else {
+        const xRange = readAxisRange(eventData, "xaxis");
+        if (xRange) {
+          next = { ...next, xRange };
+        }
+      }
+
+      if (eventData["yaxis.autorange"] === true) {
+        next = { ...next, yRange: null };
+      } else {
+        const yRange = readNumericRange(eventData, "yaxis");
+        if (yRange) {
+          next = { ...next, yRange };
+        }
+      }
+
+      writeZoomState(zoomKey, next);
+      return next;
+    });
+  }, [zoomKey]);
 
   const availableBarCount = effectiveBars.length;
   const shortHistory = historyData != null && availableBarCount < interval.limit;
@@ -860,12 +1016,13 @@ export default function CryptoPage() {
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
           <PlotlyWrapper
             data={chartResult.traces as unknown as Record<string, unknown>[]}
-            layout={chartResult.layout as unknown as Record<string, unknown>}
+            layout={chartLayout as Record<string, unknown>}
             config={{
               responsive: true,
               displayModeBar: true,
               scrollZoom: true,
             }}
+            onRelayout={handleChartRelayout}
             style={{ width: "100%", height: 500 }}
           />
         </div>

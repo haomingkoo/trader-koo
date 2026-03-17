@@ -35,6 +35,7 @@ interface PlotlyWrapperProps {
   className?: string;
   style?: React.CSSProperties;
   useResizeHandler?: boolean;
+  onRelayout?: (event: Record<string, unknown>) => void;
 }
 
 /**
@@ -48,6 +49,7 @@ export default function PlotlyWrapper({
   className,
   style,
   useResizeHandler = true,
+  onRelayout,
 }: PlotlyWrapperProps) {
   return (
     <Suspense
@@ -64,6 +66,7 @@ export default function PlotlyWrapper({
         className={className}
         style={style}
         useResizeHandler={useResizeHandler}
+        onRelayout={onRelayout}
       />
     </Suspense>
   );
