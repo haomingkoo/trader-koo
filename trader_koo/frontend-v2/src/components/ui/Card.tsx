@@ -21,7 +21,7 @@ export default function Card({ label, value, children, className = "", glass = f
       )}
       {value !== undefined && (
         <div className="text-lg font-semibold text-[var(--text)]">
-          {value ?? "\u2014"}
+          {typeof value === "string" || typeof value === "number" ? (value ?? "\u2014") : String(value ?? "\u2014")}
         </div>
       )}
       {children}

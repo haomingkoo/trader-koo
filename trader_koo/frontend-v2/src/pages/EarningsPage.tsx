@@ -258,23 +258,23 @@ function CalendarCard({ row }: { row: EarningsRow }) {
           {row.observation && (
             <p>
               <strong className="text-[var(--text)]">Observation:</strong>{" "}
-              {row.observation}
+              {String(row.observation)}
             </p>
           )}
           {row.action && (
             <p>
               <strong className="text-[var(--text)]">Action:</strong>{" "}
-              {row.action}
+              {String(row.action)}
             </p>
           )}
           {!row.observation && !row.action && (
             <p>No observation or action available for this ticker.</p>
           )}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
-            {row.sector && <span>Sector: {row.sector}</span>}
+            {row.sector && <span>Sector: {String(row.sector)}</span>}
             {row.price != null && <span>Price: ${row.price.toFixed(2)}</span>}
             {row.peg != null && <span>PEG: {row.peg.toFixed(2)}</span>}
-            {row.yolo_pattern && <span>YOLO: {row.yolo_pattern}</span>}
+            {row.yolo_pattern && <span>YOLO: {String(row.yolo_pattern)}</span>}
           </div>
         </div>
       )}
@@ -474,7 +474,7 @@ export default function EarningsPage() {
       </div>
 
       {data?.detail && (
-        <div className="text-xs text-[var(--muted)]">{data.detail}</div>
+        <div className="text-xs text-[var(--muted)]">{String(data.detail)}</div>
       )}
 
       {/* View toggle */}

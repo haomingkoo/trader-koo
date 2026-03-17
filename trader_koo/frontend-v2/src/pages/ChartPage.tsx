@@ -99,7 +99,7 @@ function GlassCard({
       )}
       {value !== undefined && (
         <div className="text-lg font-bold tabular-nums text-[var(--text)]">
-          {value ?? "\u2014"}
+          {typeof value === "string" || typeof value === "number" ? (value ?? "\u2014") : String(value ?? "\u2014")}
         </div>
       )}
       {children}
@@ -798,7 +798,7 @@ function ChartCommentarySidebar({
 
       <div className="space-y-2 text-xs">
         {commentary.observation ? (
-          <p className="text-[var(--text)]">{commentary.observation}</p>
+          <p className="text-[var(--text)]">{String(commentary.observation)}</p>
         ) : (
           <p className="text-[var(--muted)]">No observation available.</p>
         )}
@@ -806,21 +806,21 @@ function ChartCommentarySidebar({
         {commentary.action && (
           <p className="text-[var(--muted)]">
             <strong className="text-[var(--text)]">Action:</strong>{" "}
-            {commentary.action}
+            {String(commentary.action)}
           </p>
         )}
 
         {commentary.risk_note && (
           <p className="text-[var(--muted)]">
             <strong className="text-[var(--text)]">Risk:</strong>{" "}
-            {commentary.risk_note}
+            {String(commentary.risk_note)}
           </p>
         )}
 
         {commentary.technical_read && (
           <p className="text-[var(--muted)]">
             <strong className="text-[var(--text)]">Technical:</strong>{" "}
-            {commentary.technical_read}
+            {String(commentary.technical_read)}
           </p>
         )}
       </div>
@@ -832,7 +832,7 @@ function ChartCommentarySidebar({
 
       {commentary.asof && (
         <p className="mt-2 text-[10px] text-[var(--muted)]">
-          As of {commentary.asof} | Source: {commentary.narrative_source ?? "rule"}
+          As of {String(commentary.asof)} | Source: {String(commentary.narrative_source ?? "rule")}
         </p>
       )}
     </GlassCard>
@@ -928,7 +928,7 @@ function DebateRolesInline({
                         key={j}
                         className="text-[10px] text-[var(--muted)] before:mr-1 before:content-['\u2022']"
                       >
-                        {ev}
+                        {String(ev)}
                       </li>
                     ))}
                   </ul>

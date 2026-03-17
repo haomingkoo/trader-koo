@@ -81,7 +81,7 @@ function GlassCard({
       )}
       {value !== undefined && (
         <div className="text-lg font-bold tabular-nums text-[var(--text)]">
-          {value ?? "\u2014"}
+          {typeof value === "string" || typeof value === "number" ? (value ?? "\u2014") : String(value ?? "\u2014")}
         </div>
       )}
       {children}
@@ -176,10 +176,10 @@ function RiskFiltersPanel({
               <span className="text-[var(--muted)]">
                 {c.code && (
                   <span className="font-mono text-[var(--text)]">
-                    {c.code}
+                    {String(c.code)}
                   </span>
                 )}{" "}
-                {c.reason}
+                {String(c.reason)}
               </span>
             </li>
           ))}
@@ -209,8 +209,8 @@ function KeyChangesSection({ changes }: { changes: KeyChange[] }) {
       <ul className="mt-2 space-y-1.5">
         {changes.map((kc, i) => (
           <li key={i} className="text-xs">
-            <strong className="text-[var(--text)]">{kc.title}:</strong>{" "}
-            <span className="text-[var(--muted)]">{kc.detail}</span>
+            <strong className="text-[var(--text)]">{String(kc.title)}:</strong>{" "}
+            <span className="text-[var(--muted)]">{String(kc.detail)}</span>
           </li>
         ))}
       </ul>
@@ -706,7 +706,7 @@ function DebateVisualization({
                         key={j}
                         className="text-[10px] text-[var(--muted)] before:mr-1 before:content-['\u2022']"
                       >
-                        {ev}
+                        {String(ev)}
                       </li>
                     ))}
                   </ul>
@@ -938,10 +938,10 @@ function ImprovementAction({ action }: { action: SetupEvalAction }) {
         <span className="font-medium text-[var(--text)]">
           {action.scope.replace(/_/g, " ")}:
         </span>{" "}
-        <span className="text-[var(--muted)]">{action.reason}</span>
+        <span className="text-[var(--muted)]">{String(action.reason)}</span>
         {action.recommendation && (
           <p className="mt-1 text-[var(--amber)]">
-            Tune: {action.recommendation}
+            Tune: {String(action.recommendation)}
           </p>
         )}
       </div>

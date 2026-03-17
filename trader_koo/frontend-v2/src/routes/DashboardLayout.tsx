@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import Sidebar from "../components/layout/Sidebar";
 import Header from "../components/layout/Header";
 import ErrorBoundary from "../components/ui/ErrorBoundary";
@@ -9,6 +9,7 @@ import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 export default function DashboardLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const location = useLocation();
 
   const handleMobileClose = useCallback(() => setMobileOpen(false), []);
 
@@ -23,7 +24,7 @@ export default function DashboardLayout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onMenuToggle={() => setMobileOpen((p) => !p)} />
         <main className="flex-1 overflow-auto p-4">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={location.pathname}>
             <Outlet />
           </ErrorBoundary>
         </main>

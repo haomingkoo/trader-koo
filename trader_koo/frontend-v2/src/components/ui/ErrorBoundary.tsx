@@ -4,6 +4,8 @@ import type { ErrorInfo, ReactNode } from "react";
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  /** Change this value to auto-reset the boundary (e.g. on route change). */
+  resetKey?: string;
 }
 
 interface State {
@@ -19,6 +21,15 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  componentDidUpdate(prevProps: Props): void {
+    if (
+      this.state.hasError &&
+      prevProps.resetKey !== this.props.resetKey
+    ) {
+      this.setState({ hasError: false, error: null });
+    }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -38,7 +49,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             Something went wrong
           </div>
           <div className="max-w-md text-sm text-[var(--muted)]">
-            {this.state.error?.message ?? "An unexpected error occurred."}
+            {String(this.state.error?.message ?? "An unexpected error occurred.")}
           </div>
           <button
             onClick={this.handleRetry}

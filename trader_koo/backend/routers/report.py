@@ -1,7 +1,8 @@
-"""Report endpoints: daily report, earnings calendar, market summary."""
+"""Report endpoints: daily report, earnings calendar, market summary, VIX metrics."""
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,9 @@ from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.scripts.generate_daily_report import (
     _build_regime_context as _report_build_regime_context,
 )
+from trader_koo.structure.vix_metrics import compute_vix_metrics
+
+LOG = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -32,7 +36,7 @@ def public_daily_report(
     include_markdown: bool = Query(default=False),
 ) -> dict[str, Any]:
     """Return latest generated daily report for UI without admin auth."""
-    return daily_report_response(
+    payload = daily_report_response(
         report_dir=REPORT_DIR,
         get_conn_fn=get_conn,
         build_regime_context_fn=_report_build_regime_context,
@@ -42,6 +46,16 @@ def public_daily_report(
         include_internal_paths=False,
         include_admin_log_hints=False,
     )
+    # Inject VIX metrics into the response
+    conn = get_conn()
+    try:
+        payload["vix_metrics"] = compute_vix_metrics(conn)
+    except Exception as exc:
+        LOG.warning("Failed to compute VIX metrics: %s", exc)
+        payload["vix_metrics"] = None
+    finally:
+        conn.close()
+    return payload
 
 
 @router.get("/api/earnings-calendar")
@@ -82,6 +96,19 @@ def earnings_calendar(
             (latest_report or {}).get("generated_ts") if isinstance(latest_report, dict) else None
         )
         return payload
+    finally:
+        conn.close()
+
+
+@router.get("/api/vix-metrics")
+def vix_metrics() -> dict[str, Any]:
+    """Enhanced VIX metrics for the VIX dashboard."""
+    conn = get_conn()
+    try:
+        return {"ok": True, **compute_vix_metrics(conn)}
+    except Exception as exc:
+        LOG.error("Failed to compute VIX metrics: %s", exc)
+        return {"ok": False, "error": str(exc)}
     finally:
         conn.close()
 

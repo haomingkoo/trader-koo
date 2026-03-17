@@ -312,6 +312,7 @@ export interface DailyReportPayload {
     stage: string | null;
   };
   latest_markdown?: string;
+  vix_metrics?: VixMetrics | null;
 }
 
 /* ── HMM Regime ── */
@@ -787,4 +788,43 @@ export interface MarketTickerSummary {
 export interface MarketSummary {
   as_of: string | null;
   tickers: Record<string, MarketTickerSummary | null>;
+}
+
+/* ── VIX Metrics ── */
+export interface VixMetrics {
+  vix_vix3m_ratio: number | null;
+  term_structure_signal: string;
+  realized_vol_20d: number | null;
+  vol_risk_premium: number | null;
+  vol_premium_signal: string;
+  vix_percentile_252d: number | null;
+  percentile_zone: string;
+  above_80th_pctile: boolean;
+  vix_daily_change_pct: number | null;
+  is_spike: boolean;
+  spike_magnitude: string | null;
+  recommended_position_pct: number;
+  sizing_reason: string;
+  gauge_zone: string;
+  gauge_color: string;
+}
+
+export interface VixMetricsPayload {
+  ok: boolean;
+  vix_vix3m_ratio: number | null;
+  term_structure_signal: string;
+  realized_vol_20d: number | null;
+  vol_risk_premium: number | null;
+  vol_premium_signal: string;
+  vix_percentile_252d: number | null;
+  percentile_zone: string;
+  above_80th_pctile: boolean;
+  vix_daily_change_pct: number | null;
+  is_spike: boolean;
+  spike_magnitude: string | null;
+  recommended_position_pct: number;
+  sizing_reason: string;
+  gauge_zone: string;
+  gauge_color: string;
+  error?: string;
 }

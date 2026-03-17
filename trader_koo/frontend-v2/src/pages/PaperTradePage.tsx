@@ -404,7 +404,7 @@ export default function PaperTradePage() {
                           {reason.replace(/_/g, " ")}
                         </td>
                         <td className="px-2 py-1.5 text-[var(--text)]">
-                          {count}
+                          {String(count)}
                         </td>
                       </tr>
                     ),
