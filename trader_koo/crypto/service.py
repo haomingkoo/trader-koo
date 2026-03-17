@@ -427,6 +427,59 @@ def get_crypto_history(
     return aggregated[-limit:]
 
 
+def get_forming_candle(symbol: str, interval: str) -> CryptoBar | None:
+    """Get the current forming (incomplete) candle for a higher timeframe.
+
+    Aggregates recent 1m bars since the last interval boundary.
+    E.g., for 5m at 14:23, aggregates the 1m bars from 14:20-14:23.
+
+    Returns ``None`` for 1m (every 1m bar from the stream is already
+    near-real-time) or if insufficient data is available.
+    """
+    interval_norm = str(interval or "1m").lower()
+    interval_minutes = _INTERVAL_TO_MINUTES.get(interval_norm)
+    if interval_minutes is None or interval_minutes <= 1:
+        return None
+
+    now = dt.datetime.now(dt.timezone.utc)
+    bucket_start = _floor_timestamp(now, interval_minutes)
+
+    # Fetch enough 1m bars to cover the current interval window
+    bars_needed = interval_minutes + 1
+    live_bars = _client.get_bars(symbol, limit=bars_needed) if _client is not None else []
+    if len(live_bars) < 1:
+        recent_db = _load_recent_bars_from_db(symbol, limit=bars_needed, interval="1m")
+        live_bars = _merge_bars(live_bars, recent_db)
+
+    # Filter to bars within the current bucket
+    bucket_bars = [
+        b for b in live_bars
+        if b.timestamp >= bucket_start
+    ]
+    if not bucket_bars:
+        return None
+
+    # Aggregate into a single forming candle
+    first = bucket_bars[0]
+    candle = CryptoBar(
+        symbol=symbol,
+        timestamp=bucket_start,
+        interval=interval_norm,
+        open=first.open,
+        high=first.high,
+        low=first.low,
+        close=first.close,
+        volume=first.volume,
+    )
+    for bar in bucket_bars[1:]:
+        candle.high = max(candle.high, bar.high)
+        candle.low = min(candle.low, bar.low)
+        candle.close = bar.close
+        candle.volume += bar.volume
+
+    return candle
+
+
 def get_crypto_summary() -> dict[str, Any]:
     """Return a summary payload suitable for the frontend header.
 

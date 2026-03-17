@@ -55,9 +55,14 @@ function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_ru
     }
   };
 
+  // 1) Stale-running ingest → error
   if (runningStale || stage === "stale_running") {
     ingest = "error";
-  } else if (pipelineActive || runStatus === "running" || runStatus === "in_progress") {
+    return { ingest, yolo, report };
+  }
+
+  // 2) Pipeline actively running right now
+  if (pipelineActive || runStatus === "running" || runStatus === "in_progress") {
     if (ingestStages.some((s) => stage.includes(s))) {
       ingest = "active";
     } else if (yoloStages.some((s) => stage.includes(s))) {
@@ -70,15 +75,43 @@ function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_ru
     } else {
       ingest = "active";
     }
-  } else if (
+    return { ingest, yolo, report };
+  }
+
+  // 3) Idle — determine state from last completed event
+  //    If the last completed event was successful, show all-green for stages through it.
+  //    If the latest run was "failed" BUT the last completed log event was "ok",
+  //    prefer the log-level completion (require-full-dataset marks ok runs as "failed").
+  const lastCompletedOk =
     lastCompletedStatus === "ok" ||
     lastCompletedStatus === "completed" ||
-    lastCompletedStatus === "done"
-  ) {
+    lastCompletedStatus === "done";
+
+  const latestRunOk =
+    runStatus === "ok" ||
+    runStatus === "completed" ||
+    runStatus === "done";
+
+  if (lastCompletedOk) {
+    // Log says the last pipeline event completed successfully
     markCompletedThrough(lastCompletedStage);
-  } else if (runStatus === "ok" || runStatus === "completed" || runStatus === "done") {
+  } else if (latestRunOk) {
+    // DB ingest_runs says the latest run succeeded
     ingest = "done";
+  } else if (runStatus === "failed" && lastCompletedStatus === "failed") {
+    // Both log and DB agree the last run failed — show error on the failed stage
+    if (reportStages.some((s) => lastCompletedStage.includes(s))) {
+      ingest = "done";
+      yolo = "done";
+      report = "error";
+    } else if (yoloStages.some((s) => lastCompletedStage.includes(s))) {
+      ingest = "done";
+      yolo = "error";
+    } else {
+      ingest = "error";
+    }
   }
+  // Otherwise: everything stays "idle" (gray dots) — the normal between-runs state
 
   return { ingest, yolo, report };
 }

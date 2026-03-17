@@ -10,12 +10,17 @@ asyncio queues (same pattern as the crypto service).
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 import threading
 import uuid
 from typing import Any
 
 from trader_koo.streaming.finnhub_ws import FinnhubWSClient, MAX_SUBSCRIPTIONS
+from trader_koo.streaming.live_candle import (
+    get_forming_candle as _get_forming_candle,
+    update_tick as _live_candle_update,
+)
 
 LOG = logging.getLogger("trader_koo.streaming.service")
 
@@ -66,7 +71,28 @@ def _broadcast_tick(tick: dict) -> None:
 
     Called from the Finnhub WS thread — puts into asyncio queues which
     are drained by the FastAPI WebSocket handlers on the event loop.
+    Also feeds the live candle aggregator.
     """
+    # Feed live candle aggregator
+    symbol = tick.get("symbol")
+    price = tick.get("price")
+    if symbol and price is not None:
+        try:
+            ts_raw = tick.get("timestamp", "")
+            ts = (
+                dt.datetime.fromisoformat(ts_raw)
+                if ts_raw
+                else dt.datetime.now(dt.timezone.utc)
+            )
+            _live_candle_update(
+                symbol,
+                price=float(price),
+                volume=int(tick.get("volume", 0)),
+                timestamp=ts,
+            )
+        except (ValueError, TypeError):
+            pass
+
     with _subscribers_lock:
         dead: list[str] = []
         for sub_id, queue in _subscribers.items():
@@ -132,6 +158,11 @@ def get_equity_prices() -> dict[str, dict]:
     if _client is None:
         return {}
     return _client.get_all_prices()
+
+
+def get_forming_candle(symbol: str) -> dict | None:
+    """Return the current forming 1-min candle for *symbol*, or None."""
+    return _get_forming_candle(symbol)
 
 
 def get_subscription_info() -> dict:

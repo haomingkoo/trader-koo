@@ -24,6 +24,7 @@ from trader_koo.crypto.service import (
     get_crypto_history,
     get_crypto_prices,
     get_crypto_summary,
+    get_forming_candle,
     subscribe_ticks,
     unsubscribe_ticks,
 )
@@ -82,7 +83,7 @@ def crypto_history(
     normalised = _normalise_symbol(symbol)
 
     bars = get_crypto_history(normalised, interval=interval, limit=limit)
-    return {
+    payload: dict[str, Any] = {
         "ok": True,
         "symbol": normalised,
         "interval": interval,
@@ -99,6 +100,23 @@ def crypto_history(
             for bar in bars
         ],
     }
+
+    # Append forming candle for higher timeframes (5m+)
+    try:
+        forming = get_forming_candle(normalised, interval=interval)
+        if forming is not None:
+            payload["forming_candle"] = {
+                "timestamp": forming.timestamp.isoformat(),
+                "open": forming.open,
+                "high": forming.high,
+                "low": forming.low,
+                "close": forming.close,
+                "volume": forming.volume,
+            }
+    except Exception:
+        LOG.debug("Could not compute forming candle for %s [%s]", normalised, interval, exc_info=True)
+
+    return payload
 
 
 @router.get("/api/crypto/structure/{symbol}")

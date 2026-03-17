@@ -118,6 +118,33 @@ const tradeColumns = [
     },
   },
   {
+    key: "decision_state" as const,
+    label: "Decision",
+    render: (_v: unknown, row: unknown) => {
+      const trade = row as PaperTrade;
+      const state = String(trade.decision_state ?? trade.portfolio_decision ?? "").toLowerCase();
+      const variant =
+        state === "approved"
+          ? "green"
+          : state === "approved_with_flags"
+            ? "amber"
+            : state === "rejected"
+              ? "red"
+              : "muted";
+      const label = state ? state.replace(/_/g, " ").toUpperCase() : "\u2014";
+      return (
+        <div className="space-y-1">
+          <Badge variant={variant}>{label}</Badge>
+          {trade.decision_summary ? (
+            <div className="max-w-[16rem] text-[11px] leading-snug text-[var(--muted)]">
+              {trade.decision_summary}
+            </div>
+          ) : null}
+        </div>
+      );
+    },
+  },
+  {
     key: "exit_reason" as const,
     label: "Exit",
     render: (v: unknown) => {

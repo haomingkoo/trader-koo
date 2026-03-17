@@ -83,3 +83,4 @@ class TestPaperTradeDetailEndpoint:
         data = response.json()
         assert data["ok"] is True
         assert data["trade"]["ticker"] == "SPY"
+        assert "decision_state" in data["trade"]

@@ -525,6 +525,17 @@ export interface YoloPatternRow {
   y1?: number;
 }
 
+export interface LiveCandle {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  tick_count: number;
+  forming: boolean;
+}
+
 export interface DashboardPayload {
   ticker: string;
   asof: string;
@@ -547,6 +558,7 @@ export interface DashboardPayload {
   cv_proxy_patterns?: PatternOverlayRow[];
   hybrid_cv_compare?: Record<string, unknown>[];
   data_sources?: Record<string, unknown>;
+  live_candle?: LiveCandle;
 }
 
 /* ── Opportunities ── */
@@ -685,6 +697,15 @@ export interface PaperTrade {
   debate_agreement_score: number | null;
   high_water_mark: number | null;
   low_water_mark: number | null;
+  decision_version?: string | null;
+  decision_state?: string | null;
+  analyst_stage?: string | null;
+  debate_stage?: string | null;
+  risk_stage?: string | null;
+  portfolio_decision?: string | null;
+  decision_summary?: string | null;
+  decision_reasons?: string[];
+  risk_flags?: string[];
 }
 
 export interface PaperTradeList {
@@ -758,6 +779,7 @@ export interface CryptoHistoryPayload {
   interval: string;
   count: number;
   bars: CryptoBar[];
+  forming_candle?: CryptoBar | null;
 }
 
 export interface CryptoIndicators {

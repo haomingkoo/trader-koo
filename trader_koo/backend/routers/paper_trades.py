@@ -1,12 +1,13 @@
 """Paper trade endpoints: list, summary, detail."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from trader_koo.backend.services.database import get_conn
-from trader_koo.paper_trades import list_paper_trades, paper_trade_summary
+from trader_koo.paper_trades import ensure_paper_trade_schema, list_paper_trades, paper_trade_summary
 
 router = APIRouter()
 
@@ -57,6 +58,7 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
     """Get a single paper trade by ID."""
     conn = get_conn()
     try:
+        ensure_paper_trade_schema(conn)
         row = conn.execute(
             """
             SELECT id, report_date, ticker, direction, entry_price, entry_date,
@@ -65,7 +67,10 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
                    pnl_pct, r_multiple, high_water_mark, low_water_mark,
                    setup_family, setup_tier, score, signal_bias, actionability,
                    observation, action_text, risk_note, yolo_pattern, yolo_recency,
-                   debate_agreement_score, last_mtm_date, created_ts, updated_ts
+                   debate_agreement_score, last_mtm_date, created_ts, updated_ts,
+                   decision_version, decision_state, analyst_stage, debate_stage,
+                   risk_stage, portfolio_decision, decision_summary,
+                   decision_reasons, risk_flags
             FROM paper_trades WHERE id = ?
             """,
             (trade_id,),
@@ -80,7 +85,21 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
             "setup_family", "setup_tier", "score", "signal_bias", "actionability",
             "observation", "action_text", "risk_note", "yolo_pattern", "yolo_recency",
             "debate_agreement_score", "last_mtm_date", "created_ts", "updated_ts",
+            "decision_version", "decision_state", "analyst_stage", "debate_stage",
+            "risk_stage", "portfolio_decision", "decision_summary",
+            "decision_reasons", "risk_flags",
         ]
-        return {"ok": True, "trade": dict(zip(keys, row))}
+        trade = dict(zip(keys, row))
+        for key in ("decision_reasons", "risk_flags"):
+            raw = trade.get(key)
+            if raw is None:
+                trade[key] = []
+                continue
+            try:
+                payload = json.loads(str(raw))
+            except Exception:
+                payload = []
+            trade[key] = payload if isinstance(payload, list) else []
+        return {"ok": True, "trade": trade}
     finally:
         conn.close()

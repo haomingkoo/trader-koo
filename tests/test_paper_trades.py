@@ -12,6 +12,7 @@ from trader_koo.paper_trades import (
     _direction_from_row,
     compute_stop_and_target,
     create_paper_trades_from_report,
+    evaluate_setup_for_paper_trade,
     ensure_paper_trade_schema,
     list_paper_trades,
     manually_close_trade,
@@ -57,6 +58,7 @@ def _make_setup_row(
     atr_pct_14: float = 2.5,
     support_level: float = 140.0,
     resistance_level: float = 165.0,
+    risk_note: str = "Standard risk controls.",
 ) -> dict:
     return {
         "ticker": ticker,
@@ -71,7 +73,7 @@ def _make_setup_row(
         "resistance_level": resistance_level,
         "observation": "Test setup",
         "action": "Buy on breakout",
-        "risk_note": "Watch earnings",
+        "risk_note": risk_note,
     }
 
 
@@ -102,6 +104,14 @@ class TestQualifySetup:
 
         assert qualify_setup_for_paper_trade(row) is True
 
+    def test_evaluator_returns_stage_metadata(self):
+        decision = evaluate_setup_for_paper_trade(_make_setup_row())
+
+        assert decision["approved"] is True
+        assert decision["decision_state"] == "approved"
+        assert decision["analyst_stage"] == "pass"
+        assert decision["portfolio_decision"] == "approved"
+
     def test_low_tier_rejects(self):
         row = _make_setup_row(setup_tier="D")
 
@@ -126,6 +136,17 @@ class TestQualifySetup:
         row = _make_setup_row(close=0)
 
         assert qualify_setup_for_paper_trade(row) is False
+
+    def test_conditional_setup_gets_caution_state(self):
+        decision = evaluate_setup_for_paper_trade(
+            _make_setup_row(actionability="conditional", risk_note="Watch earnings"),
+        )
+
+        assert decision["approved"] is True
+        assert decision["decision_state"] == "approved_with_flags"
+        assert decision["debate_stage"] == "caution"
+        assert decision["risk_stage"] == "caution"
+        assert decision["risk_flags"]
 
 
 # ── Stop / Target Computation ────────────────────────────────────
@@ -219,8 +240,28 @@ class TestCreatePaperTrades:
         )
 
         assert inserted == 1
-        trade = conn.execute("SELECT ticker, direction, status FROM paper_trades").fetchone()
-        assert trade == ("AAPL", "long", "open")
+        trade = conn.execute(
+            "SELECT ticker, direction, status, decision_state, portfolio_decision FROM paper_trades",
+        ).fetchone()
+        assert trade == ("AAPL", "long", "open", "approved", "approved")
+
+    def test_stores_decision_metadata_for_flagged_trade(self, conn):
+        rows = [_make_setup_row(actionability="conditional", risk_note="High volatility into earnings")]
+
+        inserted = create_paper_trades_from_report(
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+        )
+
+        assert inserted == 1
+        trade = conn.execute(
+            "SELECT decision_state, debate_stage, risk_stage, decision_summary, risk_flags "
+            "FROM paper_trades WHERE ticker = 'AAPL'",
+        ).fetchone()
+        assert trade[0] == "approved_with_flags"
+        assert trade[1] == "caution"
+        assert trade[2] == "caution"
+        assert "caution" in trade[3].lower()
+        assert "earnings" in str(trade[4]).lower()
 
     def test_skips_non_qualifying_setup(self, conn):
         rows = [_make_setup_row(score=10.0)]

@@ -7,6 +7,7 @@ marks them to market, and tracks portfolio-level performance metrics.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import math
 import os
@@ -29,6 +30,38 @@ _QUALIFYING_ACTIONABILITY = {"higher-probability", "conditional"}
 _QUALIFYING_DIRECTIONS = {"long", "short"}
 
 _TIER_RANK = {"A": 1, "B": 2, "C": 3, "D": 4, "F": 5}
+_PAPER_DECISION_VERSION = "paper-trade-eval-v1"
+_DEBATE_CAUTION_AGREEMENT = 60.0
+_HIGH_VOL_ATR_PCT = 6.0
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    ddl: str,
+) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name in columns:
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
+
+
+def _decode_json_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    try:
+        payload = json.loads(str(raw))
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item) for item in payload]
 
 
 # ── Schema ──────────────────────────────────────────────────────────
@@ -87,6 +120,15 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_paper_trades_family "
         "ON paper_trades(setup_family, direction, status)"
     )
+    _ensure_column(conn, "paper_trades", "decision_version", "decision_version TEXT")
+    _ensure_column(conn, "paper_trades", "decision_state", "decision_state TEXT")
+    _ensure_column(conn, "paper_trades", "analyst_stage", "analyst_stage TEXT")
+    _ensure_column(conn, "paper_trades", "debate_stage", "debate_stage TEXT")
+    _ensure_column(conn, "paper_trades", "risk_stage", "risk_stage TEXT")
+    _ensure_column(conn, "paper_trades", "portfolio_decision", "portfolio_decision TEXT")
+    _ensure_column(conn, "paper_trades", "decision_summary", "decision_summary TEXT")
+    _ensure_column(conn, "paper_trades", "decision_reasons", "decision_reasons TEXT")
+    _ensure_column(conn, "paper_trades", "risk_flags", "risk_flags TEXT")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
@@ -130,29 +172,108 @@ def _direction_from_row(row: dict[str, Any]) -> str:
 
 def qualify_setup_for_paper_trade(row: dict[str, Any]) -> bool:
     """Return True if a setup row qualifies as a paper trade entry."""
+    return evaluate_setup_for_paper_trade(row)["approved"]
+
+
+def evaluate_setup_for_paper_trade(row: dict[str, Any]) -> dict[str, Any]:
+    """Return staged decision metadata for paper-trade qualification."""
     tier = str(row.get("setup_tier") or "").strip().upper()
+    reasons: list[str] = []
+    risk_flags: list[str] = []
+    analyst_stage = "pass"
+    debate_stage = "pass"
+    risk_stage = "pass"
+
     if tier not in _QUALIFYING_TIERS:
         min_rank = _TIER_RANK.get(PAPER_TRADE_MIN_TIER, 2)
         if _TIER_RANK.get(tier, 99) > min_rank:
-            return False
+            analyst_stage = "reject"
+            reasons.append(
+                f"Tier {tier or 'unknown'} is below paper-trade minimum {PAPER_TRADE_MIN_TIER}."
+            )
 
     score = row.get("score")
     if not isinstance(score, (int, float)) or float(score) < PAPER_TRADE_MIN_SCORE:
-        return False
+        analyst_stage = "reject"
+        reasons.append(
+            f"Score {float(score):.1f}" if isinstance(score, (int, float)) else "Missing score"
+        )
 
     actionability = str(row.get("actionability") or "").strip().lower()
     if actionability not in _QUALIFYING_ACTIONABILITY:
-        return False
+        debate_stage = "reject"
+        reasons.append(
+            f"Actionability '{actionability or 'unknown'}' is not eligible for paper trading."
+        )
+    elif actionability == "conditional":
+        debate_stage = "caution"
+        reasons.append("Setup is conditional rather than fully ready.")
+
+    debate_score = row.get("debate_agreement_score")
+    if isinstance(debate_score, (int, float)) and float(debate_score) < _DEBATE_CAUTION_AGREEMENT:
+        debate_stage = "caution" if debate_stage != "reject" else debate_stage
+        reasons.append(f"Debate agreement is only {float(debate_score):.0f}%.")
 
     direction = _direction_from_row(row)
     if direction not in _QUALIFYING_DIRECTIONS:
-        return False
+        analyst_stage = "reject"
+        reasons.append("Signal direction is neutral or unsupported.")
 
     close = row.get("close")
     if not isinstance(close, (int, float)) or float(close) <= 0:
-        return False
+        analyst_stage = "reject"
+        reasons.append("Entry price is missing or non-positive.")
 
-    return True
+    atr_pct = row.get("atr_pct_14")
+    if isinstance(atr_pct, (int, float)) and float(atr_pct) >= _HIGH_VOL_ATR_PCT:
+        risk_stage = "caution"
+        risk_flags.append(f"ATR {float(atr_pct):.1f}% suggests elevated volatility.")
+
+    risk_note = str(row.get("risk_note") or "").strip().lower()
+    if risk_note:
+        for needle, label in (
+            ("earnings", "Earnings event risk is still in play."),
+            ("high volatility", "Risk note flags high volatility."),
+            ("volatility", "Risk note mentions volatility."),
+            ("gap", "Risk note mentions gap risk."),
+            ("low liquidity", "Risk note mentions low liquidity."),
+        ):
+            if needle in risk_note and label not in risk_flags:
+                risk_stage = "caution"
+                risk_flags.append(label)
+
+    yolo_recency = str(row.get("yolo_recency") or "").strip().lower()
+    if "stale" in yolo_recency:
+        risk_stage = "caution"
+        risk_flags.append("YOLO context is stale.")
+
+    approved = analyst_stage != "reject" and debate_stage != "reject"
+    if not approved:
+        portfolio_decision = "rejected"
+        decision_state = "rejected"
+        decision_summary = "Rejected by paper-trade gating."
+    elif debate_stage == "caution" or risk_stage == "caution":
+        portfolio_decision = "approved_with_flags"
+        decision_state = "approved_with_flags"
+        decision_summary = "Approved for paper trading with caution flags."
+    else:
+        portfolio_decision = "approved"
+        decision_state = "approved"
+        decision_summary = "Approved for paper trading."
+
+    return {
+        "approved": approved,
+        "decision_version": _PAPER_DECISION_VERSION,
+        "decision_state": decision_state,
+        "analyst_stage": analyst_stage,
+        "debate_stage": debate_stage,
+        "risk_stage": risk_stage,
+        "portfolio_decision": portfolio_decision,
+        "decision_summary": decision_summary,
+        "decision_reasons": reasons,
+        "risk_flags": risk_flags,
+        "direction": direction,
+    }
 
 
 # ── Stop / Target ───────────────────────────────────────────────────
@@ -243,14 +364,15 @@ def create_paper_trades_from_report(
             break
         if not isinstance(row, dict):
             continue
-        if not qualify_setup_for_paper_trade(row):
+        evaluation = evaluate_setup_for_paper_trade(row)
+        if not evaluation["approved"]:
             continue
 
         ticker = str(row.get("ticker") or "").upper().strip()
         if not ticker:
             continue
 
-        direction = _direction_from_row(row)
+        direction = str(evaluation["direction"])
         entry_price = float(row["close"])
         levels = compute_stop_and_target(row, direction)
 
@@ -264,7 +386,10 @@ def create_paper_trades_from_report(
                 high_water_mark, low_water_mark,
                 setup_family, setup_tier, score, signal_bias, actionability,
                 observation, action_text, risk_note,
-                yolo_pattern, yolo_recency, debate_agreement_score
+                yolo_pattern, yolo_recency, debate_agreement_score,
+                decision_version, decision_state, analyst_stage, debate_stage,
+                risk_stage, portfolio_decision, decision_summary,
+                decision_reasons, risk_flags
             ) VALUES (
                 ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -272,7 +397,10 @@ def create_paper_trades_from_report(
                 ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?,
+                ?, ?
             )
             ON CONFLICT(report_date, ticker, direction) DO NOTHING
             """,
@@ -300,6 +428,15 @@ def create_paper_trades_from_report(
                 row.get("yolo_pattern"),
                 row.get("yolo_recency"),
                 row.get("debate_agreement_score"),
+                evaluation["decision_version"],
+                evaluation["decision_state"],
+                evaluation["analyst_stage"],
+                evaluation["debate_stage"],
+                evaluation["risk_stage"],
+                evaluation["portfolio_decision"],
+                evaluation["decision_summary"],
+                json.dumps(evaluation["decision_reasons"]),
+                json.dumps(evaluation["risk_flags"]),
             ),
         )
         if conn.total_changes > before_changes:
@@ -705,7 +842,8 @@ def _recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[st
         SELECT id, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, exit_price, exit_date,
                status, pnl_pct, r_multiple, unrealized_pnl_pct,
-               setup_family, setup_tier, score, exit_reason
+               setup_family, setup_tier, score, exit_reason,
+               decision_state, decision_summary
         FROM paper_trades
         ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC
         LIMIT ?
@@ -717,6 +855,7 @@ def _recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[st
         "target_price", "stop_loss", "exit_price", "exit_date",
         "status", "pnl_pct", "r_multiple", "unrealized_pnl_pct",
         "setup_family", "setup_tier", "score", "exit_reason",
+        "decision_state", "decision_summary",
     ]
     return [dict(zip(keys, r)) for r in rows]
 
@@ -814,7 +953,9 @@ def list_paper_trades(
                status, current_price, unrealized_pnl_pct, pnl_pct, r_multiple,
                setup_family, setup_tier, score, signal_bias, actionability,
                observation, action_text, risk_note, debate_agreement_score,
-               high_water_mark, low_water_mark
+               high_water_mark, low_water_mark, decision_version,
+               decision_state, analyst_stage, debate_stage, risk_stage,
+               portfolio_decision, decision_summary, decision_reasons, risk_flags
         FROM paper_trades
         WHERE {where}
         ORDER BY entry_date DESC, id DESC
@@ -829,6 +970,14 @@ def list_paper_trades(
         "status", "current_price", "unrealized_pnl_pct", "pnl_pct", "r_multiple",
         "setup_family", "setup_tier", "score", "signal_bias", "actionability",
         "observation", "action_text", "risk_note", "debate_agreement_score",
-        "high_water_mark", "low_water_mark",
+        "high_water_mark", "low_water_mark", "decision_version",
+        "decision_state", "analyst_stage", "debate_stage", "risk_stage",
+        "portfolio_decision", "decision_summary", "decision_reasons", "risk_flags",
     ]
-    return [dict(zip(keys, r)) for r in rows]
+    trades: list[dict[str, Any]] = []
+    for row in rows:
+        trade = dict(zip(keys, row))
+        trade["decision_reasons"] = _decode_json_list(trade.get("decision_reasons"))
+        trade["risk_flags"] = _decode_json_list(trade.get("risk_flags"))
+        trades.append(trade)
+    return trades

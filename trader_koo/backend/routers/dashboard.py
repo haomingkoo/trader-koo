@@ -1,6 +1,7 @@
 """Dashboard endpoints: ticker list, dashboard payload, YOLO patterns."""
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ from fastapi import APIRouter, Query
 
 from trader_koo.backend.services.chart_builder import build_dashboard_payload
 from trader_koo.backend.services.database import get_conn, get_yolo_patterns
+
+LOG = logging.getLogger("trader_koo.routers.dashboard")
 
 router = APIRouter()
 
@@ -42,7 +45,7 @@ def dashboard(
 ) -> dict[str, Any]:
     conn = get_conn()
     try:
-        return build_dashboard_payload(
+        payload = build_dashboard_payload(
             conn,
             ticker=ticker,
             months=months,
@@ -51,6 +54,18 @@ def dashboard(
         )
     finally:
         conn.close()
+
+    # Attach live forming candle when streaming data is available
+    try:
+        from trader_koo.streaming.service import get_forming_candle
+
+        live_candle = get_forming_candle(ticker.upper())
+        if live_candle is not None:
+            payload["live_candle"] = live_candle
+    except Exception:
+        LOG.debug("Could not attach live candle for %s", ticker, exc_info=True)
+
+    return payload
 
 
 @router.get("/api/yolo/{ticker}")
