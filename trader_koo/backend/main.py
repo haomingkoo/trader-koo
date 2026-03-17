@@ -545,4 +545,16 @@ app.include_router(streaming_router)
 # ---------------------------------------------------------------------------
 
 if DIST_V2.exists() and DIST_V2.is_dir():
-    app.mount("/v2", StaticFiles(directory=str(DIST_V2), html=True), name="v2")
+    _v2_index = DIST_V2 / "index.html"
+
+    # Serve static assets (JS, CSS, fonts, maps)
+    app.mount("/v2/assets", StaticFiles(directory=str(DIST_V2 / "assets")), name="v2-assets")
+
+    # Catch-all for SPA routing — any /v2/* path that isn't an asset serves index.html
+    @app.get("/v2/{rest_of_path:path}", include_in_schema=False)
+    def v2_spa_fallback(rest_of_path: str = "") -> Any:
+        # Serve static files if they exist (favicon, etc.)
+        static_file = DIST_V2 / rest_of_path
+        if rest_of_path and static_file.is_file():
+            return FileResponse(str(static_file))
+        return FileResponse(str(_v2_index))

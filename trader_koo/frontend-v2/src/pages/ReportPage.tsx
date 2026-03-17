@@ -16,7 +16,8 @@ import type {
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
-import FearGreedGauge from "../components/FearGreedGauge";
+// Fear & Greed removed — our computed index differs from CNN's, user found it confusing
+// import FearGreedGauge from "../components/FearGreedGauge";
 
 /* ── Helpers ── */
 
@@ -1012,8 +1013,7 @@ export default function ReportPage() {
 
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
 
-      {/* Fear & Greed Index */}
-      <FearGreedGauge />
+      {/* Fear & Greed Index — removed, our computed index differs from CNN's */}
 
       {/* 1. Summary KPI cards */}
       <SummaryKpiRow
