@@ -41,11 +41,13 @@ export function usePaperTradeSummary() {
 }
 
 export function usePaperTrades(status: string = "all", direction: string = "all") {
+  // Backend rejects direction=all — only send direction if it's long or short
+  const dirParam = direction === "long" || direction === "short" ? `&direction=${direction}` : "";
   return useQuery({
     queryKey: ["paper-trades", status, direction],
     queryFn: () =>
       apiFetch<PaperTradeList>(
-        `/api/paper-trades?status=${status}&direction=${direction}&limit=500`,
+        `/api/paper-trades?status=${status}${dirParam}&limit=500`,
       ),
     staleTime: 2 * 60 * 1000,
   });
