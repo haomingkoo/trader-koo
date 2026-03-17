@@ -547,6 +547,13 @@ app.include_router(streaming_router)
 if DIST_V2.exists() and DIST_V2.is_dir():
     _v2_index = DIST_V2 / "index.html"
     _v2_assets = DIST_V2 / "assets"
+    _v2_shell_headers = {
+        # Never let the SPA shell stick around across deploys: old index.html files
+        # point at hashed lazy-route chunks that disappear on the next build.
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
 
     # Only mount hashed assets when the build output is fully present.
     if _v2_assets.is_dir():
@@ -556,7 +563,7 @@ if DIST_V2.exists() and DIST_V2.is_dir():
         @app.get("/v2", include_in_schema=False)
         @app.get("/v2/", include_in_schema=False)
         def v2_index() -> Any:
-            return FileResponse(str(_v2_index))
+            return FileResponse(str(_v2_index), headers=_v2_shell_headers)
 
         # Catch-all for SPA routing — any /v2/* path that isn't an asset serves index.html
         @app.get("/v2/{rest_of_path:path}", include_in_schema=False)
@@ -565,4 +572,4 @@ if DIST_V2.exists() and DIST_V2.is_dir():
             static_file = DIST_V2 / rest_of_path
             if rest_of_path and static_file.is_file():
                 return FileResponse(str(static_file))
-            return FileResponse(str(_v2_index))
+            return FileResponse(str(_v2_index), headers=_v2_shell_headers)

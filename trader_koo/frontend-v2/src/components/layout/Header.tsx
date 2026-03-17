@@ -3,17 +3,21 @@ import ClockStrip from "./ClockStrip";
 import { usePipelineStatus } from "../../api/hooks";
 import type { CryptoPrice, EquityTick, PipelineStatus } from "../../api/types";
 
-function PipelineDot({ state }: { state: "idle" | "active" | "done" | "error" }) {
+type StageState = "idle" | "active" | "done" | "warning" | "error";
+
+function PipelineDot({ state }: { state: StageState }) {
   const colors: Record<string, string> = {
     idle: "bg-[var(--line)]",
     active: "bg-[var(--amber)] animate-pulse",
     done: "bg-[var(--green)]",
+    warning: "bg-[var(--amber)]",
     error: "bg-[var(--red)]",
   };
   const labels: Record<string, string> = {
     idle: "idle",
     active: "active",
     done: "done",
+    warning: "warning",
     error: "error",
   };
   return (
@@ -25,19 +29,21 @@ function PipelineDot({ state }: { state: "idle" | "active" | "done" | "error" })
   );
 }
 
-function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_run">) {
+function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_run" | "errors">) {
   const stage = (data.pipeline?.stage ?? "idle").toLowerCase();
   const runStatus = (data.latest_run?.status ?? "").toLowerCase();
   const lastCompletedStage = (data.pipeline?.last_completed_stage ?? "").toLowerCase();
   const lastCompletedStatus = (data.pipeline?.last_completed_status ?? "").toLowerCase();
   const pipelineActive = Boolean(data.pipeline?.active);
   const runningStale = Boolean(data.pipeline?.running_stale);
+  const tickersOk = Number(data.latest_run?.tickers_ok ?? 0);
+  const tickersFailed = Number(data.latest_run?.tickers_failed ?? 0);
+  const partialFailure = runStatus === "failed" && tickersOk > 0 && tickersFailed > 0;
 
   const ingestStages = ["price_daily", "price_seed", "fundamentals", "ingest"];
   const yoloStages = ["yolo", "yolo_batch", "patterns"];
   const reportStages = ["report", "narrative", "scoring", "daily_report"];
 
-  type StageState = "idle" | "active" | "done" | "error";
   let ingest: StageState = "idle";
   let yolo: StageState = "idle";
   let report: StageState = "idle";
@@ -106,9 +112,9 @@ function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_ru
       report = "error";
     } else if (yoloStages.some((s) => lastCompletedStage.includes(s))) {
       ingest = "done";
-      yolo = "error";
+      yolo = partialFailure ? "warning" : "error";
     } else {
-      ingest = "error";
+      ingest = partialFailure ? "warning" : "error";
     }
   }
   // Otherwise: everything stays "idle" (gray dots) — the normal between-runs state
@@ -367,7 +373,7 @@ function CryptoPriceStrip() {
 
 export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   const { data } = usePipelineStatus();
-  let states: { ingest: "idle" | "active" | "done" | "error"; yolo: "idle" | "active" | "done" | "error"; report: "idle" | "active" | "done" | "error" } = { ingest: "idle", yolo: "idle", report: "idle" };
+  let states: { ingest: StageState; yolo: StageState; report: StageState } = { ingest: "idle", yolo: "idle", report: "idle" };
   try {
     if (data && typeof data === "object" && data.pipeline && typeof data.pipeline === "object") {
       states = derivePipelineStates(data as PipelineStatus);
@@ -375,6 +381,10 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   } catch {
     // Pipeline data shape mismatch — use idle defaults
   }
+
+  const pipelineHint = data?.errors?.latest_error_message
+    ? `Latest pipeline issue: ${data.errors.latest_error_message}`
+    : "Pipeline status: Ingest, YOLO, Report";
 
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
@@ -404,7 +414,10 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
         <EquityPriceStrip />
         <CryptoPriceStrip />
       </div>
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
+      <div
+        className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5"
+        title={pipelineHint}
+      >
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
           Pipeline
         </span>
