@@ -186,16 +186,30 @@ export interface SetupEvaluation {
 
 export interface SetupRow {
   ticker: string;
-  setup_score: number | null;
+  score: number | null;
   setup_tier: string | null;
-  setup_label: string | null;
-  bias_label: string | null;
-  yolo_context: string | null;
-  level_event: string | null;
-  observation_short: string | null;
-  next_step_short: string | null;
-  audit_notes: string | null;
-  pct_change?: number | null;
+  setup_family: string | null;
+  signal_bias: string | null;
+  pct_change: number | null;
+  observation: string | null;
+  action: string | null;
+  risk_note: string | null;
+  technical_read: string | null;
+  actionability: string | null;
+  yolo_pattern: string | null;
+  yolo_recency: string | null;
+  yolo_bias: string | null;
+  yolo_direction_conflict: boolean;
+  level_context: string | null;
+  debate_consensus_state: string | null;
+  debate_agreement_score: number | null;
+  debate_consensus_bias: string | null;
+  debate_disagreement_count: number | null;
+  narrative_source: string | null;
+  discount_pct: number | null;
+  peg: number | null;
+  sector: string | null;
+  [key: string]: unknown;
 }
 
 export interface RegimeContext {

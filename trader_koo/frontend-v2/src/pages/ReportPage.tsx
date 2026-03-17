@@ -326,7 +326,7 @@ function SetupQualitySection({
   debateMap: Map<string, NonNullable<import("../api/types").ChartCommentary["debate_v1"]>>;
   activeTicker: string;
 }) {
-  const [sortCol, setSortCol] = useState<string>("setup_score");
+  const [sortCol, setSortCol] = useState<string>("score");
   const [sortAsc, setSortAsc] = useState(false);
   const [filterTier, setFilterTier] = useState<string>("all");
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
@@ -377,10 +377,10 @@ function SetupQualitySection({
       ),
     },
     {
-      key: "setup_score",
+      key: "score",
       label: "Score",
       render: (row) => (
-        <span className="tabular-nums">{fmt(row.setup_score, 1)}</span>
+        <span className="tabular-nums">{fmt(row.score, 1)}</span>
       ),
     },
     {
@@ -416,41 +416,41 @@ function SetupQualitySection({
         ),
     },
     {
-      key: "bias_label",
+      key: "signal_bias",
       label: "Bias",
       render: (row) =>
-        row.bias_label ? (
-          <Badge variant={biasVariant(row.bias_label)}>
-            {row.bias_label}
+        row.signal_bias ? (
+          <Badge variant={biasVariant(row.signal_bias)}>
+            {row.signal_bias}
           </Badge>
         ) : (
           "\u2014"
         ),
     },
     {
-      key: "yolo_context",
+      key: "yolo_pattern",
       label: "YOLO",
       render: (row) => (
         <span className="text-xs text-[var(--muted)]">
-          {row.yolo_context ?? "\u2014"}
+          {row.yolo_pattern ?? "\u2014"}
         </span>
       ),
     },
     {
-      key: "observation_short",
+      key: "observation",
       label: "Observation",
       render: (row) => (
-        <span className="text-xs text-[var(--muted)]">
-          {row.observation_short ?? "\u2014"}
+        <span className="text-xs text-[var(--muted)] max-w-[200px] truncate block" title={row.observation ?? ""}>
+          {row.observation ?? "\u2014"}
         </span>
       ),
     },
     {
-      key: "next_step_short",
-      label: "Next Step",
+      key: "action",
+      label: "Action",
       render: (row) => (
-        <span className="text-xs text-[var(--muted)]">
-          {row.next_step_short ?? "\u2014"}
+        <span className="text-xs text-[var(--muted)] max-w-[200px] truncate block" title={row.action ?? ""}>
+          {row.action ?? "\u2014"}
         </span>
       ),
     },
