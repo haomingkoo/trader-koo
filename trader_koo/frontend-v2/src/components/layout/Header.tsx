@@ -76,8 +76,8 @@ function formatPrice(price: number): string {
   return price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function CryptoPriceChip({ label, tick }: { label: string; tick: CryptoPrice | undefined }) {
-  if (!tick) return null;
+function CryptoPriceChip({ label, tick }: { label: string; tick: CryptoPrice | undefined | null }) {
+  if (!tick || typeof tick.price !== "number" || typeof tick.change_pct_24h !== "number") return null;
   const isPositive = tick.change_pct_24h >= 0;
   const changeColor = isPositive ? "text-[var(--green)]" : "text-[var(--red)]";
   const sign = isPositive ? "+" : "";
