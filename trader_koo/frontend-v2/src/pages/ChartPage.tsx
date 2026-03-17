@@ -493,8 +493,8 @@ function buildChartData(
       mode: "lines",
       x,
       y: bb.upper,
-      name: "BB Upper",
-      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      name: "BOLL Upper",
+      line: { color: "#f4c842", width: 1.4 },
       xaxis: "x",
       yaxis: "y",
     });
@@ -503,8 +503,8 @@ function buildChartData(
       mode: "lines",
       x,
       y: bb.middle,
-      name: "BB Mid",
-      line: { color: "rgba(186,130,255,0.85)", width: 1 },
+      name: "BOLL Mid",
+      line: { color: "#f3b5d4", width: 1.3 },
       xaxis: "x",
       yaxis: "y",
     });
@@ -513,8 +513,8 @@ function buildChartData(
       mode: "lines",
       x,
       y: bb.lower,
-      name: "BB Lower",
-      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      name: "BOLL Lower",
+      line: { color: "#22c4ff", width: 1.4 },
       xaxis: "x",
       yaxis: "y",
     });

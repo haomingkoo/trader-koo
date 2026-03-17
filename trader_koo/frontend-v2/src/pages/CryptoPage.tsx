@@ -941,8 +941,8 @@ function buildCandlestickChart(
       mode: "lines",
       x: bbTimestamps,
       y: bbands.upper,
-      name: "BB Upper",
-      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      name: "BOLL Upper",
+      line: { color: "#f4c842", width: 1.4 },
       xaxis: "x",
       yaxis: "y",
     });
@@ -951,8 +951,8 @@ function buildCandlestickChart(
       mode: "lines",
       x: bbTimestamps,
       y: bbands.middle,
-      name: "BB Middle",
-      line: { color: "rgba(186,130,255,0.8)", width: 1 },
+      name: "BOLL Mid",
+      line: { color: "#f3b5d4", width: 1.3 },
       xaxis: "x",
       yaxis: "y",
     });
@@ -961,8 +961,8 @@ function buildCandlestickChart(
       mode: "lines",
       x: bbTimestamps,
       y: bbands.lower,
-      name: "BB Lower",
-      line: { color: "rgba(186,130,255,0.6)", width: 1, dash: "dash" },
+      name: "BOLL Lower",
+      line: { color: "#22c4ff", width: 1.4 },
       xaxis: "x",
       yaxis: "y",
     });
