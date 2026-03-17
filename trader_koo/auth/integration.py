@@ -1,5 +1,6 @@
 """Integration module for RBAC with existing backend."""
 
+import logging
 import os
 import sqlite3
 from pathlib import Path
@@ -85,33 +86,32 @@ def create_default_admin_user(user_mgmt_service: UserManagementService) -> None:
     Args:
         user_mgmt_service: User management service
     """
+    log = logging.getLogger("trader_koo.auth.integration")
     users = user_mgmt_service.list_users()
     if len(users) == 0:
         # No users exist, create default admin
         from trader_koo.auth.models import UserRole
-        
+
         default_username = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
         default_email = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@trader-koo.local")
-        default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
-        
+        default_password = os.getenv("TRADER_KOO_ADMIN_PASSWORD", "")
+
         if not default_password:
             import secrets
             default_password = secrets.token_urlsafe(16)
-            print(f"\n{'='*60}")
-            print(f"IMPORTANT: Default admin user created")
-            print(f"Username: {default_username}")
-            print(f"Password: {default_password}")
-            print(f"Please change this password immediately!")
-            print(f"{'='*60}\n")
-        
+            log.warning(
+                "Auto-generated admin password (set TRADER_KOO_ADMIN_PASSWORD to override): %s",
+                default_password,
+            )
+
         user, error = user_mgmt_service.create_user(
             username=default_username,
             email=default_email,
             password=default_password,
             role=UserRole.ADMIN,
         )
-        
+
         if error:
-            print(f"Warning: Failed to create default admin user: {error}")
+            log.warning("Failed to create default admin user: %s", error)
         else:
-            print(f"Default admin user created: {default_username}")
+            log.info("Default admin user created: %s", default_username)

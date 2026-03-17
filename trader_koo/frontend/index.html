@@ -4130,7 +4130,7 @@
         try {
           await fetch(`${base}/api/usage/session`, {
             method: "POST",
-            credentials: "include",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
             keepalive,
@@ -5995,7 +5995,7 @@
           };
           const resp = await fetch(`${base}/api/feedback/setup`, {
             method: "POST",
-            credentials: "include",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });

@@ -118,7 +118,7 @@ async def ws_equities(websocket: WebSocket) -> None:
     which this handler drains and forwards to the connected client.
     """
     await websocket.accept()
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=200)
     sub_id = subscribe_equity_ticks(queue)
     LOG.info("Equity browser WS connected (sub_id=%s)", sub_id)
     try:

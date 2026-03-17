@@ -864,25 +864,25 @@ function DebateRolesInline({
             <span>
               Consensus:{" "}
               <strong className="text-[var(--text)]">
-                {consensus.consensus_bias}
+                {String(consensus.consensus_bias ?? "\u2014")}
               </strong>
             </span>
             <span>
               State:{" "}
               <strong className="text-[var(--text)]">
-                {consensus.consensus_state}
+                {String(consensus.consensus_state ?? "\u2014")}
               </strong>
             </span>
             <span>
               Agreement:{" "}
               <strong className="text-[var(--text)]">
-                {consensus.agreement_score?.toFixed(0) ?? "\u2014"}%
+                {typeof consensus.agreement_score === "number" ? consensus.agreement_score.toFixed(0) : "\u2014"}%
               </strong>
             </span>
             <span>
               Disagreements:{" "}
               <strong className="text-[var(--text)]">
-                {consensus.disagreement_count}
+                {String(consensus.disagreement_count ?? "\u2014")}
               </strong>
             </span>
           </div>

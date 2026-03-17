@@ -59,7 +59,7 @@ const opportunityColumns = [
     key: "price" as const,
     label: "Price",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       return n != null ? `$${n.toFixed(2)}` : "\u2014";
     },
   },
@@ -67,7 +67,7 @@ const opportunityColumns = [
     key: "pe" as const,
     label: "P/E",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       return n != null ? n.toFixed(1) : "\u2014";
     },
   },
@@ -75,7 +75,7 @@ const opportunityColumns = [
     key: "peg" as const,
     label: "PEG",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       if (n == null) return "\u2014";
       const color =
         n <= 1 ? "text-[var(--green)]" : n <= 2 ? "text-[var(--amber)]" : "text-[var(--red)]";
@@ -86,7 +86,7 @@ const opportunityColumns = [
     key: "target_price" as const,
     label: "Target",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       return n != null ? `$${n.toFixed(2)}` : "\u2014";
     },
   },
@@ -94,7 +94,7 @@ const opportunityColumns = [
     key: "discount_pct" as const,
     label: "Discount %",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       if (n == null) return "\u2014";
       const color =
         n > 0 ? "text-[var(--green)]" : n < 0 ? "text-[var(--red)]" : "";
@@ -110,7 +110,7 @@ const opportunityColumns = [
     key: "valuation_label" as const,
     label: "Valuation",
     render: (v: unknown) => {
-      const label = v as string | null;
+      const label = typeof v === "string" ? v : null;
       if (!label) return "\u2014";
       return (
         <Badge variant={valuationBadgeVariant(label)}>
@@ -123,7 +123,7 @@ const opportunityColumns = [
     key: "eps_growth_5y" as const,
     label: "EPS Growth 5Y",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       if (n == null) return "\u2014";
       const color = n > 0 ? "text-[var(--green)]" : n < 0 ? "text-[var(--red)]" : "";
       return (

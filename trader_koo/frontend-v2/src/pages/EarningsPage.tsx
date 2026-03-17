@@ -71,7 +71,7 @@ const earningsColumns = [
     key: "schedule_quality" as const,
     label: "Timing",
     render: (v: unknown) => {
-      const val = v as string | null;
+      const val = typeof v === "string" ? v : null;
       return val ? (
         <Badge variant={val === "confirmed" ? "green" : "muted"}>
           {formatState(val)}
@@ -85,7 +85,7 @@ const earningsColumns = [
     key: "days_until" as const,
     label: "Days",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       return n != null ? `${n}d` : "\u2014";
     },
   },
@@ -93,7 +93,7 @@ const earningsColumns = [
     key: "recommendation_state" as const,
     label: "State",
     render: (v: unknown) => {
-      const val = v as string | null;
+      const val = typeof v === "string" ? v : null;
       return val ? (
         <Badge variant={recStateBadgeVariant(val)}>
           {formatState(val)}
@@ -107,15 +107,14 @@ const earningsColumns = [
     key: "score" as const,
     label: "Score",
     render: (v: unknown) => {
-      const n = v as number | null;
-      return n != null ? String(n) : "\u2014";
+      return typeof v === "number" ? String(v) : "\u2014";
     },
   },
   {
     key: "signal_bias" as const,
     label: "Bias",
     render: (v: unknown) => {
-      const val = v as string | null;
+      const val = typeof v === "string" ? v : null;
       return val ? (
         <Badge variant={biasBadgeVariant(val)}>
           {formatState(val)}
@@ -129,7 +128,7 @@ const earningsColumns = [
     key: "earnings_risk" as const,
     label: "Risk",
     render: (v: unknown) => {
-      const val = v as string | null;
+      const val = typeof v === "string" ? v : null;
       return val ? (
         <Badge variant={riskBadgeVariant(val)}>
           {formatState(val)}
@@ -158,7 +157,7 @@ const earningsColumns = [
     key: "price" as const,
     label: "Price",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       return n != null ? `$${n.toFixed(2)}` : "\u2014";
     },
   },
@@ -166,7 +165,7 @@ const earningsColumns = [
     key: "discount_pct" as const,
     label: "Discount %",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       if (n == null) return "\u2014";
       const color =
         n > 0 ? "text-[var(--green)]" : n < 0 ? "text-[var(--red)]" : "";
@@ -249,7 +248,7 @@ function CalendarTickerRow({ row }: { row: EarningsRow }) {
         </td>
         {/* Score */}
         <td className="px-2 py-2 text-right tabular-nums text-xs font-semibold text-[var(--text)]">
-          {row.score != null ? row.score : "\u2014"}
+          {typeof row.score === "number" ? row.score : "\u2014"}
         </td>
         {/* Bias */}
         <td className="px-2 py-2">

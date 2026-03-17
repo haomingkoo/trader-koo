@@ -41,17 +41,24 @@ _flush_running = False
 _subscribers_lock = threading.Lock()
 _subscribers: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
+# Maximum concurrent browser WebSocket subscribers
+MAX_WS_SUBSCRIBERS = 50
+
 # Flush interval in seconds (5 minutes)
 FLUSH_INTERVAL_SEC = 300
 
 
-def subscribe_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str:
+def subscribe_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str | None:
     """Register a browser WebSocket to receive real-time tick pushes.
 
-    Returns a subscription ID used to unsubscribe later.
+    Returns a subscription ID used to unsubscribe later, or ``None``
+    if the maximum subscriber limit has been reached.
     """
     sub_id = uuid.uuid4().hex[:12]
     with _subscribers_lock:
+        if len(_subscribers) >= MAX_WS_SUBSCRIBERS:
+            LOG.warning("Max WS subscribers reached (%d), rejecting", MAX_WS_SUBSCRIBERS)
+            return None
         _subscribers[sub_id] = queue
     LOG.debug("Tick subscriber added: %s (total: %d)", sub_id, len(_subscribers))
     return sub_id

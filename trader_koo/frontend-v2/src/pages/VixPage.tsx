@@ -680,7 +680,7 @@ export default function VixPage() {
                       {String(row.metric)}
                     </td>
                     <td className="px-3 py-2 tabular-nums text-[var(--text)]">
-                      {row.value_pct != null
+                      {typeof row.value_pct === "number"
                         ? `${row.value_pct > 0 ? "+" : ""}${row.value_pct.toFixed(2)}%`
                         : "\u2014"}
                     </td>

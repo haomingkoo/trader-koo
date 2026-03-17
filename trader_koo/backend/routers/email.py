@@ -1,6 +1,7 @@
 """Email endpoints: subscribe, confirm, unsubscribe, chart-preview."""
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -237,18 +238,20 @@ def _subscription_base_url(request: Request | None = None) -> str:
 
 def _subscription_result_page(title: str, message: str, *, ok: bool = True) -> HTMLResponse:
     accent = "#0f9d58" if ok else "#d93025"
-    html = f"""\
+    safe_title = html.escape(title)
+    safe_message = html.escape(message)
+    page = f"""\
 <!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title}</title>
+    <title>{safe_title}</title>
   </head>
   <body style="margin:0;padding:22px;background:#eef3f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
     <div style="max-width:560px;margin:0 auto;border:1px solid #dde7f0;border-radius:16px;background:#ffffff;padding:20px;">
-      <div style="font-size:20px;line-height:26px;font-weight:700;color:{accent};">{title}</div>
-      <div style="margin-top:10px;font-size:14px;line-height:22px;color:#334155;">{message}</div>
+      <div style="font-size:20px;line-height:26px;font-weight:700;color:{accent};">{safe_title}</div>
+      <div style="margin-top:10px;font-size:14px;line-height:22px;color:#334155;">{safe_message}</div>
       <div style="margin-top:14px;font-size:12px;line-height:18px;color:#64748b;">
         trader_koo alerts are research only and not financial advice.
       </div>
@@ -256,7 +259,7 @@ def _subscription_result_page(title: str, message: str, *, ok: bool = True) -> H
   </body>
 </html>
 """
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=page)
 
 
 # ---------------------------------------------------------------------------

@@ -109,7 +109,7 @@ def vix_metrics() -> dict[str, Any]:
         return {"ok": True, **compute_vix_metrics(conn)}
     except Exception as exc:
         LOG.error("Failed to compute VIX metrics: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "VIX metrics computation failed"}
     finally:
         conn.close()
 
@@ -162,6 +162,6 @@ def fear_greed_index() -> dict[str, Any]:
         return {"ok": True, **compute_fear_greed_index(conn)}
     except Exception as exc:
         LOG.error("Failed to compute Fear & Greed index: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "Fear & Greed computation failed"}
     finally:
         conn.close()

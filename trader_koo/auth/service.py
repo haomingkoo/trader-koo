@@ -56,7 +56,8 @@ class AuthService:
         Returns:
             User object if valid, None otherwise
         """
-        if not self.legacy_api_key or api_key != self.legacy_api_key:
+        import secrets as _secrets
+        if not self.legacy_api_key or not _secrets.compare_digest(api_key, self.legacy_api_key):
             return None
         
         # Legacy API key grants admin access

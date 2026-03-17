@@ -632,7 +632,7 @@ function DebateVisualization({
         <span className="text-xs text-[var(--muted)]">
           Disagreements:{" "}
           <strong className="text-[var(--text)]">
-            {consensus.disagreement_count}
+            {String(consensus.disagreement_count ?? "\u2014")}
           </strong>
         </span>
       </div>

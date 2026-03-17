@@ -26,14 +26,21 @@ _client: FinnhubWSClient | None = None
 _subscribers_lock = threading.Lock()
 _subscribers: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
+# Maximum concurrent browser WebSocket subscribers
+MAX_WS_SUBSCRIBERS = 50
 
-def subscribe_equity_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str:
+
+def subscribe_equity_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str | None:
     """Register a browser WebSocket to receive real-time equity tick pushes.
 
-    Returns a subscription ID used to unsubscribe later.
+    Returns a subscription ID used to unsubscribe later, or ``None``
+    if the maximum subscriber limit has been reached.
     """
     sub_id = uuid.uuid4().hex[:12]
     with _subscribers_lock:
+        if len(_subscribers) >= MAX_WS_SUBSCRIBERS:
+            LOG.warning("Max equity WS subscribers reached (%d), rejecting", MAX_WS_SUBSCRIBERS)
+            return None
         _subscribers[sub_id] = queue
     LOG.debug(
         "Equity tick subscriber added: %s (total: %d)",

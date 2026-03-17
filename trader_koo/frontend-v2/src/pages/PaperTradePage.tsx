@@ -10,10 +10,10 @@ import Table from "../components/ui/Table";
 const Plot = lazy(() => import("react-plotly.js"));
 
 const fmtPct = (v: number | null | undefined, suffix: string = "%", sign: boolean = false): string =>
-  v != null ? `${sign && v > 0 ? "+" : ""}${v.toFixed(2)}${suffix}` : "\u2014";
+  typeof v === "number" ? `${sign && v > 0 ? "+" : ""}${v.toFixed(2)}${suffix}` : "\u2014";
 
 const fmtPrice = (v: number | null | undefined): string =>
-  v != null ? `$${v.toFixed(2)}` : "\u2014";
+  typeof v === "number" ? `$${v.toFixed(2)}` : "\u2014";
 
 const pnlColor = (v: number | null | undefined): string => {
   if (v == null) return "";
@@ -78,8 +78,9 @@ const tradeColumns = [
     label: "P&L %",
     render: (_v: unknown, row: unknown) => {
       const trade = row as PaperTrade;
-      const pnl =
+      const raw =
         trade.status === "open" ? trade.unrealized_pnl_pct : trade.pnl_pct;
+      const pnl = typeof raw === "number" ? raw : null;
       if (pnl == null) return "\u2014";
       return (
         <span className={`font-medium ${pnlColor(pnl)}`}>
@@ -93,7 +94,7 @@ const tradeColumns = [
     key: "r_multiple" as const,
     label: "R",
     render: (v: unknown) => {
-      const n = v as number | null;
+      const n = typeof v === "number" ? v : null;
       if (n == null) return "\u2014";
       return (
         <span className={pnlColor(n)}>
@@ -121,7 +122,7 @@ const tradeColumns = [
     key: "exit_reason" as const,
     label: "Exit",
     render: (v: unknown) => {
-      const val = v as string | null;
+      const val = typeof v === "string" ? v : null;
       return val ? val.replace(/_/g, " ") : "\u2014";
     },
   },
@@ -134,7 +135,7 @@ const tradeColumns = [
     key: "setup_tier" as const,
     label: "Tier",
     render: (v: unknown) => {
-      const tier = v as string | null;
+      const tier = typeof v === "string" ? v : null;
       return tier ? (
         <Badge variant={tierVariant(tier)}>{tier}</Badge>
       ) : (
@@ -352,19 +353,18 @@ export default function PaperTradePage() {
                         </Badge>
                       </td>
                       <td className="px-2 py-1.5 text-[var(--text)]">
-                        {stats.total}
+                        {String(stats.total ?? "\u2014")}
                       </td>
                       <td className="px-2 py-1.5 text-[var(--text)]">
-                        {stats.wins}
+                        {String(stats.wins ?? "\u2014")}
                       </td>
                       <td className="px-2 py-1.5 text-[var(--text)]">
-                        {stats.win_rate_pct.toFixed(1)}%
+                        {typeof stats.win_rate_pct === "number" ? `${stats.win_rate_pct.toFixed(1)}%` : "\u2014"}
                       </td>
                       <td
                         className={`px-2 py-1.5 ${pnlColor(stats.avg_pnl_pct)}`}
                       >
-                        {stats.avg_pnl_pct > 0 ? "+" : ""}
-                        {stats.avg_pnl_pct.toFixed(2)}%
+                        {typeof stats.avg_pnl_pct === "number" ? `${stats.avg_pnl_pct > 0 ? "+" : ""}${stats.avg_pnl_pct.toFixed(2)}%` : "\u2014"}
                       </td>
                     </tr>
                   ))}

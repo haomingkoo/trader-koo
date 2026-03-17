@@ -100,7 +100,7 @@ function HistoryItem({
   label: string;
   value: number | null;
 }) {
-  if (value === null) {
+  if (value === null || typeof value !== "number") {
     return (
       <div className="text-center">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
@@ -142,7 +142,7 @@ function ComponentRow({ component }: { component: FearGreedComponent }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="font-medium text-[var(--text)]">{component.name}</span>
+        <span className="font-medium text-[var(--text)]">{String(component.name ?? "")}</span>
         <div className="flex items-center gap-2">
           {score !== null ? (
             <span className="font-bold tabular-nums" style={{ color: barColor }}>
@@ -158,7 +158,7 @@ function ComponentRow({ component }: { component: FearGreedComponent }) {
               backgroundColor: `${barColor}18`,
             }}
           >
-            {component.signal}
+            {String(component.signal ?? "")}
           </span>
         </div>
       </div>
@@ -169,7 +169,7 @@ function ComponentRow({ component }: { component: FearGreedComponent }) {
           style={{ width: `${barPct}%`, backgroundColor: barColor }}
         />
       </div>
-      <div className="text-[10px] text-[var(--muted)]">{component.detail}</div>
+      <div className="text-[10px] text-[var(--muted)]">{String(component.detail ?? "")}</div>
     </div>
   );
 }
@@ -222,13 +222,13 @@ export default function FearGreedGauge() {
               className="text-4xl font-bold tabular-nums"
               style={{ color }}
             >
-              {score}
+              {typeof score === "number" ? score : String(score ?? "\u2014")}
             </div>
             <div
               className="mt-0.5 text-sm font-semibold"
               style={{ color }}
             >
-              {label}
+              {String(label ?? "")}
             </div>
           </div>
         </div>
