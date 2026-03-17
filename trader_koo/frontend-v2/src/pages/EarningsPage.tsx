@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useEarnings } from "../api/hooks";
-import type { EarningsRow, EarningsGroup } from "../api/types";
+import type { EarningsRow } from "../api/types";
 import Card from "../components/ui/Card";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
@@ -179,245 +179,311 @@ const earningsColumns = [
   },
 ];
 
-/** Session label mapping for compact badges */
-const sessionBadgeLabel = (session: string | null | undefined): string => {
-  const s = (session ?? "").toLowerCase();
-  if (s.includes("bmo") || s.includes("pre")) return "BMO";
-  if (s.includes("amc") || s.includes("after")) return "AMC";
-  return "TBD";
+/* ── Week Grid Calendar helpers ── */
+
+type SessionKey = "pre" | "tbd" | "amc";
+
+const SESSION_ORDER: SessionKey[] = ["pre", "tbd", "amc"];
+
+const SESSION_LABELS: Record<SessionKey, string> = {
+  pre: "PRE",
+  tbd: "TBD",
+  amc: "AMC",
 };
 
-const sessionBadgeVariant = (
-  session: string | null | undefined,
-): "blue" | "amber" | "muted" => {
-  const s = (session ?? "").toLowerCase();
-  if (s.includes("bmo") || s.includes("pre")) return "blue";
-  if (s.includes("amc") || s.includes("after")) return "amber";
-  return "muted";
+const SESSION_COLORS: Record<SessionKey, string> = {
+  pre: "text-[var(--blue)]",
+  tbd: "text-[var(--muted)]",
+  amc: "text-[var(--amber)]",
 };
 
-function CalendarTickerRow({ row }: { row: EarningsRow }) {
-  const [expanded, setExpanded] = useState(false);
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
 
+interface DayBucket {
+  date: Date;
+  dateStr: string;
+  label: string;
+  sessions: Record<SessionKey, EarningsRow[]>;
+}
+
+/** Classify a row's session into pre/tbd/amc */
+function classifySession(session: string | null | undefined): SessionKey {
+  const s = (session ?? "").toLowerCase();
+  if (s.includes("bmo") || s.includes("pre")) return "pre";
+  if (s.includes("amc") || s.includes("after")) return "amc";
+  return "tbd";
+}
+
+/** Get Monday of the week containing `date` */
+function getMonday(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/** Format date as "Mon Mar 17" */
+function formatDayHeader(date: Date): string {
+  const dayName = DAY_NAMES[date.getDay() === 0 ? 4 : date.getDay() - 1] ?? "?";
+  const month = date.toLocaleDateString("en-US", { month: "short" });
+  return `${dayName} ${month} ${date.getDate()}`;
+}
+
+/** Format YYYY-MM-DD string for comparison */
+function toDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** Get the today date key in local time */
+function getTodayKey(): string {
+  return toDateKey(new Date());
+}
+
+/** Tier dot color mapping */
+function tierDotColor(tier: string | null | undefined): string {
+  if (!tier) return "bg-[var(--muted)]";
+  const t = tier.toUpperCase();
+  if (t === "A") return "bg-[var(--green)]";
+  if (t === "B") return "bg-[var(--amber)]";
+  if (t === "C") return "bg-[var(--red)]";
+  return "bg-[var(--muted)]";
+}
+
+function TickerTile({ row }: { row: EarningsRow }) {
   return (
-    <>
-      <tr
-        className="cursor-pointer border-b border-[var(--line)] last:border-b-0 transition-colors hover:bg-[var(--panel-hover)]"
-        onClick={() => setExpanded((prev) => !prev)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") setExpanded((prev) => !prev);
-        }}
-      >
-        {/* Ticker */}
-        <td className="py-2 pl-3 pr-2">
-          <Link
-            to={`/chart?t=${row.ticker}`}
-            className="font-mono text-sm font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {row.ticker}
-          </Link>
-        </td>
-        {/* Session badge */}
-        <td className="px-2 py-2">
-          <Badge variant={sessionBadgeVariant(row.earnings_session)}>
-            {sessionBadgeLabel(row.earnings_session)}
-          </Badge>
-        </td>
-        {/* Recommendation state */}
-        <td className="px-2 py-2">
-          {row.recommendation_state ? (
-            <Badge variant={recStateBadgeVariant(row.recommendation_state)}>
-              {formatState(row.recommendation_state)}
-            </Badge>
-          ) : (
-            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
-          )}
-        </td>
-        {/* Tier */}
-        <td className="px-2 py-2">
-          {row.setup_tier ? (
-            <Badge variant={tierVariant(row.setup_tier)}>
-              {row.setup_tier}
-            </Badge>
-          ) : (
-            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
-          )}
-        </td>
-        {/* Score */}
-        <td className="px-2 py-2 text-right tabular-nums text-xs font-semibold text-[var(--text)]">
-          {typeof row.score === "number" ? row.score : "\u2014"}
-        </td>
-        {/* Bias */}
-        <td className="px-2 py-2">
-          {row.signal_bias ? (
-            <Badge variant={biasBadgeVariant(row.signal_bias)}>
-              {formatState(row.signal_bias)}
-            </Badge>
-          ) : (
-            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
-          )}
-        </td>
-        {/* Risk */}
-        <td className="px-2 py-2">
-          {row.earnings_risk ? (
-            <Badge variant={riskBadgeVariant(row.earnings_risk)}>
-              {formatState(row.earnings_risk)}
-            </Badge>
-          ) : (
-            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
-          )}
-        </td>
-        {/* Expand indicator */}
-        <td className="px-2 py-2 text-right text-[var(--muted)]">
-          <span
-            className={`inline-block text-xs transition-transform ${expanded ? "rotate-90" : ""}`}
-          >
-            &#9656;
-          </span>
-        </td>
-      </tr>
-      {expanded && (
-        <tr className="border-b border-[var(--line)] last:border-b-0">
-          <td colSpan={8} className="px-3 pb-3 pt-1">
-            <div className="rounded-lg bg-[var(--bg)] p-3 text-xs text-[var(--muted)] space-y-2">
-              {row.observation && (
-                <p>
-                  <strong className="text-[var(--text)]">Observation:</strong>{" "}
-                  {String(row.observation)}
-                </p>
-              )}
-              {row.action && (
-                <p>
-                  <strong className="text-[var(--text)]">Action:</strong>{" "}
-                  {String(row.action)}
-                </p>
-              )}
-              {!row.observation && !row.action && (
-                <p>No observation or action available for this ticker.</p>
-              )}
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
-                {row.sector && <span>Sector: {String(row.sector)}</span>}
-                {row.price != null && (
-                  <span>Price: ${row.price.toFixed(2)}</span>
-                )}
-                {row.peg != null && <span>PEG: {row.peg.toFixed(2)}</span>}
-                {row.discount_pct != null && (
-                  <span
-                    className={
-                      row.discount_pct > 0
-                        ? "text-[var(--green)]"
-                        : row.discount_pct < 0
-                          ? "text-[var(--red)]"
-                          : ""
-                    }
-                  >
-                    Discount: {row.discount_pct > 0 ? "+" : ""}
-                    {row.discount_pct.toFixed(1)}%
-                  </span>
-                )}
-                {row.yolo_pattern && (
-                  <span>YOLO: {String(row.yolo_pattern)}</span>
-                )}
-              </div>
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
+    <Link
+      to={`/chart?t=${row.ticker}`}
+      className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-[var(--panel-hover)]"
+      title={[
+        row.ticker,
+        row.setup_tier ? `Tier ${row.setup_tier}` : null,
+        row.signal_bias ? formatState(row.signal_bias) : null,
+        row.score != null ? `Score ${row.score}` : null,
+      ]
+        .filter(Boolean)
+        .join(" \u2022 ")}
+    >
+      <span
+        className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${tierDotColor(row.setup_tier)}`}
+        aria-label={row.setup_tier ? `Tier ${row.setup_tier}` : "No tier"}
+      />
+      <span className="text-sm font-mono font-bold text-[var(--accent)] group-hover:text-[var(--blue)] transition-colors">
+        {row.ticker}
+      </span>
+    </Link>
   );
 }
 
-function CalendarView({ groups }: { groups: EarningsGroup[] }) {
-  if (groups.length === 0) {
-    return (
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
-        No earnings found for the selected window.
-      </div>
-    );
-  }
+function WeekGridCalendar({ rows }: { rows: EarningsRow[] }) {
+  const [weekOffset, setWeekOffset] = useState(0);
+
+  const todayKey = useMemo(() => getTodayKey(), []);
+
+  const weekDays = useMemo((): DayBucket[] => {
+    const today = new Date();
+    const monday = getMonday(today);
+    monday.setDate(monday.getDate() + weekOffset * 7);
+
+    const buckets: DayBucket[] = [];
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      buckets.push({
+        date: d,
+        dateStr: toDateKey(d),
+        label: formatDayHeader(d),
+        sessions: { pre: [], tbd: [], amc: [] },
+      });
+    }
+
+    // Index buckets by dateStr for fast lookup
+    const bucketMap = new Map<string, DayBucket>();
+    for (const bucket of buckets) {
+      bucketMap.set(bucket.dateStr, bucket);
+    }
+
+    // Fill buckets with rows
+    for (const row of rows) {
+      const dateStr = row.earnings_date;
+      const bucket = bucketMap.get(dateStr);
+      if (bucket) {
+        const session = classifySession(row.earnings_session);
+        bucket.sessions[session].push(row);
+      }
+    }
+
+    return buckets;
+  }, [rows, weekOffset]);
+
+  const weekLabel = useMemo(() => {
+    if (weekDays.length === 0) return "";
+    const first = weekDays[0];
+    const last = weekDays[weekDays.length - 1];
+    if (!first || !last) return "";
+    const fmtOpts: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+    };
+    return `${first.date.toLocaleDateString("en-US", fmtOpts)} \u2013 ${last.date.toLocaleDateString("en-US", fmtOpts)}`;
+  }, [weekDays]);
+
+  const totalThisWeek = useMemo(
+    () =>
+      weekDays.reduce(
+        (sum, day) =>
+          sum +
+          day.sessions.pre.length +
+          day.sessions.tbd.length +
+          day.sessions.amc.length,
+        0,
+      ),
+    [weekDays],
+  );
 
   return (
-    <div className="space-y-4">
-      {groups.map((group) => {
-        const allRows = group.sessions.flatMap((s) => s.rows);
-        const rowCount = group.count ?? allRows.length;
-        return (
-          <Card key={group.date} className="overflow-hidden">
-            {/* Date header */}
-            <div className="flex items-center gap-3 pb-3 border-b border-[var(--line)]">
-              <h3 className="text-sm font-bold text-[var(--text)]">
-                {group.display_date || group.date}
-              </h3>
-              <Badge variant="muted">
-                {rowCount} {rowCount === 1 ? "event" : "events"}
-              </Badge>
-            </div>
+    <div className="space-y-3">
+      {/* Week navigation */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setWeekOffset((p) => p - 1)}
+            className="rounded-md border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-xs font-semibold text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+            aria-label="Previous week"
+          >
+            &larr;
+          </button>
+          <button
+            onClick={() => setWeekOffset(0)}
+            className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+              weekOffset === 0
+                ? "bg-[var(--blue)] text-white"
+                : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+            }`}
+          >
+            This Week
+          </button>
+          <button
+            onClick={() => setWeekOffset(1)}
+            className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+              weekOffset === 1
+                ? "bg-[var(--blue)] text-white"
+                : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+            }`}
+          >
+            Next Week
+          </button>
+          <button
+            onClick={() => setWeekOffset((p) => p + 1)}
+            className="rounded-md border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-xs font-semibold text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+            aria-label="Next week"
+          >
+            &rarr;
+          </button>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-medium text-[var(--text)]">
+            {weekLabel}
+          </span>
+          <Badge variant="muted">
+            {totalThisWeek} {totalThisWeek === 1 ? "event" : "events"}
+          </Badge>
+        </div>
+      </div>
 
-            {allRows.length > 0 ? (
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-                      <th className="py-1.5 pl-3 pr-2 font-semibold">Ticker</th>
-                      <th className="px-2 py-1.5 font-semibold">Session</th>
-                      <th className="px-2 py-1.5 font-semibold">State</th>
-                      <th className="px-2 py-1.5 font-semibold">Tier</th>
-                      <th className="px-2 py-1.5 text-right font-semibold">Score</th>
-                      <th className="px-2 py-1.5 font-semibold">Bias</th>
-                      <th className="px-2 py-1.5 font-semibold">Risk</th>
-                      <th className="px-2 py-1.5 w-6" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allRows.map((row, idx) => (
-                      <CalendarTickerRow
-                        key={`${row.ticker}-${idx}`}
-                        row={row}
-                      />
-                    ))}
-                  </tbody>
-                </table>
+      {/* 5-day grid — responsive: stack on narrow, 3 cols on md, 5 on lg */}
+      <div className="grid grid-cols-1 gap-px rounded-xl border border-[var(--line)] bg-[var(--line)] overflow-hidden md:grid-cols-3 lg:grid-cols-5">
+        {weekDays.map((day) => {
+          const isToday = day.dateStr === todayKey;
+          const dayTotal =
+            day.sessions.pre.length +
+            day.sessions.tbd.length +
+            day.sessions.amc.length;
+
+          return (
+            <div
+              key={day.dateStr}
+              className={`flex flex-col bg-[var(--panel)] ${
+                isToday
+                  ? "bg-[rgba(74,158,255,0.05)] ring-1 ring-inset ring-[rgba(74,158,255,0.3)]"
+                  : ""
+              }`}
+            >
+              {/* Day header */}
+              <div
+                className={`flex items-center justify-between border-b px-3 py-2 ${
+                  isToday
+                    ? "border-[rgba(74,158,255,0.3)]"
+                    : "border-[var(--line)]"
+                }`}
+              >
+                <span
+                  className={`text-xs font-bold ${
+                    isToday ? "text-[var(--accent)]" : "text-[var(--text)]"
+                  }`}
+                >
+                  {day.label}
+                </span>
+                {dayTotal > 0 && (
+                  <span className="text-[10px] font-medium text-[var(--muted)]">
+                    {dayTotal}
+                  </span>
+                )}
               </div>
-            ) : (
-              <p className="mt-3 text-xs text-[var(--muted)]">
-                No events for this date.
-              </p>
-            )}
-          </Card>
-        );
-      })}
+
+              {/* Session sub-columns */}
+              <div className="grid grid-cols-3 flex-1">
+                {SESSION_ORDER.map((sessionKey) => {
+                  const sessionRows = day.sessions[sessionKey];
+                  return (
+                    <div
+                      key={sessionKey}
+                      className="flex flex-col border-r border-[var(--line)] last:border-r-0"
+                    >
+                      {/* Session header badge */}
+                      <div className="border-b border-[var(--line)] px-1.5 py-1 text-center">
+                        <span
+                          className={`text-[10px] font-bold uppercase tracking-wider ${SESSION_COLORS[sessionKey]}`}
+                        >
+                          {SESSION_LABELS[sessionKey]}
+                        </span>
+                      </div>
+
+                      {/* Ticker list */}
+                      <div className="flex flex-col gap-0.5 px-1 py-1.5 min-h-[2.5rem]">
+                        {sessionRows.length > 0 ? (
+                          sessionRows.map((row) => (
+                            <TickerTile
+                              key={`${row.ticker}-${day.dateStr}-${sessionKey}`}
+                              row={row}
+                            />
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-[var(--muted)] text-center py-1">
+                            &mdash;
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 export default function EarningsPage() {
-  const [days, setDays] = useState(14);
+  const [days, setDays] = useState(30);
   const [viewMode, setViewMode] = useState<ViewMode>("calendar");
   const { data, isLoading, error } = useEarnings(days);
-
-  const groups = useMemo((): EarningsGroup[] => {
-    if (data?.groups?.length) return data.groups;
-    if (data?.rows?.length) {
-      const grouped: Record<string, EarningsRow[]> = {};
-      for (const row of data.rows) {
-        const date = row.earnings_date ?? "Unknown";
-        if (!grouped[date]) grouped[date] = [];
-        grouped[date].push(row);
-      }
-      return Object.entries(grouped)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, rows]) => ({
-          date,
-          display_date: rows[0]?.display_date ?? date,
-          count: rows.length,
-          sessions: [{ session: "all", label: "All Sessions", rows }],
-        }));
-    }
-    return [];
-  }, [data]);
 
   if (isLoading) return <Spinner className="mt-12" />;
   if (error) {
@@ -450,16 +516,16 @@ export default function EarningsPage() {
         </h2>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-            <label htmlFor="earningsDays">Lookahead (days):</label>
+            <label htmlFor="earningsDays">Data window (days):</label>
             <input
               id="earningsDays"
               type="number"
-              min={1}
+              min={7}
               max={90}
               value={days}
               onChange={(e) =>
                 setDays(
-                  Math.max(1, Math.min(90, Number(e.target.value) || 14)),
+                  Math.max(7, Math.min(90, Number(e.target.value) || 30)),
                 )
               }
               className="w-16 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-[var(--text)]"
@@ -528,7 +594,7 @@ export default function EarningsPage() {
 
       {/* View toggle */}
       {viewMode === "calendar" ? (
-        <CalendarView groups={groups} />
+        <WeekGridCalendar rows={rows} />
       ) : (
         <Table
           columns={earningsColumns}

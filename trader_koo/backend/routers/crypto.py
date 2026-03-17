@@ -143,6 +143,9 @@ async def ws_crypto(websocket: WebSocket) -> None:
     await websocket.accept()
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=200)
     sub_id = subscribe_ticks(queue)
+    if sub_id is None:
+        await websocket.close(code=1013, reason="Too many connections")
+        return
     LOG.info("Browser WS connected (sub_id=%s)", sub_id)
     try:
         while True:
