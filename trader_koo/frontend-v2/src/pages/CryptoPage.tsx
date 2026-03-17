@@ -804,6 +804,7 @@ function buildCandlestickChart(
   structure: CryptoStructurePayload | null,
   overlays: OverlayState,
   formingCandle?: FormingCandleData | null,
+  uirevisionKey?: string,
 ) {
   const timestamps = bars.map((b) => b.timestamp);
   const open = bars.map((b) => b.open);
@@ -996,6 +997,7 @@ function buildCandlestickChart(
   const layout = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
+    uirevision: uirevisionKey ?? symbol,
     font: { color: "#8ea0bd", size: 11 },
     margin: { t: 30, r: 60, b: 50, l: 60 },
     dragmode: "zoom" as const,
@@ -1296,8 +1298,9 @@ export default function CryptoPage() {
       structureData ?? null,
       overlays,
       effectiveFormingCandle,
+      `${selectedSymbol}-${selectedInterval}`,
     );
-  }, [effectiveBars, selectedSymbol, structureData, overlays, effectiveFormingCandle]);
+  }, [effectiveBars, selectedSymbol, selectedInterval, structureData, overlays, effectiveFormingCandle]);
 
   const availableBarCount = effectiveBars.length;
   const shortHistory = historyData != null && availableBarCount < interval.limit;

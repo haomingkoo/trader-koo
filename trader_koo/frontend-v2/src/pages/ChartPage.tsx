@@ -904,6 +904,7 @@ function buildChartData(
   const layout: Record<string, unknown> = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
+    uirevision: `${ticker}-${isWeekly ? "weekly" : "daily"}`,
     font: { color: "#8ea0bd", size: 11 },
     margin: { t: 40, r: 200, b: 50, l: 60 },
     dragmode: "zoom" as const,
