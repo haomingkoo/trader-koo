@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useSearchParams, Link } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { useChart } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
 import { useLiveEquityPrice } from "../hooks/useLiveEquityPrice";
@@ -23,6 +23,7 @@ import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
+import ChartToolbar from "../components/chart/ChartToolbar";
 
 /* ── Helpers ── */
 
@@ -1578,90 +1579,21 @@ export default function ChartPage() {
   return (
     <div className="space-y-6">
       {/* Controls row */}
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-bold tracking-tight">
-          Chart
-          {data?.ticker && (
-            <span className="ml-2 text-[var(--accent)]">{data.ticker}</span>
-          )}
-        </h2>
-        {livePrice && (
-          <span className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-xs">
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--green)] animate-pulse" />
-            <span className="font-semibold text-[var(--text)] tabular-nums">
-              ${livePrice.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-            {livePrice.prev_price != null && livePrice.prev_price > 0 && (
-              <span
-                className={`text-[10px] font-semibold tabular-nums ${
-                  livePrice.price >= livePrice.prev_price
-                    ? "text-[var(--green)]"
-                    : "text-[var(--red)]"
-                }`}
-              >
-                {livePrice.price >= livePrice.prev_price ? "+" : ""}
-                {(((livePrice.price - livePrice.prev_price) / livePrice.prev_price) * 100).toFixed(2)}%
-              </span>
-            )}
-            <span className="text-[9px] font-semibold uppercase tracking-wider text-[var(--green)]">Live</span>
-          </span>
-        )}
-        {!livePrice && streamingActive && (
-          <span className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-[10px] text-[var(--amber)]">
-            Streaming...
-          </span>
-        )}
-        {!livePrice && !streamingActive && data?.ticker && (
-          <span className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1 text-[10px] text-[var(--muted)]">
-            Delayed
-          </span>
-        )}
-        <input
-          type="text"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value.toUpperCase())}
-          onKeyDown={handleKeyDown}
-          placeholder="Ticker (e.g. SPY)"
-          className="w-28 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-1.5 text-sm font-mono text-[var(--text)] placeholder-[var(--muted)] focus:border-[var(--accent)] focus:outline-none transition-colors"
-        />
-        <button
-          onClick={handleLoad}
-          disabled={isLoading}
-          className="rounded-lg bg-[var(--accent)] px-4 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--blue)] disabled:opacity-50"
-        >
-          Load
-        </button>
-        <div className="flex gap-1">
-          {(["daily", "weekly"] as const).map((tf) => (
-            <button
-              key={tf}
-              onClick={() => setTimeframe(tf)}
-              className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                timeframe === tf
-                  ? "bg-[var(--blue)] text-white"
-                  : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-              }`}
-            >
-              {tf.charAt(0).toUpperCase() + tf.slice(1)}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => {
-            refetch();
-          }}
-          disabled={isLoading}
-          className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-xs text-[var(--muted)] transition-colors hover:text-[var(--text)] disabled:opacity-50"
-        >
-          Refresh
-        </button>
-        <Link
-          to="/report"
-          className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-xs text-[var(--muted)] transition-colors hover:text-[var(--text)]"
-        >
-          &larr; Back to Report
-        </Link>
-      </div>
+      <ChartToolbar
+        ticker={data?.ticker}
+        livePrice={livePrice}
+        streamingActive={streamingActive}
+        inputValue={inputValue}
+        isLoading={isLoading}
+        timeframe={timeframe}
+        onInputChange={setInputValue}
+        onInputKeyDown={handleKeyDown}
+        onLoad={handleLoad}
+        onSelectTimeframe={setTimeframe}
+        onRefresh={() => {
+          refetch();
+        }}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
