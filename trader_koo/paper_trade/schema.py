@@ -109,6 +109,29 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "sizing_summary", "sizing_summary TEXT")
     _ensure_column(conn, "paper_trades", "review_status", "review_status TEXT")
     _ensure_column(conn, "paper_trades", "review_summary", "review_summary TEXT")
+    _ensure_column(conn, "paper_trades", "bot_version", "bot_version TEXT")
+    _ensure_column(conn, "paper_trades", "vix_at_entry", "vix_at_entry REAL")
+    _ensure_column(conn, "paper_trades", "vix_percentile_at_entry", "vix_percentile_at_entry REAL")
+    _ensure_column(conn, "paper_trades", "regime_state_at_entry", "regime_state_at_entry TEXT")
+    _ensure_column(conn, "paper_trades", "hmm_regime_at_entry", "hmm_regime_at_entry TEXT")
+    _ensure_column(conn, "paper_trades", "hmm_confidence_at_entry", "hmm_confidence_at_entry REAL")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bot_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_version TEXT NOT NULL UNIQUE,
+            decision_version TEXT,
+            strategy_kind TEXT NOT NULL DEFAULT 'paper_rules',
+            status TEXT NOT NULL DEFAULT 'active',
+            config_json TEXT,
+            notes TEXT,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bot_versions_status "
+        "ON bot_versions(status, created_ts)"
+    )
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
@@ -136,3 +159,28 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "ON paper_portfolio_snapshots(snapshot_date)"
     )
     conn.commit()
+
+
+def register_bot_version(
+    conn: sqlite3.Connection,
+    *,
+    bot_version: str,
+    decision_version: str | None,
+    config_json: str | None = None,
+    notes: str | None = None,
+) -> None:
+    ensure_paper_trade_schema(conn)
+    if not bot_version:
+        return
+    conn.execute(
+        """
+        INSERT INTO bot_versions (
+            bot_version, decision_version, strategy_kind, status, config_json, notes
+        ) VALUES (?, ?, 'paper_rules', 'active', ?, ?)
+        ON CONFLICT(bot_version) DO UPDATE SET
+            decision_version = excluded.decision_version,
+            config_json = COALESCE(excluded.config_json, bot_versions.config_json),
+            notes = COALESCE(excluded.notes, bot_versions.notes)
+        """,
+        (bot_version, decision_version, config_json, notes),
+    )

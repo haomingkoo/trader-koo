@@ -12,6 +12,18 @@ from typing import Any
 LOG = logging.getLogger(__name__)
 
 
+def _value(row: Any, key: str, index: int) -> Any:
+    if row is None:
+        return None
+    try:
+        return row[key]
+    except Exception:
+        try:
+            return row[index]
+        except Exception:
+            return None
+
+
 def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
     """Return a dict of market-context fields to store alongside a paper trade.
 
@@ -40,8 +52,9 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
             ORDER BY date DESC LIMIT 1
             """,
         ).fetchone()
-        if vix_row and vix_row["close"]:
-            vix = float(vix_row["close"])
+        vix_close_raw = _value(vix_row, "close", 0)
+        if vix_row and vix_close_raw is not None:
+            vix = float(vix_close_raw)
             ctx["vix_at_entry"] = round(vix, 2)
 
             # VIX percentile (rank within last 252 trading days)
@@ -54,7 +67,7 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
                 """,
             ).fetchall()
             if len(vix_history) >= 20:
-                below = sum(1 for r in vix_history if float(r["close"]) <= vix)
+                below = sum(1 for r in vix_history if float(_value(r, "close", 0)) <= vix)
                 ctx["vix_percentile_at_entry"] = round(below / len(vix_history) * 100, 1)
 
             # Simple regime from VIX level
@@ -81,11 +94,11 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
             """,
         ).fetchall()
         if len(spy_rows) >= 50:
-            spy_current = float(spy_rows[0]["close"])
-            spy_ma50 = sum(float(r["close"]) for r in spy_rows) / len(spy_rows)
+            spy_current = float(_value(spy_rows[0], "close", 0))
+            spy_ma50 = sum(float(_value(r, "close", 0)) for r in spy_rows) / len(spy_rows)
             trend = "bull" if spy_current > spy_ma50 else "bear"
         elif len(spy_rows) >= 2:
-            trend = "bull" if float(spy_rows[0]["close"]) > float(spy_rows[-1]["close"]) else "bear"
+            trend = "bull" if float(_value(spy_rows[0], "close", 0)) > float(_value(spy_rows[-1], "close", 0)) else "bear"
         else:
             trend = "unknown"
 
@@ -96,7 +109,7 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
             from trader_koo.structure.hmm_regime import predict_regimes
 
             if len(spy_rows) >= 50:
-                closes = [float(r["close"]) for r in reversed(spy_rows)]
+                closes = [float(_value(r, "close", 0)) for r in reversed(spy_rows)]
                 regimes = predict_regimes(closes)
                 if regimes:
                     latest = regimes[-1]

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 import sqlite3
 from typing import Any
 
-from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.schema import decode_json_list, ensure_paper_trade_schema
+
+LOG = logging.getLogger(__name__)
 
 
 def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
@@ -129,25 +132,7 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
 def _policy_snapshot(config: PaperTradeConfig | None) -> dict[str, Any] | None:
     if config is None:
         return None
-    return {
-        "decision_version": config.decision_version,
-        "min_tier": config.min_tier,
-        "min_score": config.min_score,
-        "max_open": config.max_open,
-        "expiry_days": config.expiry_days,
-        "min_reward_r_multiple": config.min_reward_r_multiple,
-        "high_vol_atr_pct": config.high_vol_atr_pct,
-        "qualifying_tiers": sorted(config.qualifying_tiers),
-        "qualifying_actionability": sorted(config.qualifying_actionability),
-        "position_size_pct": {
-            "A": config.tier_a_position_pct,
-            "B": config.tier_b_position_pct,
-            "C": config.tier_c_position_pct,
-        },
-        "caution_position_scale": config.caution_position_scale,
-        "high_vol_position_scale": config.high_vol_position_scale,
-        "earnings_position_scale": config.earnings_position_scale,
-    }
+    return config_snapshot(config)
 
 
 def _feedback_items(

@@ -9,12 +9,13 @@ import sqlite3
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trade.decision import (
     compute_position_plan,
     compute_stop_and_target,
     evaluate_setup_for_paper_trade,
 )
-from trader_koo.paper_trade.schema import ensure_paper_trade_schema
+from trader_koo.paper_trade.schema import ensure_paper_trade_schema, register_bot_version
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
 
 LOG = logging.getLogger(__name__)
@@ -165,6 +166,13 @@ def create_paper_trades_from_report(
         return 0
 
     ensure_paper_trade_schema(conn)
+    register_bot_version(
+        conn,
+        bot_version=config.bot_version,
+        decision_version=config.decision_version,
+        config_json=json.dumps(config_snapshot(config)),
+        notes="Current champion paper-trade policy snapshot.",
+    )
 
     open_count = conn.execute(
         "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"

@@ -19,6 +19,18 @@ _DEFAULT_WINDOW_DAYS = 60
 _MIN_TRADES_FOR_EDGE = 5
 
 
+def _value(row: Any, key: str, index: int) -> Any:
+    if row is None:
+        return None
+    try:
+        return row[key]
+    except Exception:
+        try:
+            return row[index]
+        except Exception:
+            return None
+
+
 def compute_family_edges(
     conn: sqlite3.Connection,
     *,
@@ -90,10 +102,11 @@ def compute_family_edges(
 
     edges: list[dict[str, Any]] = []
     for r in rows:
-        count = int(r["trade_count"])
-        wins = int(r["wins"])
-        avg_pnl = float(r["avg_pnl_pct"] or 0)
-        avg_r = float(r["avg_r_multiple"]) if r["avg_r_multiple"] is not None else None
+        count = int(_value(r, "trade_count", 2) or 0)
+        wins = int(_value(r, "wins", 3) or 0)
+        avg_pnl = float(_value(r, "avg_pnl_pct", 5) or 0)
+        avg_r_raw = _value(r, "avg_r_multiple", 7)
+        avg_r = float(avg_r_raw) if avg_r_raw is not None else None
 
         if avg_pnl > 0.5:
             edge_label = "positive"
@@ -103,19 +116,19 @@ def compute_family_edges(
             edge_label = "neutral"
 
         edges.append({
-            "setup_family": r["setup_family"],
-            "direction": r["direction"],
+            "setup_family": _value(r, "setup_family", 0),
+            "direction": _value(r, "direction", 1),
             "trade_count": count,
             "wins": wins,
-            "losses": int(r["losses"]),
+            "losses": int(_value(r, "losses", 4) or 0),
             "win_rate_pct": round(wins / count * 100, 1) if count > 0 else 0,
             "avg_pnl_pct": round(avg_pnl, 2),
             "avg_r_multiple": round(avg_r, 2) if avg_r is not None else None,
-            "total_pnl_pct": round(float(r["total_pnl_pct"] or 0), 2),
-            "best_r": round(float(r["best_r"]), 2) if r["best_r"] is not None else None,
-            "worst_r": round(float(r["worst_r"]), 2) if r["worst_r"] is not None else None,
-            "target_hit_rate_pct": round(int(r["target_hits"]) / count * 100, 1) if count > 0 else 0,
-            "stopped_out_rate_pct": round(int(r["stopped_outs"]) / count * 100, 1) if count > 0 else 0,
+            "total_pnl_pct": round(float(_value(r, "total_pnl_pct", 6) or 0), 2),
+            "best_r": round(float(_value(r, "best_r", 8)), 2) if _value(r, "best_r", 8) is not None else None,
+            "worst_r": round(float(_value(r, "worst_r", 9)), 2) if _value(r, "worst_r", 9) is not None else None,
+            "target_hit_rate_pct": round(int(_value(r, "target_hits", 10) or 0) / count * 100, 1) if count > 0 else 0,
+            "stopped_out_rate_pct": round(int(_value(r, "stopped_outs", 11) or 0) / count * 100, 1) if count > 0 else 0,
             "edge_label": edge_label,
             "window_days": window_days,
             "bot_version": bot_version,
@@ -159,12 +172,12 @@ def compute_regime_edges(
 
     return [
         {
-            "regime": r["regime_state_at_entry"],
-            "trade_count": int(r["trade_count"]),
-            "wins": int(r["wins"]),
-            "win_rate_pct": round(int(r["wins"]) / int(r["trade_count"]) * 100, 1),
-            "avg_pnl_pct": round(float(r["avg_pnl_pct"] or 0), 2),
-            "avg_r_multiple": round(float(r["avg_r_multiple"]), 2) if r["avg_r_multiple"] is not None else None,
+            "regime": _value(r, "regime_state_at_entry", 0),
+            "trade_count": int(_value(r, "trade_count", 1) or 0),
+            "wins": int(_value(r, "wins", 2) or 0),
+            "win_rate_pct": round(int(_value(r, "wins", 2) or 0) / int(_value(r, "trade_count", 1) or 1) * 100, 1),
+            "avg_pnl_pct": round(float(_value(r, "avg_pnl_pct", 3) or 0), 2),
+            "avg_r_multiple": round(float(_value(r, "avg_r_multiple", 4)), 2) if _value(r, "avg_r_multiple", 4) is not None else None,
             "window_days": window_days,
         }
         for r in rows
@@ -211,12 +224,12 @@ def compute_vix_bucket_edges(
 
     return [
         {
-            "vix_bucket": r["vix_bucket"],
-            "trade_count": int(r["trade_count"]),
-            "wins": int(r["wins"]),
-            "win_rate_pct": round(int(r["wins"]) / int(r["trade_count"]) * 100, 1),
-            "avg_pnl_pct": round(float(r["avg_pnl_pct"] or 0), 2),
-            "avg_r_multiple": round(float(r["avg_r_multiple"]), 2) if r["avg_r_multiple"] is not None else None,
+            "vix_bucket": _value(r, "vix_bucket", 0),
+            "trade_count": int(_value(r, "trade_count", 1) or 0),
+            "wins": int(_value(r, "wins", 2) or 0),
+            "win_rate_pct": round(int(_value(r, "wins", 2) or 0) / int(_value(r, "trade_count", 1) or 1) * 100, 1),
+            "avg_pnl_pct": round(float(_value(r, "avg_pnl_pct", 3) or 0), 2),
+            "avg_r_multiple": round(float(_value(r, "avg_r_multiple", 4)), 2) if _value(r, "avg_r_multiple", 4) is not None else None,
             "window_days": window_days,
         }
         for r in rows

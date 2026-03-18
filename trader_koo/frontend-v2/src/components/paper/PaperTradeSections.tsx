@@ -1,11 +1,14 @@
 import { Link } from "react-router-dom";
 import type {
   PaperTrade,
+  PaperTradeFamilyEdgeRow,
   PaperTradeFeedbackItem,
   PaperTradePolicy,
   PaperTradeDirectionStats,
+  PaperTradeRegimeEdgeRow,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
+  PaperTradeVixBucketEdgeRow,
 } from "../../api/types";
 import PlotlyWrapper from "../PlotlyWrapper";
 import Badge, { tierVariant } from "../ui/Badge";
@@ -266,6 +269,7 @@ export function PaperTradeBotOverview({
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
             <Badge variant="blue">{policy.decision_version}</Badge>
+            <Badge variant="muted">{policy.bot_version}</Badge>
             <Badge variant="green">Min Tier {policy.min_tier}</Badge>
             <Badge variant="amber">Min Score {policy.min_score.toFixed(0)}</Badge>
             <Badge variant="muted">Max Open {policy.max_open}</Badge>
@@ -315,10 +319,117 @@ export function PaperTradeBotOverview({
           </p>
           <p>
             Current version:{" "}
-            <strong className="text-[var(--text)]">{policy.decision_version}</strong>
+            <strong className="text-[var(--text)]">{policy.bot_version}</strong>{" "}
+            <span className="text-[var(--muted)]">({policy.decision_version})</span>
           </p>
         </div>
       </Card>
+    </div>
+  );
+}
+
+type EdgeTableRow = {
+  trade_count: number;
+  win_rate_pct: number;
+  avg_pnl_pct: number;
+  avg_r_multiple: number | null;
+};
+
+function EdgeTable<T extends EdgeTableRow>({
+  title,
+  rows,
+  labelKey,
+  labelHeader,
+}: {
+  title: string;
+  rows: T[];
+  labelKey: keyof T;
+  labelHeader: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <Card label={title}>
+        <p className="text-sm text-[var(--muted)]">
+          Not enough closed-trade history yet for this slice.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card label={title}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">{labelHeader}</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Trades</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Win Rate</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Avg P&L</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Avg R</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => {
+              const label = String(row[labelKey] ?? "\u2014");
+              const tradeCount = Number(row.trade_count ?? 0);
+              const winRate = Number(row.win_rate_pct ?? 0);
+              const avgPnl = typeof row.avg_pnl_pct === "number" ? row.avg_pnl_pct : Number(row.avg_pnl_pct ?? 0);
+              const avgR = row.avg_r_multiple;
+              return (
+                <tr key={`${label}-${idx}`} className="border-b border-[var(--line)]/60">
+                  <td className="px-2 py-2 text-[var(--text)]">{label}</td>
+                  <td className="px-2 py-2 text-[var(--muted)]">{tradeCount}</td>
+                  <td className="px-2 py-2 text-[var(--muted)]">{winRate.toFixed(1)}%</td>
+                  <td className={`px-2 py-2 ${pnlColor(avgPnl)}`}>{fmtPct(avgPnl, "%", true)}</td>
+                  <td className="px-2 py-2 text-[var(--muted)]">
+                    {typeof avgR === "number" ? `${avgR.toFixed(2)}R` : "\u2014"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+export function PaperTradeEdgePanels({
+  familyEdges,
+  regimeEdges,
+  vixBucketEdges,
+}: {
+  familyEdges: PaperTradeFamilyEdgeRow[];
+  regimeEdges: PaperTradeRegimeEdgeRow[];
+  vixBucketEdges: PaperTradeVixBucketEdgeRow[];
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="text-sm font-semibold text-[var(--text)]">Rolling Edge Monitor</div>
+      <div className="grid gap-3 xl:grid-cols-3">
+        <EdgeTable
+          title="Family Edge"
+          rows={familyEdges.slice(0, 8).map((row) => ({
+            ...row,
+            label: `${row.setup_family} (${row.direction})`,
+          }))}
+          labelKey={"label"}
+          labelHeader="Family"
+        />
+        <EdgeTable
+          title="Regime Edge"
+          rows={regimeEdges}
+          labelKey={"regime"}
+          labelHeader="Regime"
+        />
+        <EdgeTable
+          title="VIX Bucket Edge"
+          rows={vixBucketEdges}
+          labelKey={"vix_bucket"}
+          labelHeader="VIX Bucket"
+        />
+      </div>
     </div>
   );
 }

@@ -752,6 +752,7 @@ export interface PaperTradeDirectionStats {
 }
 
 export interface PaperTradePolicy {
+  bot_version: string;
   decision_version: string;
   min_tier: string;
   min_score: number;
@@ -775,6 +776,36 @@ export interface PaperTradeFeedbackItem {
   action: string;
 }
 
+export interface PaperTradeEdgeRow {
+  trade_count: number;
+  wins: number;
+  win_rate_pct: number;
+  avg_pnl_pct: number;
+  avg_r_multiple: number | null;
+  window_days: number;
+}
+
+export interface PaperTradeFamilyEdgeRow extends PaperTradeEdgeRow {
+  setup_family: string;
+  direction: string;
+  losses: number;
+  total_pnl_pct: number;
+  best_r: number | null;
+  worst_r: number | null;
+  target_hit_rate_pct: number;
+  stopped_out_rate_pct: number;
+  edge_label: string;
+  bot_version?: string | null;
+}
+
+export interface PaperTradeRegimeEdgeRow extends PaperTradeEdgeRow {
+  regime: string;
+}
+
+export interface PaperTradeVixBucketEdgeRow extends PaperTradeEdgeRow {
+  vix_bucket: string;
+}
+
 export interface EquityCurvePoint {
   date: string;
   equity_index: number;
@@ -791,6 +822,9 @@ export interface PaperTradeSummary {
   recent_trades: PaperTrade[];
   policy?: PaperTradePolicy | null;
   feedback?: PaperTradeFeedbackItem[];
+  family_edges?: PaperTradeFamilyEdgeRow[];
+  regime_edges?: PaperTradeRegimeEdgeRow[];
+  vix_bucket_edges?: PaperTradeVixBucketEdgeRow[];
 }
 
 /* ── Crypto ── */

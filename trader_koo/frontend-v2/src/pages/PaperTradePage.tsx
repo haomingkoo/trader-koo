@@ -5,6 +5,7 @@ import Spinner from "../components/ui/Spinner";
 import {
   PaperTradeBotOverview,
   PaperTradeBreakdownPanels,
+  PaperTradeEdgePanels,
   PaperTradeEquityCurve,
   PaperTradeFeedbackPanel,
   PaperTradeFilters,
@@ -86,6 +87,12 @@ export default function PaperTradePage() {
       <PaperTradeBreakdownPanels summary={summary} />
 
       <PaperTradeOpenPlans trades={trades} />
+
+      <PaperTradeEdgePanels
+        familyEdges={summary?.family_edges ?? []}
+        regimeEdges={summary?.regime_edges ?? []}
+        vixBucketEdges={summary?.vix_bucket_edges ?? []}
+      />
 
       <PaperTradeFeedbackPanel feedback={summary?.feedback ?? []} />
 

@@ -282,6 +282,38 @@ class TestCreatePaperTrades:
         assert "stop" in str(trade[4]).lower()
         assert "%" in str(trade[5])
 
+    def test_stores_bot_version_and_entry_context(self, conn):
+        for idx in range(25):
+            date = (dt.date(2026, 2, 18) + dt.timedelta(days=idx)).isoformat()
+            _seed_price(conn, "^VIX", 16.0 + (idx % 5), date=date)
+        for idx, close in enumerate(range(500, 550), start=1):
+            conn.execute(
+                "INSERT OR REPLACE INTO price_daily (ticker, date, close) VALUES (?, ?, ?)",
+                ("SPY", f"2026-01-{idx:02d}" if idx <= 31 else f"2026-02-{idx-31:02d}", float(close)),
+            )
+        conn.commit()
+
+        inserted = create_paper_trades_from_report(
+            conn,
+            setup_rows=[_make_setup_row()],
+            report_date="2026-03-14",
+            generated_ts="2026-03-14T22:00:00Z",
+        )
+
+        assert inserted == 1
+        trade = conn.execute(
+            "SELECT bot_version, vix_at_entry, vix_percentile_at_entry, regime_state_at_entry "
+            "FROM paper_trades WHERE ticker = 'AAPL'",
+        ).fetchone()
+        assert trade[0] == "v1.0.0"
+        assert trade[1] == pytest.approx(20.0)
+        assert trade[2] is not None
+        assert trade[3] is not None
+        version_row = conn.execute(
+            "SELECT bot_version, decision_version FROM bot_versions WHERE bot_version = 'v1.0.0'",
+        ).fetchone()
+        assert version_row == ("v1.0.0", "paper-trade-eval-v1")
+
     def test_skips_trade_with_poor_reward_to_risk(self, conn):
         rows = [_make_setup_row(resistance_level=151.0)]
 
@@ -506,6 +538,7 @@ class TestPaperTradeSummary:
         assert result["overall"]["total_trades"] == 0
         assert result["by_direction"] == {}
         assert result["equity_curve"] == []
+        assert result["policy"]["bot_version"] == "v1.0.0"
         assert result["policy"]["decision_version"] == "paper-trade-eval-v1"
         assert result["feedback"] == []
 
@@ -531,3 +564,35 @@ class TestPaperTradeSummary:
         assert result["overall"]["total_pnl_pct"] == 10.0
         assert result["policy"]["min_tier"] == "B"
         assert result["feedback"] == []
+
+    def test_summary_includes_edge_tables(self, conn):
+        base_date = dt.date.today() - dt.timedelta(days=20)
+        for idx in range(6):
+            entry_date = (base_date + dt.timedelta(days=idx)).isoformat()
+            conn.execute(
+                """INSERT INTO paper_trades (
+                    report_date, ticker, direction, entry_price, entry_date, status,
+                    pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts,
+                    setup_family, regime_state_at_entry, vix_at_entry, bot_version
+                ) VALUES (?, ?, 'long', 100.0, ?, 'closed', ?, ?, ?, ?, 100.0, 'ts', ?, ?, ?, ?)""",
+                (
+                    entry_date,
+                    f"T{idx}",
+                    entry_date,
+                    2.0 if idx < 4 else -1.0,
+                    1.0 if idx < 4 else -0.5,
+                    entry_date,
+                    "target_hit" if idx < 4 else "stopped_out",
+                    "bullish_continuation",
+                    "bull_normal",
+                    17.5,
+                    "v1.0.0",
+                ),
+            )
+        conn.commit()
+
+        result = paper_trade_summary(conn)
+
+        assert result["family_edges"]
+        assert result["regime_edges"]
+        assert result["vix_bucket_edges"]
