@@ -4,9 +4,68 @@ This file is used by both Claude Code and Codex to communicate about ongoing wor
 avoid conflicts, and hand off tasks. Both tools should read this before starting work
 and update it after completing tasks.
 
-Last updated: 2026-03-18 by Claude (pipeline ops panel + guide reorg)
+Last updated: 2026-03-18 by Claude (pipeline data health investigation + fixes)
 
 ---
+
+## Pipeline Data Health Investigation (2026-03-18)
+
+### Root Causes Found
+
+1. **`^VIX` ingest failure**
+   - **Exact error**: `PriceFetchError("yfinance returned no data for ^VIX: Empty response from yfinance for ^VIX")`
+   - **Code path**: `update_market_db.py:902` → `sources.py:fetch_ticker_data()` → `_fetch_yfinance()` → `yf.download(tickers="^VIX", start=<5-day-lookback>, end=None)` returns empty DataFrame → `PriceFetchError` raised
+   - **Root cause**: yfinance `start/end` date-range queries are unreliable for Yahoo Finance index tickers (`^VIX`, `^GSPC`, etc.). Short lookback windows (5 days) often return empty data for indices, while `period="5d"` uses a different Yahoo endpoint that works reliably.
+   - **Impact**: `^VIX` is in `DEFAULT_SOFT_FAIL_TICKERS` so it doesn't abort the pipeline, but the run is marked `partial_failed` with error_message mentioning `^VIX`. If other S&P 500 tickers also failed AND `REQUIRE_FULL_DATASET=1`, the pipeline aborts at `daily_update.sh:119-121`, skipping YOLO + report.
+
+2. **`options_summary` table does not exist**
+   - **Exact error**: `sqlite3.OperationalError: no such table: options_summary`
+   - **Code path**: `fear_greed.py:_score_put_call_ratio()` line 403 queries `FROM options_summary` — but no such table is defined anywhere in the schema. The actual options data table is `options_iv`.
+   - **Root cause**: The put/call ratio scorer was written to query `options_summary` (a planned aggregate table) that was never created. Additionally, `INCLUDE_OPTIONS` defaults to `0` in `daily_update.sh`, so `options_iv` is also empty in production.
+   - **Impact**: The exception is caught by the try/except in `_score_put_call_ratio` and the component returns `None` + error detail. It doesn't crash the fear_greed computation but produces a confusing error message.
+
+3. **Alpha Vantage news: 0 usable articles**
+   - **Root cause**: `TRADER_KOO_ALPHA_VANTAGE_KEY` is likely not set on Railway. Without a key, the code returns immediately with a generic "not configured" note.
+   - **Impact**: External news overlay is permanently unavailable; internal composite is unaffected.
+
+4. **Reddit social pulse: 403 Blocked**
+   - **Exact error**: `403 Client Error: Forbidden` from `https://www.reddit.com/r/*/top.json`
+   - **Root cause**: Reddit blocks public JSON API requests from datacenter/cloud IPs. This is permanent without OAuth credentials. Railway runs on GCP/cloud infra.
+   - **Impact**: Every configured subreddit fails, making the social sentiment overlay permanently unavailable in production.
+
+### Fixes Applied
+
+| File | Change |
+|------|--------|
+| `trader_koo/db/sources.py` | Added `period="5d"` fallback for index tickers (`^`-prefixed) when date-range fetch returns empty |
+| `trader_koo/structure/fear_greed.py` | Fixed `_score_put_call_ratio()` to query `options_iv` instead of non-existent `options_summary`; added table existence check |
+| `trader_koo/social_sentiment.py` | Added `_is_reddit_blocked()` probe that fast-fails with a clear note instead of iterating all 10 subreddits into 403s |
+| `trader_koo/news_sentiment.py` | Improved "not configured" note to specify env var names and free tier limits |
+
+### Sentiment Provider Migration (same session)
+
+| Component | Old Provider | New Provider | Status |
+|-----------|-------------|-------------|--------|
+| News sentiment | Alpha Vantage (no key set → 0 articles) | **Finnhub** (free, key already on Railway) | Implemented + tested |
+| Social sentiment | Reddit public JSON (403 blocked) | **StockTwits** (free, no auth, 200 req/hr) | Implemented + tested |
+
+**Finnhub news** (`news_sentiment.py`):
+- Uses `/api/v1/news-sentiment` for per-ticker bullish/bearish % and buzz metrics
+- Uses `/api/v1/company-news` for recent headlines
+- Falls back to Alpha Vantage if `FINNHUB_API_KEY` is not set but `TRADER_KOO_ALPHA_VANTAGE_KEY` is
+- Uses existing `FINNHUB_API_KEY` env var — no new config needed
+
+**StockTwits social** (`social_sentiment.py`):
+- Uses `https://api.stocktwits.com/api/2/streams/symbol/{SYMBOL}.json` — no auth required
+- Aggregates user-tagged bullish/bearish sentiment labels across 10 default tickers
+- Works from datacenter IPs (legitimate REST API, not scraping)
+- Env var: `TRADER_KOO_SOCIAL_TICKERS` to customize tracked tickers
+
+### What Still Remains
+
+- **Options data**: Enable with `TRADER_KOO_INCLUDE_OPTIONS=1` on Railway if put/call ratio data is desired. This adds ~2-3 min to ingest per run.
+- **Pipeline rerun**: After deploying these fixes, trigger `POST /api/admin/trigger-update?mode=full` to verify the full pipeline produces fresh data.
+- **Test baseline**: 549 passed, 2 pre-existing failures (LLM validator property tests), 1 pre-existing CORS test failure.
 
 ## Current State (commit 06bd17a)
 

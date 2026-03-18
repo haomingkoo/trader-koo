@@ -1,118 +1,58 @@
 from __future__ import annotations
 
 import datetime as dt
-import requests
+import json
 
 from trader_koo.social_sentiment import get_social_sentiment
 
 
 class _FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict | list):
         self._payload = payload
 
-    def raise_for_status(self) -> None:
-        return None
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
 
-    def json(self) -> dict:
-        return self._payload
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
 
 
 class TestSocialSentiment:
-    def test_aggregates_reddit_posts(self, monkeypatch):
-        def _fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
-            if url.endswith("/top.json"):
-                return _FakeResponse(
-                    {
-                        "data": {
-                            "children": [
-                                {
-                                    "data": {
-                                        "title": "Bullish breakout, buying calls into the rally",
-                                        "selftext": "Strong upside and support holding.",
-                                        "score": 420,
-                                        "num_comments": 88,
-                                        "permalink": "/r/stocks/comments/demo1/bullish_breakout/",
-                                        "created_utc": 1773748800,
-                                    }
-                                },
-                                {
-                                    "data": {
-                                        "title": "Market looks weak, loading puts for downside",
-                                        "selftext": "Bearish breakdown risk is growing.",
-                                        "score": 280,
-                                        "num_comments": 53,
-                                        "permalink": "/r/stocks/comments/demo2/market_looks_weak/",
-                                        "created_utc": 1773745200,
-                                    }
-                                },
-                            ]
-                        }
-                    }
-                )
-            if "/comments/demo1/" in url:
-                return _FakeResponse(
-                    [
-                        {
-                            "data": {
-                                "children": [
-                                    {
-                                        "data": {
-                                            "selftext": "Strong upside and support holding.",
-                                        }
-                                    }
-                                ]
-                            }
-                        },
-                        {
-                            "data": {
-                                "children": [
-                                    {
-                                        "data": {
-                                            "body": "Still bullish, breakout looks real.",
-                                            "score": 18,
-                                        }
-                                    }
-                                ]
-                            }
-                        },
-                    ]
-                )
-            if "/comments/demo2/" in url:
-                return _FakeResponse(
-                    [
-                        {
-                            "data": {
-                                "children": [
-                                    {
-                                        "data": {
-                                            "selftext": "Bearish breakdown risk is growing.",
-                                        }
-                                    }
-                                ]
-                            }
-                        },
-                        {
-                            "data": {
-                                "children": [
-                                    {
-                                        "data": {
-                                            "body": "puts are tempting if support fails",
-                                            "score": 12,
-                                        }
-                                    }
-                                ]
-                            }
-                        },
-                    ]
-                )
-            return _FakeResponse(
-                {"data": {"children": []}}
-            )
+    def test_aggregates_stocktwits_messages(self, monkeypatch):
+        monkeypatch.setenv("TRADER_KOO_SOCIAL_TICKERS", "SPY")
 
-        monkeypatch.setattr("requests.get", _fake_get)
-        monkeypatch.setenv("TRADER_KOO_REDDIT_SUBREDDITS", "stocks")
-        monkeypatch.setenv("TRADER_KOO_REDDIT_POST_LIMIT", "5")
-        monkeypatch.setenv("TRADER_KOO_REDDIT_MIN_SCORE", "10")
+        def _fake_urlopen(req, timeout=15):  # noqa: ARG001
+            return _FakeResponse({
+                "symbol": {"symbol": "SPY"},
+                "messages": [
+                    {
+                        "body": "SPY looking strong, buying calls",
+                        "created_at": "2026-03-17T12:00:00Z",
+                        "entities": {"sentiment": {"basic": "Bullish"}},
+                        "likes": {"total": 5},
+                        "user": {"username": "trader1"},
+                    },
+                    {
+                        "body": "Markets are topping, puts loaded",
+                        "created_at": "2026-03-17T11:30:00Z",
+                        "entities": {"sentiment": {"basic": "Bearish"}},
+                        "likes": {"total": 3},
+                        "user": {"username": "trader2"},
+                    },
+                    {
+                        "body": "Just watching for now",
+                        "created_at": "2026-03-17T11:00:00Z",
+                        "entities": {"sentiment": None},
+                        "likes": {"total": 1},
+                        "user": {"username": "trader3"},
+                    },
+                ],
+            })
+
+        monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
         payload = get_social_sentiment(
             now_utc=dt.datetime(2026, 3, 17, 12, 0, tzinfo=dt.timezone.utc),
@@ -120,49 +60,29 @@ class TestSocialSentiment:
         )
 
         assert payload["available"] is True
-        assert payload["provider"] == "reddit_public_json"
+        assert payload["provider"] == "stocktwits"
         assert payload["source_type"] == "social"
-        assert payload["post_count"] == 2
-        assert payload["score"] is not None
+        assert payload["post_count"] == 2  # only 2 have sentiment tags
+        assert payload["bullish_terms_total"] == 1
+        assert payload["bearish_terms_total"] == 1
+        assert payload["score"] == 50  # 1 bullish, 1 bearish = neutral
         assert len(payload["posts"]) == 2
-        assert payload["posts"][0]["title"]
-        assert payload["posts"][0]["excerpt"] is not None
 
-    def test_returns_unavailable_when_posts_do_not_pass_filter(self, monkeypatch):
-        def _fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
-            if url.endswith("/top.json"):
-                return _FakeResponse(
+    def test_returns_unavailable_when_no_sentiment_tagged(self, monkeypatch):
+        monkeypatch.setenv("TRADER_KOO_SOCIAL_TICKERS", "SPY")
+
+        def _fake_urlopen(req, timeout=15):  # noqa: ARG001
+            return _FakeResponse({
+                "symbol": {"symbol": "SPY"},
+                "messages": [
                     {
-                        "data": {
-                            "children": [
-                                {
-                                    "data": {
-                                        "title": "Low engagement thread",
-                                        "selftext": "",
-                                        "score": 1,
-                                        "num_comments": 0,
-                                        "permalink": "/r/stocks/comments/demo3/low_engagement/",
-                                        "created_utc": 1773745200,
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                )
-            if "/comments/demo3/" in url:
-                return _FakeResponse(
-                    [
-                        {"data": {"children": [{"data": {"selftext": ""}}]}},
-                        {"data": {"children": []}},
-                    ]
-                )
-            return _FakeResponse(
-                {"data": {"children": []}}
-            )
+                        "body": "Random message without sentiment tag",
+                        "entities": {},
+                    },
+                ],
+            })
 
-        monkeypatch.setattr("requests.get", _fake_get)
-        monkeypatch.setenv("TRADER_KOO_REDDIT_SUBREDDITS", "stocks")
-        monkeypatch.setenv("TRADER_KOO_REDDIT_MIN_SCORE", "50")
+        monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
         payload = get_social_sentiment(
             now_utc=dt.datetime(2026, 3, 17, 12, 0, tzinfo=dt.timezone.utc),
@@ -171,14 +91,14 @@ class TestSocialSentiment:
 
         assert payload["available"] is False
         assert payload["post_count"] == 0
-        assert "No Reddit posts passed" in payload["note"]
 
-    def test_returns_blocked_note_when_all_subreddits_fail(self, monkeypatch):
-        def _fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
-            raise requests.HTTPError(f"403 Client Error: Blocked for url: {url}")
+    def test_handles_stocktwits_api_failure(self, monkeypatch):
+        monkeypatch.setenv("TRADER_KOO_SOCIAL_TICKERS", "SPY,QQQ")
 
-        monkeypatch.setattr("requests.get", _fake_get)
-        monkeypatch.setenv("TRADER_KOO_REDDIT_SUBREDDITS", "stocks,investing")
+        def _fake_urlopen(req, timeout=15):  # noqa: ARG001
+            raise Exception("Connection refused")
+
+        monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
         payload = get_social_sentiment(
             now_utc=dt.datetime(2026, 3, 18, 0, 0, tzinfo=dt.timezone.utc),
@@ -187,6 +107,5 @@ class TestSocialSentiment:
 
         assert payload["available"] is False
         assert payload["post_count"] == 0
-        assert "Reddit public JSON requests failed" in payload["note"]
-        assert "r/stocks" in payload["note"]
         assert len(payload["source_breakdown"]) == 2
+        assert all("Connection refused" in (b.get("note") or "") for b in payload["source_breakdown"])

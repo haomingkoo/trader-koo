@@ -120,7 +120,7 @@ def _blended_sentiment(
     part_labels = {
         "internal": "internal market composite",
         "external_news": "external news sentiment",
-        "social_sentiment": "Reddit social sentiment",
+        "social_sentiment": "social sentiment",
     }
     blended_summary = " + ".join(
         f"{round(normalized_weights[name] * 100)}% {part_labels[name]}"
@@ -146,8 +146,8 @@ def _build_methodology_meta(
             else None
         ),
         "optional_sources": {
-            "external_news": str(external_news.get("provider") or "alpha_vantage"),
-            "social_sentiment": str(social_sentiment.get("provider") or "reddit_public_json"),
+            "external_news": str(external_news.get("provider") or "finnhub"),
+            "social_sentiment": str(social_sentiment.get("provider") or "stocktwits"),
         },
     }
 
@@ -393,21 +393,33 @@ def _score_stock_strength(conn: sqlite3.Connection) -> tuple[float | None, str]:
 
 
 def _score_put_call_ratio(conn: sqlite3.Connection) -> tuple[float | None, str]:
-    """Aggregate put/call OI ratio across tracked tickers."""
+    """Aggregate put/call OI ratio across tracked tickers.
+
+    Queries the ``options_iv`` table (the actual schema created by ingest).
+    Options ingest is disabled by default (``INCLUDE_OPTIONS=0``), so this
+    component returns ``None`` when no options data has been collected.
+    """
     try:
+        # Check if options_iv table exists and has data
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='options_iv' LIMIT 1"
+        ).fetchone()
+        if not has_table:
+            return None, "Options data collection not enabled (options_iv table missing)"
+
         row = conn.execute(
             """
             SELECT
-                SUM(CAST(call_oi AS REAL)) AS total_call_oi,
-                SUM(CAST(put_oi AS REAL)) AS total_put_oi
-            FROM options_summary
-            WHERE snapshot_ts = (SELECT MAX(snapshot_ts) FROM options_summary)
-              AND call_oi IS NOT NULL AND put_oi IS NOT NULL
+                SUM(CASE WHEN option_type='call' THEN CAST(open_interest AS REAL) ELSE 0 END) AS total_call_oi,
+                SUM(CASE WHEN option_type='put' THEN CAST(open_interest AS REAL) ELSE 0 END) AS total_put_oi
+            FROM options_iv
+            WHERE snapshot_ts = (SELECT MAX(snapshot_ts) FROM options_iv)
+              AND open_interest IS NOT NULL
             """,
         ).fetchone()
 
         if not row or row[0] is None or row[1] is None:
-            return None, "Options data unavailable"
+            return None, "Options data unavailable (no options_iv snapshots)"
 
         total_call = float(row[0])
         total_put = float(row[1])
