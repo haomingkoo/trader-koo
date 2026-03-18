@@ -435,6 +435,72 @@ def force_cancel_run(request: Request) -> dict[str, Any]:
         conn.close()
 
 
+@router.post("/api/admin/train-ml-model")
+@require_admin_auth
+def train_ml_model(
+    request: Request,
+    start_date: str = Query(default="2025-06-01"),
+    end_date: str = Query(default=None),
+) -> dict[str, Any]:
+    """Train the swing-trade LightGBM model with walk-forward validation.
+
+    This runs synchronously and may take 1-5 minutes depending on data volume.
+    The trained model is saved to /data/models/ and will be used by the
+    paper trade scorer for future setup evaluations.
+    """
+    try:
+        from trader_koo.ml.trainer import train_walk_forward
+
+        conn = get_conn()
+        try:
+            result = train_walk_forward(
+                conn,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            return result
+        finally:
+            conn.close()
+    except Exception as exc:
+        LOG.exception("ML model training failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+@router.get("/api/admin/ml-model-status")
+@require_admin_auth
+def ml_model_status(request: Request) -> dict[str, Any]:
+    """Return the current ML model status and metrics."""
+    try:
+        from trader_koo.ml.scorer import model_status
+
+        return model_status()
+    except Exception as exc:
+        return {"loaded": False, "error": str(exc)}
+
+
+@router.get("/api/admin/ml-score-universe")
+@require_admin_auth
+def ml_score_universe(
+    request: Request,
+    date: str = Query(default=None),
+    top_n: int = Query(default=20),
+) -> dict[str, Any]:
+    """Score the full universe and return top N tickers by predicted win probability."""
+    try:
+        from trader_koo.ml.scorer import score_universe
+
+        if date is None:
+            date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        conn = get_conn()
+        try:
+            scores = score_universe(conn, as_of_date=date, top_n=top_n)
+            return {"ok": True, "date": date, "top_n": top_n, "scores": scores}
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 @router.post("/api/admin/run-yolo-seed")
 @require_admin_auth
 def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
