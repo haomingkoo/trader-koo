@@ -2,10 +2,16 @@
 
 yfinance is the sole data source. When it fails, the failure is
 propagated explicitly — no hidden fallbacks that silently degrade.
+
+Includes a thread-based hard timeout around ``yf.download`` because
+yfinance's built-in ``timeout`` parameter only sets the HTTP socket
+timeout — it does not protect against DNS hangs, SSL negotiation
+stalls, or response-streaming freezes that block the calling thread.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import time
 from dataclasses import dataclass
@@ -17,6 +23,11 @@ import pandas as pd
 import yfinance as yf
 
 LOG = logging.getLogger(__name__)
+
+# Hard timeout for any single yf.download call.  If the call does not
+# return within this many seconds, the thread is abandoned and the
+# ticker is marked as failed with a TimeoutError.
+_HARD_TIMEOUT_SEC = 60.0
 
 
 class DataSource(Enum):
@@ -110,16 +121,11 @@ class DataSourceManager:
 
         try:
             LOG.info(f"Fetching {ticker} from yfinance (start={start}, end={end})")
-            raw = yf.download(
-                tickers=ticker,
-                start=start,
-                end=end,
-                auto_adjust=auto_adjust,
-                progress=False,
-                actions=False,
-                group_by="column",
-                threads=False,
-                timeout=timeout_sec,
+            hard_timeout = max(timeout_sec + 10, _HARD_TIMEOUT_SEC)
+            raw = self._download_with_hard_timeout(
+                ticker=ticker, start=start, end=end,
+                auto_adjust=auto_adjust, timeout_sec=timeout_sec,
+                hard_timeout=hard_timeout,
             )
 
             # Index tickers (^VIX, ^GSPC, etc.) often return empty data for
@@ -131,15 +137,10 @@ class DataSourceManager:
                     "retrying with period='5d'",
                     ticker,
                 )
-                raw = yf.download(
-                    tickers=ticker,
-                    period="5d",
-                    auto_adjust=auto_adjust,
-                    progress=False,
-                    actions=False,
-                    group_by="column",
-                    threads=False,
-                    timeout=timeout_sec,
+                raw = self._download_with_hard_timeout(
+                    ticker=ticker, period="5d",
+                    auto_adjust=auto_adjust, timeout_sec=timeout_sec,
+                    hard_timeout=hard_timeout,
                 )
 
             if raw is None or raw.empty:
@@ -174,6 +175,56 @@ class DataSourceManager:
                 success=False,
                 error=str(e),
             )
+
+    @staticmethod
+    def _download_with_hard_timeout(
+        *,
+        ticker: str,
+        start: str | None = None,
+        end: str | None = None,
+        period: str | None = None,
+        auto_adjust: bool = False,
+        timeout_sec: float = 30.0,
+        hard_timeout: float = _HARD_TIMEOUT_SEC,
+    ) -> pd.DataFrame | None:
+        """Run ``yf.download`` in a thread with a hard wall-clock timeout.
+
+        yfinance's ``timeout`` parameter only sets the socket-level
+        timeout.  If the underlying HTTP request hangs at DNS, SSL, or
+        streaming level, the call blocks forever.  This wrapper uses a
+        ``ThreadPoolExecutor`` so the caller is never stuck longer than
+        *hard_timeout* seconds.
+        """
+        kwargs: dict = {
+            "tickers": ticker,
+            "auto_adjust": auto_adjust,
+            "progress": False,
+            "actions": False,
+            "group_by": "column",
+            "threads": False,
+            "timeout": timeout_sec,
+        }
+        if period:
+            kwargs["period"] = period
+        else:
+            if start:
+                kwargs["start"] = start
+            if end:
+                kwargs["end"] = end
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(yf.download, **kwargs)
+            try:
+                return future.result(timeout=hard_timeout)
+            except concurrent.futures.TimeoutError:
+                LOG.error(
+                    "yfinance hard timeout (%ss) for %s — download hung, abandoning",
+                    hard_timeout,
+                    ticker,
+                )
+                raise TimeoutError(
+                    f"yfinance download hung for {ticker} (hard timeout {hard_timeout}s)"
+                )
 
     @staticmethod
     def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:

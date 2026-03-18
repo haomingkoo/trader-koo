@@ -204,6 +204,53 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def get_succeeded_tickers_from_latest_run(conn: sqlite3.Connection) -> set[str]:
+    """Return tickers that succeeded in the most recent ingest run.
+
+    Used for resume: if an ingest run was interrupted (e.g. by a hung
+    ticker), the next run can skip tickers that already completed
+    successfully in the same day's run.
+    """
+    try:
+        if not table_exists(conn, "ingest_runs") or not table_exists(conn, "ingest_ticker_status"):
+            return set()
+        run_row = conn.execute(
+            """
+            SELECT run_id, started_ts, status
+            FROM ingest_runs
+            ORDER BY started_ts DESC
+            LIMIT 1
+            """,
+        ).fetchone()
+        if not run_row:
+            return set()
+        # Only resume from runs that started today (UTC) and are running or failed
+        run_date = str(run_row["started_ts"] or "")[:10]
+        today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        if run_date != today:
+            return set()
+        if run_row["status"] not in ("running", "failed", "partial_failed"):
+            return set()
+        rows = conn.execute(
+            """
+            SELECT ticker FROM ingest_ticker_status
+            WHERE run_id = ? AND status = 'ok' AND price_rows > 0
+            """,
+            (run_row["run_id"],),
+        ).fetchall()
+        tickers = {str(r["ticker"]) for r in rows}
+        if tickers:
+            LOG.info(
+                "Resume: %d tickers already succeeded in run %s, will skip them",
+                len(tickers),
+                run_row["run_id"],
+            )
+        return tickers
+    except Exception:
+        LOG.exception("Failed to load succeeded tickers for resume")
+        return set()
+
+
 def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
@@ -803,6 +850,20 @@ def run(args: argparse.Namespace) -> None:
     for t in ALWAYS_FETCH:
         if t not in tickers:
             tickers.append(t)
+
+    # Resume: skip tickers that already succeeded in today's latest run
+    already_done = get_succeeded_tickers_from_latest_run(conn)
+    if already_done:
+        original_count = len(tickers)
+        # Always re-fetch context tickers to keep them fresh
+        context_set = {t.upper() for t in ALWAYS_FETCH}
+        tickers = [t for t in tickers if t not in already_done or t.upper() in context_set]
+        LOG.info(
+            "Resume: reduced ticker list from %d to %d (skipping %d already-succeeded)",
+            original_count,
+            len(tickers),
+            original_count - len(tickers),
+        )
 
     now = dt.datetime.now(dt.timezone.utc)
     snapshot_ts = utc_now_iso()
