@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 import sqlite3
 from typing import Any
 
-from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.schema import decode_json_list, ensure_paper_trade_schema
+
+LOG = logging.getLogger(__name__)
 
 
 def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
@@ -129,25 +132,7 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
 def _policy_snapshot(config: PaperTradeConfig | None) -> dict[str, Any] | None:
     if config is None:
         return None
-    return {
-        "decision_version": config.decision_version,
-        "min_tier": config.min_tier,
-        "min_score": config.min_score,
-        "max_open": config.max_open,
-        "expiry_days": config.expiry_days,
-        "min_reward_r_multiple": config.min_reward_r_multiple,
-        "high_vol_atr_pct": config.high_vol_atr_pct,
-        "qualifying_tiers": sorted(config.qualifying_tiers),
-        "qualifying_actionability": sorted(config.qualifying_actionability),
-        "position_size_pct": {
-            "A": config.tier_a_position_pct,
-            "B": config.tier_b_position_pct,
-            "C": config.tier_c_position_pct,
-        },
-        "caution_position_scale": config.caution_position_scale,
-        "high_vol_position_scale": config.high_vol_position_scale,
-        "earnings_position_scale": config.earnings_position_scale,
-    }
+    return config_snapshot(config)
 
 
 def _feedback_items(
@@ -390,6 +375,32 @@ def paper_trade_summary(
         for row in eq_rows
     ]
 
+    # Family edge, regime edge, VIX bucket analysis
+    family_edges: list[dict[str, Any]] = []
+    regime_edges: list[dict[str, Any]] = []
+    vix_bucket_edges: list[dict[str, Any]] = []
+    edge_feedback: list[dict[str, Any]] = []
+    try:
+        from trader_koo.paper_trade.family_edge import (
+            compute_family_edges,
+            compute_regime_edges,
+            compute_vix_bucket_edges,
+            generate_edge_feedback,
+        )
+
+        family_edges = compute_family_edges(conn, window_days=window_days)
+        regime_edges = compute_regime_edges(conn, window_days=window_days)
+        vix_bucket_edges = compute_vix_bucket_edges(conn, window_days=window_days)
+        edge_feedback = generate_edge_feedback(family_edges, regime_edges)
+    except Exception as exc:
+        LOG.warning("Edge computation failed (non-fatal): %s", exc)
+
+    base_feedback = _feedback_items(
+        overall=overall,
+        by_direction=by_direction,
+        by_family=by_family,
+    )
+
     return {
         "overall": overall,
         "by_direction": by_direction,
@@ -399,11 +410,10 @@ def paper_trade_summary(
         "equity_curve": equity_curve,
         "recent_trades": recent_trades(conn, limit=20),
         "policy": _policy_snapshot(config),
-        "feedback": _feedback_items(
-            overall=overall,
-            by_direction=by_direction,
-            by_family=by_family,
-        ),
+        "feedback": base_feedback + edge_feedback,
+        "family_edges": family_edges,
+        "regime_edges": regime_edges,
+        "vix_bucket_edges": vix_bucket_edges,
     }
 
 

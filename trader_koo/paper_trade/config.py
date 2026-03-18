@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
 class PaperTradeConfig:
     """Runtime configuration snapshot used by paper-trade helpers."""
 
+    bot_version: str
     min_tier: str
     min_score: float
     max_open: int
@@ -31,3 +33,27 @@ class PaperTradeConfig:
     caution_position_scale: float
     high_vol_position_scale: float
     earnings_position_scale: float
+
+
+def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
+    """Return a JSON-safe snapshot of the current paper-trading policy."""
+    return {
+        "bot_version": config.bot_version,
+        "decision_version": config.decision_version,
+        "min_tier": config.min_tier,
+        "min_score": config.min_score,
+        "max_open": config.max_open,
+        "expiry_days": config.expiry_days,
+        "min_reward_r_multiple": config.min_reward_r_multiple,
+        "high_vol_atr_pct": config.high_vol_atr_pct,
+        "qualifying_tiers": sorted(config.qualifying_tiers),
+        "qualifying_actionability": sorted(config.qualifying_actionability),
+        "position_size_pct": {
+            "A": config.tier_a_position_pct,
+            "B": config.tier_b_position_pct,
+            "C": config.tier_c_position_pct,
+        },
+        "caution_position_scale": config.caution_position_scale,
+        "high_vol_position_scale": config.high_vol_position_scale,
+        "earnings_position_scale": config.earnings_position_scale,
+    }

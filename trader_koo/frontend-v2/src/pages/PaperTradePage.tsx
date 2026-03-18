@@ -3,8 +3,10 @@ import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTradeSummaryOverall } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 import {
+  PaperTradeHero,
   PaperTradeBotOverview,
   PaperTradeBreakdownPanels,
+  PaperTradeEdgePanels,
   PaperTradeEquityCurve,
   PaperTradeFeedbackPanel,
   PaperTradeFilters,
@@ -63,33 +65,39 @@ export default function PaperTradePage() {
 
   return (
     <div className="space-y-6">
-      {/* NFA disclaimer */}
       <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
         Paper trades are simulated and do not represent real money. Simulated results may not reflect actual trading conditions.
       </div>
 
-      <h2 className="text-xl font-bold tracking-tight">Paper Trades</h2>
+      <PaperTradeHero
+        overall={overall}
+        latestEquity={latestEquity}
+        maxDrawdown={maxDrawdown}
+        policy={summary?.policy}
+      />
 
-      <PaperTradeBotOverview overall={overall} policy={summary?.policy} />
-
-      {/* Summary KPI cards */}
       <PaperTradeSummaryGrid
         overall={overall}
         maxDrawdown={maxDrawdown}
         latestEquity={latestEquity}
       />
 
-      {/* Equity curve chart */}
+      <PaperTradeBotOverview overall={overall} policy={summary?.policy} />
+
       <PaperTradeEquityCurve equityCurve={equityCurve} />
 
-      {/* By-direction and By-exit-reason panels */}
       <PaperTradeBreakdownPanels summary={summary} />
 
       <PaperTradeOpenPlans trades={trades} />
 
+      <PaperTradeEdgePanels
+        familyEdges={summary?.family_edges ?? []}
+        regimeEdges={summary?.regime_edges ?? []}
+        vixBucketEdges={summary?.vix_bucket_edges ?? []}
+      />
+
       <PaperTradeFeedbackPanel feedback={summary?.feedback ?? []} />
 
-      {/* Filters */}
       <PaperTradeFilters
         statusFilter={statusFilter}
         directionFilter={dirFilter}
@@ -98,7 +106,6 @@ export default function PaperTradePage() {
         onDirectionChange={setDirFilter}
       />
 
-      {/* Trade log table */}
       <PaperTradeLogTable trades={trades} />
     </div>
   );

@@ -9,12 +9,13 @@ import sqlite3
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trade.decision import (
     compute_position_plan,
     compute_stop_and_target,
     evaluate_setup_for_paper_trade,
 )
-from trader_koo.paper_trade.schema import ensure_paper_trade_schema
+from trader_koo.paper_trade.schema import ensure_paper_trade_schema, register_bot_version
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
 
 LOG = logging.getLogger(__name__)
@@ -165,6 +166,13 @@ def create_paper_trades_from_report(
         return 0
 
     ensure_paper_trade_schema(conn)
+    register_bot_version(
+        conn,
+        bot_version=config.bot_version,
+        decision_version=config.decision_version,
+        config_json=json.dumps(config_snapshot(config)),
+        notes="Current champion paper-trade policy snapshot.",
+    )
 
     open_count = conn.execute(
         "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"
@@ -212,6 +220,12 @@ def create_paper_trades_from_report(
             )
             continue
 
+        # Capture market context at entry (VIX, regime, HMM state)
+        from trader_koo.paper_trade.context import capture_market_context
+
+        market_ctx = capture_market_context(conn)
+        market_ctx["bot_version"] = config.bot_version
+
         before_changes = conn.total_changes
         conn.execute(
             """
@@ -229,7 +243,9 @@ def create_paper_trades_from_report(
                 position_size_pct, risk_budget_pct, stop_distance_pct,
                 expected_reward_pct, expected_r_multiple,
                 entry_plan, exit_plan, sizing_summary,
-                review_status, review_summary
+                review_status, review_summary,
+                bot_version, vix_at_entry, vix_percentile_at_entry,
+                regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry
             ) VALUES (
                 ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -244,7 +260,9 @@ def create_paper_trades_from_report(
                 ?, ?, ?,
                 ?, ?,
                 ?, ?, ?,
-                ?, ?
+                ?, ?,
+                ?, ?, ?,
+                ?, ?, ?
             )
             ON CONFLICT(report_date, ticker, direction) DO NOTHING
             """,
@@ -291,6 +309,12 @@ def create_paper_trades_from_report(
                 plan["sizing_summary"],
                 plan["review_status"],
                 plan["review_summary"],
+                market_ctx["bot_version"],
+                market_ctx["vix_at_entry"],
+                market_ctx["vix_percentile_at_entry"],
+                market_ctx["regime_state_at_entry"],
+                market_ctx["hmm_regime_at_entry"],
+                market_ctx["hmm_confidence_at_entry"],
             ),
         )
         if conn.total_changes > before_changes:

@@ -31,6 +31,7 @@ from trader_koo.paper_trade.trading import (
 
 # ── Configuration (env vars) ────────────────────────────────────────
 PAPER_TRADE_ENABLED = os.getenv("TRADER_KOO_PAPER_TRADE_ENABLED", "1") == "1"
+PAPER_TRADE_BOT_VERSION = os.getenv("TRADER_KOO_PAPER_TRADE_BOT_VERSION", "v1.0.0")
 PAPER_TRADE_MIN_TIER = os.getenv("TRADER_KOO_PAPER_TRADE_MIN_TIER", "B")
 PAPER_TRADE_MIN_SCORE = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_SCORE", "60.0"))
 PAPER_TRADE_MAX_OPEN = int(os.getenv("TRADER_KOO_PAPER_TRADE_MAX_OPEN", "20"))
@@ -59,6 +60,7 @@ _HIGH_VOL_ATR_PCT = 6.0
 
 def _build_config() -> PaperTradeConfig:
     return PaperTradeConfig(
+        bot_version=PAPER_TRADE_BOT_VERSION,
         min_tier=PAPER_TRADE_MIN_TIER,
         min_score=PAPER_TRADE_MIN_SCORE,
         max_open=PAPER_TRADE_MAX_OPEN,

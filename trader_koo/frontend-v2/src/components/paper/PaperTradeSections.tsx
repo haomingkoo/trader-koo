@@ -1,11 +1,14 @@
 import { Link } from "react-router-dom";
 import type {
   PaperTrade,
+  PaperTradeFamilyEdgeRow,
   PaperTradeFeedbackItem,
   PaperTradePolicy,
   PaperTradeDirectionStats,
+  PaperTradeRegimeEdgeRow,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
+  PaperTradeVixBucketEdgeRow,
 } from "../../api/types";
 import PlotlyWrapper from "../PlotlyWrapper";
 import Badge, { tierVariant } from "../ui/Badge";
@@ -203,6 +206,128 @@ export const tradeColumns = [
   },
 ];
 
+function HeroMetric({
+  label,
+  value,
+  tone = "text-[var(--text)]",
+}: {
+  label: string;
+  value: string;
+  tone?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 backdrop-blur-sm">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
+        {label}
+      </div>
+      <div className={`mt-2 text-2xl font-semibold tracking-tight ${tone}`}>{value}</div>
+    </div>
+  );
+}
+
+export function PaperTradeHero({
+  overall,
+  latestEquity,
+  maxDrawdown,
+  policy,
+}: {
+  overall: PaperTradeSummaryOverall;
+  latestEquity: number | null;
+  maxDrawdown: number | null;
+  policy: PaperTradePolicy | null | undefined;
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-[28px] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(38,64,122,0.28),rgba(12,18,32,0.96)_42%,rgba(20,64,56,0.32))] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.28)] sm:p-6">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-16 right-[-4rem] h-52 w-52 rounded-full bg-[rgba(96,165,250,0.12)] blur-3xl" />
+        <div className="absolute bottom-[-3rem] left-[-2rem] h-40 w-40 rounded-full bg-[rgba(34,197,94,0.10)] blur-3xl" />
+      </div>
+      <div className="relative grid gap-5 xl:grid-cols-[1.4fr_1fr]">
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="blue">Auto Paper Trader</Badge>
+            {policy?.bot_version ? <Badge variant="muted">{policy.bot_version}</Badge> : null}
+            {policy?.decision_version ? <Badge variant="muted">{policy.decision_version}</Badge> : null}
+            {typeof overall.open_count === "number" ? (
+              <Badge variant={overall.open_count > 0 ? "green" : "muted"}>
+                {overall.open_count} open
+              </Badge>
+            ) : null}
+          </div>
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight text-[var(--text)] sm:text-3xl">
+              Versioned swing-trade paper bot
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)] sm:text-[15px]">
+              Nightly setups are filtered, sized, planned, simulated, and reviewed as a governed
+              paper-trading system. This is the proving ground before any live execution.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <HeroMetric label="Win Rate" value={fmtPct(overall.win_rate_pct)} tone="text-[var(--green)]" />
+            <HeroMetric
+              label="Expectancy"
+              value={fmtPct(overall.expectancy_pct, "%", true)}
+              tone={pnlColor(overall.expectancy_pct)}
+            />
+            <HeroMetric
+              label="Profit Factor"
+              value={overall.profit_factor != null ? overall.profit_factor.toFixed(2) : "\u2014"}
+            />
+            <HeroMetric
+              label="Open Risk"
+              value={typeof overall.open_count === "number" ? String(overall.open_count) : "\u2014"}
+            />
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+          <div className="rounded-[24px] border border-white/8 bg-[rgba(8,12,22,0.55)] p-4 backdrop-blur-sm">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
+              Capital Discipline
+            </div>
+            <div className="mt-3 space-y-2 text-sm text-[var(--muted)]">
+              <div className="flex items-center justify-between gap-4">
+                <span>Equity Index</span>
+                <span className="font-semibold text-[var(--text)]">
+                  {latestEquity != null ? latestEquity.toFixed(2) : "\u2014"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span>Max Drawdown</span>
+                <span className="font-semibold text-[var(--text)]">
+                  {maxDrawdown != null ? `${maxDrawdown.toFixed(2)}%` : "\u2014"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span>Total Closed</span>
+                <span className="font-semibold text-[var(--text)]">{overall.total_trades}</span>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-[24px] border border-white/8 bg-[rgba(8,12,22,0.55)] p-4 backdrop-blur-sm sm:col-span-2 xl:col-span-1">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
+              Policy Guardrails
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {policy ? (
+                <>
+                  <Badge variant="green">Min Tier {policy.min_tier}</Badge>
+                  <Badge variant="amber">Min Score {policy.min_score.toFixed(0)}</Badge>
+                  <Badge variant="muted">Max Open {policy.max_open}</Badge>
+                  <Badge variant="muted">{policy.expiry_days}d expiry</Badge>
+                  <Badge variant="muted">Min {policy.min_reward_r_multiple.toFixed(1)}R</Badge>
+                </>
+              ) : (
+                <span className="text-sm text-[var(--muted)]">Policy metadata unavailable.</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PaperTradeSummaryGrid({
   overall,
   maxDrawdown,
@@ -266,6 +391,7 @@ export function PaperTradeBotOverview({
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
             <Badge variant="blue">{policy.decision_version}</Badge>
+            <Badge variant="muted">{policy.bot_version}</Badge>
             <Badge variant="green">Min Tier {policy.min_tier}</Badge>
             <Badge variant="amber">Min Score {policy.min_score.toFixed(0)}</Badge>
             <Badge variant="muted">Max Open {policy.max_open}</Badge>
@@ -315,10 +441,117 @@ export function PaperTradeBotOverview({
           </p>
           <p>
             Current version:{" "}
-            <strong className="text-[var(--text)]">{policy.decision_version}</strong>
+            <strong className="text-[var(--text)]">{policy.bot_version}</strong>{" "}
+            <span className="text-[var(--muted)]">({policy.decision_version})</span>
           </p>
         </div>
       </Card>
+    </div>
+  );
+}
+
+type EdgeTableRow = {
+  trade_count: number;
+  win_rate_pct: number;
+  avg_pnl_pct: number;
+  avg_r_multiple: number | null;
+};
+
+function EdgeTable<T extends EdgeTableRow>({
+  title,
+  rows,
+  labelKey,
+  labelHeader,
+}: {
+  title: string;
+  rows: T[];
+  labelKey: keyof T;
+  labelHeader: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <Card label={title}>
+        <p className="text-sm text-[var(--muted)]">
+          Not enough closed-trade history yet for this slice.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card label={title}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">{labelHeader}</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Trades</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Win Rate</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Avg P&L</th>
+              <th className="px-2 py-1.5 font-semibold uppercase tracking-wider">Avg R</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => {
+              const label = String(row[labelKey] ?? "\u2014");
+              const tradeCount = Number(row.trade_count ?? 0);
+              const winRate = Number(row.win_rate_pct ?? 0);
+              const avgPnl = typeof row.avg_pnl_pct === "number" ? row.avg_pnl_pct : Number(row.avg_pnl_pct ?? 0);
+              const avgR = row.avg_r_multiple;
+              return (
+                <tr key={`${label}-${idx}`} className="border-b border-[var(--line)]/60">
+                  <td className="px-2 py-2 text-[var(--text)]">{label}</td>
+                  <td className="px-2 py-2 text-[var(--muted)]">{tradeCount}</td>
+                  <td className="px-2 py-2 text-[var(--muted)]">{winRate.toFixed(1)}%</td>
+                  <td className={`px-2 py-2 ${pnlColor(avgPnl)}`}>{fmtPct(avgPnl, "%", true)}</td>
+                  <td className="px-2 py-2 text-[var(--muted)]">
+                    {typeof avgR === "number" ? `${avgR.toFixed(2)}R` : "\u2014"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+export function PaperTradeEdgePanels({
+  familyEdges,
+  regimeEdges,
+  vixBucketEdges,
+}: {
+  familyEdges: PaperTradeFamilyEdgeRow[];
+  regimeEdges: PaperTradeRegimeEdgeRow[];
+  vixBucketEdges: PaperTradeVixBucketEdgeRow[];
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="text-sm font-semibold text-[var(--text)]">Rolling Edge Monitor</div>
+      <div className="grid gap-3 xl:grid-cols-3">
+        <EdgeTable
+          title="Family Edge"
+          rows={familyEdges.slice(0, 8).map((row) => ({
+            ...row,
+            label: `${row.setup_family} (${row.direction})`,
+          }))}
+          labelKey={"label"}
+          labelHeader="Family"
+        />
+        <EdgeTable
+          title="Regime Edge"
+          rows={regimeEdges}
+          labelKey={"regime"}
+          labelHeader="Regime"
+        />
+        <EdgeTable
+          title="VIX Bucket Edge"
+          rows={vixBucketEdges}
+          labelKey={"vix_bucket"}
+          labelHeader="VIX Bucket"
+        />
+      </div>
     </div>
   );
 }
@@ -341,7 +574,15 @@ export function PaperTradeOpenPlans({
 
   return (
     <div className="space-y-3">
-      <div className="text-sm font-semibold text-[var(--text)]">Open Trade Plans</div>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Execution Board</div>
+          <div className="text-xs text-[var(--muted)]">
+            Live paper positions with size, invalidation, and planned exits.
+          </div>
+        </div>
+        <Badge variant="blue">{openTrades.length} live plans</Badge>
+      </div>
       <div className="grid gap-3 lg:grid-cols-2">
         {openTrades.map((trade) => (
           <Card key={trade.id} label={`${trade.ticker} ${trade.direction.toUpperCase()}`}>
@@ -422,7 +663,15 @@ export function PaperTradeFeedbackPanel({
 
   return (
     <div className="space-y-3">
-      <div className="text-sm font-semibold text-[var(--text)]">Post-Trade Feedback Loop</div>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Post-Trade Feedback Loop</div>
+          <div className="text-xs text-[var(--muted)]">
+            Evidence-based tuning notes from closed paper trades and rolling edge data.
+          </div>
+        </div>
+        <Badge variant="muted">{feedback.length} notes</Badge>
+      </div>
       <div className="grid gap-3 lg:grid-cols-2">
         {feedback.map((item, index) => (
           <Card key={`${item.kind}-${index}`} label={item.title}>
