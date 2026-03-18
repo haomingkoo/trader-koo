@@ -220,6 +220,36 @@ def create_paper_trades_from_report(
             )
             continue
 
+        # Critic review — devil's advocate that kills low-conviction trades
+        try:
+            from trader_koo.paper_trade.critic import critic_review
+
+            critic = critic_review(
+                conn,
+                row=row,
+                evaluation=evaluation,
+                plan=plan,
+                market_ctx=market_ctx,
+            )
+            if not critic["approved"]:
+                LOG.info(
+                    "Critic REJECTED: %s %s — %s",
+                    direction.upper(),
+                    ticker,
+                    critic["rejections"][0] if critic["rejections"] else "failed critic review",
+                )
+                continue
+            LOG.info(
+                "Critic APPROVED: %s %s (%s) — %d/%d checks passed",
+                direction.upper(),
+                ticker,
+                critic["conviction_grade"],
+                critic["checks_passed"],
+                critic["checks_total"],
+            )
+        except Exception as exc:
+            LOG.warning("Critic check failed (allowing trade): %s", exc)
+
         # Capture market context at entry (VIX, regime, HMM state)
         from trader_koo.paper_trade.context import capture_market_context
 
