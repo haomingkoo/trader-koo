@@ -7,10 +7,6 @@ import type {
   DashboardPayload,
   LiveCandle,
   OhlcvRow,
-  PatternRow,
-  HybridPatternRow,
-  CandlestickPatternRow,
-  YoloAuditRow,
   YoloPatternRow,
   ChartCommentary,
   HmmRegime,
@@ -18,7 +14,6 @@ import type {
 } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
-import Table from "../components/ui/Table";
 import ChartToolbar from "../components/chart/ChartToolbar";
 import GlassCard from "../components/chart/GlassCard";
 import ChartFundamentals from "../components/chart/ChartFundamentals";
@@ -27,6 +22,8 @@ import LevelsCard from "../components/chart/LevelsCard";
 import GapsCard from "../components/chart/GapsCard";
 import ChartOverlayControls from "../components/chart/ChartOverlayControls";
 import ChartPlotPanel from "../components/chart/ChartPlotPanel";
+import PatternTabs from "../components/chart/PatternTabs";
+import YoloAuditSection from "../components/chart/YoloAuditSection";
 
 /* ── Helpers ── */
 
@@ -1242,215 +1239,6 @@ function DebateRolesInline({
   );
 }
 
-/* ── Pattern tables ── */
-
-function PatternTabs({ payload }: { payload: DashboardPayload }) {
-  const [activeTab, setActiveTab] = useState<
-    "rule" | "hybrid" | "candlestick"
-  >("rule");
-
-  const rulePatterns = payload.patterns ?? [];
-  const hybridPatterns = payload.hybrid_patterns ?? [];
-  const candlestickPatterns = payload.candlestick_patterns ?? [];
-
-  const tabs = [
-    { key: "rule" as const, label: `Rule (${rulePatterns.length})` },
-    { key: "hybrid" as const, label: `Hybrid (${hybridPatterns.length})` },
-    {
-      key: "candlestick" as const,
-      label: `Candlestick (${candlestickPatterns.length})`,
-    },
-  ];
-
-  const ruleColumns: Array<{
-    key: keyof PatternRow & string;
-    label: string;
-    render?: (v: unknown) => React.ReactNode;
-  }> = [
-    { key: "pattern", label: "Pattern" },
-    { key: "status", label: "Status" },
-    {
-      key: "confidence",
-      label: "Confidence",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    { key: "start_date", label: "Start" },
-    { key: "end_date", label: "End" },
-  ];
-
-  const hybridColumns: Array<{
-    key: keyof HybridPatternRow & string;
-    label: string;
-    render?: (v: unknown) => React.ReactNode;
-  }> = [
-    { key: "pattern", label: "Pattern" },
-    { key: "status", label: "Status" },
-    {
-      key: "hybrid_confidence",
-      label: "Hybrid Conf",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    {
-      key: "base_confidence",
-      label: "Base Conf",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    { key: "candle_bias", label: "Candle Bias" },
-    {
-      key: "vol_ratio",
-      label: "Vol Ratio",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    { key: "start_date", label: "Start" },
-    { key: "end_date", label: "End" },
-  ];
-
-  const candleColumns: Array<{
-    key: keyof CandlestickPatternRow & string;
-    label: string;
-    render?: (v: unknown) => React.ReactNode;
-  }> = [
-    { key: "date", label: "Date" },
-    { key: "pattern", label: "Pattern" },
-    { key: "bias", label: "Bias" },
-    {
-      key: "confidence",
-      label: "Confidence",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    { key: "explanation", label: "Explanation" },
-  ];
-
-  return (
-    <div>
-      <div className="mb-2 flex gap-1">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-              activeTab === tab.key
-                ? "bg-[var(--accent)] text-white"
-                : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "rule" && (
-        rulePatterns.length > 0 ? (
-          <Table
-            columns={ruleColumns}
-            data={rulePatterns as unknown as Record<string, unknown>[]}
-            sortable
-          />
-        ) : (
-          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
-            No rule patterns detected.
-          </div>
-        )
-      )}
-      {activeTab === "hybrid" && (
-        hybridPatterns.length > 0 ? (
-          <Table
-            columns={hybridColumns}
-            data={hybridPatterns as unknown as Record<string, unknown>[]}
-            sortable
-          />
-        ) : (
-          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
-            No hybrid patterns detected.
-          </div>
-        )
-      )}
-      {activeTab === "candlestick" && (
-        candlestickPatterns.length > 0 ? (
-          <Table
-            columns={candleColumns}
-            data={candlestickPatterns as unknown as Record<string, unknown>[]}
-            sortable
-          />
-        ) : (
-          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
-            No candlestick patterns detected.
-          </div>
-        )
-      )}
-    </div>
-  );
-}
-
-/* ── YOLO Audit Table ── */
-
-function YoloAuditSection({
-  yoloAudit,
-}: {
-  yoloAudit: YoloAuditRow[];
-}) {
-  if (yoloAudit.length === 0) {
-    return (
-      <div>
-        <h3 className="mb-2 text-sm font-semibold text-[var(--muted)]">
-          YOLO Audit
-        </h3>
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
-          No YOLO audit data available.
-        </div>
-      </div>
-    );
-  }
-
-  const columns: Array<{
-    key: keyof YoloAuditRow & string;
-    label: string;
-    render?: (v: unknown, row: unknown) => React.ReactNode;
-  }> = [
-    { key: "timeframe", label: "TF" },
-    { key: "pattern", label: "Pattern" },
-    { key: "signal_role", label: "Role" },
-    {
-      key: "active_now",
-      label: "Active",
-      render: (v: unknown) => (v ? "Yes" : "No"),
-    },
-    { key: "yolo_recency", label: "Recency" },
-    { key: "confirmation_trend", label: "Trend" },
-    { key: "lifecycle_state", label: "Lifecycle" },
-    {
-      key: "age_days",
-      label: "Age (d)",
-      render: (v: unknown) => fmt(v as number | null, 0),
-    },
-    {
-      key: "current_streak",
-      label: "Streak",
-      render: (v: unknown) => fmt(v as number | null, 0),
-    },
-    {
-      key: "confidence",
-      label: "Conf",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    { key: "first_seen_asof", label: "First Seen" },
-    { key: "last_seen_asof", label: "Last Seen" },
-  ];
-
-  return (
-    <div>
-      <h3 className="mb-2 text-sm font-semibold text-[var(--muted)]">
-        YOLO Audit ({yoloAudit.length} entries)
-      </h3>
-      <Table
-        columns={columns}
-        data={yoloAudit as unknown as Record<string, unknown>[]}
-        sortable
-      />
-    </div>
-  );
-}
-
 /* ── Main Page ── */
 
 export default function ChartPage() {
@@ -1621,10 +1409,10 @@ export default function ChartPage() {
           </div>
 
           {/* Pattern tables */}
-          <PatternTabs payload={data} />
+          <PatternTabs payload={data} formatNumber={fmt} />
 
           {/* YOLO Audit */}
-          <YoloAuditSection yoloAudit={data.yolo_audit ?? []} />
+          <YoloAuditSection yoloAudit={data.yolo_audit ?? []} formatNumber={fmt} />
 
           {/* Footer */}
           <div className="text-xs text-[var(--muted)]">
