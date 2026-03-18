@@ -70,7 +70,11 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
                    debate_agreement_score, last_mtm_date, created_ts, updated_ts,
                    decision_version, decision_state, analyst_stage, debate_stage,
                    risk_stage, portfolio_decision, decision_summary,
-                   decision_reasons, risk_flags
+                   decision_reasons, risk_flags,
+                   position_size_pct, risk_budget_pct, stop_distance_pct,
+                   expected_reward_pct, expected_r_multiple,
+                   entry_plan, exit_plan, sizing_summary,
+                   review_status, review_summary
             FROM paper_trades WHERE id = ?
             """,
             (trade_id,),
@@ -88,6 +92,10 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
             "decision_version", "decision_state", "analyst_stage", "debate_stage",
             "risk_stage", "portfolio_decision", "decision_summary",
             "decision_reasons", "risk_flags",
+            "position_size_pct", "risk_budget_pct", "stop_distance_pct",
+            "expected_reward_pct", "expected_r_multiple",
+            "entry_plan", "exit_plan", "sizing_summary",
+            "review_status", "review_summary",
         ]
         trade = dict(zip(keys, row))
         for key in ("decision_reasons", "risk_flags"):

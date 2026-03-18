@@ -179,3 +179,130 @@ def compute_stop_and_target(
         "atr_at_entry": round(float(atr_pct), 2) if isinstance(atr_pct, (int, float)) else None,
     }
 
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def compute_position_plan(
+    row: dict[str, Any],
+    evaluation: dict[str, Any],
+    levels: dict[str, float | None],
+    *,
+    config: PaperTradeConfig,
+) -> dict[str, float | str | None]:
+    """Build a simple sizing and execution plan for a paper trade."""
+    entry = float(row["close"])
+    direction = str(evaluation["direction"])
+    tier = str(row.get("setup_tier") or "").strip().upper()
+    score = float(row.get("score") or 0.0)
+    atr_pct = row.get("atr_pct_14")
+    atr_pct_num = float(atr_pct) if isinstance(atr_pct, (int, float)) else None
+    risk_note = str(row.get("risk_note") or "").strip().lower()
+
+    base_position = {
+        "A": config.tier_a_position_pct,
+        "B": config.tier_b_position_pct,
+        "C": config.tier_c_position_pct,
+    }.get(tier, config.min_position_pct)
+    score_boost = _clamp((score - config.min_score) / 30.0, 0.0, 0.25)
+    position_size_pct = base_position * (1.0 + score_boost)
+    sizing_notes = [f"tier {tier or 'fallback'} base {base_position:.1f}%"]
+
+    if evaluation.get("decision_state") == "approved_with_flags":
+        position_size_pct *= config.caution_position_scale
+        sizing_notes.append("caution haircut applied")
+
+    if atr_pct_num is not None and atr_pct_num >= config.high_vol_atr_pct:
+        position_size_pct *= config.high_vol_position_scale
+        sizing_notes.append("high-volatility haircut applied")
+
+    if "earnings" in risk_note:
+        position_size_pct *= config.earnings_position_scale
+        sizing_notes.append("event-risk haircut applied")
+
+    position_size_pct = _clamp(
+        position_size_pct,
+        config.min_position_pct,
+        config.max_position_pct,
+    )
+
+    stop_loss = levels.get("stop_loss")
+    target_price = levels.get("target_price")
+    stop_distance_pct = None
+    expected_reward_pct = None
+    expected_r_multiple = None
+
+    if isinstance(stop_loss, (int, float)) and entry > 0:
+        stop_distance_pct = abs(entry - float(stop_loss)) / entry * 100.0
+
+    if isinstance(target_price, (int, float)) and entry > 0:
+        expected_reward_pct = abs(float(target_price) - entry) / entry * 100.0
+
+    if (
+        isinstance(stop_distance_pct, (int, float))
+        and stop_distance_pct > 0
+        and isinstance(expected_reward_pct, (int, float))
+    ):
+        expected_r_multiple = expected_reward_pct / stop_distance_pct
+
+    risk_budget_pct = (
+        position_size_pct * stop_distance_pct / 100.0
+        if isinstance(stop_distance_pct, (int, float))
+        else None
+    )
+
+    if direction == "long":
+        entry_plan = (
+            f"Enter long around {entry:.2f} only while price remains above "
+            f"{float(stop_loss):.2f} invalidation."
+            if isinstance(stop_loss, (int, float))
+            else f"Enter long around {entry:.2f} with disciplined risk."
+        )
+        exit_plan = (
+            f"Initial stop {float(stop_loss):.2f}; objective {float(target_price):.2f}. "
+            f"Reassess after +1R and avoid adding into exhaustion."
+            if isinstance(stop_loss, (int, float)) and isinstance(target_price, (int, float))
+            else "Use the initial stop and reassess at +1R."
+        )
+    else:
+        entry_plan = (
+            f"Enter short around {entry:.2f} only while price stays below "
+            f"{float(stop_loss):.2f} invalidation."
+            if isinstance(stop_loss, (int, float))
+            else f"Enter short around {entry:.2f} with disciplined risk."
+        )
+        exit_plan = (
+            f"Initial stop {float(stop_loss):.2f}; objective {float(target_price):.2f}. "
+            f"Cover partial risk after +1R and avoid pressing into support."
+            if isinstance(stop_loss, (int, float)) and isinstance(target_price, (int, float))
+            else "Use the initial stop and reassess at +1R."
+        )
+
+    sizing_summary = (
+        f"{position_size_pct:.1f}% notional, "
+        f"{risk_budget_pct:.2f}% risk budget"
+        if isinstance(risk_budget_pct, (int, float))
+        else f"{position_size_pct:.1f}% notional"
+    )
+
+    return {
+        "position_size_pct": round(position_size_pct, 2),
+        "risk_budget_pct": round(risk_budget_pct, 2)
+        if isinstance(risk_budget_pct, (int, float))
+        else None,
+        "stop_distance_pct": round(stop_distance_pct, 2)
+        if isinstance(stop_distance_pct, (int, float))
+        else None,
+        "expected_reward_pct": round(expected_reward_pct, 2)
+        if isinstance(expected_reward_pct, (int, float))
+        else None,
+        "expected_r_multiple": round(expected_r_multiple, 2)
+        if isinstance(expected_r_multiple, (int, float))
+        else None,
+        "entry_plan": entry_plan,
+        "exit_plan": exit_plan,
+        "sizing_summary": "; ".join(sizing_notes + [sizing_summary]),
+        "review_status": "monitoring",
+        "review_summary": "Open trade. Compare progress against the initial stop/target plan.",
+    }

@@ -99,6 +99,16 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "decision_summary", "decision_summary TEXT")
     _ensure_column(conn, "paper_trades", "decision_reasons", "decision_reasons TEXT")
     _ensure_column(conn, "paper_trades", "risk_flags", "risk_flags TEXT")
+    _ensure_column(conn, "paper_trades", "position_size_pct", "position_size_pct REAL")
+    _ensure_column(conn, "paper_trades", "risk_budget_pct", "risk_budget_pct REAL")
+    _ensure_column(conn, "paper_trades", "stop_distance_pct", "stop_distance_pct REAL")
+    _ensure_column(conn, "paper_trades", "expected_reward_pct", "expected_reward_pct REAL")
+    _ensure_column(conn, "paper_trades", "expected_r_multiple", "expected_r_multiple REAL")
+    _ensure_column(conn, "paper_trades", "entry_plan", "entry_plan TEXT")
+    _ensure_column(conn, "paper_trades", "exit_plan", "exit_plan TEXT")
+    _ensure_column(conn, "paper_trades", "sizing_summary", "sizing_summary TEXT")
+    _ensure_column(conn, "paper_trades", "review_status", "review_status TEXT")
+    _ensure_column(conn, "paper_trades", "review_summary", "review_summary TEXT")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
@@ -126,4 +136,3 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "ON paper_portfolio_snapshots(snapshot_date)"
     )
     conn.commit()
-

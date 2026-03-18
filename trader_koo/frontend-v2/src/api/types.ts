@@ -706,6 +706,16 @@ export interface PaperTrade {
   decision_summary?: string | null;
   decision_reasons?: string[];
   risk_flags?: string[];
+  position_size_pct?: number | null;
+  risk_budget_pct?: number | null;
+  stop_distance_pct?: number | null;
+  expected_reward_pct?: number | null;
+  expected_r_multiple?: number | null;
+  entry_plan?: string | null;
+  exit_plan?: string | null;
+  sizing_summary?: string | null;
+  review_status?: string | null;
+  review_summary?: string | null;
 }
 
 export interface PaperTradeList {
@@ -721,10 +731,17 @@ export interface PaperTradeSummaryOverall {
   losses?: number;
   win_rate_pct: number | null;
   avg_pnl_pct: number | null;
+  expectancy_pct?: number | null;
   total_pnl_pct: number | null;
   avg_r_multiple: number | null;
   best_trade_pct?: number | null;
   worst_trade_pct?: number | null;
+  avg_win_pct?: number | null;
+  avg_loss_pct?: number | null;
+  payoff_ratio?: number | null;
+  profit_factor?: number | null;
+  target_hit_rate_pct?: number | null;
+  stopped_out_rate_pct?: number | null;
 }
 
 export interface PaperTradeDirectionStats {

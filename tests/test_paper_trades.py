@@ -263,6 +263,34 @@ class TestCreatePaperTrades:
         assert "caution" in trade[3].lower()
         assert "earnings" in str(trade[4]).lower()
 
+    def test_stores_position_plan_metadata(self, conn):
+        rows = [_make_setup_row()]
+
+        inserted = create_paper_trades_from_report(
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+        )
+
+        assert inserted == 1
+        trade = conn.execute(
+            "SELECT position_size_pct, risk_budget_pct, expected_r_multiple, entry_plan, exit_plan, sizing_summary "
+            "FROM paper_trades WHERE ticker = 'AAPL'",
+        ).fetchone()
+        assert trade[0] is not None
+        assert trade[1] is not None
+        assert trade[2] is not None and trade[2] >= 1.5
+        assert "enter" in str(trade[3]).lower()
+        assert "stop" in str(trade[4]).lower()
+        assert "%" in str(trade[5])
+
+    def test_skips_trade_with_poor_reward_to_risk(self, conn):
+        rows = [_make_setup_row(resistance_level=151.0)]
+
+        inserted = create_paper_trades_from_report(
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+        )
+
+        assert inserted == 0
+
     def test_skips_non_qualifying_setup(self, conn):
         rows = [_make_setup_row(score=10.0)]
 
@@ -344,9 +372,13 @@ class TestMarkToMarket:
         conn.commit()
 
         assert result["closed"] == 1
-        status = conn.execute("SELECT status, exit_reason FROM paper_trades WHERE ticker='AAPL'").fetchone()
+        status = conn.execute(
+            "SELECT status, exit_reason, review_status, review_summary FROM paper_trades WHERE ticker='AAPL'",
+        ).fetchone()
         assert status[0] == "stopped_out"
         assert status[1] == "stopped_out"
+        assert status[2] == "stopped_out"
+        assert "invalidation" in str(status[3]).lower()
 
     def test_triggers_target_hit(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, target_price=110.0)
@@ -492,4 +524,6 @@ class TestPaperTradeSummary:
         assert result["overall"]["wins"] == 2
         assert result["overall"]["losses"] == 1
         assert result["overall"]["win_rate_pct"] == pytest.approx(66.7, abs=0.1)
+        assert result["overall"]["expectancy_pct"] == pytest.approx(3.33, abs=0.01)
+        assert result["overall"]["profit_factor"] == pytest.approx(4.33, abs=0.01)
         assert result["overall"]["total_pnl_pct"] == 10.0

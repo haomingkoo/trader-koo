@@ -110,6 +110,7 @@ interface PlotlyAnnotation {
 }
 
 export const CHART_OVERLAY_OPTIONS = [
+  { key: "ma5", label: "5 MA", minBars: 5 },
   { key: "ma20", label: "20 MA", minBars: 20 },
   { key: "ma50", label: "50 MA", minBars: 50 },
   { key: "ma200", label: "200 MA", minBars: 200 },
@@ -120,6 +121,7 @@ export type ChartOverlayKey = (typeof CHART_OVERLAY_OPTIONS)[number]["key"];
 export type ChartOverlayState = Record<ChartOverlayKey, boolean>;
 
 export const DEFAULT_CHART_OVERLAYS: ChartOverlayState = {
+  ma5: false,
   ma20: true,
   ma50: true,
   ma200: false,
@@ -172,6 +174,38 @@ function defaultThreeMonthRange(dates: string[]): [string, string] | undefined {
     return [dates[0], dates[dates.length - 1]];
   }
   return [start.toISOString(), end.toISOString()];
+}
+
+function isoDateOnly(value: string): string | null {
+  const raw = value.length <= 10 ? `${value}T00:00:00Z` : value;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function tradingDayRangeBreaks(dates: string[]): string[] {
+  if (dates.length < 2) return [];
+  const normalized = dates
+    .map(isoDateOnly)
+    .filter((value): value is string => value !== null);
+  if (normalized.length < 2) return [];
+
+  const missing = new Set<string>();
+  for (let i = 1; i < normalized.length; i += 1) {
+    const prev = new Date(`${normalized[i - 1]}T00:00:00Z`);
+    const next = new Date(`${normalized[i]}T00:00:00Z`);
+    if (Number.isNaN(prev.getTime()) || Number.isNaN(next.getTime())) continue;
+
+    prev.setUTCDate(prev.getUTCDate() + 1);
+    while (prev < next) {
+      const weekday = prev.getUTCDay();
+      if (weekday >= 1 && weekday <= 5) {
+        missing.add(prev.toISOString().slice(0, 10));
+      }
+      prev.setUTCDate(prev.getUTCDate() + 1);
+    }
+  }
+  return [...missing];
 }
 
 function nyDateStringFromIso(value: string | null | undefined): string | null {
@@ -400,6 +434,18 @@ export function buildChartData(
     }
   }
 
+  if (overlays.ma5) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: ma(close, 5),
+      name: "MA5",
+      line: { color: "#f97316", width: 1.1 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
   if (overlays.ma20) {
     traces.push({
       type: "scatter",
@@ -894,6 +940,13 @@ export function buildChartData(
   const volumeDomain: [number, number] = hasHmm ? [0.18, 0.30] : [0, 0.22];
   const regimeDomain: [number, number] = [0, 0.14];
   const chartHeight = hasHmm ? 660 : 580;
+  const missingTradingDays = tradingDayRangeBreaks(x);
+  const rangeBreaks = isWeekly
+    ? []
+    : [
+        { bounds: ["sat", "mon"] },
+        ...(missingTradingDays.length > 0 ? [{ values: missingTradingDays }] : []),
+      ];
 
   const layout: Record<string, unknown> = {
     paper_bgcolor: "transparent",
@@ -907,7 +960,7 @@ export function buildChartData(
       gridcolor: "rgba(255,255,255,0.04)",
       rangeslider: { visible: false },
       range: defaultThreeMonthRange(x),
-      rangebreaks: [{ bounds: ["sat", "mon"] }],
+      rangebreaks: rangeBreaks,
       rangeselector: {
         bgcolor: "#e9eef8",
         activecolor: "#6aa9ff",

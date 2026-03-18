@@ -9,11 +9,48 @@ import sqlite3
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
-from trader_koo.paper_trade.decision import compute_stop_and_target, evaluate_setup_for_paper_trade
+from trader_koo.paper_trade.decision import (
+    compute_position_plan,
+    compute_stop_and_target,
+    evaluate_setup_for_paper_trade,
+)
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
 
 LOG = logging.getLogger(__name__)
+
+
+def _build_review(
+    *,
+    exit_reason: str,
+    r_multiple: float | None,
+    expected_r_multiple: float | None,
+) -> tuple[str, str]:
+    expected_text = (
+        f" vs plan {expected_r_multiple:.2f}R"
+        if isinstance(expected_r_multiple, (int, float))
+        else ""
+    )
+    if exit_reason == "target_hit":
+        achieved = f"{r_multiple:.2f}R" if isinstance(r_multiple, (int, float)) else "target"
+        return (
+            "target_hit",
+            f"Plan worked: target reached at {achieved}{expected_text}. Review whether a trailing exit could preserve trend continuation.",
+        )
+    if exit_reason == "stopped_out":
+        return (
+            "stopped_out",
+            f"Invalidation was hit{expected_text}. Review whether the entry was early, the setup family is weakening, or confirmation should be stricter.",
+        )
+    if exit_reason == "expired":
+        return (
+            "timed_out",
+            "Time stop triggered before the move resolved. Review whether entries need stronger momentum confirmation or shorter holding windows.",
+        )
+    return (
+        "closed",
+        f"Trade closed with {f'{r_multiple:.2f}R' if isinstance(r_multiple, (int, float)) else 'an unscored outcome'}{expected_text}. Compare discretion with the original plan.",
+    )
 
 
 def compute_pnl(
@@ -72,6 +109,16 @@ def _close_trade(
     )
     status = exit_reason if exit_reason in ("stopped_out", "target_hit", "expired") else "closed"
     now = dt.datetime.now(dt.timezone.utc).isoformat()
+    meta_row = conn.execute(
+        "SELECT expected_r_multiple FROM paper_trades WHERE id = ?",
+        (trade_id,),
+    ).fetchone()
+    expected_r_multiple = float(meta_row[0]) if meta_row and meta_row[0] is not None else None
+    review_status, review_summary = _build_review(
+        exit_reason=exit_reason,
+        r_multiple=r_mult,
+        expected_r_multiple=expected_r_multiple,
+    )
 
     conn.execute(
         """
@@ -84,10 +131,24 @@ def _close_trade(
             r_multiple = ?,
             current_price = ?,
             unrealized_pnl_pct = NULL,
+            review_status = ?,
+            review_summary = ?,
             updated_ts = ?
         WHERE id = ?
         """,
-        (status, exit_price, exit_date, exit_reason, pnl, r_mult, exit_price, now, trade_id),
+        (
+            status,
+            exit_price,
+            exit_date,
+            exit_reason,
+            pnl,
+            r_mult,
+            exit_price,
+            review_status,
+            review_summary,
+            now,
+            trade_id,
+        ),
     )
 
 
@@ -135,6 +196,21 @@ def create_paper_trades_from_report(
         direction = str(evaluation["direction"])
         entry_price = float(row["close"])
         levels = compute_stop_and_target(row, direction, config=config)
+        plan = compute_position_plan(row, evaluation, levels, config=config)
+
+        expected_r_multiple = plan.get("expected_r_multiple")
+        if (
+            isinstance(expected_r_multiple, (int, float))
+            and expected_r_multiple < config.min_reward_r_multiple
+        ):
+            LOG.info(
+                "Paper trade skipped: %s %s only offers %.2fR (< %.2fR minimum)",
+                direction.upper(),
+                ticker,
+                float(expected_r_multiple),
+                config.min_reward_r_multiple,
+            )
+            continue
 
         before_changes = conn.total_changes
         conn.execute(
@@ -149,7 +225,11 @@ def create_paper_trades_from_report(
                 yolo_pattern, yolo_recency, debate_agreement_score,
                 decision_version, decision_state, analyst_stage, debate_stage,
                 risk_stage, portfolio_decision, decision_summary,
-                decision_reasons, risk_flags
+                decision_reasons, risk_flags,
+                position_size_pct, risk_budget_pct, stop_distance_pct,
+                expected_reward_pct, expected_r_multiple,
+                entry_plan, exit_plan, sizing_summary,
+                review_status, review_summary
             ) VALUES (
                 ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -159,6 +239,10 @@ def create_paper_trades_from_report(
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?, ?,
+                ?, ?, ?,
+                ?, ?,
+                ?, ?, ?,
+                ?, ?,
                 ?, ?, ?,
                 ?, ?
             )
@@ -197,6 +281,16 @@ def create_paper_trades_from_report(
                 evaluation["decision_summary"],
                 json.dumps(evaluation["decision_reasons"]),
                 json.dumps(evaluation["risk_flags"]),
+                plan["position_size_pct"],
+                plan["risk_budget_pct"],
+                plan["stop_distance_pct"],
+                plan["expected_reward_pct"],
+                plan["expected_r_multiple"],
+                plan["entry_plan"],
+                plan["exit_plan"],
+                plan["sizing_summary"],
+                plan["review_status"],
+                plan["review_summary"],
             ),
         )
         if conn.total_changes > before_changes:
@@ -384,4 +478,3 @@ def manually_close_trade(
         "pnl_pct": pnl,
         "status": "closed",
     }
-

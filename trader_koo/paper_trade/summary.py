@@ -100,7 +100,11 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
                target_price, stop_loss, exit_price, exit_date,
                status, pnl_pct, r_multiple, unrealized_pnl_pct,
                setup_family, setup_tier, score, exit_reason,
-               decision_state, decision_summary
+               decision_state, decision_summary,
+               position_size_pct, risk_budget_pct, stop_distance_pct,
+               expected_reward_pct, expected_r_multiple,
+               entry_plan, exit_plan, sizing_summary,
+               review_status, review_summary
         FROM paper_trades
         ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC
         LIMIT ?
@@ -113,6 +117,10 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
         "status", "pnl_pct", "r_multiple", "unrealized_pnl_pct",
         "setup_family", "setup_tier", "score", "exit_reason",
         "decision_state", "decision_summary",
+        "position_size_pct", "risk_budget_pct", "stop_distance_pct",
+        "expected_reward_pct", "expected_r_multiple",
+        "entry_plan", "exit_plan", "sizing_summary",
+        "review_status", "review_summary",
     ]
     return [dict(zip(keys, row)) for row in rows]
 
@@ -156,6 +164,20 @@ def paper_trade_summary(
     pnls = [float(row[0]) for row in all_closed]
     r_mults = [float(row[1]) for row in all_closed if row[1] is not None]
     wins = sum(1 for pnl in pnls if pnl > 0)
+    win_pnls = [pnl for pnl in pnls if pnl > 0]
+    loss_pnls = [pnl for pnl in pnls if pnl < 0]
+    avg_win = round(sum(win_pnls) / len(win_pnls), 2) if win_pnls else None
+    avg_loss = round(sum(loss_pnls) / len(loss_pnls), 2) if loss_pnls else None
+    payoff_ratio = (
+        round(abs(avg_win / avg_loss), 2)
+        if isinstance(avg_win, (int, float)) and isinstance(avg_loss, (int, float)) and avg_loss != 0
+        else None
+    )
+    gross_win = sum(win_pnls)
+    gross_loss = abs(sum(loss_pnls))
+    profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else None
+    hit_target_count = sum(1 for row in all_closed if row[5] == "target_hit")
+    stopped_out_count = sum(1 for row in all_closed if row[5] == "stopped_out")
 
     overall = {
         "total_trades": total,
@@ -164,10 +186,17 @@ def paper_trade_summary(
         "losses": total - wins,
         "win_rate_pct": round(wins / total * 100, 1),
         "avg_pnl_pct": round(sum(pnls) / total, 2),
+        "expectancy_pct": round(sum(pnls) / total, 2),
         "avg_r_multiple": round(sum(r_mults) / len(r_mults), 2) if r_mults else None,
         "total_pnl_pct": round(sum(pnls), 2),
         "best_trade_pct": round(max(pnls), 2),
         "worst_trade_pct": round(min(pnls), 2),
+        "avg_win_pct": avg_win,
+        "avg_loss_pct": avg_loss,
+        "payoff_ratio": payoff_ratio,
+        "profit_factor": profit_factor,
+        "target_hit_rate_pct": round(hit_target_count / total * 100, 1),
+        "stopped_out_rate_pct": round(stopped_out_count / total * 100, 1),
     }
 
     by_direction: dict[str, dict[str, Any]] = {}
@@ -292,7 +321,11 @@ def list_paper_trades(
                observation, action_text, risk_note, debate_agreement_score,
                high_water_mark, low_water_mark, decision_version,
                decision_state, analyst_stage, debate_stage, risk_stage,
-               portfolio_decision, decision_summary, decision_reasons, risk_flags
+               portfolio_decision, decision_summary, decision_reasons, risk_flags,
+               position_size_pct, risk_budget_pct, stop_distance_pct,
+               expected_reward_pct, expected_r_multiple,
+               entry_plan, exit_plan, sizing_summary,
+               review_status, review_summary
         FROM paper_trades
         WHERE {where}
         ORDER BY entry_date DESC, id DESC
@@ -310,6 +343,10 @@ def list_paper_trades(
         "high_water_mark", "low_water_mark", "decision_version",
         "decision_state", "analyst_stage", "debate_stage", "risk_stage",
         "portfolio_decision", "decision_summary", "decision_reasons", "risk_flags",
+        "position_size_pct", "risk_budget_pct", "stop_distance_pct",
+        "expected_reward_pct", "expected_r_multiple",
+        "entry_plan", "exit_plan", "sizing_summary",
+        "review_status", "review_summary",
     ]
     trades: list[dict[str, Any]] = []
     for row in rows:
@@ -318,4 +355,3 @@ def list_paper_trades(
         trade["risk_flags"] = decode_json_list(trade.get("risk_flags"))
         trades.append(trade)
     return trades
-

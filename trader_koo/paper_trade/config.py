@@ -22,4 +22,12 @@ class PaperTradeConfig:
     decision_version: str
     debate_caution_agreement: float
     high_vol_atr_pct: float
-
+    min_reward_r_multiple: float
+    min_position_pct: float
+    max_position_pct: float
+    tier_a_position_pct: float
+    tier_b_position_pct: float
+    tier_c_position_pct: float
+    caution_position_scale: float
+    high_vol_position_scale: float
+    earnings_position_scale: float

@@ -37,6 +37,15 @@ PAPER_TRADE_MAX_OPEN = int(os.getenv("TRADER_KOO_PAPER_TRADE_MAX_OPEN", "20"))
 PAPER_TRADE_EXPIRY_DAYS = int(os.getenv("TRADER_KOO_PAPER_TRADE_EXPIRY_DAYS", "10"))
 PAPER_TRADE_STOP_ATR_MULT = float(os.getenv("TRADER_KOO_PAPER_TRADE_STOP_ATR_MULT", "1.5"))
 PAPER_TRADE_DEFAULT_STOP_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_DEFAULT_STOP_PCT", "3.0"))
+PAPER_TRADE_MIN_REWARD_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_REWARD_R", "1.5"))
+PAPER_TRADE_MIN_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_POSITION_PCT", "2.0"))
+PAPER_TRADE_MAX_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_MAX_POSITION_PCT", "14.0"))
+PAPER_TRADE_TIER_A_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_TIER_A_POSITION_PCT", "12.0"))
+PAPER_TRADE_TIER_B_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_TIER_B_POSITION_PCT", "8.0"))
+PAPER_TRADE_TIER_C_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_TIER_C_POSITION_PCT", "5.0"))
+PAPER_TRADE_CAUTION_POSITION_SCALE = float(os.getenv("TRADER_KOO_PAPER_TRADE_CAUTION_POSITION_SCALE", "0.65"))
+PAPER_TRADE_HIGH_VOL_POSITION_SCALE = float(os.getenv("TRADER_KOO_PAPER_TRADE_HIGH_VOL_POSITION_SCALE", "0.75"))
+PAPER_TRADE_EARNINGS_POSITION_SCALE = float(os.getenv("TRADER_KOO_PAPER_TRADE_EARNINGS_POSITION_SCALE", "0.60"))
 
 _QUALIFYING_TIERS = frozenset({"A", "B"})
 _QUALIFYING_ACTIONABILITY = frozenset({"higher-probability", "conditional"})
@@ -63,6 +72,15 @@ def _build_config() -> PaperTradeConfig:
         decision_version=_PAPER_DECISION_VERSION,
         debate_caution_agreement=_DEBATE_CAUTION_AGREEMENT,
         high_vol_atr_pct=_HIGH_VOL_ATR_PCT,
+        min_reward_r_multiple=PAPER_TRADE_MIN_REWARD_R,
+        min_position_pct=PAPER_TRADE_MIN_POSITION_PCT,
+        max_position_pct=PAPER_TRADE_MAX_POSITION_PCT,
+        tier_a_position_pct=PAPER_TRADE_TIER_A_POSITION_PCT,
+        tier_b_position_pct=PAPER_TRADE_TIER_B_POSITION_PCT,
+        tier_c_position_pct=PAPER_TRADE_TIER_C_POSITION_PCT,
+        caution_position_scale=PAPER_TRADE_CAUTION_POSITION_SCALE,
+        high_vol_position_scale=PAPER_TRADE_HIGH_VOL_POSITION_SCALE,
+        earnings_position_scale=PAPER_TRADE_EARNINGS_POSITION_SCALE,
     )
 
 
@@ -173,4 +191,3 @@ def list_paper_trades(
         to_date=to_date,
         limit=limit,
     )
-
