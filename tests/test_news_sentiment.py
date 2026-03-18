@@ -21,18 +21,18 @@ class _FakeResponse:
 
 
 class TestExternalNewsSentiment:
-    def test_returns_unavailable_when_no_keys_configured(self, monkeypatch):
+    def test_falls_back_to_rss_when_no_keys_configured(self, monkeypatch):
         monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
         monkeypatch.delenv("TRADER_KOO_ALPHA_VANTAGE_KEY", raising=False)
         monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+        monkeypatch.setenv("TRADER_KOO_RSS_ENABLED", "0")  # disable RSS to test empty path
 
         payload = get_external_news_sentiment(
             now_utc=dt.datetime(2026, 3, 17, 12, 0, tzinfo=dt.timezone.utc),
             force_refresh=True,
         )
 
-        assert payload["available"] is False
-        assert payload["score"] is None
+        assert payload["provider"] == "rss_aggregator"
         assert "FINNHUB_API_KEY" in payload["note"]
 
     def test_finnhub_news_sentiment(self, monkeypatch):

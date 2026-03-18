@@ -236,44 +236,59 @@ def _fetch_finnhub_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
         except Exception as exc:
             LOG.warning("Finnhub news-sentiment failed for %s: %s", ticker, exc)
 
-    # Step 2: Fetch recent headlines via /company-news (first ticker only to save rate)
+    # Step 2: Fetch headlines via RSS (scored) with Finnhub company-news fallback
     headlines: list[dict[str, Any]] = []
-    date_to = now_utc.strftime("%Y-%m-%d")
-    date_from = (now_utc - dt.timedelta(hours=lookback_hours)).strftime("%Y-%m-%d")
+    rss_meta: dict[str, Any] | None = None
+    try:
+        from trader_koo.rss_news import fetch_rss_headlines
 
-    for ticker in tickers[:2]:
-        try:
-            articles = _finnhub_get(
-                "company-news",
-                {"symbol": ticker, "from": date_from, "to": date_to},
-                api_key,
-            )
-            if not isinstance(articles, list):
-                continue
-            for item in articles:
-                if len(headlines) >= 5:
-                    break
-                if not isinstance(item, dict):
+        rss_result = fetch_rss_headlines(tickers=tickers, max_headlines=10, now_utc=now_utc)
+        if rss_result.get("available") and rss_result.get("headlines"):
+            headlines = rss_result["headlines"][:10]
+            rss_meta = {
+                "rss_article_count": rss_result.get("article_count", 0),
+                "rss_feed_breakdown": rss_result.get("feed_breakdown", []),
+            }
+    except Exception as exc:
+        LOG.warning("RSS headline fetch failed, falling back to Finnhub company-news: %s", exc)
+
+    # Fallback to Finnhub company-news if RSS returned nothing
+    if not headlines:
+        date_to = now_utc.strftime("%Y-%m-%d")
+        date_from = (now_utc - dt.timedelta(hours=lookback_hours)).strftime("%Y-%m-%d")
+        for ticker in tickers[:2]:
+            try:
+                articles = _finnhub_get(
+                    "company-news",
+                    {"symbol": ticker, "from": date_from, "to": date_to},
+                    api_key,
+                )
+                if not isinstance(articles, list):
                     continue
-                title = str(item.get("headline") or "").strip()
-                if not title:
-                    continue
-                ts = item.get("datetime")
-                time_published = None
-                if isinstance(ts, int | float):
-                    time_published = _iso_utc(
-                        dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc)
-                    )
-                headlines.append({
-                    "title": title,
-                    "source": str(item.get("source") or "").strip() or None,
-                    "url": str(item.get("url") or "").strip() or None,
-                    "time_published": time_published,
-                    "score": None,
-                    "label": None,
-                })
-        except Exception as exc:
-            LOG.warning("Finnhub company-news failed for %s: %s", ticker, exc)
+                for item in articles:
+                    if len(headlines) >= 5:
+                        break
+                    if not isinstance(item, dict):
+                        continue
+                    title = str(item.get("headline") or "").strip()
+                    if not title:
+                        continue
+                    ts = item.get("datetime")
+                    time_published = None
+                    if isinstance(ts, int | float):
+                        time_published = _iso_utc(
+                            dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc)
+                        )
+                    headlines.append({
+                        "title": title,
+                        "source": str(item.get("source") or "").strip() or None,
+                        "url": str(item.get("url") or "").strip() or None,
+                        "time_published": time_published,
+                        "score": None,
+                        "label": None,
+                    })
+            except Exception as exc:
+                LOG.warning("Finnhub company-news failed for %s: %s", ticker, exc)
 
     if weight_total <= 0:
         return _empty_news_payload(
@@ -303,9 +318,11 @@ def _fetch_finnhub_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
         "note": (
             f"Finnhub news sentiment aggregated across {len(ticker_details)} tickers "
             f"({article_count} articles in last week)"
+            + (f" + {rss_meta['rss_article_count']} RSS headlines" if rss_meta else "")
         ),
         "headlines": headlines,
         "ticker_details": ticker_details,
+        **(rss_meta or {}),
     }
 
 
@@ -457,6 +474,54 @@ def _fetch_alpha_vantage_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# RSS-only fallback (no API key required)
+# ---------------------------------------------------------------------------
+
+def _fetch_rss_only_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
+    """Use RSS feeds as a standalone news sentiment source when no API keys are configured."""
+    tickers = _csv_env("TRADER_KOO_SENTIMENT_TICKERS", _DEFAULT_TICKERS)
+    lookback_hours = _lookback_hours()
+
+    try:
+        from trader_koo.rss_news import fetch_rss_headlines
+
+        rss = fetch_rss_headlines(tickers=tickers, max_headlines=10, now_utc=now_utc)
+        if rss.get("available") and rss.get("score") is not None:
+            return {
+                "provider": "rss_aggregator",
+                "source_type": "news",
+                "available": True,
+                "score": rss["score"],
+                "raw_score": rss.get("raw_score"),
+                "label": rss.get("label"),
+                "article_count": rss.get("article_count", 0),
+                "updated_at": _iso_utc(now_utc),
+                "lookback_hours": lookback_hours,
+                "tickers": tickers,
+                "topics": [],
+                "note": (
+                    f"RSS-only mode (no API key configured). {rss.get('note', '')}. "
+                    "Set FINNHUB_API_KEY for more accurate sentiment scoring."
+                ),
+                "headlines": rss.get("headlines", []),
+                "rss_feed_breakdown": rss.get("feed_breakdown", []),
+            }
+    except Exception as exc:
+        LOG.warning("RSS-only news sentiment failed: %s", exc)
+
+    return _empty_news_payload(
+        provider="rss_aggregator",
+        now_utc=now_utc,
+        tickers=tickers,
+        lookback_hours=lookback_hours,
+        note=(
+            "No news sentiment provider configured and RSS feeds unavailable. "
+            "Set FINNHUB_API_KEY (recommended, free 60 calls/min) for news sentiment."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API — dispatches to Finnhub (primary) or Alpha Vantage (fallback)
 # ---------------------------------------------------------------------------
 
@@ -490,18 +555,8 @@ def get_external_news_sentiment(*, now_utc: dt.datetime | None = None, force_ref
     elif _alpha_vantage_key():
         fresh_payload = _fetch_alpha_vantage_news_sentiment(resolved_now)
     else:
-        tickers = _csv_env("TRADER_KOO_SENTIMENT_TICKERS", _DEFAULT_TICKERS)
-        fresh_payload = _empty_news_payload(
-            provider="none",
-            now_utc=resolved_now,
-            tickers=tickers,
-            lookback_hours=_lookback_hours(),
-            note=(
-                "No news sentiment provider configured. "
-                "Set FINNHUB_API_KEY (recommended, free 60 calls/min) or "
-                "TRADER_KOO_ALPHA_VANTAGE_KEY (free 25 calls/day)."
-            ),
-        )
+        # No API key — fall back to RSS-only headlines with lexicon scoring
+        fresh_payload = _fetch_rss_only_news_sentiment(resolved_now)
 
     expires_at = resolved_now + dt.timedelta(seconds=_cache_ttl_sec())
 
