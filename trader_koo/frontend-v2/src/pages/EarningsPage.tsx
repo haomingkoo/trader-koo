@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useEarnings } from "../api/hooks";
 import type { EarningsRow } from "../api/types";
-import Card from "../components/ui/Card";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
 import Table from "../components/ui/Table";
@@ -249,43 +248,18 @@ export default function EarningsPage() {
         </div>
       </div>
 
-      {/* Summary KPI cards */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-        <Card
-          glass
-          label="Matches"
-          value={data?.count ?? 0}
-        />
-        <Card
-          glass
-          label="Setup Ready"
-          value={summary.setup_ready}
-        />
-        <Card
-          glass
-          label="Watch"
-          value={summary.watch}
-        />
-        <Card
-          glass
-          label="Calendar Only"
-          value={summary.calendar_only}
-        />
-        <Card
-          glass
-          label="Unverified"
-          value={summary.unverified}
-        />
-        <Card
-          glass
-          label="Market Date"
-          value={data?.market_date ?? "\u2014"}
-        />
-        <Card
-          glass
-          label="Provider"
-          value={data?.provider ?? "\u2014"}
-        />
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="muted">{data?.provider ?? "Provider unknown"}</Badge>
+          <Badge variant="muted">{data?.count ?? 0} tracked events</Badge>
+          <Badge variant="muted">{summary.setup_ready} setup-ready</Badge>
+          <Badge variant="muted">{summary.watch} watch</Badge>
+          {data?.market_date ? <Badge variant="muted">Market date {data.market_date}</Badge> : null}
+        </div>
+        <p className="mt-3 text-xs text-[var(--muted)]">
+          This is a tracked-universe earnings calendar, not a full-market feed like Unusual Whales.
+          It focuses on the names we already score and monitor.
+        </p>
       </div>
 
       {data?.detail && (

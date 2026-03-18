@@ -19,20 +19,18 @@ export default function DashboardLayout() {
   });
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex min-h-[100dvh] overflow-hidden bg-[var(--bg)]">
       <Sidebar mobileOpen={mobileOpen} onMobileClose={handleMobileClose} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onMenuToggle={() => setMobileOpen((p) => !p)} />
-        <main className="flex-1 overflow-auto p-4">
+        <main className="flex-1 overflow-auto px-4 pb-4 pt-3 [padding-bottom:max(1rem,env(safe-area-inset-bottom))]">
           <ErrorBoundary resetKey={location.pathname}>
             <Outlet />
           </ErrorBoundary>
         </main>
-        <footer className="border-t border-[var(--line)] bg-[var(--bg)] px-4 py-2">
-          <p className="text-center text-[10px] text-[var(--muted)]">
-            Research tool only. Not financial advice. Past performance does not guarantee future results.
-            All data may be delayed, inaccurate, or incomplete. Do not make investment decisions based solely on this dashboard.
-            Always consult a qualified financial advisor.
+        <footer className="border-t border-[var(--line)] bg-[var(--bg)] px-4 py-2 [padding-bottom:max(0.5rem,env(safe-area-inset-bottom))]">
+          <p className="text-center text-[10px] leading-relaxed text-[var(--muted)] sm:text-[10px]">
+            Research tool only. Not financial advice. Data may be delayed, inaccurate, or incomplete.
           </p>
         </footer>
       </div>

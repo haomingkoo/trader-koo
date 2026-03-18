@@ -36,6 +36,9 @@ export default function ChartPage() {
   const [chartOverlays, setChartOverlays] = useState<ChartOverlayState>(
     DEFAULT_CHART_OVERLAYS,
   );
+  const [compactChart, setCompactChart] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 768,
+  );
   const { livePrice, streamingActive } = useLiveEquityPrice(ticker);
 
   // Pick up ticker from URL query param ?t=AAPL
@@ -49,6 +52,14 @@ export default function ChartPage() {
       }
     }
   }, [searchParams, setTicker, ticker]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => setCompactChart(window.innerWidth < 768);
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const { data, isLoading, error, refetch } = useChart(ticker);
 
@@ -115,8 +126,14 @@ export default function ChartPage() {
     if (!livePayload || !livePayload.chart || livePayload.chart.length === 0) {
       return null;
     }
-    return buildChartData(livePayload, isWeekly, chartOverlays, effectiveLiveCandle);
-  }, [livePayload, isWeekly, chartOverlays, effectiveLiveCandle]);
+    return buildChartData(
+      livePayload,
+      isWeekly,
+      chartOverlays,
+      effectiveLiveCandle,
+      compactChart,
+    );
+  }, [livePayload, isWeekly, chartOverlays, effectiveLiveCandle, compactChart]);
 
   const chartBarCount = (
     isWeekly ? resampleToWeekly(livePayload?.chart ?? []) : livePayload?.chart ?? []

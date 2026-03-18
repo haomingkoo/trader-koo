@@ -83,10 +83,10 @@ export default function FearGreedGauge() {
               </span>
               <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
                 {uses_social_sentiment
-                  ? "Reddit Pulse Live"
+                  ? "Social Pulse Live"
                   : noteLooksBlocked(social_sentiment.note)
-                    ? "Reddit Pulse Blocked"
-                    : "Reddit Pulse Unavailable"}
+                    ? "Social Pulse Blocked"
+                    : "Social Pulse Unavailable"}
               </span>
               <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
                 {external_news.available
@@ -151,7 +151,7 @@ export default function FearGreedGauge() {
       <p className="mt-3 text-[10px] text-[var(--muted)]">
         This market sentiment gauge is for educational purposes only. The core
         score is still our internal market-data composite. External news and
-        Reddit social sentiment are optional overlays and should be treated as
+        social sentiment overlays are optional context and should be treated as
         context, not trade instructions.
       </p>
     </div>

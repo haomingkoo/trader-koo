@@ -6,6 +6,32 @@ import { biasVariant, formatReportNumber as fmt } from "./reportShared";
 
 type DebateData = NonNullable<ChartCommentary["debate_v1"]>;
 
+function normalizeDebate(
+  raw: SetupRow["debate_v1"] | DebateData | null | undefined,
+): DebateData | undefined {
+  const debate = raw as DebateData | null | undefined;
+  if (!debate || typeof debate !== "object" || !debate.consensus) return undefined;
+  return {
+    version: Number(debate.version ?? 1),
+    consensus: {
+      consensus_state: String(debate.consensus.consensus_state ?? "unknown"),
+      consensus_bias: String(debate.consensus.consensus_bias ?? "neutral"),
+      agreement_score: Number(debate.consensus.agreement_score ?? 0),
+      disagreement_count: Number(debate.consensus.disagreement_count ?? 0),
+    },
+    roles: Array.isArray(debate.roles)
+      ? debate.roles.map((role: DebateData["roles"][number]) => ({
+          role: String(role.role ?? "unknown"),
+          stance: String(role.stance ?? "neutral"),
+          confidence: Number(role.confidence ?? 0),
+          evidence: Array.isArray(role.evidence)
+            ? role.evidence.map((item: string) => String(item))
+            : [],
+        }))
+      : [],
+  };
+}
+
 function DebateVisualization({ debate }: { debate: DebateData }) {
   const consensus = debate.consensus;
   const roles = debate.roles ?? [];
@@ -156,25 +182,80 @@ function SetupTableRow({
           </td>
         ))}
         <td className="px-3 py-2">
-          {debate ? (
-            <button
-              onClick={onToggle}
-              className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
-            >
-              {agreementScore != null && (
-                <span className="tabular-nums">{agreementScore.toFixed(0)}%</span>
-              )}
-              <span>{isExpanded ? "\u25B2" : "\u25BC"}</span>
-            </button>
-          ) : (
-            <span className="text-xs text-[var(--muted)]">{"\u2014"}</span>
-          )}
+          <button
+            onClick={onToggle}
+            className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
+          >
+            {agreementScore != null ? (
+              <span className="tabular-nums">{agreementScore.toFixed(0)}%</span>
+            ) : (
+              <span>View</span>
+            )}
+            <span>{isExpanded ? "\u25B2" : "\u25BC"}</span>
+          </button>
         </td>
       </tr>
-      {isExpanded && debate && (
+      {isExpanded && (
         <tr className="border-b border-[var(--line)]">
           <td colSpan={columns.length + 1} className="bg-[var(--bg)] px-4 py-3">
-            <DebateVisualization debate={debate} />
+            <div className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+                    Setup Read
+                  </div>
+                  <p className="mt-2 text-sm text-[var(--text)]">
+                    {row.observation ?? "No observation available."}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+                    Plan
+                  </div>
+                  <p className="mt-2 text-sm text-[var(--text)]">
+                    {row.action ?? "No action plan available."}
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+                    Risk
+                  </div>
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    {row.risk_note ?? "No risk note available."}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+                    Technical
+                  </div>
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    {row.technical_read ?? "No technical summary available."}
+                  </p>
+                </div>
+              </div>
+
+              {row.yolo_pattern && (
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="muted">YOLO {String(row.yolo_pattern)}</Badge>
+                  {Boolean(row.primary_yolo_recency) && (
+                    <Badge variant="muted">{String(row.primary_yolo_recency)}</Badge>
+                  )}
+                  {Boolean(row.yolo_bias) && (
+                    <Badge variant={biasVariant(String(row.yolo_bias))}>{String(row.yolo_bias)}</Badge>
+                  )}
+                </div>
+              )}
+
+              {debate ? (
+                <DebateVisualization debate={debate} />
+              ) : (
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
+                  Debate detail is not available for this setup snapshot.
+                </div>
+              )}
+            </div>
           </td>
         </tr>
       )}
@@ -247,26 +328,6 @@ export default function SetupQualitySection({
       render: (row) => <span className="tabular-nums">{fmt(row.score, 1)}</span>,
     },
     {
-      key: "pct_change",
-      label: "% Chg",
-      render: (row) => {
-        const value = row.pct_change;
-        if (value == null) return "\u2014";
-        const color =
-          value > 0
-            ? "text-[var(--green)]"
-            : value < 0
-              ? "text-[var(--red)]"
-              : "text-[var(--muted)]";
-        return (
-          <span className={`tabular-nums ${color}`}>
-            {value > 0 ? "+" : ""}
-            {value.toFixed(2)}%
-          </span>
-        );
-      },
-    },
-    {
       key: "setup_tier",
       label: "Tier",
       render: (row) =>
@@ -287,33 +348,14 @@ export default function SetupQualitySection({
         ),
     },
     {
-      key: "yolo_pattern",
-      label: "YOLO",
-      render: (row) => (
-        <span className="text-xs text-[var(--muted)]">{row.yolo_pattern ?? "\u2014"}</span>
-      ),
-    },
-    {
-      key: "observation",
-      label: "Observation",
+      key: "setup",
+      label: "Setup",
       render: (row) => (
         <span
-          className="block max-w-[200px] truncate text-xs text-[var(--muted)]"
-          title={row.observation ?? ""}
+          className="block max-w-[260px] truncate text-xs text-[var(--muted)]"
+          title={row.action ?? row.observation ?? ""}
         >
-          {row.observation ?? "\u2014"}
-        </span>
-      ),
-    },
-    {
-      key: "action",
-      label: "Action",
-      render: (row) => (
-        <span
-          className="block max-w-[200px] truncate text-xs text-[var(--muted)]"
-          title={row.action ?? ""}
-        >
-          {row.action ?? "\u2014"}
+          {row.action ?? row.observation ?? "\u2014"}
         </span>
       ),
     },
@@ -347,45 +389,125 @@ export default function SetupQualitySection({
           No setups match the current filter.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)]">
-          <table className="w-full border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-[var(--line)]">
-                {columns.map((column) => (
-                  <th
-                    key={column.key}
-                    className="cursor-pointer select-none px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] hover:text-[var(--text)]"
-                    onClick={() => handleSort(column.key)}
+        <div className="space-y-3">
+          <div className="space-y-3 md:hidden">
+            {filtered.map((row) => {
+              const debate = debateMap.get(row.ticker) ?? normalizeDebate(row.debate_v1);
+              const isExpanded = expandedTicker === row.ticker;
+              return (
+                <div
+                  key={row.ticker}
+                  className={`rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 ${
+                    row.ticker === activeTicker ? "ring-1 ring-[var(--accent)]/40" : ""
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Link
+                        to={`/chart?t=${row.ticker}`}
+                        className="font-mono text-lg font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
+                      >
+                        {row.ticker}
+                      </Link>
+                      <div className="mt-1 text-xs text-[var(--muted)]">
+                        Score {fmt(row.score, 1)}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {row.setup_tier ? (
+                        <Badge variant={tierVariant(row.setup_tier)}>{row.setup_tier}</Badge>
+                      ) : null}
+                      {row.signal_bias ? (
+                        <Badge variant={biasVariant(row.signal_bias)}>{row.signal_bias}</Badge>
+                      ) : null}
+                      {debate?.consensus?.agreement_score != null ? (
+                        <Badge variant="muted">
+                          Debate {debate.consensus.agreement_score.toFixed(0)}%
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-sm text-[var(--text)]">
+                    {row.action ?? row.observation ?? "No setup note available."}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => setExpandedTicker(isExpanded ? null : row.ticker)}
+                    className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
                   >
-                    {column.label}
-                    {sortCol === column.key && (
-                      <span className="ml-1">{sortAsc ? "\u25B2" : "\u25BC"}</span>
-                    )}
+                    {isExpanded ? "Hide details" : "Show details"}
+                  </button>
+
+                  {isExpanded && (
+                    <div className="mt-3 space-y-3 border-t border-[var(--line)] pt-3">
+                      <div className="text-xs text-[var(--muted)]">
+                        <strong className="text-[var(--text)]">Observation:</strong>{" "}
+                        {row.observation ?? "\u2014"}
+                      </div>
+                      <div className="text-xs text-[var(--muted)]">
+                        <strong className="text-[var(--text)]">Risk:</strong>{" "}
+                        {row.risk_note ?? "\u2014"}
+                      </div>
+                      <div className="text-xs text-[var(--muted)]">
+                        <strong className="text-[var(--text)]">Technical:</strong>{" "}
+                        {row.technical_read ?? "\u2014"}
+                      </div>
+                      {debate ? (
+                        <DebateVisualization debate={debate} />
+                      ) : (
+                        <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs text-[var(--muted)]">
+                          Debate detail is not available for this setup snapshot.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="hidden overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] md:block">
+            <table className="w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-[var(--line)]">
+                  {columns.map((column) => (
+                    <th
+                      key={column.key}
+                      className="cursor-pointer select-none px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] hover:text-[var(--text)]"
+                      onClick={() => handleSort(column.key)}
+                    >
+                      {column.label}
+                      {sortCol === column.key && (
+                        <span className="ml-1">{sortAsc ? "\u25B2" : "\u25BC"}</span>
+                      )}
+                    </th>
+                  ))}
+                  <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Details
                   </th>
-                ))}
-                <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                  Debate
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((row) => {
-                const debate = debateMap.get(row.ticker);
-                const isExpanded = expandedTicker === row.ticker;
-                return (
-                  <SetupTableRow
-                    key={row.ticker}
-                    row={row}
-                    columns={columns}
-                    debate={debate}
-                    isExpanded={isExpanded}
-                    isHighlighted={row.ticker === activeTicker}
-                    onToggle={() => setExpandedTicker(isExpanded ? null : row.ticker)}
-                  />
-                );
-              })}
-            </tbody>
-          </table>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((row) => {
+                  const debate = debateMap.get(row.ticker) ?? normalizeDebate(row.debate_v1);
+                  const isExpanded = expandedTicker === row.ticker;
+                  return (
+                    <SetupTableRow
+                      key={row.ticker}
+                      row={row}
+                      columns={columns}
+                      debate={debate}
+                      isExpanded={isExpanded}
+                      isHighlighted={row.ticker === activeTicker}
+                      onToggle={() => setExpandedTicker(isExpanded ? null : row.ticker)}
+                    />
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

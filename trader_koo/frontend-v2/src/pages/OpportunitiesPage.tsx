@@ -2,7 +2,6 @@ import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useOpportunities } from "../api/hooks";
 import type { OpportunityRow } from "../api/types";
-import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
 import Table from "../components/ui/Table";
@@ -187,31 +186,12 @@ export default function OpportunitiesPage() {
         </div>
       </div>
 
-      {/* Funnel cards */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Card
-          glass
-          label="Universe"
-          value={data?.universe_count ?? "\u2014"}
-        />
-        <Card
-          glass
-          label="Eligible"
-          value={data?.eligible_count ?? "\u2014"}
-        />
-        <Card
-          glass
-          label="Showing"
-          value={rows.length}
-        />
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-xs text-[var(--muted)]">
+        Snapshot: {formatTimestamp(data?.snapshot_ts)}
+        {typeof rows.length === "number" && (
+          <span className="ml-2">• {rows.length} names shown</span>
+        )}
       </div>
-
-      {/* Snapshot timestamp */}
-      {data?.snapshot_ts && (
-        <div className="text-xs text-[var(--muted)]">
-          Snapshot: {formatTimestamp(data.snapshot_ts)}
-        </div>
-      )}
 
       {/* Main table */}
       <Table

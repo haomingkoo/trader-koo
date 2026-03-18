@@ -15,30 +15,20 @@ import {
 
 export function SummaryKpiRow({
   generatedTs,
-  trackedTickers,
-  priceRows,
   priceDate,
-  ingestStatus,
 }: {
   generatedTs: string | null;
-  trackedTickers: number | null;
-  priceRows: number | null;
   priceDate: string | null;
-  ingestStatus: string | null;
 }) {
   const ts = formatReportTimestamp(generatedTs);
+  const reportFor = priceDate ?? ts.ny.split(",")[0] ?? "\u2014";
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-      <GlassCard label="Generated (Local)" value={ts.local} />
-      <GlassCard label="Generated (NY)" value={ts.ny} />
-      <GlassCard label="Tracked Tickers" value={trackedTickers ?? "\u2014"} />
-      <GlassCard
-        label="Price Rows"
-        value={priceRows != null ? priceRows.toLocaleString() : "\u2014"}
-      />
-      <GlassCard label="Latest Price Date" value={priceDate ?? "\u2014"} />
-      <GlassCard label="Last Ingest" value={ingestStatus ?? "\u2014"} />
-    </div>
+    <GlassCard label="Report For" value={reportFor}>
+      <div className="mt-2 text-xs text-[var(--muted)]">
+        Generated {ts.local}
+      </div>
+      <div className="mt-1 text-xs text-[var(--muted)]">NY: {ts.ny}</div>
+    </GlassCard>
   );
 }
 

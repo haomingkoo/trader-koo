@@ -354,20 +354,27 @@ export function NewsPulseCard({
 
 export function SocialPulseCard({ social }: { social: SocialSentiment }) {
   const status = statusBadgeTone(social.available, social.post_count, social.note);
+  const providerLabel = social.provider.replaceAll("_", " ");
+  const sourceLabel =
+    social.provider.toLowerCase().includes("stocktwits")
+      ? "Symbols"
+      : social.provider.toLowerCase().includes("reddit")
+        ? "Subreddits"
+        : "Sources";
 
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg)]/55 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
-            Reddit Social Pulse
+            Social Pulse
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span
               className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
               style={{ color: social.available ? "var(--accent)" : "var(--muted)" }}
             >
-              {social.provider.replaceAll("_", " ")}
+              {providerLabel}
             </span>
             <span
               className="rounded-full border border-[var(--line)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
@@ -397,13 +404,13 @@ export function SocialPulseCard({ social }: { social: SocialSentiment }) {
 
       {!social.available && social.posts.length === 0 ? (
         <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)]/70 p-3 text-xs text-[var(--muted)]">
-          No Reddit posts were ingested for the current window. If the provider is blocked or rate-limited, this overlay should be treated as unavailable rather than neutral.
+          No live social posts were ingested for the current window. If the provider is blocked or rate-limited, this overlay should be treated as unavailable rather than neutral.
         </div>
       ) : null}
 
       <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/75 p-3">
-          <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Subreddits</div>
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">{sourceLabel}</div>
           <div className="mt-1 font-semibold text-[var(--text)]">{social.subreddit_count}</div>
         </div>
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/75 p-3">

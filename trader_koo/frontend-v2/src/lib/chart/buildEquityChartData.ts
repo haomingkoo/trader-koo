@@ -292,6 +292,7 @@ export function buildChartData(
   isWeekly: boolean,
   overlays: ChartOverlayState,
   liveCandle?: LiveCandle | null,
+  compactMode = false,
 ) {
   const rawChart = payload.chart ?? [];
   const baseChart = isWeekly ? resampleToWeekly(rawChart) : rawChart;
@@ -569,7 +570,7 @@ export function buildChartData(
   const shapes: PlotlyShape[] = [];
   const annotations: PlotlyAnnotation[] = [];
 
-  if (overlays.bollinger) {
+  if (overlays.bollinger && !compactMode) {
     const bb = computeRollingBollinger(close, 20, 2);
     const bbUpper = lastFinite(bb.upper);
     const bbMiddle = lastFinite(bb.middle);
@@ -662,22 +663,24 @@ export function buildChartData(
       line: { color, width, dash },
     });
     const tierLabel = tier.toUpperCase();
-    annotations.push({
-      xref: "paper",
-      yref: "y",
-      x: 1.0,
-      y: lvl,
-      text: `${tierLabel} ${String(r.type).toUpperCase()} ${formatChartNumber(lvl)} (${r.touches ?? "-"})`,
-      showarrow: false,
-      xanchor: "left",
-      yanchor: "middle",
-      align: "left",
-      xshift: 4,
-      borderpad: 2,
-      bgcolor: "rgba(18,25,39,0.9)",
-      bordercolor: color,
-      font: { color, size: 11 },
-    });
+    if (!compactMode) {
+      annotations.push({
+        xref: "paper",
+        yref: "y",
+        x: 1.0,
+        y: lvl,
+        text: `${tierLabel} ${String(r.type).toUpperCase()} ${formatChartNumber(lvl)} (${r.touches ?? "-"})`,
+        showarrow: false,
+        xanchor: "left",
+        yanchor: "middle",
+        align: "left",
+        xshift: 4,
+        borderpad: 2,
+        bgcolor: "rgba(18,25,39,0.9)",
+        bordercolor: color,
+        font: { color, size: 11 },
+      });
+    }
   });
 
   earningsMarkers.forEach((marker, idx) => {
@@ -696,20 +699,22 @@ export function buildChartData(
       y1: 1,
       line: { color, width: 1.6, dash: "dot" },
     });
-    annotations.push({
-      xref: "x",
-      yref: "paper",
-      x: markerDate,
-      y: 1,
-      yshift: -18 - idx * 18,
-      text: `E ${session}`,
-      showarrow: false,
-      xanchor: "left",
-      bgcolor: "rgba(18,25,39,0.92)",
-      bordercolor: color,
-      borderpad: 3,
-      font: { color, size: 11 },
-    });
+    if (!compactMode) {
+      annotations.push({
+        xref: "x",
+        yref: "paper",
+        x: markerDate,
+        y: 1,
+        yshift: -18 - idx * 18,
+        text: `E ${session}`,
+        showarrow: false,
+        xanchor: "left",
+        bgcolor: "rgba(18,25,39,0.92)",
+        bordercolor: color,
+        borderpad: 3,
+        font: { color, size: 11 },
+      });
+    }
   });
 
   gaps.forEach((g) => {
@@ -795,7 +800,7 @@ export function buildChartData(
         fillcolor: fill,
       });
 
-      if (labelCount < 5) {
+      if (!compactMode && labelCount < 5) {
         const conf = Number(p.confidence);
         const confPct = Number.isFinite(conf) ? `${(conf * 100).toFixed(0)}%` : "";
         const streak = Number(p.current_streak);
@@ -839,8 +844,9 @@ export function buildChartData(
   }
 
   const hasHmm = hmmRegime !== null && hmmRegime.regimes.length > 0;
+  const showHmm = hasHmm && !compactMode;
 
-  if (hasHmm) {
+  if (showHmm) {
     const regimes = hmmRegime.regimes;
 
     let spanStart = 0;
@@ -936,10 +942,10 @@ export function buildChartData(
     });
   }
 
-  const priceDomain: [number, number] = hasHmm ? [0.36, 1] : [0.28, 1];
-  const volumeDomain: [number, number] = hasHmm ? [0.18, 0.30] : [0, 0.22];
+  const priceDomain: [number, number] = showHmm ? [0.36, 1] : [0.28, 1];
+  const volumeDomain: [number, number] = showHmm ? [0.18, 0.30] : [0, 0.22];
   const regimeDomain: [number, number] = [0, 0.14];
-  const chartHeight = hasHmm ? 660 : 580;
+  const chartHeight = compactMode ? 460 : showHmm ? 660 : 580;
   const missingTradingDays = tradingDayRangeBreaks(x);
   const rangeBreaks = isWeekly
     ? []
@@ -948,51 +954,77 @@ export function buildChartData(
         ...(missingTradingDays.length > 0 ? [{ values: missingTradingDays }] : []),
       ];
 
+  const initialRange = defaultThreeMonthRange(x);
+  const visibleRows = chart.filter((row) => {
+    if (!initialRange) return true;
+    const rowTime = new Date(row.date).getTime();
+    const start = new Date(initialRange[0]).getTime();
+    const end = new Date(initialRange[1]).getTime();
+    return Number.isFinite(rowTime) && rowTime >= start && rowTime <= end;
+  });
+  const rangeRows = visibleRows.length > 0 ? visibleRows : chart;
+  const minVisible = Math.min(...rangeRows.map((row) => row.low));
+  const maxVisible = Math.max(...rangeRows.map((row) => row.high));
+  const pricePadding =
+    Number.isFinite(minVisible) && Number.isFinite(maxVisible)
+      ? Math.max((maxVisible - minVisible) * 0.08, maxVisible * 0.015)
+      : 0;
+
   const layout: Record<string, unknown> = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
     uirevision: `${ticker}-${isWeekly ? "weekly" : "daily"}`,
     font: { color: "#8ea0bd", size: 11 },
-    margin: { t: 40, r: 200, b: 50, l: 60 },
+    margin: compactMode ? { t: 18, r: 18, b: 44, l: 52 } : { t: 40, r: 200, b: 50, l: 60 },
     dragmode: "zoom" as const,
     legend: { orientation: "h" as const, y: -0.04, x: 0, xanchor: "left" as const },
     xaxis: {
       gridcolor: "rgba(255,255,255,0.04)",
       rangeslider: { visible: false },
-      range: defaultThreeMonthRange(x),
+      range: initialRange,
       rangebreaks: rangeBreaks,
       rangeselector: {
         bgcolor: "#e9eef8",
         activecolor: "#6aa9ff",
         bordercolor: "#0b0f16",
         borderwidth: 1,
-        font: { color: "#0b0f16", size: 12 },
-        buttons: [
-          { count: 3, step: "month", stepmode: "backward", label: "3M" },
-          { count: 6, step: "month", stepmode: "backward", label: "6M" },
-          { count: 1, step: "year", stepmode: "todate", label: "YTD" },
-          { count: 1, step: "year", stepmode: "backward", label: "1Y" },
-          { count: 2, step: "year", stepmode: "backward", label: "2Y" },
-          { step: "all", label: "ALL" },
-        ],
+        font: { color: "#0b0f16", size: compactMode ? 11 : 12 },
+        buttons: compactMode
+          ? [
+              { count: 3, step: "month", stepmode: "backward", label: "3M" },
+              { count: 1, step: "year", stepmode: "backward", label: "1Y" },
+              { step: "all", label: "ALL" },
+            ]
+          : [
+              { count: 3, step: "month", stepmode: "backward", label: "3M" },
+              { count: 6, step: "month", stepmode: "backward", label: "6M" },
+              { count: 1, step: "year", stepmode: "todate", label: "YTD" },
+              { count: 1, step: "year", stepmode: "backward", label: "1Y" },
+              { count: 2, step: "year", stepmode: "backward", label: "2Y" },
+              { step: "all", label: "ALL" },
+            ],
       },
     },
     yaxis: {
       gridcolor: "rgba(255,255,255,0.06)",
       domain: priceDomain,
-      title: "Price",
+      title: compactMode ? undefined : "Price",
+      range:
+        Number.isFinite(minVisible) && Number.isFinite(maxVisible)
+          ? [minVisible - pricePadding, maxVisible + pricePadding]
+          : undefined,
     },
     yaxis2: {
       gridcolor: "rgba(255,255,255,0.04)",
       domain: volumeDomain,
-      title: "Volume",
+      title: compactMode ? undefined : "Volume",
     },
     shapes,
     annotations,
     height: chartHeight,
   };
 
-  if (hasHmm) {
+  if (showHmm) {
     (layout as Record<string, unknown>).yaxis3 = {
       gridcolor: "rgba(255,255,255,0.04)",
       domain: regimeDomain,

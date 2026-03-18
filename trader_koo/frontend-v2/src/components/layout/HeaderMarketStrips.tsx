@@ -204,7 +204,7 @@ export function EquityPriceStrip() {
   }
 
   return (
-    <div className="flex items-center gap-3 overflow-x-auto rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px] scrollbar-none">
+    <div className="flex w-full items-center gap-3 overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-[11.5px] scrollbar-none">
       {availableChips.map((symbol, index) => (
         <span key={symbol.key} className="flex items-center gap-3 whitespace-nowrap">
           {index > 0 && <span className="text-[var(--line)]">|</span>}
@@ -235,7 +235,7 @@ export function CryptoPriceStrip() {
   const availableChips = CRYPTO_SYMBOLS.filter((symbol) => prices[symbol.key]);
 
   return (
-    <div className="flex items-center gap-3 overflow-x-auto rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px] scrollbar-none">
+    <div className="flex w-full items-center gap-3 overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-[11.5px] scrollbar-none">
       {availableChips.map((symbol, index) => (
         <span key={symbol.key} className="flex items-center gap-3 whitespace-nowrap">
           {index > 0 && <span className="text-[var(--line)]">|</span>}

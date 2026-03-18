@@ -64,22 +64,22 @@ export default function ClockStrip() {
   const market = getMarketStatus(nyDate);
 
   return (
-    <div className="flex flex-wrap items-center gap-4 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[11.5px] text-[var(--muted)]">
-      <div className="flex items-center gap-1.5">
+    <div className="flex w-full flex-wrap items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-[11.5px] text-[var(--muted)] md:w-auto md:gap-4 md:px-4">
+      <div className="flex min-w-0 items-center gap-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text)] opacity-70">
           {localLabel}
         </span>
         <span className="tabular-nums text-[var(--text)]">{localTime}</span>
       </div>
-      <span className="text-[var(--line)]">|</span>
-      <div className="flex items-center gap-1.5">
+      <span className="hidden text-[var(--line)] md:inline">|</span>
+      <div className="flex min-w-0 items-center gap-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text)] opacity-70">
           NY
         </span>
         <span className="tabular-nums text-[var(--text)]">{nyTime}</span>
       </div>
       <span
-        className={`rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider ${badgeStyles[market.variant]}`}
+        className={`ml-auto rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wider ${badgeStyles[market.variant]}`}
       >
         {market.label}
       </span>

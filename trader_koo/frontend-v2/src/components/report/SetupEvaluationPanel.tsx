@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   SetupEvalAction,
   SetupEvalFamily,
@@ -40,13 +41,14 @@ export default function SetupEvaluationPanel({
 }: {
   evaluation: SetupEvaluation | Record<string, never>;
 }) {
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const eval_ = evaluation as SetupEvaluation;
 
   if (!eval_ || !Object.keys(eval_).length) {
     return (
       <GlassCard label="Setup Evaluation">
         <p className="mt-1 text-xs text-[var(--muted)]">
-          No setup evaluation data available.
+          No model calibration data available yet.
         </p>
       </GlassCard>
     );
@@ -56,7 +58,7 @@ export default function SetupEvaluationPanel({
     return (
       <GlassCard label="Setup Evaluation">
         <p className="mt-1 text-xs text-[var(--muted)]">
-          Setup evaluation unavailable ({eval_.error ?? eval_.reason ?? "disabled"}).
+          Model calibration unavailable ({eval_.error ?? eval_.reason ?? "disabled"}).
         </p>
       </GlassCard>
     );
@@ -129,13 +131,13 @@ export default function SetupEvaluationPanel({
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-[var(--muted)]">
-        Setup Evaluation
+        Model Calibration
       </h3>
 
       <p className="text-xs text-[var(--muted)]">
         Historical calibration built from archived setup calls and the later price
-        outcomes that followed their validity windows. These figures are computed
-        from stored report snapshots and subsequent closes, not manually keyed in.
+        outcomes that followed their validity windows. These figures come from
+        stored report snapshots and subsequent closes, not manually keyed values.
       </p>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -175,48 +177,62 @@ export default function SetupEvaluationPanel({
           ` | Best horizon: ${bestValidity.validity_days}d (${formatReportNumber(bestValidity.expectancy_pct, 2)}%)`}
       </p>
 
-      {longFamilies.length > 0 && (
-        <div>
-          <h4 className="mb-1 text-xs font-semibold text-[var(--green)]">
-            Long Families
-          </h4>
-          <Table columns={familyColumns} data={longFamilies} />
-        </div>
-      )}
-      {shortFamilies.length > 0 && (
-        <div>
-          <h4 className="mb-1 text-xs font-semibold text-[var(--red)]">
-            Short Families
-          </h4>
-          <Table columns={familyColumns} data={shortFamilies} />
-        </div>
-      )}
-
-      {validities.length > 0 && (
-        <div>
-          <h4 className="mb-1 text-xs font-semibold text-[var(--muted)]">
-            By Validity Window
-          </h4>
-          <Table columns={validityColumns} data={validities} />
-        </div>
-      )}
-
       <div>
-        <h4 className="mb-1 text-xs font-semibold text-[var(--muted)]">
-          Improvement Actions
-        </h4>
-        {actions.length > 0 ? (
-          <ul className="space-y-2">
-            {actions.map((action, i) => (
-              <ImprovementAction key={i} action={action} />
-            ))}
-          </ul>
-        ) : (
-          <p className="text-xs text-[var(--muted)]">
-            No tuning actions yet. Collect more scored calls.
-          </p>
-        )}
+        <button
+          type="button"
+          onClick={() => setShowDiagnostics((prev) => !prev)}
+          className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
+        >
+          {showDiagnostics ? "Hide" : "Show"} model diagnostics
+        </button>
       </div>
+
+      {showDiagnostics && (
+        <div className="space-y-4">
+          {longFamilies.length > 0 && (
+            <div>
+              <h4 className="mb-1 text-xs font-semibold text-[var(--green)]">
+                Long Families
+              </h4>
+              <Table columns={familyColumns} data={longFamilies} />
+            </div>
+          )}
+          {shortFamilies.length > 0 && (
+            <div>
+              <h4 className="mb-1 text-xs font-semibold text-[var(--red)]">
+                Short Families
+              </h4>
+              <Table columns={familyColumns} data={shortFamilies} />
+            </div>
+          )}
+
+          {validities.length > 0 && (
+            <div>
+              <h4 className="mb-1 text-xs font-semibold text-[var(--muted)]">
+                By Validity Window
+              </h4>
+              <Table columns={validityColumns} data={validities} />
+            </div>
+          )}
+
+          <div>
+            <h4 className="mb-1 text-xs font-semibold text-[var(--muted)]">
+              Tuning Notes
+            </h4>
+            {actions.length > 0 ? (
+              <ul className="space-y-2">
+                {actions.map((action, i) => (
+                  <ImprovementAction key={i} action={action} />
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-[var(--muted)]">
+                No tuning notes yet. Collect more scored calls.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
