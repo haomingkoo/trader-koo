@@ -55,6 +55,13 @@ DEFAULT_SOFT_FAIL_TICKERS = (
     "^VIX6M",
     "VIX3M",
     "VIX6M",
+    "^IRX",
+    "^TYX",
+    "GLD",
+    "TLT",
+    "HYG",
+    "IEF",
+    "DIA",
 )
 LOG = logging.getLogger("trader_koo.ingest")
 
@@ -846,7 +853,17 @@ def run(args: argparse.Namespace) -> None:
 
     # Always include market context tickers regardless of mode
     # Trinity: SPY (S&P 500), QQQ (Nasdaq), ^DJI (Dow) + VIX + 10yr yield + inverse VIX
-    ALWAYS_FETCH = ["^VIX", "^GSPC", "^DJI", "^TNX", "SPY", "QQQ", "SVIX"]
+    # Macro context tickers — used for regime detection, ML features, and sentiment
+    ALWAYS_FETCH = [
+        "^VIX", "^GSPC", "^DJI", "^TNX", "SPY", "QQQ", "SVIX",
+        "^IRX",   # 13-week T-bill (short-term rates)
+        "^TYX",   # 30-year yield (long end)
+        "GLD",    # Gold ETF (risk-off proxy)
+        "TLT",    # 20+ year treasury ETF (duration/rate sensitivity)
+        "HYG",    # High-yield corporate bond ETF (credit risk proxy)
+        "IEF",    # 7-10 year treasury ETF (mid-duration)
+        "DIA",    # Dow Jones ETF (breadth confirmation)
+    ]
     for t in ALWAYS_FETCH:
         if t not in tickers:
             tickers.append(t)
