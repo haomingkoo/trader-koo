@@ -61,11 +61,34 @@ Last updated: 2026-03-18 by Claude (pipeline data health investigation + fixes)
 - Works from datacenter IPs (legitimate REST API, not scraping)
 - Env var: `TRADER_KOO_SOCIAL_TICKERS` to customize tracked tickers
 
+### Pipeline Hung-Download Fix (same session)
+
+**Problem**: `yf.download()` hangs indefinitely on certain tickers (observed: LLY at ticker 289/510, then again at ticker 51/510). The SIGALRM-based `_ticker_timeout` doesn't fire because signals can't interrupt blocking C-level socket operations.
+
+**Fixes applied**:
+1. **Thread-based hard timeout** (`sources.py`): `_download_with_hard_timeout()` wraps every `yf.download()` call in a `ThreadPoolExecutor` with a 60-second wall-clock deadline. If the call doesn't return, the thread is abandoned and the ticker is marked failed with a `TimeoutError`.
+2. **Auto-resume** (`update_market_db.py`): `get_succeeded_tickers_from_latest_run()` checks today's latest run and skips tickers that already completed with `price_rows > 0`. Context tickers (^VIX etc.) are always re-fetched.
+3. **Force-cancel endpoint** (`admin.py`): `POST /api/admin/force-cancel-run` marks all stuck "running" runs as failed, bypassing the 75-minute stale timeout.
+
+### Production Pipeline Verification (2026-03-18T10:26 UTC)
+
+| Metric | Value |
+|--------|-------|
+| `/api/status` ok | `true` |
+| Warnings | `[]` |
+| Ingest | `ok` — 460/460 tickers, 0 failed |
+| `^VIX` | Succeeded via `period="5d"` fallback |
+| Price date | `2026-03-18` (today) |
+| Report `generated_ts` | `2026-03-18T10:25:17Z` |
+| YOLO | Fresh — 390 daily, 340 weekly patterns |
+| Email | Sent successfully |
+| LLM | Healthy (215 successes, 6 failures) |
+
 ### What Still Remains
 
 - **Options data**: Enable with `TRADER_KOO_INCLUDE_OPTIONS=1` on Railway if put/call ratio data is desired. This adds ~2-3 min to ingest per run.
-- **Pipeline rerun**: After deploying these fixes, trigger `POST /api/admin/trigger-update?mode=full` to verify the full pipeline produces fresh data.
-- **Test baseline**: 549 passed, 2 pre-existing failures (LLM validator property tests), 1 pre-existing CORS test failure.
+- **RSS news enrichment**: Committed to main (`rss_news.py`) — Yahoo Finance + CNBC + MarketWatch RSS feeds with lexicon scoring. Supplements Finnhub headlines.
+- **Test baseline**: 549+ passed, 2 pre-existing failures (LLM validator property tests), 1 pre-existing CORS test failure.
 
 ## Current State (commit 06bd17a)
 
