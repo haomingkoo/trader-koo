@@ -16,7 +16,6 @@ import type {
   HmmRegime,
   EquityTick,
 } from "../api/types";
-import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
@@ -26,6 +25,8 @@ import ChartFundamentals from "../components/chart/ChartFundamentals";
 import ChartWorkspace from "../components/chart/ChartWorkspace";
 import LevelsCard from "../components/chart/LevelsCard";
 import GapsCard from "../components/chart/GapsCard";
+import ChartOverlayControls from "../components/chart/ChartOverlayControls";
+import ChartPlotPanel from "../components/chart/ChartPlotPanel";
 
 /* ── Helpers ── */
 
@@ -1565,43 +1566,18 @@ export default function ChartPage() {
         }}
       />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-          Indicators
-        </span>
-        {CHART_OVERLAY_OPTIONS.map((option) => {
-          const unavailable = chartBarCount > 0 && chartBarCount < option.minBars;
-          const active = chartOverlays[option.key];
-          return (
-            <button
-              key={option.key}
-              type="button"
-              disabled={unavailable}
-              title={unavailable ? `Needs ${option.minBars} bars on this timeframe` : undefined}
-              onClick={() =>
-                setChartOverlays((current) => ({
-                  ...current,
-                  [option.key]: !current[option.key],
-                }))
-              }
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-                unavailable
-                  ? "cursor-not-allowed border-[var(--line)] bg-[var(--panel)]/50 text-[var(--muted)] opacity-45"
-                  : active
-                    ? "border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--text)]"
-                    : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-              }`}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-        {chartBarCount > 0 && (
-          <span className="text-xs text-[var(--muted)]">
-            Default view opens on the latest 3 months.
-          </span>
-        )}
-      </div>
+      <ChartOverlayControls
+        overlayOptions={CHART_OVERLAY_OPTIONS}
+        barCount={chartBarCount}
+        overlays={chartOverlays}
+        onToggleOverlay={(overlayKey) => {
+          const key = overlayKey as ChartOverlayKey;
+          setChartOverlays((current) => ({
+            ...current,
+            [key]: !current[key],
+          }));
+        }}
+      />
 
       {isLoading && <Spinner className="mt-12" />}
       {error && (
@@ -1625,24 +1601,10 @@ export default function ChartPage() {
             onCollapse={() => setCommentaryExpanded(false)}
             onExpand={() => setCommentaryExpanded(true)}
             chartContent={
-              chartResult ? (
-                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
-                  <PlotlyWrapper
-                    data={chartResult.traces as unknown as Record<string, unknown>[]}
-                    layout={chartResult.layout as unknown as Record<string, unknown>}
-                    config={{
-                      responsive: true,
-                      displayModeBar: true,
-                      scrollZoom: true,
-                    }}
-                    style={{ width: "100%", height: ((chartResult.layout as Record<string, unknown>).height as number) ?? 580 }}
-                  />
-                </div>
-              ) : (
-                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--muted)]">
-                  No chart data available.
-                </div>
-              )
+              <ChartPlotPanel
+                chartData={chartResult ? (chartResult.traces as unknown as Record<string, unknown>[]) : null}
+                chartLayout={chartResult ? (chartResult.layout as unknown as Record<string, unknown>) : null}
+              />
             }
             desktopCommentary={
               <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
