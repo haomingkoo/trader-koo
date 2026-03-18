@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import requests
 
 from trader_koo.social_sentiment import get_social_sentiment
 
@@ -171,3 +172,21 @@ class TestSocialSentiment:
         assert payload["available"] is False
         assert payload["post_count"] == 0
         assert "No Reddit posts passed" in payload["note"]
+
+    def test_returns_blocked_note_when_all_subreddits_fail(self, monkeypatch):
+        def _fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
+            raise requests.HTTPError(f"403 Client Error: Blocked for url: {url}")
+
+        monkeypatch.setattr("requests.get", _fake_get)
+        monkeypatch.setenv("TRADER_KOO_REDDIT_SUBREDDITS", "stocks,investing")
+
+        payload = get_social_sentiment(
+            now_utc=dt.datetime(2026, 3, 18, 0, 0, tzinfo=dt.timezone.utc),
+            force_refresh=True,
+        )
+
+        assert payload["available"] is False
+        assert payload["post_count"] == 0
+        assert "Reddit public JSON requests failed" in payload["note"]
+        assert "r/stocks" in payload["note"]
+        assert len(payload["source_breakdown"]) == 2

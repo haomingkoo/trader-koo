@@ -62,6 +62,53 @@ class TestDailyReportEndpoint:
 
         assert data["ok"] is False
 
+    @patch(
+        "trader_koo.backend.services.report_loader.latest_daily_report_json",
+        return_value=(
+            None,
+            {
+                "generated_ts": "2026-03-16T05:32:19Z",
+                "counts": {"tracked_tickers": 510, "price_rows": 1028349},
+                "latest_data": {"price_date": "2026-03-13"},
+                "latest_ingest_run": {"status": "ok"},
+                "signals": {"setup_quality_top": [], "setup_evaluation": {}, "tonight_key_changes": [], "regime_context": None},
+                "risk_filters": {"trade_mode": "normal", "hard_blocks": 0, "soft_flags": 0, "conditions": []},
+                "yolo": {"summary": {}, "timeframes": []},
+            },
+        ),
+    )
+    @patch(
+        "trader_koo.backend.services.pipeline.pipeline_status_snapshot",
+        return_value={
+            "active": False,
+            "stage": "idle",
+            "latest_run": {
+                "finished_ts": "2026-03-17T22:12:02Z",
+                "status": "failed",
+            },
+            "run_log_path": "/tmp/log",
+        },
+    )
+    @patch(
+        "trader_koo.backend.routers.report.pipeline_status_snapshot",
+        return_value={
+            "active": False,
+            "stage": "idle",
+            "latest_run": {
+                "finished_ts": "2026-03-17T22:12:02Z",
+                "status": "failed",
+            },
+            "run_log_path": "/tmp/log",
+        },
+    )
+    def test_daily_report_surfaces_stale_report_detail(self, _mock_pipe_r, _mock_pipe_s, _mock_latest, test_app):
+        response = test_app.get("/api/daily-report")
+        data = response.json()
+
+        assert response.status_code == 200
+        assert "detail" in data
+        assert "Report output is stale" in str(data["detail"])
+
 
 class TestMarketSummaryEndpoint:
     def test_market_summary_returns_200(self, test_app):
