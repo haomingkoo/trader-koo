@@ -395,6 +395,46 @@ def trigger_update(
     }
 
 
+@router.post("/api/admin/force-cancel-run")
+@require_admin_auth
+def force_cancel_run(request: Request) -> dict[str, Any]:
+    """Force-cancel all running ingest runs by marking them as failed.
+
+    Use when a run is stuck and the automatic stale-detection timeout
+    (75 min) hasn't expired yet.
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT run_id, started_ts FROM ingest_runs WHERE status = 'running'"
+        ).fetchall()
+        if not rows:
+            return {"ok": True, "message": "No running ingest runs found", "cancelled": 0}
+        now_iso = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        cancelled = []
+        for row in rows:
+            run_id = row["run_id"]
+            conn.execute(
+                """
+                UPDATE ingest_runs
+                SET status = 'failed', finished_ts = ?, error_message = 'force-cancelled via admin API'
+                WHERE run_id = ?
+                """,
+                (now_iso, run_id),
+            )
+            cancelled.append(run_id)
+        conn.commit()
+        LOG.warning("Force-cancelled %d running ingest run(s): %s", len(cancelled), cancelled)
+        return {
+            "ok": True,
+            "message": f"Force-cancelled {len(cancelled)} running run(s)",
+            "cancelled": len(cancelled),
+            "run_ids": cancelled,
+        }
+    finally:
+        conn.close()
+
+
 @router.post("/api/admin/run-yolo-seed")
 @require_admin_auth
 def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
