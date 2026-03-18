@@ -286,6 +286,28 @@ function formatPublished(ts: string | null): string {
   return compact;
 }
 
+function noteLooksBlocked(note: string | null | undefined): boolean {
+  const raw = String(note ?? "").toLowerCase();
+  return raw.includes("403") || raw.includes("blocked") || raw.includes("forbidden");
+}
+
+function statusBadgeTone(
+  available: boolean,
+  count: number,
+  note: string | null | undefined,
+): { label: string; color: string; bg: string } {
+  if (available && count > 0) {
+    return { label: "Live", color: "var(--green)", bg: "rgba(34,197,94,0.12)" };
+  }
+  if (noteLooksBlocked(note)) {
+    return { label: "Blocked", color: "var(--red)", bg: "rgba(248,113,113,0.12)" };
+  }
+  if (count === 0) {
+    return { label: "No data", color: "var(--amber)", bg: "rgba(245,158,11,0.12)" };
+  }
+  return { label: "Unavailable", color: "var(--muted)", bg: "rgba(148,163,184,0.12)" };
+}
+
 function NewsPulseCard({
   news,
   blendedScore,
@@ -300,6 +322,7 @@ function NewsPulseCard({
   blendedSummary: string | null;
 }) {
   const scoreColor = blendedColor ?? "var(--accent)";
+  const status = statusBadgeTone(news.available, news.article_count, news.note);
 
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg)]/55 p-3">
@@ -309,8 +332,17 @@ function NewsPulseCard({
             External News Pulse
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">
+            <span
+              className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: news.available ? "var(--accent)" : "var(--muted)" }}
+            >
               {news.provider.replaceAll("_", " ")}
+            </span>
+            <span
+              className="rounded-full border border-[var(--line)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: status.color, backgroundColor: status.bg }}
+            >
+              {status.label}
             </span>
             <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] text-[var(--muted)]">
               {news.lookback_hours}h window
@@ -331,6 +363,12 @@ function NewsPulseCard({
       </div>
 
       <p className="mt-3 text-sm text-[var(--muted)]">{news.note}</p>
+
+      {!news.available && news.headlines.length === 0 ? (
+        <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)]/70 p-3 text-xs text-[var(--muted)]">
+          No live news headlines are being blended right now. The internal composite is still real, but this overlay is currently unavailable.
+        </div>
+      ) : null}
 
       {news.available && blendedScore !== null && blendedLabel && blendedSummary ? (
         <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)]/80 p-3">
@@ -388,6 +426,8 @@ function NewsPulseCard({
 }
 
 function SocialPulseCard({ social }: { social: SocialSentiment }) {
+  const status = statusBadgeTone(social.available, social.post_count, social.note);
+
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-[var(--bg)]/55 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -396,8 +436,17 @@ function SocialPulseCard({ social }: { social: SocialSentiment }) {
             Reddit Social Pulse
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">
+            <span
+              className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: social.available ? "var(--accent)" : "var(--muted)" }}
+            >
               {social.provider.replaceAll("_", " ")}
+            </span>
+            <span
+              className="rounded-full border border-[var(--line)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: status.color, backgroundColor: status.bg }}
+            >
+              {status.label}
             </span>
             <span className="rounded-full border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[10px] text-[var(--muted)]">
               {social.lookback_hours}h window
@@ -418,6 +467,12 @@ function SocialPulseCard({ social }: { social: SocialSentiment }) {
       </div>
 
       <p className="mt-3 text-sm text-[var(--muted)]">{social.note}</p>
+
+      {!social.available && social.posts.length === 0 ? (
+        <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)]/70 p-3 text-xs text-[var(--muted)]">
+          No Reddit posts were ingested for the current window. If the provider is blocked or rate-limited, this overlay should be treated as unavailable rather than neutral.
+        </div>
+      ) : null}
 
       <div className="mt-3 grid gap-2 sm:grid-cols-3 text-xs">
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/75 p-3">
@@ -551,10 +606,10 @@ export default function FearGreedGauge() {
                 Internal Composite
               </span>
               <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                {uses_social_sentiment ? "Reddit Pulse Live" : "Social Pulse Optional"}
+                {uses_social_sentiment ? "Reddit Pulse Live" : noteLooksBlocked(social_sentiment.note) ? "Reddit Pulse Blocked" : "Reddit Pulse Unavailable"}
               </span>
               <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                {external_news.available ? "News Source Live" : "News Source Optional"}
+                {external_news.available ? "News Source Live" : external_news.article_count > 0 ? "News Source Cached" : "News Source Unavailable"}
               </span>
               <span className="rounded-full border border-[var(--line)] bg-[var(--bg)]/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
                 {methodology_meta.version}

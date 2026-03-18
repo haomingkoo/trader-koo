@@ -45,6 +45,17 @@ DEFAULT_REQUIRE_FULL_DATASET = os.getenv("TRADER_KOO_REQUIRE_FULL_DATASET", "0")
     "yes",
     "on",
 }
+DEFAULT_SOFT_FAIL_TICKERS = (
+    "^VIX",
+    "^GSPC",
+    "^DJI",
+    "^TNX",
+    "SVIX",
+    "^VIX3M",
+    "^VIX6M",
+    "VIX3M",
+    "VIX6M",
+)
 LOG = logging.getLogger("trader_koo.ingest")
 
 
@@ -165,6 +176,13 @@ def to_percent(value: object) -> Optional[float]:
 
 def parse_tickers(raw: str) -> list[str]:
     return [x.strip().upper() for x in raw.split(",") if x.strip()]
+
+
+def soft_fail_tickers() -> set[str]:
+    raw = str(os.getenv("TRADER_KOO_SOFT_FAIL_TICKERS", "")).strip()
+    if raw:
+        return set(parse_tickers(raw))
+    return {ticker.upper() for ticker in DEFAULT_SOFT_FAIL_TICKERS}
 
 
 def get_sp500_tickers() -> list[str]:
@@ -1051,19 +1069,53 @@ def run(args: argparse.Namespace) -> None:
         if market_state.get("market_data_state") in {"stale_or_source_delay", "no_price_data", "invalid_latest_price_date"}:
             LOG.warning("run_id=%s market_data_attention state=%s", run_id, market_state.get("market_data_state"))
 
-        if fail > 0 and args.require_full_dataset:
-            failed_preview = ",".join(sorted(final_errors.keys())[:25])
-            if len(final_errors) > 25:
+        soft_fail_set = soft_fail_tickers()
+        soft_fail_errors = {
+            ticker: err for ticker, err in final_errors.items() if str(ticker or "").upper() in soft_fail_set
+        }
+        blocking_errors = {
+            ticker: err for ticker, err in final_errors.items() if str(ticker or "").upper() not in soft_fail_set
+        }
+        if soft_fail_errors:
+            soft_preview = ",".join(sorted(soft_fail_errors.keys())[:25])
+            if len(soft_fail_errors) > 25:
+                soft_preview += ",..."
+            LOG.warning(
+                "run_id=%s soft_fail_context_tickers=%s count=%s",
+                run_id,
+                soft_preview,
+                len(soft_fail_errors),
+            )
+
+        if blocking_errors and args.require_full_dataset:
+            failed_preview = ",".join(sorted(blocking_errors.keys())[:25])
+            if len(blocking_errors) > 25:
                 failed_preview += ",..."
             raise RuntimeError(
                 (
                     "require_full_dataset enabled: "
-                    f"{fail}/{len(tickers)} ticker(s) failed after {max_passes} pass(es). "
+                    f"{len(blocking_errors)}/{len(tickers)} blocking ticker(s) failed after {max_passes} pass(es). "
                     f"failed_tickers={failed_preview}"
                 )
             )
 
         final_status = "ok" if fail == 0 else ("failed" if ok == 0 else "partial_failed")
+        final_error_message: str | None = None
+        if fail > 0:
+            failed_preview = ",".join(sorted(final_errors.keys())[:25])
+            if len(final_errors) > 25:
+                failed_preview += ",..."
+            if soft_fail_errors and not blocking_errors:
+                final_error_message = (
+                    "soft_fail_context_only: "
+                    f"{fail}/{len(tickers)} ticker(s) failed after {max_passes} pass(es). "
+                    f"failed_tickers={failed_preview}"
+                )
+            else:
+                final_error_message = (
+                    f"{fail}/{len(tickers)} ticker(s) failed after {max_passes} pass(es). "
+                    f"failed_tickers={failed_preview}"
+                )
         finish_run(
             conn,
             run_id=run_id,
@@ -1071,6 +1123,7 @@ def run(args: argparse.Namespace) -> None:
             status=final_status,
             tickers_ok=ok,
             tickers_failed=fail,
+            error_message=final_error_message,
         )
         LOG.info(
             "run_id=%s finished status=%s ok=%s failed=%s passes_used=%s/%s",

@@ -825,6 +825,11 @@ function SetupEvaluationPanel({
         Setup Evaluation
       </h3>
 
+      <p className="text-xs text-[var(--muted)]">
+        Historical calibration built from archived setup calls and the later price outcomes that followed their
+        validity windows. These figures are computed from stored report snapshots and subsequent closes, not manually keyed in.
+      </p>
+
       {/* Overall KPIs */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <GlassCard
@@ -987,6 +992,7 @@ export default function ReportPage() {
     setup_quality_top: [],
     setup_evaluation: {},
   };
+  const reportDetail = typeof data.detail === "string" && data.detail.trim().length > 0 ? data.detail.trim() : null;
   const risk = latest.risk_filters ?? {
     trade_mode: "normal",
     hard_blocks: 0,
@@ -1013,6 +1019,12 @@ export default function ReportPage() {
 
       {/* Pipeline status inline */}
       <PipelineStatusInline />
+
+      {reportDetail && (
+        <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/8 px-4 py-3 text-xs text-[var(--amber)]">
+          <strong>Report status:</strong> {reportDetail}
+        </div>
+      )}
 
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
 

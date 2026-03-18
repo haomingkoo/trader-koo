@@ -24,6 +24,10 @@ function setAdminKey(key: string): void {
   }
 }
 
+function hasAdminKey(): boolean {
+  return getAdminKey().trim().length > 0;
+}
+
 type PipelineState = "idle" | "running" | "completed" | "warning" | "error";
 
 function derivePipelineState(data: PipelineStatus | undefined): PipelineState {
@@ -35,6 +39,7 @@ function derivePipelineState(data: PipelineStatus | undefined): PipelineState {
   if (run) {
     const status = (run.status ?? "").toLowerCase();
     if (status === "failed" || status === "error") return "error";
+    if (status === "partial_failed" || status === "warning") return "warning";
     if (status === "completed" || status === "success" || status === "ok") {
       const failed = run.tickers_failed ?? 0;
       const ok = run.tickers_ok ?? 0;
@@ -198,7 +203,11 @@ function StatusSection({ data, state }: { data: PipelineStatus; state: PipelineS
   const tickersOk = run?.tickers_ok ?? 0;
   const tickersFailed = run?.tickers_failed ?? 0;
   const tickersTotal = run?.tickers_total ?? 0;
-  const failedNames = parseFailedTickers(data.errors?.latest_error_message);
+  const issueMessage =
+    (typeof run?.error_message === "string" && run.error_message.length > 0
+      ? run.error_message
+      : data.errors?.latest_error_message) ?? null;
+  const failedNames = parseFailedTickers(issueMessage);
 
   return (
     <div className="space-y-3">
@@ -254,9 +263,9 @@ function StatusSection({ data, state }: { data: PipelineStatus; state: PipelineS
       )}
 
       {/* Error message */}
-      {data.errors?.latest_error_message && state !== "completed" && (
+      {issueMessage && state !== "completed" && (
         <div className="rounded-md border border-[var(--red)]/30 bg-[var(--red)]/5 px-3 py-2 text-xs text-[var(--red)]">
-          {data.errors.latest_error_message.slice(0, 300)}
+          {issueMessage.slice(0, 300)}
           {data.errors.latest_error_ts && (
             <span className="ml-2 text-[var(--muted)]">
               ({formatTimestamp(data.errors.latest_error_ts)})
@@ -363,6 +372,7 @@ export default function PipelineOpsPanel() {
 
   const state = derivePipelineState(data);
   const isRunning = state === "running";
+  const adminUnlocked = hasAdminKey();
 
   if (isLoading || !data) {
     return (
@@ -382,17 +392,28 @@ export default function PipelineOpsPanel() {
       <StatusSection data={data} state={state} />
 
       {/* Action buttons */}
-      <div className="flex flex-wrap gap-3">
-        <ActionButton label="Run Full Update" mode="full" disabled={isRunning} />
-        <ActionButton label="Rerun YOLO + Report" mode="yolo" disabled={isRunning} />
-        <ActionButton label="Rebuild Report Only" mode="report" disabled={isRunning} />
-        <button
-          onClick={() => queryClient.invalidateQueries({ queryKey: ["pipeline-status"] })}
-          className="rounded-md border border-[var(--line)] bg-[var(--panel-hover)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)]"
-        >
-          Refresh Status
-        </button>
-      </div>
+      {adminUnlocked ? (
+        <div className="space-y-2">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+            Admin Controls
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <ActionButton label="Run Full Update" mode="full" disabled={isRunning} />
+            <ActionButton label="Rerun YOLO + Report" mode="yolo" disabled={isRunning} />
+            <ActionButton label="Rebuild Report Only" mode="report" disabled={isRunning} />
+            <button
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["pipeline-status"] })}
+              className="rounded-md border border-[var(--line)] bg-[var(--panel-hover)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)]"
+            >
+              Refresh Status
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-md border border-[var(--line)] bg-[var(--bg)]/45 px-3 py-2 text-xs text-[var(--muted)]">
+          Status auto-refreshes every 30 seconds. Admin actions stay hidden until a valid API key is set locally.
+        </div>
+      )}
 
       {/* Recent Events */}
       <div>
@@ -409,7 +430,6 @@ export default function PipelineOpsPanel() {
 
 export function PipelineStatusInline() {
   const { data, isLoading } = usePipelineStatus();
-  const queryClient = useQueryClient();
 
   const state = derivePipelineState(data);
 
@@ -417,7 +437,10 @@ export function PipelineStatusInline() {
     return null;
   }
 
-  const errorMsg = data.errors?.latest_error_message;
+  const errorMsg =
+    (typeof data.latest_run?.error_message === "string" && data.latest_run.error_message.length > 0
+      ? data.latest_run.error_message
+      : data.errors?.latest_error_message) ?? null;
 
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-2">
@@ -435,12 +458,14 @@ export function PipelineStatusInline() {
           {errorMsg.slice(0, 100)}{errorMsg.length > 100 ? "\u2026" : ""}
         </span>
       )}
-      <button
-        onClick={() => queryClient.invalidateQueries({ queryKey: ["pipeline-status"] })}
-        className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
-      >
-        Refresh
-      </button>
+      {data.latest_data?.price_date && (
+        <span className="text-xs text-[var(--muted)]">
+          Raw DB price date: {data.latest_data.price_date}
+        </span>
+      )}
+      <span className="ml-auto text-[10px] uppercase tracking-wider text-[var(--muted)]">
+        Auto-refreshing
+      </span>
     </div>
   );
 }

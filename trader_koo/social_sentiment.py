@@ -194,6 +194,7 @@ def _empty_social_payload(
     now_utc: dt.datetime,
     subreddits: list[str],
     note: str,
+    source_breakdown: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "provider": "reddit_public_json",
@@ -211,7 +212,7 @@ def _empty_social_payload(
         "bullish_terms_total": 0,
         "bearish_terms_total": 0,
         "posts": [],
-        "source_breakdown": [],
+        "source_breakdown": source_breakdown or [],
     }
 
 
@@ -401,6 +402,21 @@ def _fetch_reddit_social_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
         )
 
     if weight_total <= 0 or not normalized_posts:
+        breakdown_errors = [
+            f"r/{item.get('subreddit')}: {item.get('note')}"
+            for item in breakdown
+            if isinstance(item, dict) and str(item.get("note") or "").strip()
+        ]
+        if breakdown_errors and len(breakdown_errors) == len(breakdown):
+            return _empty_social_payload(
+                now_utc=now_utc,
+                subreddits=subreddits,
+                note=(
+                    "Reddit public JSON requests failed for every configured subreddit. "
+                    + " | ".join(breakdown_errors[:3])
+                ),
+                source_breakdown=breakdown,
+            )
         return _empty_social_payload(
             now_utc=now_utc,
             subreddits=subreddits,
@@ -408,6 +424,7 @@ def _fetch_reddit_social_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
                 "No Reddit posts passed the archive-style subreddit, engagement, "
                 "and keyword filters for the current window."
             ),
+            source_breakdown=breakdown,
         )
 
     raw_score = weighted_total / weight_total
