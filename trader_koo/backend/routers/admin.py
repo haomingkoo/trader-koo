@@ -501,6 +501,39 @@ def ml_score_universe(
         return {"ok": False, "error": str(exc)}
 
 
+@router.post("/api/admin/run-backtest")
+@require_admin_auth
+def run_backtest_endpoint(
+    request: Request,
+    start_date: str = Query(default="2025-06-01"),
+    end_date: str = Query(default=None),
+    max_positions: int = Query(default=5),
+    min_win_prob: float = Query(default=0.55),
+) -> dict[str, Any]:
+    """Run a walk-forward backtest of the ML model vs SPY.
+
+    This retrains a model at each rebalance point using only past data,
+    then simulates trades forward.  May take several minutes.
+    """
+    try:
+        from trader_koo.ml.backtest import run_backtest
+
+        conn = get_conn()
+        try:
+            return run_backtest(
+                conn,
+                start_date=start_date,
+                end_date=end_date,
+                max_positions=max_positions,
+                min_win_prob=min_win_prob,
+            )
+        finally:
+            conn.close()
+    except Exception as exc:
+        LOG.exception("Backtest failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
 @router.post("/api/admin/run-yolo-seed")
 @require_admin_auth
 def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
