@@ -194,7 +194,8 @@ def train_walk_forward(
         end_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
     LOG.info("Building full dataset from %s to %s", start_date, end_date)
-    dataset = build_dataset(conn, start_date=start_date, end_date=end_date)
+    # Sample every 2 trading days for denser data (was 5 — too sparse)
+    dataset = build_dataset(conn, start_date=start_date, end_date=end_date, sample_frequency=2)
     if dataset.empty or len(dataset) < 100:
         return {
             "ok": False,

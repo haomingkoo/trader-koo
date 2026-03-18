@@ -64,6 +64,15 @@ MACRO_FEATURE_COLUMNS = [
     # SVIX (inverse VIX — vol-of-vol proxy)
     "svix_ret_5d",
     "svix_vix_correlation_21d",
+    # Commodities (inflation/energy/risk proxies)
+    "gold_ret_5d",
+    "gold_ret_21d",
+    "oil_ret_5d",
+    "oil_ret_21d",
+    # Risk appetite
+    "em_ret_5d",       # emerging markets
+    "smallcap_ret_5d", # Russell 2000
+    "usd_ret_5d",      # dollar strength
 ]
 
 
@@ -202,5 +211,34 @@ def extract_macro_features(
             common = vix_ret.index.intersection(svix_ret.index)
             if len(common) >= 10:
                 result["svix_vix_correlation_21d"] = float(vix_ret.loc[common].corr(svix_ret.loc[common]))
+
+    # --- Gold (GLD) ---
+    gld = _fetch_ticker_series(conn, "GLD", start, as_of_date)
+    if len(gld) >= 6:
+        c = gld["close"]
+        result["gold_ret_5d"] = float(c.iloc[-1] / c.iloc[-6] - 1)
+        result["gold_ret_21d"] = float(c.iloc[-1] / c.iloc[-22] - 1) if len(gld) > 21 else np.nan
+
+    # --- Crude Oil (USO) ---
+    uso = _fetch_ticker_series(conn, "USO", start, as_of_date)
+    if len(uso) >= 6:
+        c = uso["close"]
+        result["oil_ret_5d"] = float(c.iloc[-1] / c.iloc[-6] - 1)
+        result["oil_ret_21d"] = float(c.iloc[-1] / c.iloc[-22] - 1) if len(uso) > 21 else np.nan
+
+    # --- Emerging Markets (EEM) ---
+    eem = _fetch_ticker_series(conn, "EEM", start, as_of_date)
+    if len(eem) >= 6:
+        result["em_ret_5d"] = float(eem["close"].iloc[-1] / eem["close"].iloc[-6] - 1)
+
+    # --- Small-cap / Russell 2000 (IWM) ---
+    iwm = _fetch_ticker_series(conn, "IWM", start, as_of_date)
+    if len(iwm) >= 6:
+        result["smallcap_ret_5d"] = float(iwm["close"].iloc[-1] / iwm["close"].iloc[-6] - 1)
+
+    # --- USD strength (UUP) ---
+    uup = _fetch_ticker_series(conn, "UUP", start, as_of_date)
+    if len(uup) >= 6:
+        result["usd_ret_5d"] = float(uup["close"].iloc[-1] / uup["close"].iloc[-6] - 1)
 
     return result
