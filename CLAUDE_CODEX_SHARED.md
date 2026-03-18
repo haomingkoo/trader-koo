@@ -4,7 +4,7 @@ This file is used by both Claude Code and Codex to communicate about ongoing wor
 avoid conflicts, and hand off tasks. Both tools should read this before starting work
 and update it after completing tasks.
 
-Last updated: 2026-03-18 by Claude (pipeline data health investigation + fixes)
+Last updated: 2026-03-18 by Claude (versioned bot architecture design + pipeline ops)
 
 ---
 
@@ -216,6 +216,244 @@ Last updated: 2026-03-18 by Claude (pipeline data health investigation + fixes)
 - `components/sentiment/NewsPulseCard.tsx`
 - `components/sentiment/SocialPulseCard.tsx`
 - Paper-trade backend split already complete in `trader_koo/paper_trade/`
+
+---
+
+## Versioned Paper-Trading Bot Architecture (2026-03-18)
+
+### What "Bot Version" Means
+
+A bot version is a **frozen strategy bundle** — the full snapshot of everything that affects trade selection and sizing. It is NOT just a model or just a config. It is the combination:
+
+| Layer | What it contains | Example change that bumps version |
+|-------|-----------------|-----------------------------------|
+| Feature set | What inputs the bot reads | Adding VIX-at-entry, adding HMM regime |
+| Decision policy | Gating rules (qualifying tiers, min score, min R) | Changing min_tier from B to A-only |
+| Scoring model | How setups are ranked (rules today, ML later) | Switching from score-rank to logistic regression |
+| Sizing policy | Position allocation + haircuts | Changing caution_scale from 0.65 to 0.50 |
+| Risk management | Stop/target computation, expiry, R-gate | Changing stop_atr_mult from 1.5 to 2.0 |
+
+**Version format**: `v{major}.{minor}.{patch}`
+- Major: structural change (new model type, new decision stage)
+- Minor: parameter change (new thresholds, new haircuts)
+- Patch: bug fix, cosmetic
+
+**Current version**: `v1.0.0` (rules-based, the existing `paper-trade-eval-v1`)
+
+### Separation of Concerns
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  DETERMINISTIC RULES                 │
+│  (config-driven, auditable, never auto-tuned)        │
+│                                                      │
+│  • Qualifying tiers (A/B)                            │
+│  • Min score (60), min R-multiple (1.5)              │
+│  • Max open positions (20)                           │
+│  • ATR-based stop/target computation                 │
+│  • Position sizing by tier + haircuts                │
+│  • Expiry (10 days)                                  │
+└──────────────────┬──────────────────────────────────┘
+                   │ filters setups
+┌──────────────────▼──────────────────────────────────┐
+│              LEARNED RANKING / SCORING               │
+│  (data-driven, versioned, offline-trained)           │
+│                                                      │
+│  Phase 1 (now): Score-based rank, no ML              │
+│  Phase 2: Family-edge estimator from closed trades   │
+│  Phase 3: Logistic/GBM model on features:            │
+│    setup_family, tier, score, ATR, debate_agreement,  │
+│    vix_at_entry, market_breadth, hmm_regime           │
+│  Target: P(trade wins) → rank by expected edge       │
+└──────────────────┬──────────────────────────────────┘
+                   │ ranks approved setups
+┌──────────────────▼──────────────────────────────────┐
+│              EXECUTION POLICY                        │
+│  (frozen per version, tuned between versions)        │
+│                                                      │
+│  • Position sizing (tier-based + score boost)        │
+│  • Entry: market-on-close (current)                  │
+│  • Exit: stop/target/expiry (current)                │
+│  • Future: trailing stops, partial exits              │
+└──────────────────┬──────────────────────────────────┘
+                   │ trades execute, lifecycle tracked
+┌──────────────────▼──────────────────────────────────┐
+│         POST-TRADE CRITIQUE / FEEDBACK               │
+│  (automated, generates promotion candidates)         │
+│                                                      │
+│  • Per-family win rate (rolling 60-day)              │
+│  • Per-regime performance                            │
+│  • Version comparison (A/B)                          │
+│  • Degradation detection                             │
+│  • Promotion recommendations                         │
+└─────────────────────────────────────────────────────┘
+```
+
+### Data Model
+
+#### New table: `bot_versions`
+
+```sql
+CREATE TABLE bot_versions (
+    version_id TEXT PRIMARY KEY,           -- "v1.0.0"
+    created_ts TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',  -- active | shadow | retired
+    config_json TEXT NOT NULL,             -- full PaperTradeConfig as JSON
+    feature_set_version TEXT,              -- "features-v1"
+    model_type TEXT DEFAULT 'rules',       -- rules | logistic | gbm
+    model_artifact_path TEXT,              -- path to saved weights (Phase 3+)
+    training_sample_size INTEGER,
+    training_date_range TEXT,
+    promotion_metrics_json TEXT,           -- metrics at time of promotion
+    promoted_from TEXT,                    -- previous version_id
+    promotion_reason TEXT,
+    notes TEXT
+);
+```
+
+#### Additions to `paper_trades` table
+
+```sql
+ALTER TABLE paper_trades ADD COLUMN bot_version TEXT;          -- "v1.0.0"
+ALTER TABLE paper_trades ADD COLUMN regime_at_entry TEXT;      -- "bull_low_vol"
+ALTER TABLE paper_trades ADD COLUMN vix_at_entry REAL;
+ALTER TABLE paper_trades ADD COLUMN market_breadth_at_entry REAL;
+ALTER TABLE paper_trades ADD COLUMN hmm_regime_at_entry TEXT;
+ALTER TABLE paper_trades ADD COLUMN predicted_win_prob REAL;   -- ML score (Phase 2+)
+```
+
+#### New table: `bot_family_edge` (rolling performance by family)
+
+```sql
+CREATE TABLE bot_family_edge (
+    snapshot_date TEXT NOT NULL,
+    bot_version TEXT NOT NULL,
+    setup_family TEXT NOT NULL,
+    direction TEXT NOT NULL,              -- long | short
+    regime TEXT,                          -- bull | bear | neutral | NULL (all)
+    trade_count INTEGER NOT NULL,
+    win_rate_pct REAL,
+    avg_r_multiple REAL,
+    expectancy_pct REAL,
+    sample_window_days INTEGER,
+    PRIMARY KEY (snapshot_date, bot_version, setup_family, direction, regime)
+);
+```
+
+### Minimum Trade Log (what MUST be recorded per trade)
+
+Already stored (good):
+- `ticker`, `direction`, `entry_price`, `entry_date`
+- `stop_loss`, `target_price`, `atr_at_entry`
+- `exit_price`, `exit_date`, `exit_reason`
+- `pnl_pct`, `r_multiple`, `expected_r_multiple`
+- `setup_family`, `setup_tier`, `score`, `actionability`
+- `debate_agreement_score`, `yolo_pattern`, `yolo_recency`
+- `decision_state`, `analyst_stage`, `debate_stage`, `risk_stage`
+- `position_size_pct`, `risk_budget_pct`
+- `high_water_mark`, `low_water_mark`
+
+**Must add** (for learning):
+- `bot_version` — which policy created this trade
+- `vix_at_entry` — market volatility context
+- `regime_at_entry` — bull/bear/neutral (from HMM or breadth)
+- `market_breadth_at_entry` — % advancers
+- `hmm_regime_at_entry` — HMM state at entry
+
+**Nice to add later** (Phase 2+):
+- `predicted_win_prob` — model's confidence
+- `feature_vector_json` — full feature snapshot for replay
+
+### Honest Performance Measurement
+
+**Core metrics** (already computed, keep):
+- Win rate, expectancy (avg PnL), avg R-multiple, profit factor, max drawdown, Sharpe
+
+**Add for learning**:
+- **By family × regime**: which setups work in which market conditions
+- **By VIX bucket**: low (<15), normal (15-25), high (>25)
+- **By debate confidence**: high agreement (>80%) vs. contested (<60%)
+- **Rolling 30-day expectancy**: detect degradation vs. noise
+- **Turnover**: trades/week — high turnover amplifies noise
+- **Version comparison**: same metrics, side-by-side, for A vs. B policy
+
+**Overfitting detection**:
+- Minimum 50 closed trades before trusting any metric
+- Compare rolling 30-day to all-time — persistent divergence = regime shift
+- New policy must beat current by ≥ 1 standard error (not just point estimate)
+- Track if a family edge degrades after we start trading it (adverse selection)
+
+### What Can Auto-Tune vs. Manual Promotion
+
+| Aspect | Auto-tune OK | Manual promotion required |
+|--------|-------------|--------------------------|
+| Caution haircut scale (within ±20%) | ✅ | |
+| Min score threshold (within ±10) | ✅ | |
+| Expiry days (within ±3) | ✅ | |
+| Family-level position override | ✅ | |
+| Qualifying tier change | | ✅ |
+| New model type (rules → ML) | | ✅ |
+| New feature additions | | ✅ |
+| Structural pipeline change | | ✅ |
+| R-multiple gate change | | ✅ |
+
+### Phased Roadmap
+
+#### Phase 1: NOW — Versioned Rules (Codex + Claude)
+- Add `bot_versions` table + schema migration
+- Add `bot_version`, `vix_at_entry`, `regime_at_entry` columns to `paper_trades`
+- Snapshot current config as `v1.0.0` in `bot_versions`
+- Tag all new trades with `bot_version`
+- Add `vix_at_entry` and `regime_at_entry` from existing HMM/VIX data at trade creation time
+- **Frontend**: version badge in BotOverview, family edge breakdown table
+- **Backend**: `compare_versions(v1, v2)` function
+
+#### Phase 2: NEXT — Family Edge Learning
+- Compute rolling family-level win rate (60-day window) nightly
+- Store in `bot_family_edge` table
+- Use family edge to rank setups: families with proven edge get priority
+- Families with negative edge get flagged for demotion
+- **Frontend**: family edge heatmap (family × regime → color), rolling performance chart
+- **Backend**: `compute_family_edges()` nightly, `suggest_policy_adjustments()` from edges
+
+#### Phase 3: LATER — ML Scoring + Shadow Mode
+- Train logistic regression on closed trades (features → win probability)
+- Run in shadow mode: ML policy paper-trades alongside rules policy, both recorded
+- Compare after 50+ closed trades per policy
+- **Frontend**: shadow vs. active comparison panel, promotion candidate display
+- **Backend**: `train_scoring_model()`, `shadow_evaluate()`, `promote_version()`
+
+#### Phase 4: EVENTUALLY — Promotion Gates + Auto-Tuning
+- Automated A/B comparison with statistical significance testing
+- Auto-tune haircuts and thresholds within bounds
+- Manual approval gate for major changes
+- Graduated rollout: shadow → 25% allocation → 50% → full
+
+### UI Recommendations (for PaperTradePage)
+
+**Add to existing page**:
+1. **Bot version badge** — `v1.0.0 (rules)` with status indicator
+2. **Version history** — collapsible table showing all versions, when promoted, why
+3. **Family edge table** — setup_family × direction → win rate, R, trade count (color-coded)
+4. **Rolling performance chart** — 30-day rolling expectancy line, baseline at 0
+5. **Regime breakdown** — performance sliced by VIX bucket + HMM regime
+6. **Degradation alerts** — if 30-day expectancy drops below historical by >1σ
+
+### Who Builds What Next
+
+#### Codex (backend + frontend, safe parallel lane)
+1. `bot_versions` table creation in `schema.py`
+2. `ALTER TABLE paper_trades ADD COLUMN` migrations for `bot_version`, `vix_at_entry`, `regime_at_entry`, `hmm_regime_at_entry`
+3. Populate `vix_at_entry` and `regime_at_entry` at trade creation time (read from existing `^VIX` data + HMM model)
+4. Snapshot current config as `v1.0.0` in startup hook
+5. `compare_versions()` in `summary.py`
+6. Frontend: version badge, family edge table, rolling performance chart
+
+#### Claude (architecture review, ML pipeline, shadow mode)
+1. Design the `compute_family_edges()` nightly job
+2. Design the ML feature vector for Phase 2 scoring
+3. Design shadow-mode trade tagging
+4. Review Codex's schema migrations before they land
 
 ---
 
