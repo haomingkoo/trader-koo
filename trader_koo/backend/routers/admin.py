@@ -435,6 +435,10 @@ def force_cancel_run(request: Request) -> dict[str, Any]:
         conn.close()
 
 
+_ml_train_thread: threading.Thread | None = None
+_ml_train_result: dict[str, Any] | None = None
+
+
 @router.post("/api/admin/train-ml-model")
 @require_admin_auth
 def train_ml_model(
@@ -442,40 +446,61 @@ def train_ml_model(
     start_date: str = Query(default="2025-06-01"),
     end_date: str = Query(default=None),
 ) -> dict[str, Any]:
-    """Train the swing-trade LightGBM model with walk-forward validation.
+    """Train the swing-trade LightGBM model in a background thread.
 
-    This runs synchronously and may take 1-5 minutes depending on data volume.
-    The trained model is saved to /data/models/ and will be used by the
-    paper trade scorer for future setup evaluations.
+    The model trains asynchronously because it can take several minutes.
+    Use GET /api/admin/ml-model-status to check progress and results.
     """
-    try:
-        from trader_koo.ml.trainer import train_walk_forward
+    global _ml_train_thread, _ml_train_result
 
-        conn = get_conn()
+    if _ml_train_thread and _ml_train_thread.is_alive():
+        return {"ok": False, "message": "Training already in progress — check /api/admin/ml-model-status"}
+
+    def _run_training() -> None:
+        global _ml_train_result
         try:
-            result = train_walk_forward(
-                conn,
-                start_date=start_date,
-                end_date=end_date,
-            )
-            return result
-        finally:
-            conn.close()
-    except Exception as exc:
-        LOG.exception("ML model training failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+            from trader_koo.ml.trainer import train_walk_forward
+
+            conn = get_conn()
+            try:
+                _ml_train_result = train_walk_forward(
+                    conn,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            finally:
+                conn.close()
+        except Exception as exc:
+            LOG.exception("ML model training failed: %s", exc)
+            _ml_train_result = {"ok": False, "error": str(exc)}
+
+    _ml_train_result = {"ok": False, "status": "training", "message": "Training started..."}
+    _ml_train_thread = threading.Thread(target=_run_training, daemon=True)
+    _ml_train_thread.start()
+
+    return {
+        "ok": True,
+        "message": f"Training started in background (start_date={start_date}). Check /api/admin/ml-model-status for results.",
+        "start_date": start_date,
+        "end_date": end_date,
+    }
 
 
 @router.get("/api/admin/ml-model-status")
 @require_admin_auth
 def ml_model_status(request: Request) -> dict[str, Any]:
-    """Return the current ML model status and metrics."""
+    """Return the current ML model status, training progress, and metrics."""
+    training_active = bool(_ml_train_thread and _ml_train_thread.is_alive())
     try:
         from trader_koo.ml.scorer import model_status
 
-        return model_status()
+        status = model_status()
+        status["training_active"] = training_active
+        if _ml_train_result:
+            status["last_train_result"] = _ml_train_result
+        return status
     except Exception as exc:
-        return {"loaded": False, "error": str(exc)}
+        return {"loaded": False, "training_active": training_active, "error": str(exc)}
 
 
 @router.get("/api/admin/ml-score-universe")
@@ -501,6 +526,10 @@ def ml_score_universe(
         return {"ok": False, "error": str(exc)}
 
 
+_backtest_thread: threading.Thread | None = None
+_backtest_result: dict[str, Any] | None = None
+
+
 @router.post("/api/admin/run-backtest")
 @require_admin_auth
 def run_backtest_endpoint(
@@ -510,28 +539,47 @@ def run_backtest_endpoint(
     max_positions: int = Query(default=5),
     min_win_prob: float = Query(default=0.55),
 ) -> dict[str, Any]:
-    """Run a walk-forward backtest of the ML model vs SPY.
+    """Run a walk-forward backtest in background. Check /api/admin/backtest-result."""
+    global _backtest_thread, _backtest_result
 
-    This retrains a model at each rebalance point using only past data,
-    then simulates trades forward.  May take several minutes.
-    """
-    try:
-        from trader_koo.ml.backtest import run_backtest
+    if _backtest_thread and _backtest_thread.is_alive():
+        return {"ok": False, "message": "Backtest already running — check /api/admin/backtest-result"}
 
-        conn = get_conn()
+    def _run() -> None:
+        global _backtest_result
         try:
-            return run_backtest(
-                conn,
-                start_date=start_date,
-                end_date=end_date,
-                max_positions=max_positions,
-                min_win_prob=min_win_prob,
-            )
-        finally:
-            conn.close()
-    except Exception as exc:
-        LOG.exception("Backtest failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+            from trader_koo.ml.backtest import run_backtest
+
+            conn = get_conn()
+            try:
+                _backtest_result = run_backtest(
+                    conn,
+                    start_date=start_date,
+                    end_date=end_date,
+                    max_positions=max_positions,
+                    min_win_prob=min_win_prob,
+                )
+            finally:
+                conn.close()
+        except Exception as exc:
+            LOG.exception("Backtest failed: %s", exc)
+            _backtest_result = {"ok": False, "error": str(exc)}
+
+    _backtest_result = {"ok": False, "status": "running", "message": "Backtest started..."}
+    _backtest_thread = threading.Thread(target=_run, daemon=True)
+    _backtest_thread.start()
+
+    return {"ok": True, "message": "Backtest started in background. Check /api/admin/backtest-result."}
+
+
+@router.get("/api/admin/backtest-result")
+@require_admin_auth
+def get_backtest_result(request: Request) -> dict[str, Any]:
+    """Return the latest backtest result."""
+    running = bool(_backtest_thread and _backtest_thread.is_alive())
+    if _backtest_result:
+        return {**_backtest_result, "running": running}
+    return {"ok": False, "running": running, "message": "No backtest has been run yet"}
 
 
 @router.post("/api/admin/run-yolo-seed")
