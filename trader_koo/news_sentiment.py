@@ -194,47 +194,68 @@ def _fetch_finnhub_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
             ),
         )
 
-    # Step 1: Fetch per-ticker sentiment scores via /news-sentiment
+    # Step 1: Fetch company news per ticker and score headlines with lexicon.
+    # Note: /news-sentiment is premium-only (403 on free tier).
+    # /company-news is free and returns recent headlines we can score ourselves.
+    from trader_koo.rss_news import _score_headline, _score_to_100 as _rss_score_to_100
+
+    date_to = now_utc.strftime("%Y-%m-%d")
+    date_from = (now_utc - dt.timedelta(hours=lookback_hours)).strftime("%Y-%m-%d")
+
     weighted_total = 0.0
     weight_total = 0.0
     ticker_details: list[dict[str, Any]] = []
 
     for ticker in tickers:
         try:
-            data = _finnhub_get("news-sentiment", {"symbol": ticker}, api_key)
-            sentiment = data.get("sentiment") or {}
-            bullish = _safe_float(sentiment.get("bullishPercent"))
-            bearish = _safe_float(sentiment.get("bearishPercent"))
-            news_score = _safe_float(data.get("companyNewsScore"))
-            buzz = data.get("buzz") or {}
-            articles = int(buzz.get("articlesInLastWeek") or 0)
+            articles = _finnhub_get(
+                "company-news",
+                {"symbol": ticker, "from": date_from, "to": date_to},
+                api_key,
+            )
+            if not isinstance(articles, list):
+                continue
 
-            if bullish is not None and bearish is not None:
-                raw = bullish - bearish  # -1.0 to +1.0
-                weight = max(articles, 1)
-                weighted_total += raw * weight
-                weight_total += weight
+            ticker_bullish = 0
+            ticker_bearish = 0
+            ticker_scores: list[float] = []
+
+            for item in articles[:30]:  # cap per ticker to save processing
+                if not isinstance(item, dict):
+                    continue
+                headline = str(item.get("headline") or "").strip()
+                summary = str(item.get("summary") or "").strip()
+                if not headline:
+                    continue
+                raw, bullish_count, bearish_count = _score_headline(headline, summary)
+                if raw is not None and raw != 0.0:
+                    ticker_scores.append(raw)
+                    ticker_bullish += bullish_count
+                    ticker_bearish += bearish_count
+
+            if ticker_scores:
+                avg_raw = sum(ticker_scores) / len(ticker_scores)
+                weighted_total += avg_raw * len(ticker_scores)
+                weight_total += len(ticker_scores)
                 ticker_details.append({
                     "ticker": ticker,
-                    "bullish": round(bullish, 4),
-                    "bearish": round(bearish, 4),
-                    "news_score": round(news_score, 4) if news_score is not None else None,
-                    "articles_last_week": articles,
+                    "bullish": ticker_bullish,
+                    "bearish": ticker_bearish,
+                    "articles_scored": len(ticker_scores),
+                    "articles_total": min(len(articles), 30),
+                    "avg_raw_score": round(avg_raw, 4),
                 })
-            elif news_score is not None:
-                # companyNewsScore is 0–1, map to -1..+1
-                raw = (news_score - 0.5) * 2.0
-                weighted_total += raw
-                weight_total += 1.0
+            else:
                 ticker_details.append({
                     "ticker": ticker,
-                    "bullish": None,
-                    "bearish": None,
-                    "news_score": round(news_score, 4),
-                    "articles_last_week": articles,
+                    "bullish": 0,
+                    "bearish": 0,
+                    "articles_scored": 0,
+                    "articles_total": min(len(articles), 30),
+                    "avg_raw_score": None,
                 })
         except Exception as exc:
-            LOG.warning("Finnhub news-sentiment failed for %s: %s", ticker, exc)
+            LOG.warning("Finnhub company-news failed for %s: %s", ticker, exc)
 
     # Step 2: Fetch headlines via RSS (scored) with Finnhub company-news fallback
     headlines: list[dict[str, Any]] = []
@@ -301,7 +322,7 @@ def _fetch_finnhub_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
 
     raw_score = weighted_total / weight_total
     score = _score_to_100(raw_score)
-    article_count = sum(d.get("articles_last_week", 0) for d in ticker_details)
+    article_count = sum(d.get("articles_scored", d.get("articles_total", 0)) for d in ticker_details)
 
     return {
         "provider": "finnhub",
