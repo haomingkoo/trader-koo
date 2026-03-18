@@ -122,3 +122,51 @@ def test_get_crypto_history_supports_weekly_native_backfill(monkeypatch):
     assert len(result) == 8
     assert result[0].interval == "1w"
     assert calls[0][2] == "1w"
+
+
+def test_get_crypto_history_refreshes_stale_native_interval_history(monkeypatch):
+    stale_bars = [
+        CryptoBar(
+            symbol="BTC-USD",
+            timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc) + dt.timedelta(hours=idx),
+            interval="1h",
+            open=100.0 + idx,
+            high=101.0 + idx,
+            low=99.0 + idx,
+            close=100.5 + idx,
+            volume=10.0 + idx,
+        )
+        for idx in range(2160)
+    ]
+    refreshed_tail = [
+        CryptoBar(
+            symbol="BTC-USD",
+            timestamp=dt.datetime(2026, 3, 17, 0, 0, tzinfo=dt.timezone.utc) + dt.timedelta(hours=idx),
+            interval="1h",
+            open=500.0 + idx,
+            high=501.0 + idx,
+            low=499.0 + idx,
+            close=500.5 + idx,
+            volume=50.0 + idx,
+        )
+        for idx in range(24)
+    ]
+    refresh_calls: list[tuple[str, str, int]] = []
+
+    monkeypatch.setattr(
+        "trader_koo.crypto.service._load_recent_bars_from_db",
+        lambda symbol, limit, interval="1m": stale_bars if interval == "1h" else [],
+    )
+    monkeypatch.setattr(
+        "trader_koo.crypto.service._backfill_history",
+        lambda symbol, interval, limit: (
+            refresh_calls.append((symbol, interval, limit)) or refreshed_tail
+        ),
+    )
+    monkeypatch.setattr("trader_koo.crypto.service._client", None)
+
+    result = get_crypto_history("BTC-USD", interval="1h", limit=48)
+
+    assert refresh_calls, "stale native 1h history should trigger a refresh"
+    assert refresh_calls[0][1] == "1h"
+    assert result[-1].timestamp == refreshed_tail[-1].timestamp

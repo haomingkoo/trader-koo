@@ -96,6 +96,18 @@ _BACKFILL_TARGETS: dict[str, int] = {
     "1d": 1825,    # ~5 years
     "1w": 260,     # ~5 years
 }
+_RECENT_NATIVE_REFRESH_BARS: dict[str, int] = {
+    "5m": 576,     # ~2 days
+    "15m": 384,    # ~4 days
+    "30m": 336,    # ~7 days
+    "1h": 336,     # ~14 days
+    "2h": 240,     # ~20 days
+    "4h": 180,     # ~30 days
+    "6h": 180,     # ~45 days
+    "12h": 120,    # ~60 days
+    "1d": 90,      # ~3 months
+    "1w": 52,      # ~1 year
+}
 
 
 def subscribe_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str | None:
@@ -353,6 +365,46 @@ def _backfill_target_limit(interval: str, requested_limit: int) -> int:
     return max(int(requested_limit), _BACKFILL_TARGETS.get(interval, int(requested_limit)))
 
 
+def _latest_closed_bucket_start(interval_minutes: int, now: dt.datetime | None = None) -> dt.datetime:
+    now_utc = now or dt.datetime.now(dt.timezone.utc)
+    current_bucket = _floor_timestamp(now_utc, interval_minutes)
+    return current_bucket - dt.timedelta(minutes=interval_minutes)
+
+
+def _native_history_is_stale(bars: list[CryptoBar], interval: str) -> bool:
+    if not bars:
+        return True
+
+    interval_minutes = _INTERVAL_TO_MINUTES.get(interval)
+    if interval_minutes is None:
+        return False
+
+    latest = bars[-1].timestamp
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=dt.timezone.utc)
+    else:
+        latest = latest.astimezone(dt.timezone.utc)
+
+    expected_latest = _latest_closed_bucket_start(interval_minutes)
+    return latest < expected_latest
+
+
+def _refresh_recent_native_history(
+    symbol: str,
+    interval: str,
+    existing_bars: list[CryptoBar],
+    requested_limit: int,
+) -> list[CryptoBar]:
+    refresh_limit = min(
+        _backfill_target_limit(interval, _RECENT_NATIVE_REFRESH_BARS.get(interval, requested_limit)),
+        _BACKFILL_TARGETS.get(interval, requested_limit),
+    )
+    refreshed = _backfill_history(symbol, interval, refresh_limit)
+    if not refreshed:
+        return existing_bars
+    return _merge_bars(refreshed, existing_bars)
+
+
 def _warm_backfill_history() -> None:
     if _db_path_str is None:
         return
@@ -536,6 +588,13 @@ def get_crypto_history(
         if len(native_bars) < native_limit:
             _backfill_history(symbol, interval_norm, native_limit)
             native_bars = _load_recent_bars_from_db(symbol, limit=native_limit, interval=interval_norm)
+        elif _native_history_is_stale(native_bars, interval_norm):
+            native_bars = _refresh_recent_native_history(
+                symbol,
+                interval_norm,
+                native_bars,
+                requested_limit=limit,
+            )
         if interval_norm != "1w":
             minutes = _INTERVAL_TO_MINUTES[interval_norm]
             patch_limit = max(minutes * 4, 240)
