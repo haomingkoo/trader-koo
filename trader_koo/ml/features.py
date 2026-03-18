@@ -46,6 +46,16 @@ FEATURE_COLUMNS = [
     "has_yolo_pattern", "yolo_confidence",
     # Cross-sectional ranks
     "rank_ret_5d", "rank_ret_21d", "rank_vol_21d", "rank_volume_ratio",
+    # Macro features (from macro_features.py — same for all tickers on a date)
+    "macro_vix_close", "macro_vix_ma20", "macro_vix_ma50",
+    "macro_vix_percentile_252d", "macro_vix_realized_vol_21d",
+    "macro_vix_above_ma20", "macro_vix_above_ma50",
+    "macro_tnx_close", "macro_tnx_ret_5d", "macro_tnx_ret_21d", "macro_tnx_above_ma50",
+    "macro_sp500_ret_1d", "macro_sp500_ret_5d", "macro_sp500_ret_21d", "macro_sp500_ret_63d",
+    "macro_sp500_vol_21d", "macro_sp500_dist_ma50_pct", "macro_sp500_dist_ma200_pct",
+    "macro_sp500_ma50_above_ma200", "macro_sp500_breadth_ratio",
+    "macro_spy_volume_ratio_20d",
+    "macro_svix_ret_5d", "macro_svix_vix_correlation_21d",
 ]
 
 
@@ -304,5 +314,22 @@ def extract_features_for_universe(
         valid = feat_df[col].notna()
         if valid.sum() >= 5:
             feat_df.loc[valid, rank_col] = feat_df.loc[valid, col].rank(pct=True)
+
+    # Merge macro features (same for all tickers on this date)
+    try:
+        from trader_koo.ml.macro_features import extract_macro_features, MACRO_FEATURE_COLUMNS
+
+        macro = extract_macro_features(conn, as_of_date=as_of_date, lookback_days=lookback_days)
+        for col_name in MACRO_FEATURE_COLUMNS:
+            macro_col = f"macro_{col_name}"
+            if macro_col in FEATURE_COLUMNS:
+                feat_df[macro_col] = macro.get(col_name, np.nan)
+    except Exception as exc:
+        LOG.warning("Macro feature extraction failed (non-fatal): %s", exc)
+
+    # Ensure all expected columns exist
+    for col in FEATURE_COLUMNS:
+        if col not in feat_df.columns:
+            feat_df[col] = np.nan
 
     return feat_df.set_index("ticker")[FEATURE_COLUMNS].copy()
