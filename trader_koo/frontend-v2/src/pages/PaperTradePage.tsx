@@ -3,10 +3,13 @@ import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTradeSummaryOverall } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 import {
+  PaperTradeBotOverview,
   PaperTradeBreakdownPanels,
   PaperTradeEquityCurve,
+  PaperTradeFeedbackPanel,
   PaperTradeFilters,
   PaperTradeLogTable,
+  PaperTradeOpenPlans,
   PaperTradeSummaryGrid,
 } from "../components/paper/PaperTradeSections";
 
@@ -67,6 +70,8 @@ export default function PaperTradePage() {
 
       <h2 className="text-xl font-bold tracking-tight">Paper Trades</h2>
 
+      <PaperTradeBotOverview overall={overall} policy={summary?.policy} />
+
       {/* Summary KPI cards */}
       <PaperTradeSummaryGrid
         overall={overall}
@@ -79,6 +84,10 @@ export default function PaperTradePage() {
 
       {/* By-direction and By-exit-reason panels */}
       <PaperTradeBreakdownPanels summary={summary} />
+
+      <PaperTradeOpenPlans trades={trades} />
+
+      <PaperTradeFeedbackPanel feedback={summary?.feedback ?? []} />
 
       {/* Filters */}
       <PaperTradeFilters

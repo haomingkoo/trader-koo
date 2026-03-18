@@ -506,6 +506,8 @@ class TestPaperTradeSummary:
         assert result["overall"]["total_trades"] == 0
         assert result["by_direction"] == {}
         assert result["equity_curve"] == []
+        assert result["policy"]["decision_version"] == "paper-trade-eval-v1"
+        assert result["feedback"] == []
 
     def test_summary_with_closed_trades(self, conn):
         for ticker, pnl, r in [("AAPL", 5.0, 1.0), ("MSFT", -3.0, -0.6), ("GOOG", 8.0, 1.6)]:
@@ -527,3 +529,5 @@ class TestPaperTradeSummary:
         assert result["overall"]["expectancy_pct"] == pytest.approx(3.33, abs=0.01)
         assert result["overall"]["profit_factor"] == pytest.approx(4.33, abs=0.01)
         assert result["overall"]["total_pnl_pct"] == 10.0
+        assert result["policy"]["min_tier"] == "B"
+        assert result["feedback"] == []

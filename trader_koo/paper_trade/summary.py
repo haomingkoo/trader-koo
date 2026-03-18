@@ -7,6 +7,7 @@ import math
 import sqlite3
 from typing import Any
 
+from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.schema import decode_json_list, ensure_paper_trade_schema
 
 
@@ -125,10 +126,135 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
     return [dict(zip(keys, row)) for row in rows]
 
 
+def _policy_snapshot(config: PaperTradeConfig | None) -> dict[str, Any] | None:
+    if config is None:
+        return None
+    return {
+        "decision_version": config.decision_version,
+        "min_tier": config.min_tier,
+        "min_score": config.min_score,
+        "max_open": config.max_open,
+        "expiry_days": config.expiry_days,
+        "min_reward_r_multiple": config.min_reward_r_multiple,
+        "high_vol_atr_pct": config.high_vol_atr_pct,
+        "qualifying_tiers": sorted(config.qualifying_tiers),
+        "qualifying_actionability": sorted(config.qualifying_actionability),
+        "position_size_pct": {
+            "A": config.tier_a_position_pct,
+            "B": config.tier_b_position_pct,
+            "C": config.tier_c_position_pct,
+        },
+        "caution_position_scale": config.caution_position_scale,
+        "high_vol_position_scale": config.high_vol_position_scale,
+        "earnings_position_scale": config.earnings_position_scale,
+    }
+
+
+def _feedback_items(
+    *,
+    overall: dict[str, Any],
+    by_direction: dict[str, dict[str, Any]],
+    by_family: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+
+    expectancy = overall.get("expectancy_pct")
+    total = overall.get("total_trades")
+    if isinstance(expectancy, (int, float)) and isinstance(total, int) and total >= 5:
+        if expectancy < 0:
+            items.append(
+                {
+                    "kind": "risk",
+                    "severity": "high",
+                    "title": "Overall expectancy is still negative",
+                    "detail": f"Closed paper trades are averaging {expectancy:.2f}% across {total} trades.",
+                    "action": "Tighten setup-ready criteria and keep position size conservative until expectancy recovers.",
+                }
+            )
+        else:
+            items.append(
+                {
+                    "kind": "edge",
+                    "severity": "green",
+                    "title": "Overall expectancy is positive",
+                    "detail": f"Closed paper trades are averaging +{expectancy:.2f}% across {total} trades.",
+                    "action": "Keep the playbook stable and focus on whether the positive edge survives a larger sample.",
+                }
+            )
+
+    for direction in ("long", "short"):
+        stats = by_direction.get(direction)
+        if not stats:
+            continue
+        sample = stats.get("total")
+        avg_pnl = stats.get("avg_pnl_pct")
+        if not isinstance(sample, int) or sample < 4 or not isinstance(avg_pnl, (int, float)):
+            continue
+        if avg_pnl < 0:
+            items.append(
+                {
+                    "kind": "direction",
+                    "severity": "amber",
+                    "title": f"{direction.title()} setups are underperforming",
+                    "detail": f"{direction.title()} paper trades are averaging {avg_pnl:.2f}% across {sample} closed trades.",
+                    "action": f"Reduce {direction} size or require cleaner confirmation until the sample turns positive.",
+                }
+            )
+
+    weak_families = [
+        (family, stats)
+        for family, stats in by_family.items()
+        if isinstance(stats.get("total"), int)
+        and stats["total"] >= 4
+        and isinstance(stats.get("avg_pnl_pct"), (int, float))
+        and stats["avg_pnl_pct"] < 0
+    ]
+    weak_families.sort(key=lambda item: item[1]["avg_pnl_pct"])
+    for family, stats in weak_families[:2]:
+        items.append(
+            {
+                "kind": "family",
+                "severity": "amber",
+                "title": f"{family.replace('_', ' ')} is weak",
+                "detail": (
+                    f"Expectancy is {stats['avg_pnl_pct']:.2f}% with "
+                    f"{stats['win_rate_pct']:.1f}% win rate over {stats['total']} trades."
+                ),
+                "action": "Downgrade this family to watch-only by default or demand stronger level/trend confirmation.",
+            }
+        )
+
+    strong_families = [
+        (family, stats)
+        for family, stats in by_family.items()
+        if isinstance(stats.get("total"), int)
+        and stats["total"] >= 4
+        and isinstance(stats.get("avg_pnl_pct"), (int, float))
+        and stats["avg_pnl_pct"] > 0
+    ]
+    strong_families.sort(key=lambda item: item[1]["avg_pnl_pct"], reverse=True)
+    for family, stats in strong_families[:2]:
+        items.append(
+            {
+                "kind": "family",
+                "severity": "green",
+                "title": f"{family.replace('_', ' ')} is working",
+                "detail": (
+                    f"Expectancy is +{stats['avg_pnl_pct']:.2f}% with "
+                    f"{stats['win_rate_pct']:.1f}% win rate over {stats['total']} trades."
+                ),
+                "action": "Use this family as the benchmark playbook and compare weaker setups against it.",
+            }
+        )
+
+    return items[:6]
+
+
 def paper_trade_summary(
     conn: sqlite3.Connection,
     *,
     window_days: int = 180,
+    config: PaperTradeConfig | None = None,
 ) -> dict[str, Any]:
     """Return comprehensive paper trading performance metrics."""
     ensure_paper_trade_schema(conn)
@@ -159,6 +285,8 @@ def paper_trade_summary(
             "by_exit_reason": {},
             "equity_curve": [],
             "recent_trades": recent_trades(conn, limit=20),
+            "policy": _policy_snapshot(config),
+            "feedback": [],
         }
 
     pnls = [float(row[0]) for row in all_closed]
@@ -270,6 +398,12 @@ def paper_trade_summary(
         "by_exit_reason": by_exit_reason,
         "equity_curve": equity_curve,
         "recent_trades": recent_trades(conn, limit=20),
+        "policy": _policy_snapshot(config),
+        "feedback": _feedback_items(
+            overall=overall,
+            by_direction=by_direction,
+            by_family=by_family,
+        ),
     }
 
 

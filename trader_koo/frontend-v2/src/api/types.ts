@@ -751,6 +751,30 @@ export interface PaperTradeDirectionStats {
   avg_pnl_pct: number;
 }
 
+export interface PaperTradePolicy {
+  decision_version: string;
+  min_tier: string;
+  min_score: number;
+  max_open: number;
+  expiry_days: number;
+  min_reward_r_multiple: number;
+  high_vol_atr_pct: number;
+  qualifying_tiers: string[];
+  qualifying_actionability: string[];
+  position_size_pct: Record<string, number>;
+  caution_position_scale: number;
+  high_vol_position_scale: number;
+  earnings_position_scale: number;
+}
+
+export interface PaperTradeFeedbackItem {
+  kind: string;
+  severity: string;
+  title: string;
+  detail: string;
+  action: string;
+}
+
 export interface EquityCurvePoint {
   date: string;
   equity_index: number;
@@ -765,6 +789,8 @@ export interface PaperTradeSummary {
   by_exit_reason: Record<string, number>;
   equity_curve: EquityCurvePoint[];
   recent_trades: PaperTrade[];
+  policy?: PaperTradePolicy | null;
+  feedback?: PaperTradeFeedbackItem[];
 }
 
 /* ── Crypto ── */

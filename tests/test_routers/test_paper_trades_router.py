@@ -44,6 +44,8 @@ class TestPaperTradeSummaryEndpoint:
         data = response.json()
 
         assert "overall" in data
+        assert "policy" in data
+        assert "feedback" in data
 
     def test_summary_ok_is_true(self, test_app):
         response = test_app.get("/api/paper-trades/summary")

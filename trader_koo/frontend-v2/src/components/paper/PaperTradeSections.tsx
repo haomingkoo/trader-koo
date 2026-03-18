@@ -1,6 +1,8 @@
 import { Link } from "react-router-dom";
 import type {
   PaperTrade,
+  PaperTradeFeedbackItem,
+  PaperTradePolicy,
   PaperTradeDirectionStats,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
@@ -27,6 +29,14 @@ const pnlColor = (value: number | null | undefined): string => {
   if (value > 0) return "text-[var(--green)]";
   if (value < 0) return "text-[var(--red)]";
   return "";
+};
+
+const severityVariant = (value: string | null | undefined) => {
+  const severity = String(value ?? "").toLowerCase();
+  if (severity === "high" || severity === "red" || severity === "risk") return "red";
+  if (severity === "medium" || severity === "amber") return "amber";
+  if (severity === "green" || severity === "positive") return "green";
+  return "muted";
 };
 
 export const tradeColumns = [
@@ -229,6 +239,205 @@ export function PaperTradeSummaryGrid({
         label="Equity Index"
         value={latestEquity != null ? latestEquity.toFixed(2) : "\u2014"}
       />
+    </div>
+  );
+}
+
+export function PaperTradeBotOverview({
+  overall,
+  policy,
+}: {
+  overall: PaperTradeSummaryOverall;
+  policy: PaperTradePolicy | null | undefined;
+}) {
+  if (!policy) {
+    return (
+      <Card label="Auto Paper Trader">
+        <p className="text-sm text-[var(--muted)]">
+          Bot policy metadata is not available yet.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
+      <Card label="Auto Paper Trader">
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="blue">{policy.decision_version}</Badge>
+            <Badge variant="green">Min Tier {policy.min_tier}</Badge>
+            <Badge variant="amber">Min Score {policy.min_score.toFixed(0)}</Badge>
+            <Badge variant="muted">Max Open {policy.max_open}</Badge>
+            <Badge variant="muted">{policy.expiry_days}d expiry</Badge>
+            <Badge variant="muted">Min {policy.min_reward_r_multiple.toFixed(1)}R</Badge>
+          </div>
+          <p className="text-sm text-[var(--text)]">
+            The bot paper-trades nightly report setups that clear tier, score,
+            actionability, debate, and risk gates. Each approved trade gets a
+            size, invalidation, target, and review loop.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+                  Sizing Rules
+                </div>
+                <div className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                <div>A: {policy.position_size_pct["A"]?.toFixed(1)}%</div>
+                <div>B: {policy.position_size_pct["B"]?.toFixed(1)}%</div>
+                <div>C: {policy.position_size_pct["C"]?.toFixed(1)}%</div>
+                <div>Caution scale: {(policy.caution_position_scale * 100).toFixed(0)}%</div>
+                <div>High-vol scale: {(policy.high_vol_position_scale * 100).toFixed(0)}%</div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+                Current Edge
+              </div>
+              <div className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                <div>Closed trades: {overall.total_trades}</div>
+                <div>Open trades: {overall.open_count}</div>
+                <div>Win rate: {fmtPct(overall.win_rate_pct)}</div>
+                <div>Expectancy: {fmtPct(overall.expectancy_pct, "%", true)}</div>
+                <div>Avg R: {overall.avg_r_multiple != null ? `${overall.avg_r_multiple.toFixed(2)}R` : "\u2014"}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card label="Promotion Gate">
+        <div className="space-y-2 text-sm text-[var(--muted)]">
+          <p>
+            Treat this as a versioned paper-trading bot, not a self-editing live
+            system. Promote changes only after a larger sample shows stable
+            expectancy, controlled drawdown, and repeatable family-level edge.
+          </p>
+          <p>
+            Current version:{" "}
+            <strong className="text-[var(--text)]">{policy.decision_version}</strong>
+          </p>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+export function PaperTradeOpenPlans({
+  trades,
+}: {
+  trades: PaperTrade[];
+}) {
+  const openTrades = trades.filter((trade) => trade.status === "open").slice(0, 4);
+  if (openTrades.length === 0) {
+    return (
+      <Card label="Open Trade Plans">
+        <p className="text-sm text-[var(--muted)]">
+          No open paper trades right now.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="text-sm font-semibold text-[var(--text)]">Open Trade Plans</div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {openTrades.map((trade) => (
+          <Card key={trade.id} label={`${trade.ticker} ${trade.direction.toUpperCase()}`}>
+            <div className="space-y-3 text-sm">
+              <div className="flex flex-wrap gap-2">
+                {trade.setup_tier ? <Badge variant={tierVariant(trade.setup_tier)}>{trade.setup_tier}</Badge> : null}
+                {trade.decision_state ? (
+                  <Badge variant={severityVariant(trade.decision_state)}>
+                    {trade.decision_state.replace(/_/g, " ").toUpperCase()}
+                  </Badge>
+                ) : null}
+                {typeof trade.expected_r_multiple === "number" ? (
+                  <Badge variant="muted">Plan {trade.expected_r_multiple.toFixed(2)}R</Badge>
+                ) : null}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3 text-xs text-[var(--muted)]">
+                <div>
+                  <div className="uppercase tracking-wider">Entry</div>
+                  <div className="mt-1 text-[var(--text)]">{fmtPrice(trade.entry_price)}</div>
+                </div>
+                <div>
+                  <div className="uppercase tracking-wider">Stop</div>
+                  <div className="mt-1 text-[var(--text)]">{fmtPrice(trade.stop_loss)}</div>
+                </div>
+                <div>
+                  <div className="uppercase tracking-wider">Target</div>
+                  <div className="mt-1 text-[var(--text)]">{fmtPrice(trade.target_price)}</div>
+                </div>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3 text-xs text-[var(--muted)]">
+                <div>
+                  <div className="uppercase tracking-wider">Size</div>
+                  <div className="mt-1 text-[var(--text)]">{fmtPct(trade.position_size_pct)}</div>
+                </div>
+                <div>
+                  <div className="uppercase tracking-wider">Risk Budget</div>
+                  <div className="mt-1 text-[var(--text)]">{fmtPct(trade.risk_budget_pct)}</div>
+                </div>
+                <div>
+                  <div className="uppercase tracking-wider">Current P&L</div>
+                  <div className={`mt-1 ${pnlColor(trade.unrealized_pnl_pct)}`}>
+                    {fmtPct(trade.unrealized_pnl_pct, "%", true)}
+                  </div>
+                </div>
+              </div>
+              {trade.entry_plan ? (
+                <p className="text-xs text-[var(--text)]">
+                  <strong>Entry:</strong> {trade.entry_plan}
+                </p>
+              ) : null}
+              {trade.exit_plan ? (
+                <p className="text-xs text-[var(--muted)]">
+                  <strong className="text-[var(--text)]">Exit:</strong> {trade.exit_plan}
+                </p>
+              ) : null}
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function PaperTradeFeedbackPanel({
+  feedback,
+}: {
+  feedback: PaperTradeFeedbackItem[];
+}) {
+  if (feedback.length === 0) {
+    return (
+      <Card label="Model Feedback">
+        <p className="text-sm text-[var(--muted)]">
+          Not enough closed-trade evidence yet to generate tuning notes.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="text-sm font-semibold text-[var(--text)]">Post-Trade Feedback Loop</div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {feedback.map((item, index) => (
+          <Card key={`${item.kind}-${index}`} label={item.title}>
+            <div className="space-y-2 text-sm">
+              <Badge variant={severityVariant(item.severity)}>
+                {item.severity.toUpperCase()}
+              </Badge>
+              <p className="text-[var(--muted)]">{item.detail}</p>
+              <p className="text-[var(--text)]">
+                <strong>Tune:</strong> {item.action}
+              </p>
+            </div>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }

@@ -151,7 +151,7 @@ def paper_trade_summary(
     *,
     window_days: int = 180,
 ) -> dict[str, Any]:
-    return _paper_trade_summary_impl(conn, window_days=window_days)
+    return _paper_trade_summary_impl(conn, window_days=window_days, config=_build_config())
 
 
 def manually_close_trade(
