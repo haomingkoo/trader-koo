@@ -52,6 +52,10 @@ FEATURE_COLUMNS = [
     "macro_sp500_vol_21d",
     # Inverse VIX (vol-of-vol proxy)
     "macro_svix_ret_5d",
+    # FRED macro (fetched via external_data.py)
+    "fred_yield_curve_10y2y",
+    "fred_high_yield_oas",
+    "fred_fed_funds_rate",
 ]
 
 
@@ -322,6 +326,16 @@ def extract_features_for_universe(
                 feat_df[macro_col] = macro.get(col_name, np.nan)
     except Exception as exc:
         LOG.warning("Macro feature extraction failed (non-fatal): %s", exc)
+
+    # FRED macro data (yield curve, credit stress, rates)
+    try:
+        from trader_koo.ml.external_data import get_fred_latest
+
+        feat_df["fred_yield_curve_10y2y"] = get_fred_latest("T10Y2Y")
+        feat_df["fred_high_yield_oas"] = get_fred_latest("BAMLH0A0HYM2")
+        feat_df["fred_fed_funds_rate"] = get_fred_latest("DFF")
+    except Exception as exc:
+        LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
 
     # Ensure all expected columns exist
     for col in FEATURE_COLUMNS:

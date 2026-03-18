@@ -129,13 +129,16 @@ def build_dataset(
 
     feat_df = pd.concat(all_features, ignore_index=True)
 
-    # Generate labels for all (ticker, date) pairs
+    # Generate labels with asymmetric barriers (easier to hit profit target)
     unique_dates = sorted(feat_df["entry_date"].unique())
     unique_tickers = sorted(feat_df["ticker"].unique())
     labels_df = generate_triple_barrier_labels(
         conn,
         entry_dates=unique_dates,
         tickers=unique_tickers,
+        profit_mult=1.5,  # easier to hit (was 2.0)
+        stop_mult=2.0,    # wider stop (let trades breathe)
+        max_holding_days=10,
     )
 
     if labels_df.empty:
@@ -149,8 +152,9 @@ def build_dataset(
         how="inner",
     )
 
-    # Binary target: profitable (+1) vs not (0, -1)
-    dataset["target"] = (dataset["label"] == 1).astype(int)
+    # Binary target: positive return over holding period
+    # Using return_pct > 0 gives better label balance than triple-barrier hit
+    dataset["target"] = (dataset["return_pct"] > 0).astype(int)
 
     LOG.info(
         "Dataset built: %d samples, %d tickers, %d dates, target balance: %.1f%% positive",
@@ -297,6 +301,23 @@ def train_walk_forward(
     avg_acc = round(np.mean([f["accuracy"] for f in folds]), 4)
     avg_prec = round(np.mean([f["precision"] for f in folds]), 4)
 
+    # Meta-labeling: train secondary model to filter primary signals
+    meta_metrics: dict[str, Any] = {"ok": False, "note": "not_attempted"}
+    try:
+        from trader_koo.ml.meta_label import build_meta_labels, train_meta_model
+
+        meta_dataset = build_meta_labels(dataset, model, feature_cols)
+        meta_model, meta_metrics = train_meta_model(meta_dataset, feature_cols)
+        if meta_model is not None:
+            # Save meta-model alongside primary
+            meta_model_path = _model_dir() / "swing_meta_lgbm_latest.txt"
+            meta_model.booster_.save_model(str(meta_model_path))
+            meta_metrics["model_path"] = str(meta_model_path)
+            LOG.info("Meta-model saved: %s", meta_model_path)
+    except Exception as exc:
+        LOG.warning("Meta-labeling failed (non-fatal): %s", exc)
+        meta_metrics = {"ok": False, "error": str(exc)}
+
     return {
         "ok": True,
         "model_path": str(model_path),
@@ -311,6 +332,7 @@ def train_walk_forward(
             "avg_precision": avg_prec,
             "best_auc": round(best_auc, 4),
         },
+        "meta_labeling": meta_metrics,
         "trained_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
