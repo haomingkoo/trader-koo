@@ -24,6 +24,9 @@ import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Table from "../components/ui/Table";
 import ChartToolbar from "../components/chart/ChartToolbar";
+import GlassCard from "../components/chart/GlassCard";
+import ChartFundamentals from "../components/chart/ChartFundamentals";
+import ChartWorkspace from "../components/chart/ChartWorkspace";
 
 /* ── Helpers ── */
 
@@ -86,38 +89,6 @@ function resampleToWeekly(
   }
   if (current) weeks.push(current);
   return weeks;
-}
-
-/* ── Glassmorphism card wrapper ── */
-
-function GlassCard({
-  label,
-  value,
-  children,
-  className = "",
-}: {
-  label?: string;
-  value?: string | number;
-  children?: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={`rounded-xl backdrop-blur-sm bg-[var(--panel)]/80 border border-[var(--line)] p-4 ${className}`}
-    >
-      {label && (
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
-          {label}
-        </div>
-      )}
-      {value !== undefined && (
-        <div className="text-lg font-bold tabular-nums text-[var(--text)]">
-          {typeof value === "string" || typeof value === "number" ? (value ?? "\u2014") : String(value ?? "\u2014")}
-        </div>
-      )}
-      {children}
-    </div>
-  );
 }
 
 /* ── Chart building ── */
@@ -1643,53 +1614,19 @@ export default function ChartPage() {
       {data && !isLoading && (
         <>
           {/* Fundamental cards */}
-          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <GlassCard
-              label="Price"
-              value={currentPrice != null ? `$${currentPrice.toFixed(2)}` : "\u2014"}
-            />
-            <GlassCard
-              label="P/E"
-              value={fmt(fundamentals.pe, 1)}
-            />
-            <GlassCard
-              label="PEG"
-              value={fmt(fundamentals.peg, 2)}
-            />
-            <GlassCard
-              label="Target"
-              value={fundamentals.target_price != null ? `$${fundamentals.target_price.toFixed(2)}` : "\u2014"}
-            />
-            <GlassCard
-              label="Discount %"
-              value={
-                fundamentals.discount_pct != null
-                  ? `${fundamentals.discount_pct > 0 ? "+" : ""}${fundamentals.discount_pct.toFixed(1)}%`
-                  : "\u2014"
-              }
-              className={
-                fundamentals.discount_pct != null && fundamentals.discount_pct > 0
-                  ? "border-[rgba(56,211,159,0.3)]"
-                  : fundamentals.discount_pct != null && fundamentals.discount_pct < -10
-                    ? "border-[rgba(255,107,107,0.3)]"
-                    : ""
-              }
-            />
-            <GlassCard
-              label="Put/Call OI"
-              value={
-                options.put_call_oi_ratio != null
-                  ? options.put_call_oi_ratio.toFixed(3)
-                  : "\u2014"
-              }
-            />
-          </div>
+          <ChartFundamentals
+            currentPrice={currentPrice}
+            fundamentals={fundamentals}
+            putCallOiRatio={options.put_call_oi_ratio}
+            formatNumber={fmt}
+          />
 
-          {/* Main content: chart + commentary sidebar */}
-          <div className="flex gap-4">
-            {/* Chart area */}
-            <div className="flex-1 min-w-0">
-              {chartResult ? (
+          <ChartWorkspace
+            commentaryExpanded={commentaryExpanded}
+            onCollapse={() => setCommentaryExpanded(false)}
+            onExpand={() => setCommentaryExpanded(true)}
+            chartContent={
+              chartResult ? (
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
                   <PlotlyWrapper
                     data={chartResult.traces as unknown as Record<string, unknown>[]}
@@ -1706,42 +1643,15 @@ export default function ChartPage() {
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--muted)]">
                   No chart data available.
                 </div>
-              )}
-            </div>
-
-            {/* Commentary sidebar */}
-            <div
-              className={`transition-all duration-200 ${
-                commentaryExpanded ? "w-80 shrink-0" : "w-8 shrink-0"
-              } hidden lg:block`}
-            >
-              {commentaryExpanded ? (
-                <div className="relative">
-                  <button
-                    onClick={() => setCommentaryExpanded(false)}
-                    className="absolute -left-3 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--panel)] text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
-                    title="Collapse commentary"
-                  >
-                    &rsaquo;
-                  </button>
-                  <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
-                </div>
-              ) : (
-                <button
-                  onClick={() => setCommentaryExpanded(true)}
-                  className="flex h-full w-8 items-start justify-center rounded-lg border border-[var(--line)] bg-[var(--panel)] pt-3 text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors"
-                  title="Expand commentary"
-                >
-                  &lsaquo;
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Commentary for mobile/tablet (below chart) */}
-          <div className="lg:hidden">
-            <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
-          </div>
+              )
+            }
+            desktopCommentary={
+              <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
+            }
+            mobileCommentary={
+              <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
+            }
+          />
 
           {/* Levels + Gaps summary */}
           <div className="grid gap-4 lg:grid-cols-2">
