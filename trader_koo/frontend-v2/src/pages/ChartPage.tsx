@@ -6,8 +6,6 @@ import { useLiveEquityPrice } from "../hooks/useLiveEquityPrice";
 import type {
   DashboardPayload,
   LiveCandle,
-  LevelRow,
-  GapRow,
   OhlcvRow,
   PatternRow,
   HybridPatternRow,
@@ -18,7 +16,6 @@ import type {
   HmmRegime,
   EquityTick,
 } from "../api/types";
-import Card from "../components/ui/Card";
 import PlotlyWrapper from "../components/PlotlyWrapper";
 import Spinner from "../components/ui/Spinner";
 import Badge, { tierVariant } from "../components/ui/Badge";
@@ -27,6 +24,8 @@ import ChartToolbar from "../components/chart/ChartToolbar";
 import GlassCard from "../components/chart/GlassCard";
 import ChartFundamentals from "../components/chart/ChartFundamentals";
 import ChartWorkspace from "../components/chart/ChartWorkspace";
+import LevelsCard from "../components/chart/LevelsCard";
+import GapsCard from "../components/chart/GapsCard";
 
 /* ── Helpers ── */
 
@@ -1655,8 +1654,8 @@ export default function ChartPage() {
 
           {/* Levels + Gaps summary */}
           <div className="grid gap-4 lg:grid-cols-2">
-            <LevelsCard levels={data.levels ?? []} />
-            <GapsCard gaps={data.gaps ?? []} />
+            <LevelsCard levels={data.levels ?? []} formatNumber={fmt} />
+            <GapsCard gaps={data.gaps ?? []} formatNumber={fmt} />
           </div>
 
           {/* Pattern tables */}
@@ -1676,117 +1675,6 @@ export default function ChartPage() {
           </p>
         </>
       )}
-    </div>
-  );
-}
-
-/* ── Levels card ── */
-
-function LevelsCard({ levels }: { levels: LevelRow[] }) {
-  if (levels.length === 0) {
-    return (
-      <Card label="Support / Resistance Levels">
-        <p className="mt-1 text-xs text-[var(--muted)]">
-          No levels data available.
-        </p>
-      </Card>
-    );
-  }
-
-  const columns: Array<{
-    key: keyof LevelRow & string;
-    label: string;
-    render?: (v: unknown) => React.ReactNode;
-  }> = [
-    {
-      key: "type",
-      label: "Type",
-      render: (v: unknown) => {
-        const t = String(v ?? "");
-        return (
-          <Badge variant={t === "support" ? "blue" : "red"}>
-            {t.toUpperCase()}
-          </Badge>
-        );
-      },
-    },
-    {
-      key: "level",
-      label: "Level",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    { key: "tier", label: "Tier" },
-    { key: "touches", label: "Touches" },
-    { key: "last_touch_date", label: "Last Touch" },
-  ];
-
-  return (
-    <div>
-      <h3 className="mb-2 text-sm font-semibold text-[var(--muted)]">
-        Support / Resistance ({levels.length})
-      </h3>
-      <Table
-        columns={columns}
-        data={levels as unknown as Record<string, unknown>[]}
-        sortable
-      />
-    </div>
-  );
-}
-
-/* ── Gaps card ── */
-
-function GapsCard({ gaps }: { gaps: GapRow[] }) {
-  if (gaps.length === 0) {
-    return (
-      <Card label="Gaps">
-        <p className="mt-1 text-xs text-[var(--muted)]">
-          No gap data available.
-        </p>
-      </Card>
-    );
-  }
-
-  const columns: Array<{
-    key: keyof GapRow & string;
-    label: string;
-    render?: (v: unknown) => React.ReactNode;
-  }> = [
-    { key: "date", label: "Date" },
-    {
-      key: "type",
-      label: "Type",
-      render: (v: unknown) => {
-        const t = String(v ?? "");
-        return (
-          <Badge variant={t === "bull_gap" ? "green" : "blue"}>
-            {t.replace(/_/g, " ").toUpperCase()}
-          </Badge>
-        );
-      },
-    },
-    {
-      key: "gap_low",
-      label: "Low",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-    {
-      key: "gap_high",
-      label: "High",
-      render: (v: unknown) => fmt(v as number | null, 2),
-    },
-  ];
-
-  return (
-    <div>
-      <h3 className="mb-2 text-sm font-semibold text-[var(--muted)]">
-        Gaps ({gaps.length})
-      </h3>
-      <Table
-        columns={columns}
-        data={gaps as unknown as Record<string, unknown>[]}
-        sortable
-      />
     </div>
   );
 }
