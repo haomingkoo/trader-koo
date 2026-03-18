@@ -1,4 +1,7 @@
+import type { CryptoOverlayState } from "../../lib/crypto/buildCandlestickChart";
+
 type IntervalValue = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "12h" | "1d" | "1w";
+type OverlayKey = keyof CryptoOverlayState;
 
 type IntervalOption = {
   value: IntervalValue;
@@ -8,12 +11,12 @@ type IntervalOption = {
 };
 
 type OverlayOption = {
-  key: string;
+  key: OverlayKey;
   label: string;
   minBars: number;
 };
 
-type OverlayState = Record<string, boolean>;
+type OverlayState = CryptoOverlayState;
 
 interface CryptoToolbarProps {
   allSymbols: readonly string[];
@@ -28,7 +31,7 @@ interface CryptoToolbarProps {
   formatVisibleWindow: (interval: IntervalOption["value"], barCount: number) => string;
   onSelectSymbol: (symbol: string) => void;
   onSelectInterval: (interval: IntervalValue) => void;
-  onToggleOverlay: (overlayKey: string) => void;
+  onToggleOverlay: (overlayKey: OverlayKey) => void;
 }
 
 export default function CryptoToolbar({

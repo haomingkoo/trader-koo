@@ -7,12 +7,7 @@ import {
   useCryptoCorrelation,
   useCryptoMarketStructure,
 } from "../api/hooks";
-import type {
-  CryptoBar,
-  CryptoIndicators,
-  CryptoStructurePayload,
-  LevelRow,
-} from "../api/types";
+import type { CryptoIndicators } from "../api/types";
 import {
   CryptoPriceCard,
 } from "../components/crypto/CryptoInsightCards";
@@ -24,6 +19,10 @@ import {
   type FormingCandleData,
   useCryptoSubscription,
 } from "../hooks/useCryptoSubscription";
+import {
+  buildCandlestickChart,
+  type CryptoOverlayState,
+} from "../lib/crypto/buildCandlestickChart";
 
 /* ── Constants ── */
 
@@ -68,7 +67,7 @@ const OVERLAY_OPTIONS = [
 
 type IntervalValue = (typeof INTERVALS)[number]["value"];
 type OverlayKey = (typeof OVERLAY_OPTIONS)[number]["key"];
-type OverlayState = Record<OverlayKey, boolean>;
+type OverlayState = CryptoOverlayState;
 type AxisRangeValue = string | number;
 
 interface PersistedZoomState {
@@ -87,25 +86,6 @@ const EMPTY_ZOOM_STATE: PersistedZoomState = {
   xRange: null,
   yRange: null,
 };
-
-/* ── Helpers ── */
-
-function formatPrice(price: number): string {
-  if (price >= 1000)
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
-  if (price >= 1)
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-  return price.toLocaleString("en-US", {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 6,
-  });
-}
 
 function formatVisibleWindow(interval: IntervalValue, barCount: number): string {
   if (!barCount) return "--";
@@ -200,388 +180,6 @@ function readNumericRange(
     return null;
   }
   return [left, right];
-}
-
-/* ── Candlestick chart builder with overlays ── */
-
-function addLevelOverlays(
-  levels: LevelRow[],
-  annotations: Record<string, unknown>[],
-  shapes: Record<string, unknown>[],
-) {
-  levels.forEach((level) => {
-    if (!Number.isFinite(level.level)) return;
-    const color = level.type === "support" ? "#3f8cff" : "#ff7b5b";
-    const dash = level.tier === "primary" ? "solid" : level.tier === "secondary" ? "dot" : "dash";
-
-    if (Number.isFinite(level.zone_low) && Number.isFinite(level.zone_high)) {
-      shapes.push({
-        type: "rect",
-        xref: "paper",
-        yref: "y",
-        x0: 0,
-        x1: 1,
-        y0: Math.min(level.zone_low, level.zone_high),
-        y1: Math.max(level.zone_low, level.zone_high),
-        fillcolor: level.type === "support" ? "rgba(63,140,255,0.09)" : "rgba(255,123,91,0.09)",
-        line: { width: 0 },
-      });
-    }
-
-    shapes.push({
-      type: "line",
-      xref: "paper",
-      yref: "y",
-      x0: 0,
-      x1: 1,
-      y0: level.level,
-      y1: level.level,
-      line: { color, width: level.tier === "primary" ? 2 : 1, dash },
-    });
-
-    annotations.push({
-      xref: "paper",
-      yref: "y",
-      x: 1.0,
-      y: level.level,
-      text: `${level.type.toUpperCase()} ${formatPrice(level.level)}`,
-      showarrow: false,
-      xanchor: "left",
-      yanchor: "middle",
-      xshift: 4,
-      borderpad: 2,
-      bgcolor: "rgba(18,25,39,0.9)",
-      bordercolor: color,
-      font: { color, size: 10 },
-    });
-  });
-}
-
-function buildCandlestickChart(
-  bars: CryptoBar[],
-  symbol: string,
-  structure: CryptoStructurePayload | null,
-  overlays: OverlayState,
-  formingCandle?: FormingCandleData | null,
-  uirevisionKey?: string,
-) {
-  const timestamps = bars.map((b) => b.timestamp);
-  const open = bars.map((b) => b.open);
-  const high = bars.map((b) => b.high);
-  const low = bars.map((b) => b.low);
-  const close = bars.map((b) => b.close);
-  const volume = bars.map((b) => b.volume);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const traces: Record<string, any>[] = [
-    {
-      type: "candlestick",
-      x: timestamps,
-      open,
-      high,
-      low,
-      close,
-      name: symbol,
-      xaxis: "x",
-      yaxis: "y",
-      increasing: {
-        line: { color: "#38d39f" },
-        fillcolor: "rgba(56,211,159,0.85)",
-      },
-      decreasing: {
-        line: { color: "#ff6b6b" },
-        fillcolor: "rgba(255,107,107,0.85)",
-      },
-    },
-    {
-      type: "bar",
-      x: timestamps,
-      y: volume,
-      name: "Volume",
-      marker: {
-        color: bars.map((b) =>
-          b.close >= b.open
-            ? "rgba(56,211,159,0.5)"
-            : "rgba(255,107,107,0.5)",
-        ),
-      },
-      xaxis: "x",
-      yaxis: "y2",
-    },
-  ];
-
-  // Forming candle as a semi-transparent dashed-outline bar
-  if (formingCandle && formingCandle.timestamp) {
-    const fColor = formingCandle.close >= formingCandle.open
-      ? "rgba(56,211,159,0.35)"
-      : "rgba(255,107,107,0.35)";
-    const fLine = formingCandle.close >= formingCandle.open
-      ? "rgba(56,211,159,0.8)"
-      : "rgba(255,107,107,0.8)";
-    traces.push({
-      type: "candlestick",
-      x: [formingCandle.timestamp],
-      open: [formingCandle.open],
-      high: [formingCandle.high],
-      low: [formingCandle.low],
-      close: [formingCandle.close],
-      name: `Forming (${Math.round(formingCandle.progress_pct)}%)`,
-      xaxis: "x",
-      yaxis: "y",
-      increasing: {
-        line: { color: fLine, width: 1, dash: "dot" },
-        fillcolor: fColor,
-      },
-      decreasing: {
-        line: { color: fLine, width: 1, dash: "dot" },
-        fillcolor: fColor,
-      },
-    });
-    // Forming candle volume bar
-    traces.push({
-      type: "bar",
-      x: [formingCandle.timestamp],
-      y: [formingCandle.volume],
-      name: "Forming Vol",
-      marker: { color: fColor },
-      xaxis: "x",
-      yaxis: "y2",
-      showlegend: false,
-    });
-  }
-
-  // Compute SMA overlays (rolling averages from available bars)
-  if (overlays.sma20 && bars.length >= 20) {
-    const sma20Values = computeRollingSma(close, 20);
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: timestamps.slice(19),
-      y: sma20Values,
-      name: "SMA 20",
-      line: { color: "#f0c040", width: 1.2 },
-      xaxis: "x",
-      yaxis: "y",
-    });
-  }
-  if (overlays.sma50 && bars.length >= 50) {
-    const sma50Values = computeRollingSma(close, 50);
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: timestamps.slice(49),
-      y: sma50Values,
-      name: "SMA 50",
-      line: { color: "#6baed6", width: 1.2 },
-      xaxis: "x",
-      yaxis: "y",
-    });
-  }
-  if (overlays.sma200 && bars.length >= 200) {
-    const sma200Values = computeRollingSma(close, 200);
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: timestamps.slice(199),
-      y: sma200Values,
-      name: "SMA 200",
-      line: { color: "#d291ff", width: 1.3 },
-      xaxis: "x",
-      yaxis: "y",
-    });
-  }
-
-  // Bollinger Band overlays
-  if (overlays.bollinger && bars.length >= 20) {
-    const bbands = computeRollingBollinger(close, 20, 2);
-    const bbTimestamps = timestamps.slice(19);
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: bbTimestamps,
-      y: bbands.upper,
-      name: "BOLL Upper",
-      line: { color: "#ffd21f", width: 1.8 },
-      showlegend: false,
-      xaxis: "x",
-      yaxis: "y",
-    });
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: bbTimestamps,
-      y: bbands.middle,
-      name: "BOLL Mid",
-      line: { color: "#f6bed8", width: 1.6 },
-      showlegend: false,
-      xaxis: "x",
-      yaxis: "y",
-    });
-    traces.push({
-      type: "scatter",
-      mode: "lines",
-      x: bbTimestamps,
-      y: bbands.lower,
-      name: "BOLL Lower",
-      line: { color: "#16c7ff", width: 1.8 },
-      showlegend: false,
-      xaxis: "x",
-      yaxis: "y",
-    });
-  }
-
-  const shapes: Record<string, unknown>[] = [];
-  const annotations: Record<string, unknown>[] = [];
-  addLevelOverlays(structure?.levels ?? [], annotations, shapes);
-
-  if (overlays.bollinger && bars.length >= 20) {
-    const bbands = computeRollingBollinger(close, 20, 2);
-    const bbUpper = bbands.upper[bbands.upper.length - 1];
-    const bbMiddle = bbands.middle[bbands.middle.length - 1];
-    const bbLower = bbands.lower[bbands.lower.length - 1];
-    if (
-      Number.isFinite(bbUpper) &&
-      Number.isFinite(bbMiddle) &&
-      Number.isFinite(bbLower)
-    ) {
-      annotations.push(
-        {
-          xref: "paper",
-          yref: "paper",
-          x: 0.015,
-          y: 0.985,
-          text: "BOLL",
-          showarrow: false,
-          xanchor: "left",
-          yanchor: "top",
-          font: { color: "#e7edf7", size: 12 },
-        },
-        {
-          xref: "paper",
-          yref: "paper",
-          x: 0.075,
-          y: 0.985,
-          text: `MID: ${formatPrice(bbMiddle)}`,
-          showarrow: false,
-          xanchor: "left",
-          yanchor: "top",
-          font: { color: "#f6bed8", size: 12 },
-        },
-        {
-          xref: "paper",
-          yref: "paper",
-          x: 0.17,
-          y: 0.985,
-          text: `UPPER: ${formatPrice(bbUpper)}`,
-          showarrow: false,
-          xanchor: "left",
-          yanchor: "top",
-          font: { color: "#ffd21f", size: 12 },
-        },
-        {
-          xref: "paper",
-          yref: "paper",
-          x: 0.315,
-          y: 0.985,
-          text: `LOWER: ${formatPrice(bbLower)}`,
-          showarrow: false,
-          xanchor: "left",
-          yanchor: "top",
-          font: { color: "#16c7ff", size: 12 },
-        },
-      );
-    }
-  }
-
-  // "FORMING" badge annotation near the forming candle
-  if (formingCandle && formingCandle.timestamp) {
-    const pctLabel = typeof formingCandle.progress_pct === "number"
-      ? `${Math.round(formingCandle.progress_pct)}%`
-      : "";
-    annotations.push({
-      xref: "x",
-      yref: "y",
-      x: formingCandle.timestamp,
-      y: formingCandle.high,
-      text: pctLabel ? `FORMING ${pctLabel}` : "FORMING",
-      showarrow: false,
-      xanchor: "center",
-      yanchor: "bottom",
-      yshift: 6,
-      bgcolor: "rgba(56,211,159,0.18)",
-      bordercolor: "rgba(56,211,159,0.5)",
-      borderpad: 2,
-      font: { color: "#38d39f", size: 9 },
-    });
-  }
-
-  const layout = {
-    paper_bgcolor: "transparent",
-    plot_bgcolor: "transparent",
-    uirevision: uirevisionKey ?? symbol,
-    font: { color: "#8ea0bd", size: 11 },
-    margin: { t: 30, r: 60, b: 50, l: 60 },
-    dragmode: "zoom" as const,
-    legend: {
-      orientation: "h" as const,
-      y: -0.04,
-      x: 0,
-      xanchor: "left" as const,
-    },
-    xaxis: {
-      gridcolor: "rgba(255,255,255,0.04)",
-      rangeslider: { visible: false },
-    },
-    yaxis: {
-      gridcolor: "rgba(255,255,255,0.06)",
-      domain: [0.28, 1],
-      title: "Price",
-    },
-    yaxis2: {
-      gridcolor: "rgba(255,255,255,0.04)",
-      domain: [0, 0.22],
-      title: "Volume",
-    },
-    shapes,
-    annotations,
-    height: 500,
-  };
-
-  return { traces, layout };
-}
-
-/* ── Client-side rolling computations for chart overlays ── */
-
-function computeRollingSma(values: number[], period: number): number[] {
-  const result: number[] = [];
-  for (let i = period - 1; i < values.length; i++) {
-    let sum = 0;
-    for (let j = i - period + 1; j <= i; j++) sum += values[j];
-    result.push(sum / period);
-  }
-  return result;
-}
-
-function computeRollingBollinger(
-  values: number[],
-  period: number,
-  stdDev: number,
-): { upper: number[]; middle: number[]; lower: number[] } {
-  const upper: number[] = [];
-  const middle: number[] = [];
-  const lower: number[] = [];
-
-  for (let i = period - 1; i < values.length; i++) {
-    const window = values.slice(i - period + 1, i + 1);
-    const mean = window.reduce((a, b) => a + b, 0) / period;
-    const variance = window.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
-    const sd = Math.sqrt(variance);
-    middle.push(mean);
-    upper.push(mean + stdDev * sd);
-    lower.push(mean - stdDev * sd);
-  }
-
-  return { upper, middle, lower };
 }
 
 /* ── Main page ── */
@@ -778,12 +376,13 @@ export default function CryptoPage() {
         formatVisibleWindow={formatVisibleWindow}
         onSelectSymbol={setSelectedSymbol}
         onSelectInterval={(value) => setSelectedInterval(value as IntervalValue)}
-        onToggleOverlay={(overlayKey) =>
+        onToggleOverlay={(overlayKey) => {
+          const key = overlayKey as OverlayKey;
           setOverlays((current) => ({
             ...current,
-            [overlayKey]: !current[overlayKey as OverlayKey],
-          }))
-        }
+            [key]: !current[key],
+          }));
+        }}
       />
 
       {/* Candlestick chart */}
