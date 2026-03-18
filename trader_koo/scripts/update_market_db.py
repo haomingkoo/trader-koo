@@ -62,6 +62,13 @@ DEFAULT_SOFT_FAIL_TICKERS = (
     "HYG",
     "IEF",
     "DIA",
+    "USO",
+    "UNG",
+    "SLV",
+    "EEM",
+    "FXI",
+    "UUP",
+    "IWM",
 )
 LOG = logging.getLogger("trader_koo.ingest")
 
@@ -863,6 +870,13 @@ def run(args: argparse.Namespace) -> None:
         "HYG",    # High-yield corporate bond ETF (credit risk proxy)
         "IEF",    # 7-10 year treasury ETF (mid-duration)
         "DIA",    # Dow Jones ETF (breadth confirmation)
+        "USO",    # Crude oil ETF (energy/inflation proxy)
+        "UNG",    # Natural gas ETF (energy proxy)
+        "SLV",    # Silver ETF (precious metals)
+        "EEM",    # Emerging markets ETF (global risk appetite)
+        "FXI",    # China large-cap ETF (China risk proxy)
+        "UUP",    # USD bull ETF (dollar strength proxy)
+        "IWM",    # Russell 2000 small-cap (risk appetite)
     ]
     for t in ALWAYS_FETCH:
         if t not in tickers:

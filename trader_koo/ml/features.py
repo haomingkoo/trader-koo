@@ -56,6 +56,10 @@ FEATURE_COLUMNS = [
     "fred_yield_curve_10y2y",
     "fred_high_yield_oas",
     "fred_fed_funds_rate",
+    # Commodities + global risk (from macro_features.py)
+    "macro_gold_ret_5d", "macro_gold_ret_21d",
+    "macro_oil_ret_5d", "macro_oil_ret_21d",
+    "macro_em_ret_5d", "macro_smallcap_ret_5d", "macro_usd_ret_5d",
 ]
 
 
