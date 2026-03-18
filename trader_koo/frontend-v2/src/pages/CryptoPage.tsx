@@ -13,18 +13,12 @@ import type {
   CryptoStructurePayload,
   LevelRow,
 } from "../api/types";
-import PlotlyWrapper from "../components/PlotlyWrapper";
 import {
-  BollingerCard,
-  BtcSpyCorrelationCard,
-  CryptoBreadthCard,
   CryptoPriceCard,
-  MacdCard,
-  RsiGauge,
-  StructureCard,
-  VwapSmaCard,
 } from "../components/crypto/CryptoInsightCards";
-import Spinner from "../components/ui/Spinner";
+import CryptoAnalyticsPanels from "../components/crypto/CryptoAnalyticsPanels";
+import CryptoToolbar from "../components/crypto/CryptoToolbar";
+import CryptoChartPanel from "../components/crypto/CryptoChartPanel";
 
 /* ── Constants ── */
 
@@ -928,136 +922,43 @@ export default function CryptoPage() {
       </div>
 
       {/* Chart controls */}
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex gap-1">
-              {ALL_SYMBOLS.map((sym) => (
-                <button
-                  key={sym}
-                  onClick={() => setSelectedSymbol(sym)}
-                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                    selectedSymbol === sym
-                      ? "bg-[var(--accent)] text-white"
-                      : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-                  }`}
-                >
-                  {sym.split("-")[0]}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {INTERVALS.map((iv) => (
-                <button
-                  key={iv.label}
-                  onClick={() => setSelectedInterval(iv.value)}
-                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                    selectedInterval === iv.value
-                      ? "bg-[var(--blue)] text-white"
-                      : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-                  }`}
-                >
-                  {iv.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="text-right text-xs text-[var(--muted)]">
-            <div>
-              {availableBarCount > 0
-                ? `${availableBarCount} bars · ${formatVisibleWindow(interval.value, availableBarCount)} visible`
-                : `Target window ${interval.targetWindow}`}
-            </div>
-            <div>{selectedSymbol.replace("-USD", "")} from native Binance history with live 1-minute patching</div>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-            Indicators
-          </span>
-          {OVERLAY_OPTIONS.map((option) => {
-            const unavailable = availableBarCount > 0 && availableBarCount < option.minBars;
-            const active = overlays[option.key];
-            return (
-              <button
-                key={option.key}
-                type="button"
-                disabled={unavailable}
-                title={unavailable ? `Needs ${option.minBars} bars on this timeframe` : undefined}
-                onClick={() =>
-                  setOverlays((current) => ({
-                    ...current,
-                    [option.key]: !current[option.key],
-                  }))
-                }
-                className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-                  unavailable
-                    ? "cursor-not-allowed border-[var(--line)] bg-[var(--panel)]/50 text-[var(--muted)] opacity-45"
-                    : active
-                      ? "border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--text)]"
-                      : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-                }`}
-              >
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-        {shortHistory && (
-          <div className="text-xs text-[var(--muted)]">
-            Showing {availableBarCount} {interval.label} bars cached so far. Missing history is backfilled from Binance and then stored locally.
-          </div>
-        )}
-      </div>
+      <CryptoToolbar
+        allSymbols={ALL_SYMBOLS}
+        intervals={INTERVALS}
+        overlayOptions={OVERLAY_OPTIONS}
+        selectedSymbol={selectedSymbol}
+        selectedInterval={selectedInterval}
+        overlays={overlays}
+        availableBarCount={availableBarCount}
+        shortHistory={shortHistory}
+        currentInterval={interval}
+        formatVisibleWindow={formatVisibleWindow}
+        onSelectSymbol={setSelectedSymbol}
+        onSelectInterval={(value) => setSelectedInterval(value as IntervalValue)}
+        onToggleOverlay={(overlayKey) =>
+          setOverlays((current) => ({
+            ...current,
+            [overlayKey]: !current[overlayKey as OverlayKey],
+          }))
+        }
+      />
 
       {/* Candlestick chart */}
-      {historyLoading && <Spinner className="mt-8" />}
-      {!historyLoading && chartResult && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
-          <PlotlyWrapper
-            data={chartResult.traces as unknown as Record<string, unknown>[]}
-            layout={chartLayout as Record<string, unknown>}
-            config={{
-              responsive: true,
-              displayModeBar: true,
-              scrollZoom: true,
-            }}
-            onRelayout={handleChartRelayout}
-            style={{ width: "100%", height: 500 }}
-          />
-        </div>
-      )}
-      {!historyLoading && !chartResult && connected && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--muted)]">
-          No chart data available yet. The app will backfill Binance history for this symbol and timeframe on demand.
-        </div>
-      )}
-      {!historyLoading && !chartResult && !connected && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--red)]">
-          Crypto feed disconnected — no chart data available.
-        </div>
-      )}
+      <CryptoChartPanel
+        historyLoading={historyLoading}
+        hasChart={Boolean(chartResult && chartLayout)}
+        connected={connected}
+        chartData={chartResult ? (chartResult.traces as unknown as Record<string, unknown>[]) : null}
+        chartLayout={chartLayout as Record<string, unknown> | null}
+        onRelayout={handleChartRelayout}
+      />
 
-      <StructureCard structure={structureData} />
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <BtcSpyCorrelationCard correlation={btcSpyCorrelation} />
-        <CryptoBreadthCard market={cryptoMarketStructure} />
-      </div>
-
-      {/* Technical indicator cards */}
-      {indicators && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <RsiGauge value={indicators.rsi_14} />
-          <MacdCard macd={indicators.macd} />
-          <BollingerCard bollinger={indicators.bollinger} />
-          <VwapSmaCard
-            vwap={indicators.vwap}
-            sma20={indicators.sma_20}
-            sma50={indicators.sma_50}
-          />
-        </div>
-      )}
+      <CryptoAnalyticsPanels
+        structure={structureData}
+        btcSpyCorrelation={btcSpyCorrelation}
+        cryptoMarketStructure={cryptoMarketStructure}
+        indicators={indicators}
+      />
 
       {/* Info footer */}
       <div className="text-xs text-[var(--muted)]">
