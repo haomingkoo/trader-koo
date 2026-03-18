@@ -24,38 +24,34 @@ import pandas as pd
 
 LOG = logging.getLogger(__name__)
 
+# Pruned feature set based on actual feature importance from first training runs.
+# Dropped: seasonality (zero signal), YOLO (insufficient data), binary MA flags
+# (too coarse), redundant macro features. Kept top 25 by importance.
 FEATURE_COLUMNS = [
-    # Momentum
+    # === Per-ticker features (what makes THIS stock different) ===
+    # Momentum (multi-horizon)
     "ret_1d", "ret_5d", "ret_10d", "ret_21d", "ret_63d",
-    # Volatility
+    # Volatility (top predictive cluster)
     "vol_5d", "vol_21d", "atr_pct_14", "bb_width",
     # Volume
     "volume_ratio_20d", "obv_slope_10d",
-    # Mean-reversion / trend
+    # Trend position (distance from key MAs)
     "dist_ma20_pct", "dist_ma50_pct", "dist_ma200_pct",
-    "ma20_above_ma50", "ma50_above_ma200",
-    # Regime context
-    "vix_level", "vix_percentile", "vix_ma20_ratio",
-    "vix_ret_5d",
-    # Time series features
+    # Time series (autocorrelation = mean-reversion signal)
     "autocorr_lag1", "autocorr_lag5",
     "trend_strength_10d", "mean_reversion_5d",
-    # Seasonality
-    "day_of_week", "month", "is_month_end", "is_quarter_end",
-    # YOLO (filled if available)
-    "has_yolo_pattern", "yolo_confidence",
-    # Cross-sectional ranks
+    # VIX regime (per-ticker duplicate but strongest cluster)
+    "vix_level", "vix_percentile", "vix_ma20_ratio", "vix_ret_5d",
+    # Cross-sectional rank (where this stock sits vs peers)
     "rank_ret_5d", "rank_ret_21d", "rank_vol_21d", "rank_volume_ratio",
-    # Macro features (from macro_features.py — same for all tickers on a date)
-    "macro_vix_close", "macro_vix_ma20", "macro_vix_ma50",
-    "macro_vix_percentile_252d", "macro_vix_realized_vol_21d",
-    "macro_vix_above_ma20", "macro_vix_above_ma50",
-    "macro_tnx_close", "macro_tnx_ret_5d", "macro_tnx_ret_21d", "macro_tnx_above_ma50",
-    "macro_sp500_ret_1d", "macro_sp500_ret_5d", "macro_sp500_ret_21d", "macro_sp500_ret_63d",
-    "macro_sp500_vol_21d", "macro_sp500_dist_ma50_pct", "macro_sp500_dist_ma200_pct",
-    "macro_sp500_ma50_above_ma200", "macro_sp500_breadth_ratio",
-    "macro_spy_volume_ratio_20d",
-    "macro_svix_ret_5d", "macro_svix_vix_correlation_21d",
+    # === Macro features (same for all tickers — market environment) ===
+    # Treasury (rate environment — #6 in importance)
+    "macro_tnx_close", "macro_tnx_ret_21d",
+    # Broad market
+    "macro_sp500_ret_63d", "macro_sp500_breadth_ratio",
+    "macro_sp500_vol_21d",
+    # Inverse VIX (vol-of-vol proxy)
+    "macro_svix_ret_5d",
 ]
 
 

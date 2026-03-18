@@ -526,6 +526,18 @@ def ml_score_universe(
         return {"ok": False, "error": str(exc)}
 
 
+@router.get("/api/admin/macro-snapshot")
+@require_admin_auth
+def macro_snapshot(request: Request) -> dict[str, Any]:
+    """Return current macro data snapshot (FRED + Polymarket)."""
+    try:
+        from trader_koo.ml.external_data import get_macro_snapshot
+
+        return {"ok": True, **get_macro_snapshot()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 _backtest_thread: threading.Thread | None = None
 _backtest_result: dict[str, Any] | None = None
 
