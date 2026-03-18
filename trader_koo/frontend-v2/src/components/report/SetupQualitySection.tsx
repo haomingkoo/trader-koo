@@ -276,6 +276,8 @@ export default function SetupQualitySection({
   const [sortAsc, setSortAsc] = useState(false);
   const [filterTier, setFilterTier] = useState<string>("all");
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const DEFAULT_VISIBLE = 10;
 
   const filtered = useMemo(() => {
     let result = [...rows];
@@ -391,7 +393,7 @@ export default function SetupQualitySection({
       ) : (
         <div className="space-y-3">
           <div className="space-y-3 md:hidden">
-            {filtered.map((row) => {
+            {(showAll ? filtered : filtered.slice(0, DEFAULT_VISIBLE)).map((row) => {
               const debate = debateMap.get(row.ticker) ?? normalizeDebate(row.debate_v1);
               const isExpanded = expandedTicker === row.ticker;
               return (
@@ -490,7 +492,7 @@ export default function SetupQualitySection({
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((row) => {
+                {(showAll ? filtered : filtered.slice(0, DEFAULT_VISIBLE)).map((row) => {
                   const debate = debateMap.get(row.ticker) ?? normalizeDebate(row.debate_v1);
                   const isExpanded = expandedTicker === row.ticker;
                   return (
@@ -508,6 +510,19 @@ export default function SetupQualitySection({
               </tbody>
             </table>
           </div>
+
+          {filtered.length > DEFAULT_VISIBLE && (
+            <div className="flex justify-center pt-1">
+              <button
+                onClick={() => setShowAll((prev) => !prev)}
+                className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:bg-[var(--panel-hover)] hover:text-[var(--blue)]"
+              >
+                {showAll
+                  ? `Show Top ${DEFAULT_VISIBLE}`
+                  : `Show All ${filtered.length} Setups`}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

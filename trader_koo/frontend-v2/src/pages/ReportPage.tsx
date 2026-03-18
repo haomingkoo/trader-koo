@@ -61,8 +61,11 @@ export default function ReportPage() {
     <div className="space-y-6">
       {/* NFA disclaimer banner */}
       <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
-        <strong>Research only. Not financial advice.</strong> This dashboard can be wrong, stale, or incomplete.
-        Treat it as a decision-support tool, not an instruction to buy or sell. Past performance does not guarantee future results.
+        <strong>For informational and educational purposes only.</strong> Nothing on this
+        page constitutes investment advice, a recommendation, or a solicitation to buy or sell
+        any security. All content may be inaccurate, incomplete, or outdated. Past performance
+        is not indicative of future results. Consult a licensed financial advisor before making
+        any investment decisions. Use entirely at your own risk.
       </div>
 
       {reportDetail && (

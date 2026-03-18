@@ -146,38 +146,90 @@ export function VixRegimeWidget({ regime }: { regime: RegimeContext | null }) {
         ? "amber"
         : "red";
 
+  const healthVariant =
+    healthState.toLowerCase().includes("healthy") || healthState.toLowerCase().includes("strong")
+      ? "green"
+      : healthState.toLowerCase().includes("warning") || healthState.toLowerCase().includes("weak")
+        ? "amber"
+        : "muted";
+
   return (
     <GlassCard>
-      <div className="flex flex-wrap items-center gap-4">
-        <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
-          VIX Regime
+      <div className="space-y-3">
+        {/* Header row */}
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+            VIX Regime
+          </div>
+          <Link
+            to="/vix"
+            className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+          >
+            Full Analysis &rarr;
+          </Link>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold tabular-nums text-[var(--text)]">
+
+        {/* VIX level + risk state */}
+        <div className="flex items-center gap-3">
+          <span className="text-2xl font-bold tabular-nums text-[var(--text)]">
             {formatReportNumber(vix.close, 2)}
           </span>
           <Badge variant={riskVariant}>{riskState.toUpperCase()}</Badge>
         </div>
-        <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-          <span>
-            Health:{" "}
-            <strong className="text-[var(--text)]">
-              {healthState} ({formatReportNumber(health.score, 1)}/100)
-            </strong>
-          </span>
+
+        {/* Key metrics grid */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-2.5">
+            <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+              Market Health
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <Badge variant={healthVariant} className="text-[9px]">
+                {healthState.toUpperCase()}
+              </Badge>
+              <span className="text-sm font-bold tabular-nums text-[var(--text)]">
+                {formatReportNumber(health.score, 0)}/100
+              </span>
+            </div>
+          </div>
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-2.5">
+            <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+              Participation Bias
+            </div>
+            <div className="mt-1 text-sm font-bold capitalize text-[var(--text)]">
+              {participationBias}
+            </div>
+          </div>
+          {vix.percentile_1y != null && (
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-2.5">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                1Y Percentile
+              </div>
+              <div className="mt-1 text-sm font-bold tabular-nums text-[var(--text)]">
+                {formatReportNumber(vix.percentile_1y, 0)}%
+              </div>
+            </div>
+          )}
+          {vix.ma20 != null && (
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-2.5">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                VIX 20-Day MA
+              </div>
+              <div className="mt-1 text-sm font-bold tabular-nums text-[var(--text)]">
+                {formatReportNumber(vix.ma20, 2)}
+              </div>
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-          <span>
-            Bias:{" "}
-            <strong className="text-[var(--text)]">{participationBias}</strong>
-          </span>
+
+        {/* Actionable takeaway */}
+        <div className="text-xs text-[var(--muted)]">
+          {vix.close != null && vix.close < 15 && "Low volatility environment. Wider stops may whipsaw; consider tighter position sizing."}
+          {vix.close != null && vix.close >= 15 && vix.close < 20 && "Normal volatility. Standard trading conditions."}
+          {vix.close != null && vix.close >= 20 && vix.close < 25 && "Elevated volatility. Consider reducing position sizes and widening stops."}
+          {vix.close != null && vix.close >= 25 && vix.close < 30 && "High volatility. Defensive posture recommended. Reduce exposure."}
+          {vix.close != null && vix.close >= 30 && "Extreme volatility. Risk-off. Consider sitting out or trading reduced size only."}
         </div>
-        <Link
-          to="/vix"
-          className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
-        >
-          Full VIX Analysis &rarr;
-        </Link>
       </div>
     </GlassCard>
   );
