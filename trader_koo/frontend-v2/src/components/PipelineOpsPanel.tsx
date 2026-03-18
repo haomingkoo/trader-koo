@@ -122,29 +122,41 @@ function freshnessColor(age: number | null | undefined, thresholdFresh: number, 
 function ApiKeyInput() {
   const [key, setKey] = useState(getAdminKey);
   const hasKey = key.length > 0;
+  const [visible, setVisible] = useState(hasKey);
 
   return (
-    <div className="flex items-center gap-2">
-      <span
-        className="text-sm"
-        title={hasKey ? "API key is set" : "No API key configured"}
-        aria-hidden="true"
-      >
-        {hasKey ? "\uD83D\uDD13" : "\uD83D\uDD12"}
-      </span>
-      <input
-        type="password"
-        value={key}
-        onChange={(e) => {
-          setKey(e.target.value);
-          setAdminKey(e.target.value);
-        }}
-        placeholder="Admin API key"
-        className="h-7 w-48 rounded-md border border-[var(--line)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none"
-      />
-      <span className="text-[10px] text-[var(--muted)]">
-        {hasKey ? "Key set" : "Required for actions"}
-      </span>
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span
+          className="text-sm"
+          title={hasKey ? "API key is set" : "No API key configured"}
+          aria-hidden="true"
+        >
+          {hasKey ? "\uD83D\uDD13" : "\uD83D\uDD12"}
+        </span>
+        <button
+          type="button"
+          onClick={() => setVisible((p) => !p)}
+          className="rounded-md border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)]"
+        >
+          {visible ? "Hide Admin Key" : hasKey ? "Admin Unlocked" : "Unlock Admin"}
+        </button>
+        <span className="text-[10px] text-[var(--muted)]">
+          {hasKey ? "Key stored locally" : "Required for actions"}
+        </span>
+      </div>
+      {visible && (
+        <input
+          type="password"
+          value={key}
+          onChange={(e) => {
+            setKey(e.target.value);
+            setAdminKey(e.target.value);
+          }}
+          placeholder="Admin API key"
+          className="h-8 w-full max-w-xs rounded-md border border-[var(--line)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none"
+        />
+      )}
     </div>
   );
 }

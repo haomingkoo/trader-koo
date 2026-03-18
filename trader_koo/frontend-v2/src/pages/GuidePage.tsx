@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import Card from "../components/ui/Card";
 import PipelineOpsPanel from "../components/PipelineOpsPanel";
@@ -55,12 +55,10 @@ const features: FeatureCard[] = [
 ];
 
 export default function GuidePage() {
-  const [opsOpen, setOpsOpen] = useState(false);
-
-  /* Expand by default on desktop (>= 768px), collapsed on mobile */
-  useEffect(() => {
-    setOpsOpen(window.matchMedia("(min-width: 768px)").matches);
-  }, []);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"general" | "operations">(
+    "general",
+  );
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -124,42 +122,32 @@ export default function GuidePage() {
         ))}
       </div>
 
-      {/* Pipeline & Operations — collapsible */}
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]">
-        <button
-          onClick={() => setOpsOpen((p) => !p)}
-          className="flex w-full items-center justify-between px-5 py-3 text-left transition-colors hover:bg-[var(--panel-hover)]"
-        >
-          <span className="text-sm font-semibold text-[var(--muted)]">
-            Pipeline &amp; Operations
-          </span>
-          <span className="text-xs text-[var(--muted)]">
-            {opsOpen ? "\u25B2" : "\u25BC"}
-          </span>
-        </button>
-        {opsOpen && (
-          <div className="border-t border-[var(--line)] px-5 py-4">
-            <PipelineOpsPanel />
+      {/* Data freshness + quiet settings entry */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <Card label="Data Freshness">
+          <div className="mt-1 space-y-1.5 text-xs text-[var(--muted)]">
+            <p>
+              All data is processed nightly via an automated pipeline:
+              <span className="ml-1 font-medium text-[var(--text)]">
+                Ingest &rarr; YOLO Detection &rarr; Report Generation
+              </span>
+            </p>
+            <p>
+              Market data refreshes Monday through Friday at 22:00 UTC.
+              Weekend snapshots include weekly timeframe YOLO seed runs.
+              Data shown is always as of the most recent pipeline completion.
+            </p>
           </div>
-        )}
+        </Card>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="inline-flex items-center gap-2 self-start rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)]"
+        >
+          <span aria-hidden="true">&#9881;</span>
+          Settings &amp; Admin
+        </button>
       </div>
-
-      {/* Data freshness disclaimer */}
-      <Card label="Data Freshness">
-        <div className="mt-1 space-y-1.5 text-xs text-[var(--muted)]">
-          <p>
-            All data is processed nightly via an automated pipeline:
-            <span className="ml-1 font-medium text-[var(--text)]">
-              Ingest &rarr; YOLO Detection &rarr; Report Generation
-            </span>
-          </p>
-          <p>
-            Market data refreshes Monday through Friday at 22:00 UTC.
-            Weekend snapshots include weekly timeframe YOLO seed runs.
-            Data shown is always as of the most recent pipeline completion.
-          </p>
-        </div>
-      </Card>
 
       {/* Quick links footer */}
       <div className="flex flex-wrap gap-3 text-xs">
@@ -173,6 +161,94 @@ export default function GuidePage() {
           </Link>
         ))}
       </div>
+
+      {settingsOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 px-4 py-8 backdrop-blur-sm">
+          <div className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel)] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text)]">
+                  Settings &amp; Admin
+                </h2>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  Advanced controls and pipeline diagnostics stay tucked away
+                  from the main guide flow.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+                className="rounded-md border border-[var(--line)] px-3 py-1.5 text-xs font-semibold text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)]"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex gap-2 border-b border-[var(--line)] px-5 py-3">
+              {[
+                { key: "general", label: "General" },
+                { key: "operations", label: "Operations" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() =>
+                    setSettingsTab(tab.key as "general" | "operations")
+                  }
+                  className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition-colors ${
+                    settingsTab === tab.key
+                      ? "bg-[var(--accent)]/15 text-[var(--text)] ring-1 ring-inset ring-[var(--accent)]/35"
+                      : "border border-[var(--line)] bg-[var(--bg)] text-[var(--muted)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="max-h-[calc(85vh-8rem)] overflow-y-auto px-5 py-5">
+              {settingsTab === "general" ? (
+                <div className="space-y-4">
+                  <Card label="Usage Notes">
+                    <div className="space-y-2 text-xs leading-relaxed text-[var(--muted)]">
+                      <p>
+                        v2 is the long-term interface and will eventually
+                        replace the legacy v1 surface.
+                      </p>
+                      <p>
+                        Pipeline internals and rerun controls are intentionally
+                        hidden from regular users unless someone opens the admin
+                        settings panel.
+                      </p>
+                      <p>
+                        Research outputs can be stale, partial, or unavailable
+                        when upstream data providers fail.
+                      </p>
+                    </div>
+                  </Card>
+                  <Card label="Data Freshness">
+                    <div className="space-y-2 text-xs leading-relaxed text-[var(--muted)]">
+                      <p>
+                        Nightly pipeline:
+                        <span className="ml-1 font-medium text-[var(--text)]">
+                          Ingest &rarr; YOLO Detection &rarr; Report Generation
+                        </span>
+                      </p>
+                      <p>
+                        Market data refreshes Monday through Friday at 22:00 UTC.
+                        Weekend snapshots include weekly timeframe YOLO seed
+                        runs.
+                      </p>
+                    </div>
+                  </Card>
+                </div>
+              ) : (
+                <PipelineOpsPanel />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
