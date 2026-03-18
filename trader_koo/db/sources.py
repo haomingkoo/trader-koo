@@ -122,6 +122,26 @@ class DataSourceManager:
                 timeout=timeout_sec,
             )
 
+            # Index tickers (^VIX, ^GSPC, etc.) often return empty data for
+            # narrow date-range queries.  Fall back to period="5d" which uses
+            # a different Yahoo endpoint that is more reliable for indices.
+            if (raw is None or raw.empty) and ticker.startswith("^"):
+                LOG.warning(
+                    "yfinance date-range fetch returned empty for index ticker %s; "
+                    "retrying with period='5d'",
+                    ticker,
+                )
+                raw = yf.download(
+                    tickers=ticker,
+                    period="5d",
+                    auto_adjust=auto_adjust,
+                    progress=False,
+                    actions=False,
+                    group_by="column",
+                    threads=False,
+                    timeout=timeout_sec,
+                )
+
             if raw is None or raw.empty:
                 metrics.failed_fetches += 1
                 return FetchResult(

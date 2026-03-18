@@ -1,119 +1,40 @@
-"""Optional Reddit-first social sentiment for the market dashboard.
+"""Social sentiment for the market dashboard.
 
-This intentionally mirrors the old workflow-harvester archive scraper style:
-curated subreddit targets, lightweight keyword gating, post-detail fetches,
-and top-comment enrichment.
+Provider priority:
+1. StockTwits public API (no auth, 200 req/hr, works from datacenter IPs)
+2. Reddit public JSON (fallback, blocked from most cloud IPs)
+
+StockTwits messages include user-tagged bullish/bearish sentiment labels,
+giving us real retail trader sentiment without needing NLP.
 """
 from __future__ import annotations
 
 import copy
 import datetime as dt
+import json
 import logging
 import math
 import os
 import re
 import threading
+import urllib.parse
+import urllib.request
 from typing import Any
-
-import requests
 
 LOG = logging.getLogger(__name__)
 
-_DEFAULT_SUBREDDITS = (
-    "wallstreetbets",
-    "stocks",
-    "investing",
-    "options",
-    "SecurityAnalysis",
-    "BitcoinMarkets",
-    "CryptoCurrency",
-    "ethtrader",
-    "economy",
-    "finance",
-)
-_DEFAULT_LOOKBACK_HOURS = 24
-_DEFAULT_POST_LIMIT = 6
-_DEFAULT_MIN_SCORE = 25
+_DEFAULT_TICKERS = ("SPY", "QQQ", "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "AMD", "GME")
 _DEFAULT_CACHE_TTL_SEC = 900
-_TOP_COMMENT_LIMIT = 4
-
-_MARKET_KEYWORDS = (
-    "market",
-    "stocks",
-    "bullish",
-    "bearish",
-    "buy",
-    "sell",
-    "calls",
-    "puts",
-    "long",
-    "short",
-    "trade",
-    "position",
-    "breakout",
-    "breakdown",
-    "support",
-    "resistance",
-    "earnings",
-    "fed",
-    "inflation",
-    "macro",
-    "risk on",
-    "risk off",
-    "bitcoin",
-    "btc",
-    "ethereum",
-    "eth",
-    "crypto",
-    "spy",
-    "qqq",
-    "volatility",
-    "liquidity",
-    "recession",
-)
-
-_BULLISH_TERMS = {
-    "bull",
-    "bullish",
-    "buy",
-    "calls",
-    "long",
-    "breakout",
-    "rally",
-    "rip",
-    "moon",
-    "squeeze",
-    "accumulate",
-    "upside",
-    "strong",
-    "beat",
-    "support",
-    "undervalued",
-    "outperform",
-}
-_BEARISH_TERMS = {
-    "bear",
-    "bearish",
-    "sell",
-    "puts",
-    "short",
-    "dump",
-    "crash",
-    "rug",
-    "breakdown",
-    "recession",
-    "overvalued",
-    "miss",
-    "weak",
-    "resistance",
-    "downside",
-    "underperform",
-}
+_DEFAULT_POST_LIMIT = 30
 
 _cache_lock = threading.Lock()
 _cache_expires_at: dt.datetime | None = None
 _cache_payload: dict[str, Any] | None = None
 
+
+# ---------------------------------------------------------------------------
+# Env helpers
+# ---------------------------------------------------------------------------
 
 def _csv_env(name: str, default: tuple[str, ...]) -> list[str]:
     raw = str(os.getenv(name, "")).strip()
@@ -136,7 +57,7 @@ def _int_env(name: str, default: int, *, lo: int, hi: int) -> int:
 
 
 def _request_timeout_sec() -> int:
-    return _int_env("TRADER_KOO_REDDIT_TIMEOUT_SEC", 15, lo=5, hi=60)
+    return _int_env("TRADER_KOO_SOCIAL_TIMEOUT_SEC", 15, lo=5, hi=60)
 
 
 def _cache_ttl_sec() -> int:
@@ -144,24 +65,7 @@ def _cache_ttl_sec() -> int:
 
 
 def _post_limit() -> int:
-    return _int_env("TRADER_KOO_REDDIT_POST_LIMIT", _DEFAULT_POST_LIMIT, lo=3, hi=20)
-
-
-def _min_score() -> int:
-    return _int_env("TRADER_KOO_REDDIT_MIN_SCORE", _DEFAULT_MIN_SCORE, lo=1, hi=500)
-
-
-def _user_agent() -> str:
-    return str(
-        os.getenv(
-            "TRADER_KOO_REDDIT_USER_AGENT",
-            "trader-koo/1.0 social sentiment (+https://trader.kooexperience.com)",
-        )
-    ).strip()
-
-
-def _lookback_hours() -> int:
-    return _DEFAULT_LOOKBACK_HOURS
+    return _int_env("TRADER_KOO_SOCIAL_POST_LIMIT", _DEFAULT_POST_LIMIT, lo=10, hi=50)
 
 
 def _iso_utc(value: dt.datetime) -> str:
@@ -191,23 +95,25 @@ def _label_for_score(score: int | None) -> str | None:
 
 def _empty_social_payload(
     *,
+    provider: str,
     now_utc: dt.datetime,
-    subreddits: list[str],
+    tickers: list[str],
     note: str,
     source_breakdown: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
-        "provider": "reddit_public_json",
+        "provider": provider,
         "source_type": "social",
         "available": False,
         "score": None,
         "raw_score": None,
         "label": None,
         "post_count": 0,
-        "subreddit_count": len(subreddits),
+        "subreddit_count": 0,
         "updated_at": _iso_utc(now_utc),
-        "lookback_hours": _lookback_hours(),
-        "subreddits": subreddits,
+        "lookback_hours": 24,
+        "subreddits": [],
+        "tickers": tickers,
         "note": note,
         "bullish_terms_total": 0,
         "bearish_terms_total": 0,
@@ -216,249 +122,152 @@ def _empty_social_payload(
     }
 
 
-def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-zA-Z][a-zA-Z0-9_+-]*", text.lower())
+# ---------------------------------------------------------------------------
+# StockTwits provider
+# ---------------------------------------------------------------------------
 
-
-def _matches_keywords(title: str, body: str) -> bool:
-    text = f"{title} {body}".lower()
-    return any(keyword in text for keyword in _MARKET_KEYWORDS)
-
-
-def _lexicon_score(text: str) -> tuple[float | None, int, int]:
-    tokens = _tokenize(text)
-    if not tokens:
-        return None, 0, 0
-    bullish = sum(1 for token in tokens if token in _BULLISH_TERMS)
-    bearish = sum(1 for token in tokens if token in _BEARISH_TERMS)
-    if bullish == 0 and bearish == 0:
-        return 0.0, 0, 0
-    raw_score = (bullish - bearish) / max(bullish + bearish, 1)
-    return raw_score, bullish, bearish
-
-
-def _post_detail_url(permalink: str) -> str:
-    if permalink.endswith("/"):
-        return f"https://www.reddit.com{permalink}.json"
-    return f"https://www.reddit.com{permalink}/.json"
-
-
-def _fetch_post_detail(permalink: str) -> tuple[str, list[str]]:
-    if not permalink:
-        return "", []
-    resp = requests.get(
-        _post_detail_url(permalink),
-        params={"raw_json": 1, "limit": _TOP_COMMENT_LIMIT},
-        headers={"User-Agent": _user_agent(), "Accept": "application/json"},
-        timeout=_request_timeout_sec(),
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    if not isinstance(payload, list) or len(payload) < 2:
-        return "", []
-
-    post_body = ""
-    try:
-        post_listing = ((payload[0] or {}).get("data") or {}).get("children") or []
-        if post_listing and isinstance(post_listing[0], dict):
-            post_data = post_listing[0].get("data") or {}
-            post_body = str(post_data.get("selftext") or "").strip()
-    except Exception:
-        post_body = ""
-
-    top_comments: list[str] = []
-    try:
-        comment_listing = ((payload[1] or {}).get("data") or {}).get("children") or []
-        for child in comment_listing[:_TOP_COMMENT_LIMIT]:
-            data = child.get("data") if isinstance(child, dict) else None
-            if not isinstance(data, dict):
-                continue
-            body = str(data.get("body") or "").strip()
-            score = max(int(data.get("score") or 0), 0)
-            if body and score >= 5:
-                top_comments.append(body)
-    except Exception:
-        top_comments = []
-
-    return post_body, top_comments
-
-
-def _normalize_post(post: dict[str, Any], subreddit: str) -> dict[str, Any] | None:
-    title = str(post.get("title") or "").strip()
-    body = str(post.get("selftext") or "").strip()
-    if not title and not body:
-        return None
-
-    upvotes = max(int(post.get("score") or 0), 0)
-    num_comments = max(int(post.get("num_comments") or 0), 0)
-    if upvotes < _min_score():
-        return None
-
-    permalink = str(post.get("permalink") or "").strip()
-    url = f"https://www.reddit.com{permalink}" if permalink else None
-    detail_body, top_comments = _fetch_post_detail(permalink)
-    body_parts = [body]
-    if detail_body:
-        body_parts.append(detail_body)
-    if top_comments:
-        body_parts.append("TOP COMMENTS:\n" + "\n---\n".join(top_comments))
-    merged_body = "\n\n".join(part for part in body_parts if part).strip()
-
-    if not _matches_keywords(title, merged_body):
-        return None
-
-    raw_score, bullish_terms, bearish_terms = _lexicon_score(f"{title}\n{merged_body}")
-    engagement = 1.0 + math.log1p(upvotes) + 0.25 * math.log1p(num_comments)
-    sentiment_score = _score_to_100(raw_score)
-    created_utc = post.get("created_utc")
-    created_at = None
-    if isinstance(created_utc, int | float):
-        created_at = _iso_utc(dt.datetime.fromtimestamp(created_utc, tz=dt.timezone.utc))
-
-    return {
-        "title": title,
-        "subreddit": subreddit,
-        "url": url,
-        "upvotes": upvotes,
-        "num_comments": num_comments,
-        "created_at": created_at,
-        "excerpt": merged_body[:280] if merged_body else None,
-        "raw_score": round(raw_score or 0.0, 4),
-        "sentiment_score": sentiment_score,
-        "label": _label_for_score(sentiment_score),
-        "bullish_terms": bullish_terms,
-        "bearish_terms": bearish_terms,
-        "engagement": round(engagement, 3),
-    }
-
-
-def _fetch_subreddit_posts(subreddit: str, *, limit: int) -> list[dict[str, Any]]:
-    url = f"https://www.reddit.com/r/{subreddit}/top.json"
-    resp = requests.get(
+def _stocktwits_get(symbol: str) -> dict[str, Any]:
+    """Fetch recent messages for a symbol from StockTwits public API."""
+    url = f"https://api.stocktwits.com/api/2/streams/symbol/{urllib.parse.quote(symbol)}.json"
+    req = urllib.request.Request(
         url,
-        params={"t": "day", "limit": limit, "raw_json": 1},
-        headers={"User-Agent": _user_agent(), "Accept": "application/json"},
-        timeout=_request_timeout_sec(),
+        headers={
+            "User-Agent": "trader-koo/1.0 (+https://trader.kooexperience.com)",
+            "Accept": "application/json",
+        },
     )
-    resp.raise_for_status()
-    payload = resp.json()
-    listing = payload.get("data") or {}
-    children = listing.get("children") or []
+    with urllib.request.urlopen(req, timeout=_request_timeout_sec()) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _fetch_stocktwits_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
+    tickers = _csv_env("TRADER_KOO_SOCIAL_TICKERS", _DEFAULT_TICKERS)
+
+    total_bullish = 0
+    total_bearish = 0
+    total_messages = 0
     posts: list[dict[str, Any]] = []
-    for child in children:
-        data = child.get("data") if isinstance(child, dict) else None
-        if isinstance(data, dict):
-            posts.append(data)
-    return posts
-
-
-def _fetch_reddit_social_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
-    subreddits = _csv_env("TRADER_KOO_REDDIT_SUBREDDITS", _DEFAULT_SUBREDDITS)
-    post_limit = _post_limit()
-
-    normalized_posts: list[dict[str, Any]] = []
     breakdown: list[dict[str, Any]] = []
-    weighted_total = 0.0
-    weight_total = 0.0
-    bullish_total = 0
-    bearish_total = 0
 
-    for subreddit in subreddits:
+    for ticker in tickers:
         try:
-            posts = _fetch_subreddit_posts(subreddit, limit=post_limit)
-        except Exception as exc:
-            LOG.warning("Reddit social sentiment fetch failed for r/%s: %s", subreddit, exc)
-            breakdown.append(
-                {
-                    "subreddit": subreddit,
-                    "post_count": 0,
-                    "avg_sentiment_score": None,
-                    "note": str(exc),
-                }
-            )
-            continue
+            data = _stocktwits_get(ticker)
+            messages = data.get("messages") or []
+            if not isinstance(messages, list):
+                messages = []
 
-        subreddit_scores: list[int] = []
-        for post in posts:
-            normalized = _normalize_post(post, subreddit)
-            if not normalized:
-                continue
-            normalized_posts.append(normalized)
-            bullish_total += int(normalized["bullish_terms"])
-            bearish_total += int(normalized["bearish_terms"])
-            subreddit_scores.append(int(normalized["sentiment_score"] or 50))
-            weighted_total += float(normalized["raw_score"]) * float(normalized["engagement"])
-            weight_total += float(normalized["engagement"])
+            ticker_bullish = 0
+            ticker_bearish = 0
+            ticker_count = 0
 
-        breakdown.append(
-            {
-                "subreddit": subreddit,
-                "post_count": len(subreddit_scores),
-                "avg_sentiment_score": round(sum(subreddit_scores) / len(subreddit_scores), 1)
-                if subreddit_scores
-                else None,
-                "note": None,
-            }
-        )
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                entities = msg.get("entities") or {}
+                sentiment = entities.get("sentiment") if isinstance(entities, dict) else None
+                if not isinstance(sentiment, dict):
+                    continue
+                basic = str(sentiment.get("basic") or "").strip().lower()
+                if basic not in ("bullish", "bearish"):
+                    continue
 
-    if weight_total <= 0 or not normalized_posts:
-        breakdown_errors = [
-            f"r/{item.get('subreddit')}: {item.get('note')}"
-            for item in breakdown
-            if isinstance(item, dict) and str(item.get("note") or "").strip()
-        ]
-        if breakdown_errors and len(breakdown_errors) == len(breakdown):
-            return _empty_social_payload(
-                now_utc=now_utc,
-                subreddits=subreddits,
-                note=(
-                    "Reddit public JSON requests failed for every configured subreddit. "
-                    + " | ".join(breakdown_errors[:3])
+                ticker_count += 1
+                if basic == "bullish":
+                    ticker_bullish += 1
+                else:
+                    ticker_bearish += 1
+
+                # Collect top posts for display (limit to 6 total)
+                if len(posts) < 6:
+                    body = str(msg.get("body") or "").strip()
+                    created = str(msg.get("created_at") or "").strip() or None
+                    user = msg.get("user") or {}
+                    username = str(user.get("username") or "").strip() if isinstance(user, dict) else None
+                    posts.append({
+                        "title": body[:120] if body else f"${ticker} — {basic}",
+                        "subreddit": f"StockTwits/${ticker}",
+                        "url": f"https://stocktwits.com/symbol/{ticker}",
+                        "upvotes": int(msg.get("likes", {}).get("total", 0)) if isinstance(msg.get("likes"), dict) else 0,
+                        "num_comments": 0,
+                        "created_at": created,
+                        "excerpt": body[:280] if body else None,
+                        "raw_score": 1.0 if basic == "bullish" else -1.0,
+                        "sentiment_score": 100 if basic == "bullish" else 0,
+                        "label": "Greed" if basic == "bullish" else "Fear",
+                        "bullish_terms": 1 if basic == "bullish" else 0,
+                        "bearish_terms": 1 if basic == "bearish" else 0,
+                        "engagement": 1.0,
+                    })
+
+            total_bullish += ticker_bullish
+            total_bearish += ticker_bearish
+            total_messages += ticker_count
+
+            breakdown.append({
+                "subreddit": f"StockTwits/${ticker}",
+                "post_count": ticker_count,
+                "avg_sentiment_score": (
+                    round((ticker_bullish / (ticker_bullish + ticker_bearish)) * 100, 1)
+                    if (ticker_bullish + ticker_bearish) > 0
+                    else None
                 ),
-                source_breakdown=breakdown,
-            )
+                "note": None,
+            })
+
+        except Exception as exc:
+            LOG.warning("StockTwits fetch failed for %s: %s", ticker, exc)
+            breakdown.append({
+                "subreddit": f"StockTwits/${ticker}",
+                "post_count": 0,
+                "avg_sentiment_score": None,
+                "note": str(exc),
+            })
+
+    if total_bullish + total_bearish == 0:
         return _empty_social_payload(
+            provider="stocktwits",
             now_utc=now_utc,
-            subreddits=subreddits,
-            note=(
-                "No Reddit posts passed the archive-style subreddit, engagement, "
-                "and keyword filters for the current window."
-            ),
+            tickers=tickers,
+            note="No sentiment-tagged StockTwits messages found for tracked tickers",
             source_breakdown=breakdown,
         )
 
-    raw_score = weighted_total / weight_total
+    raw_score = (total_bullish - total_bearish) / (total_bullish + total_bearish)
     score = _score_to_100(raw_score)
-    normalized_posts.sort(
-        key=lambda item: (float(item["engagement"]), int(item["upvotes"])),
-        reverse=True,
-    )
 
     return {
-        "provider": "reddit_public_json",
+        "provider": "stocktwits",
         "source_type": "social",
         "available": True,
         "score": score,
         "raw_score": round(raw_score, 4),
         "label": _label_for_score(score),
-        "post_count": len(normalized_posts),
-        "subreddit_count": len(subreddits),
+        "post_count": total_messages,
+        "subreddit_count": len(tickers),
         "updated_at": _iso_utc(now_utc),
-        "lookback_hours": _lookback_hours(),
-        "subreddits": subreddits,
+        "lookback_hours": 24,
+        "subreddits": [],
+        "tickers": tickers,
         "note": (
-            f"{len(normalized_posts)} Reddit posts aggregated from curated market "
-            "subreddits with post-detail and top-comment enrichment over the last 24h."
+            f"{total_messages} sentiment-tagged StockTwits messages across {len(tickers)} tickers "
+            f"({total_bullish} bullish, {total_bearish} bearish)"
         ),
-        "bullish_terms_total": bullish_total,
-        "bearish_terms_total": bearish_total,
-        "posts": normalized_posts[:6],
+        "bullish_terms_total": total_bullish,
+        "bearish_terms_total": total_bearish,
+        "posts": posts[:6],
         "source_breakdown": breakdown,
     }
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def get_social_sentiment(*, now_utc: dt.datetime | None = None, force_refresh: bool = False) -> dict[str, Any]:
-    """Return cached social sentiment metadata."""
+    """Return cached social sentiment metadata.
+
+    Uses StockTwits public API (no auth required, 200 req/hr).
+    """
     global _cache_expires_at, _cache_payload
 
     resolved_now = now_utc or dt.datetime.now(dt.timezone.utc)
@@ -476,7 +285,7 @@ def get_social_sentiment(*, now_utc: dt.datetime | None = None, force_refresh: b
         ):
             return copy.deepcopy(_cache_payload)
 
-    fresh_payload = _fetch_reddit_social_sentiment(resolved_now)
+    fresh_payload = _fetch_stocktwits_sentiment(resolved_now)
     expires_at = resolved_now + dt.timedelta(seconds=_cache_ttl_sec())
 
     with _cache_lock:

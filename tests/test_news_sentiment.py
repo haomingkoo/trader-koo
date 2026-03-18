@@ -7,7 +7,7 @@ from trader_koo.news_sentiment import get_external_news_sentiment
 
 
 class _FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict | list):
         self._payload = payload
 
     def read(self) -> bytes:
@@ -21,7 +21,8 @@ class _FakeResponse:
 
 
 class TestExternalNewsSentiment:
-    def test_returns_unavailable_when_alpha_vantage_key_missing(self, monkeypatch):
+    def test_returns_unavailable_when_no_keys_configured(self, monkeypatch):
+        monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
         monkeypatch.delenv("TRADER_KOO_ALPHA_VANTAGE_KEY", raising=False)
         monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
 
@@ -31,12 +32,67 @@ class TestExternalNewsSentiment:
         )
 
         assert payload["available"] is False
-        assert payload["provider"] == "alpha_vantage"
         assert payload["score"] is None
-        assert "TRADER_KOO_ALPHA_VANTAGE_KEY" in payload["note"]
+        assert "FINNHUB_API_KEY" in payload["note"]
 
-    def test_aggregates_alpha_vantage_news_sentiment(self, monkeypatch):
+    def test_finnhub_news_sentiment(self, monkeypatch):
+        monkeypatch.setenv("FINNHUB_API_KEY", "test-key")
+        monkeypatch.setenv("TRADER_KOO_SENTIMENT_TICKERS", "SPY")
+
+        call_count = {"sentiment": 0, "news": 0}
+
+        def _fake_urlopen(req, timeout=20):  # noqa: ARG001
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "news-sentiment" in url:
+                call_count["sentiment"] += 1
+                return _FakeResponse({
+                    "buzz": {
+                        "articlesInLastWeek": 25,
+                        "buzz": 1.1,
+                        "weeklyAverage": 22.7,
+                    },
+                    "companyNewsScore": 0.72,
+                    "sentiment": {
+                        "bearishPercent": 0.15,
+                        "bullishPercent": 0.85,
+                    },
+                    "symbol": "SPY",
+                })
+            if "company-news" in url:
+                call_count["news"] += 1
+                return _FakeResponse([
+                    {
+                        "headline": "Markets rally on strong earnings",
+                        "source": "Reuters",
+                        "url": "https://example.com/article-1",
+                        "datetime": 1710676200,
+                    },
+                ])
+            return _FakeResponse({})
+
+        monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+        payload = get_external_news_sentiment(
+            now_utc=dt.datetime(2026, 3, 17, 12, 30, tzinfo=dt.timezone.utc),
+            force_refresh=True,
+        )
+
+        assert payload["available"] is True
+        assert payload["provider"] == "finnhub"
+        assert payload["source_type"] == "news"
+        assert payload["score"] is not None
+        assert 50 < payload["score"] <= 100  # bullish 85% should score high
+        assert payload["label"] in {
+            "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed",
+        }
+        assert len(payload["headlines"]) >= 1
+        assert payload["headlines"][0]["title"] == "Markets rally on strong earnings"
+        assert call_count["sentiment"] >= 1
+
+    def test_falls_back_to_alpha_vantage(self, monkeypatch):
+        monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
         monkeypatch.setenv("TRADER_KOO_ALPHA_VANTAGE_KEY", "demo-key")
+
         monkeypatch.setattr(
             "urllib.request.urlopen",
             lambda req, timeout=20: _FakeResponse(
@@ -56,20 +112,6 @@ class TestExternalNewsSentiment:
                                 }
                             ],
                         },
-                        {
-                            "title": "Equity traders stay cautious into the Fed decision",
-                            "source": "Bloomberg",
-                            "url": "https://example.com/article-2",
-                            "time_published": "20260317T103000",
-                            "overall_sentiment_score": "-0.04",
-                            "ticker_sentiment": [
-                                {
-                                    "ticker": "QQQ",
-                                    "relevance_score": "0.7",
-                                    "ticker_sentiment_score": "0.05",
-                                }
-                            ],
-                        },
                     ]
                 }
             ),
@@ -82,15 +124,5 @@ class TestExternalNewsSentiment:
 
         assert payload["available"] is True
         assert payload["provider"] == "alpha_vantage"
-        assert payload["source_type"] == "news"
-        assert payload["article_count"] == 2
+        assert payload["article_count"] == 1
         assert payload["score"] is not None
-        assert payload["label"] in {
-            "Extreme Fear",
-            "Fear",
-            "Neutral",
-            "Greed",
-            "Extreme Greed",
-        }
-        assert len(payload["headlines"]) == 2
-        assert payload["headlines"][0]["title"].startswith("Risk appetite improves")
