@@ -390,6 +390,32 @@ def paper_trade_summary(
         for row in eq_rows
     ]
 
+    # Family edge, regime edge, VIX bucket analysis
+    family_edges: list[dict[str, Any]] = []
+    regime_edges: list[dict[str, Any]] = []
+    vix_bucket_edges: list[dict[str, Any]] = []
+    edge_feedback: list[dict[str, Any]] = []
+    try:
+        from trader_koo.paper_trade.family_edge import (
+            compute_family_edges,
+            compute_regime_edges,
+            compute_vix_bucket_edges,
+            generate_edge_feedback,
+        )
+
+        family_edges = compute_family_edges(conn, window_days=window_days)
+        regime_edges = compute_regime_edges(conn, window_days=window_days)
+        vix_bucket_edges = compute_vix_bucket_edges(conn, window_days=window_days)
+        edge_feedback = generate_edge_feedback(family_edges, regime_edges)
+    except Exception as exc:
+        LOG.warning("Edge computation failed (non-fatal): %s", exc)
+
+    base_feedback = _feedback_items(
+        overall=overall,
+        by_direction=by_direction,
+        by_family=by_family,
+    )
+
     return {
         "overall": overall,
         "by_direction": by_direction,
@@ -399,11 +425,10 @@ def paper_trade_summary(
         "equity_curve": equity_curve,
         "recent_trades": recent_trades(conn, limit=20),
         "policy": _policy_snapshot(config),
-        "feedback": _feedback_items(
-            overall=overall,
-            by_direction=by_direction,
-            by_family=by_family,
-        ),
+        "feedback": base_feedback + edge_feedback,
+        "family_edges": family_edges,
+        "regime_edges": regime_edges,
+        "vix_bucket_edges": vix_bucket_edges,
     }
 
 
