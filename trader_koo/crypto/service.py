@@ -372,6 +372,7 @@ def _latest_closed_bucket_start(interval_minutes: int, now: dt.datetime | None =
 
 
 def _native_history_is_stale(bars: list[CryptoBar], interval: str) -> bool:
+    """Check if bars are stale OR have gaps that need backfilling."""
     if not bars:
         return True
 
@@ -386,7 +387,30 @@ def _native_history_is_stale(bars: list[CryptoBar], interval: str) -> bool:
         latest = latest.astimezone(dt.timezone.utc)
 
     expected_latest = _latest_closed_bucket_start(interval_minutes)
-    return latest < expected_latest
+    if latest < expected_latest:
+        return True
+
+    # Check for gaps in the middle of the dataset
+    # A gap = two consecutive bars more than 2x the interval apart
+    gap_threshold = dt.timedelta(minutes=interval_minutes * 2)
+    for i in range(1, min(len(bars), 500)):  # check last 500 bars
+        t_prev = bars[i - 1].timestamp
+        t_curr = bars[i].timestamp
+        if t_prev.tzinfo is None:
+            t_prev = t_prev.replace(tzinfo=dt.timezone.utc)
+        if t_curr.tzinfo is None:
+            t_curr = t_curr.replace(tzinfo=dt.timezone.utc)
+        if (t_curr - t_prev) > gap_threshold:
+            LOG.warning(
+                "Gap detected in %s history: %s → %s (%.1fh)",
+                interval,
+                t_prev.isoformat(),
+                t_curr.isoformat(),
+                (t_curr - t_prev).total_seconds() / 3600,
+            )
+            return True
+
+    return False
 
 
 def _refresh_recent_native_history(
