@@ -1,21 +1,35 @@
 import { NavLink } from "react-router-dom";
 import { useState, useEffect } from "react";
+import {
+  BookOpen,
+  FileText,
+  Thermometer,
+  Calendar,
+  TrendingUp,
+  Bitcoin,
+  Search,
+  Wallet,
+  ChevronLeft,
+  ChevronRight,
+  X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 interface NavItem {
   to: string;
   label: string;
-  icon: string;
+  Icon: LucideIcon;
 }
 
 const navItems: NavItem[] = [
-  { to: "/", label: "Guide", icon: "\uD83D\uDCD6" },
-  { to: "/report", label: "Report", icon: "\uD83D\uDCCB" },
-  { to: "/vix", label: "VIX Analysis", icon: "\uD83C\uDF21\uFE0F" },
-  { to: "/earnings", label: "Earnings", icon: "\uD83D\uDCC5" },
-  { to: "/chart", label: "Chart", icon: "\uD83D\uDCC8" },
-  { to: "/crypto", label: "Crypto", icon: "\u20BF" },
-  { to: "/opportunities", label: "Opportunities", icon: "\uD83D\uDD0D" },
-  { to: "/paper-trades", label: "Paper Trades", icon: "\uD83D\uDCB0" },
+  { to: "/", label: "Guide", Icon: BookOpen },
+  { to: "/report", label: "Report", Icon: FileText },
+  { to: "/vix", label: "VIX Analysis", Icon: Thermometer },
+  { to: "/earnings", label: "Earnings", Icon: Calendar },
+  { to: "/chart", label: "Chart", Icon: TrendingUp },
+  { to: "/crypto", label: "Crypto", Icon: Bitcoin },
+  { to: "/opportunities", label: "Opportunities", Icon: Search },
+  { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
 ];
 
 export default function Sidebar({
@@ -27,7 +41,6 @@ export default function Sidebar({
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
-  // Close mobile sidebar on route change (NavLink click)
   useEffect(() => {
     if (mobileOpen) {
       const handleResize = () => {
@@ -56,15 +69,14 @@ export default function Sidebar({
           className="hidden rounded p-1 text-[var(--muted)] transition-colors hover:bg-[var(--panel-hover)] hover:text-[var(--text)] md:block"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {collapsed ? "\u276F" : "\u276E"}
+          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
-        {/* Mobile close button */}
         <button
           onClick={onMobileClose}
           className="rounded p-1 text-[var(--muted)] transition-colors hover:bg-[var(--panel-hover)] hover:text-[var(--text)] md:hidden"
           aria-label="Close navigation menu"
         >
-          &#10005;
+          <X size={16} />
         </button>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 p-2">
@@ -82,7 +94,7 @@ export default function Sidebar({
               }`
             }
           >
-            <span className="text-base" aria-hidden="true">{item.icon}</span>
+            <item.Icon size={18} strokeWidth={1.75} aria-hidden="true" />
             {!collapsed && <span>{item.label}</span>}
           </NavLink>
         ))}
@@ -99,14 +111,12 @@ export default function Sidebar({
 
   return (
     <>
-      {/* Desktop sidebar */}
       <aside
         className={`hidden md:flex flex-col border-r border-[var(--line)] bg-[var(--panel)] transition-all duration-200 ${collapsed ? "w-14" : "w-52"}`}
       >
         {sidebarContent}
       </aside>
 
-      {/* Mobile overlay */}
       {mobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50 md:hidden"
@@ -115,7 +125,6 @@ export default function Sidebar({
         />
       )}
 
-      {/* Mobile drawer */}
       <aside
         className={`fixed inset-y-0 left-0 z-50 flex w-52 flex-col border-r border-[var(--line)] bg-[var(--panel)] transition-transform duration-200 md:hidden ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
