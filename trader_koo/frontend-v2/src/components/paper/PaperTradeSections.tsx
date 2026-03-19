@@ -302,9 +302,9 @@ function AttributionTable({
                   {fmtPct(stats.avg_pnl_pct, "%", true)}
                 </td>
                 {showAvgR && (
-                  <td className={`px-3 py-1.5 text-right font-medium ${pnlColor((stats as Record<string, unknown>).avg_r_multiple as number | null)}`}>
-                    {typeof (stats as Record<string, unknown>).avg_r_multiple === "number"
-                      ? `${((stats as Record<string, unknown>).avg_r_multiple as number).toFixed(2)}R`
+                  <td className={`px-3 py-1.5 text-right font-medium ${pnlColor((stats as unknown as Record<string, unknown>).avg_r_multiple as number | null)}`}>
+                    {typeof (stats as unknown as Record<string, unknown>).avg_r_multiple === "number"
+                      ? `${((stats as unknown as Record<string, unknown>).avg_r_multiple as number).toFixed(2)}R`
                       : "\u2014"}
                   </td>
                 )}
@@ -563,7 +563,7 @@ export function exportTradesToCsv(trades: PaperTrade[]): void {
   const header = CSV_COLUMNS.join(",");
   const rows = trades.map((trade) =>
     CSV_COLUMNS.map((col) =>
-      escapeCsvField((trade as Record<string, unknown>)[col]),
+      escapeCsvField((trade as unknown as Record<string, unknown>)[col]),
     ).join(","),
   );
   const csvContent = [header, ...rows].join("\n");
