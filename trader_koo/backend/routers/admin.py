@@ -637,6 +637,7 @@ def run_backtest_endpoint(
     end_date: str = Query(default=None),
     max_positions: int = Query(default=5),
     min_win_prob: float = Query(default=0.55),
+    short_threshold: float = Query(default=0.45),
 ) -> dict[str, Any]:
     """Run a walk-forward backtest in background. Check /api/admin/backtest-result."""
     global _backtest_thread, _backtest_result
@@ -657,6 +658,7 @@ def run_backtest_endpoint(
                     end_date=end_date,
                     max_positions=max_positions,
                     min_win_prob=min_win_prob,
+                    short_threshold=short_threshold,
                 )
             finally:
                 conn.close()
