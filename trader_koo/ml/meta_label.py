@@ -86,6 +86,51 @@ def build_meta_labels(
     return result
 
 
+def build_meta_labels_from_oos(
+    dataset: pd.DataFrame,
+    oos_indices: list[int],
+    oos_probs: list[float],
+    feature_cols: list[str],
+) -> pd.DataFrame:
+    """Generate meta-labels using ONLY out-of-sample predictions.
+
+    This prevents inflated meta-labels from in-sample predictions where
+    the primary model has memorized training data.
+
+    Parameters
+    ----------
+    dataset : full training dataset with 'target' column
+    oos_indices : row indices from each fold's test set
+    oos_probs : corresponding predicted probabilities (out-of-sample)
+    feature_cols : feature column names
+    """
+    if not oos_indices:
+        LOG.warning("No OOS predictions available for meta-labeling")
+        return pd.DataFrame()
+
+    # Only keep rows that have OOS predictions (deduplicate if overlapping folds)
+    oos_df = dataset.loc[dataset.index.isin(oos_indices)].copy()
+    prob_map = dict(zip(oos_indices, oos_probs))
+    oos_df["primary_prob"] = oos_df.index.map(prob_map)
+    oos_df = oos_df.dropna(subset=["primary_prob"])
+
+    oos_df["primary_pred"] = (oos_df["primary_prob"] >= 0.5).astype(int)
+    actual = oos_df["target"].values
+    primary_preds = oos_df["primary_pred"].values
+
+    # Meta-label: was the primary model correct? (OOS only)
+    oos_df["meta_label"] = (primary_preds == actual).astype(int)
+    oos_df["primary_confidence"] = np.abs(oos_df["primary_prob"] - 0.5) * 2
+
+    LOG.info(
+        "Meta-labels (OOS only): %d samples, primary OOS accuracy=%.3f, meta_label_rate=%.3f",
+        len(oos_df),
+        float((primary_preds == actual).mean()),
+        float(oos_df["meta_label"].mean()),
+    )
+    return oos_df
+
+
 def train_meta_model(
     dataset: pd.DataFrame,
     feature_cols: list[str],

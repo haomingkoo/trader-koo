@@ -350,7 +350,7 @@ def extract_features_for_universe(
             ("BAMLH0A0HYM2", "fred_high_yield_oas"),
             ("DFF", "fred_fed_funds_rate"),
         ]:
-            rows = fetch_fred_series(series_id, lookback_days=90)
+            rows = fetch_fred_series(series_id, lookback_days=90, as_of_date=as_of_date)
             # Find the value on or before as_of_date (no future data)
             value = np.nan
             for r in reversed(rows):

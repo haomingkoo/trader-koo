@@ -216,6 +216,8 @@ def train_walk_forward(
     max_date = all_dates[-1]
 
     folds: list[dict[str, Any]] = []
+    oos_indices: list[int] = []  # indices of out-of-sample test rows
+    oos_probs: list[float] = []  # OOS predicted probabilities
     fold_start = min_date
     best_model = None
     best_auc = 0.0
@@ -240,17 +242,22 @@ def train_walk_forward(
             fold_start += pd.Timedelta(days=step_days)
             continue
 
-        # Handle NaN
-        X_train = X_train.fillna(X_train.median())
-        X_test = X_test.fillna(X_train.median())
+        # Handle NaN — save training medians for consistent imputation at scoring
+        train_medians = X_train.median()
+        X_train = X_train.fillna(train_medians)
+        X_test = X_test.fillna(train_medians)
 
         # Train
         model = lgb.LGBMClassifier(**LGBM_PARAMS)
         model.fit(X_train, y_train)
 
-        # Predict
+        # Predict (out-of-sample)
         y_pred = model.predict(X_test)
         y_prob = model.predict_proba(X_test)[:, 1]
+
+        # Collect OOS predictions for meta-labeling (no in-sample contamination)
+        oos_indices.extend(X_test.index.tolist())
+        oos_probs.extend(y_prob.tolist())
 
         # Metrics
         try:
@@ -294,8 +301,8 @@ def train_walk_forward(
     if not folds:
         return {"ok": False, "error": "No valid folds produced", "folds": []}
 
-    # Save the last fold's model (most recent data)
-    model_path = _save_model(model, feature_cols, folds)
+    # Save the last fold's model (most recent data) + training medians for imputation
+    model_path = _save_model(model, feature_cols, folds, train_medians=train_medians)
 
     # Feature importance from the last model
     importance = dict(zip(feature_cols, model.feature_importances_.tolist()))
@@ -306,12 +313,16 @@ def train_walk_forward(
     avg_acc = round(np.mean([f["accuracy"] for f in folds]), 4)
     avg_prec = round(np.mean([f["precision"] for f in folds]), 4)
 
-    # Meta-labeling: train secondary model to filter primary signals
+    # Meta-labeling: train secondary model using ONLY out-of-sample predictions.
+    # Previously this used the full dataset (train+test) which inflated meta-labels
+    # because in-sample predictions are more accurate than OOS ones.
     meta_metrics: dict[str, Any] = {"ok": False, "note": "not_attempted"}
     try:
-        from trader_koo.ml.meta_label import build_meta_labels, train_meta_model
+        from trader_koo.ml.meta_label import build_meta_labels_from_oos, train_meta_model
 
-        meta_dataset = build_meta_labels(dataset, model, feature_cols)
+        meta_dataset = build_meta_labels_from_oos(
+            dataset, oos_indices, oos_probs, feature_cols,
+        )
         meta_model, meta_metrics = train_meta_model(meta_dataset, feature_cols)
         if meta_model is not None:
             # Save meta-model alongside primary
@@ -346,6 +357,8 @@ def _save_model(
     model: lgb.LGBMClassifier,
     feature_cols: list[str],
     folds: list[dict[str, Any]],
+    *,
+    train_medians: pd.Series | None = None,
 ) -> Path:
     """Save model + metadata to disk."""
     model_dir = _model_dir()
@@ -359,6 +372,14 @@ def _save_model(
 
     model.booster_.save_model(str(model_path))
 
+    # Save training medians for consistent NaN imputation at scoring time
+    medians_dict: dict[str, float] = {}
+    if train_medians is not None:
+        medians_dict = {
+            k: float(v) for k, v in train_medians.to_dict().items()
+            if pd.notna(v)
+        }
+
     meta = {
         "model_type": "lightgbm",
         "task": "binary_classification",
@@ -367,6 +388,7 @@ def _save_model(
         "lgbm_params": LGBM_PARAMS,
         "folds": folds,
         "trained_at": ts,
+        "train_medians": medians_dict,
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
