@@ -170,13 +170,15 @@ def apply_meta_filter(
     Returns adjusted probabilities: if meta-model says "don't trade",
     probability is pushed toward 0.5 (uncertain).
     """
-    meta_features = feature_cols + ["primary_confidence", "primary_prob"]
-    available = [c for c in meta_features if c in features.columns]
-
-    X = features[available].copy()
+    # Build feature matrix with primary model outputs FIRST, then filter to available
+    X = features[feature_cols].copy() if all(c in features.columns for c in feature_cols) else features.copy()
     X["primary_prob"] = primary_probs
     X["primary_confidence"] = np.abs(primary_probs - 0.5) * 2
     X = X.fillna(0.0)
+
+    # Use all columns the meta-model was trained on
+    meta_features = feature_cols + ["primary_confidence", "primary_prob"]
+    available = [c for c in meta_features if c in X.columns]
 
     meta_probs = meta_model.predict_proba(X[available])[:, 1]
 

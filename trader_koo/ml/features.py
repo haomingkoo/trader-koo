@@ -335,12 +335,24 @@ def extract_features_for_universe(
         LOG.warning("Macro feature extraction failed (non-fatal): %s", exc)
 
     # FRED macro data (yield curve, credit stress, rates)
+    # NOTE: FRED data is fetched as of as_of_date to prevent data leakage.
+    # During training, as_of_date is in the past, so we must NOT use today's values.
     try:
-        from trader_koo.ml.external_data import get_fred_latest
+        from trader_koo.ml.external_data import fetch_fred_series
 
-        feat_df["fred_yield_curve_10y2y"] = get_fred_latest("T10Y2Y")
-        feat_df["fred_high_yield_oas"] = get_fred_latest("BAMLH0A0HYM2")
-        feat_df["fred_fed_funds_rate"] = get_fred_latest("DFF")
+        for series_id, col_name in [
+            ("T10Y2Y", "fred_yield_curve_10y2y"),
+            ("BAMLH0A0HYM2", "fred_high_yield_oas"),
+            ("DFF", "fred_fed_funds_rate"),
+        ]:
+            rows = fetch_fred_series(series_id, lookback_days=90)
+            # Find the value on or before as_of_date (no future data)
+            value = np.nan
+            for r in reversed(rows):
+                if r["date"] <= as_of_date:
+                    value = r["value"]
+                    break
+            feat_df[col_name] = value
     except Exception as exc:
         LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
 

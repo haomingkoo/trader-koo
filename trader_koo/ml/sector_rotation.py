@@ -54,17 +54,20 @@ def _compute_sector_data(conn: sqlite3.Connection, as_of_date: str) -> dict[str,
     etf_tickers = list(SECTOR_ETFS.keys())
     placeholders = ",".join("?" * len(etf_tickers))
 
-    # Single query: get last 22 closes for ALL sector ETFs at once
+    # Single query with date lower bound to avoid full table scan
+    import pandas as pd
+    date_lower = (pd.Timestamp(as_of_date) - pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+
     rows = conn.execute(
         f"""
         SELECT ticker, date, CAST(close AS REAL) AS close
         FROM price_daily
         WHERE ticker IN ({placeholders})
-          AND date <= ?
+          AND date >= ? AND date <= ?
           AND close IS NOT NULL AND close > 0
         ORDER BY ticker, date DESC
         """,
-        (*etf_tickers, as_of_date),
+        (*etf_tickers, date_lower, as_of_date),
     ).fetchall()
 
     # Group by ticker, keep last 22 per ticker
