@@ -74,7 +74,7 @@ function addLevelOverlays(
       yref: "y",
       x: 1.0,
       y: level.level,
-      text: `${level.type.toUpperCase()} ${formatPrice(level.level)}`,
+      text: `${level.type === "support" ? "SUP" : "RES"} ${formatPrice(level.level)}`,
       showarrow: false,
       xanchor: "left",
       yanchor: "middle",
