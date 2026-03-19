@@ -87,11 +87,11 @@ function EventCard({ event }: { event: PolyEvent }) {
         </div>
       )}
 
-      <div className="mt-2 flex items-center gap-3 text-[9px] text-[var(--muted)]">
+      <div className="mt-2 flex items-center gap-3 text-[10px] text-[var(--muted)]">
         <span>Vol: <strong className="text-[var(--text)]">{formatVolume(event.total_volume)}</strong></span>
         <span>{event.market_count} market{event.market_count !== 1 ? "s" : ""}</span>
         {event.end_date && (
-          <span>Ends {new Date(event.end_date).toLocaleDateString()}</span>
+          <span>Ends <strong className="text-[var(--text)]">{new Date(event.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</strong></span>
         )}
       </div>
     </a>

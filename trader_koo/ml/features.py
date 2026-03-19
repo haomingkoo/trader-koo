@@ -12,10 +12,16 @@ Feature categories:
 7. Seasonality (day of week, month, quarter effects)
 8. YOLO patterns (if available in DB)
 9. Cross-sectional ranks
+10. News sentiment (Finnhub company-news + RSS lexicon scoring)
+11. Earnings proximity (days to next earnings, earnings week flag)
+12. Polymarket prediction market probabilities
 """
 from __future__ import annotations
 
+import datetime as dt
+import json
 import logging
+import re
 import sqlite3
 from typing import Any
 
@@ -63,6 +69,16 @@ FEATURE_COLUMNS = [
     # Sector rotation (from sector_rotation.py)
     "sector_rank", "sector_momentum_5d", "sector_momentum_21d",
     "leading_sector_momentum", "lagging_sector_momentum", "sector_dispersion",
+    # News sentiment (Finnhub company-news + RSS lexicon scoring)
+    "news_sentiment_score",
+    # Earnings proximity (vol expansion + positioning into catalyst)
+    "days_to_next_earnings", "is_earnings_week",
+    # Polymarket prediction market probabilities (from external_data.py)
+    # NOTE: Live-only features — Polymarket API returns current prices, not historical.
+    # These will be NaN during historical training. Only useful for live scoring.
+    "polymarket_fed_cut_prob",
+    "polymarket_recession_prob",
+    "polymarket_macro_sentiment",
 ]
 
 
@@ -113,6 +129,246 @@ def _mean_reversion_signal(returns: pd.Series, window: int = 5) -> float:
     if len(returns) < window:
         return np.nan
     return float(returns.iloc[-window:].sum())
+
+
+def _get_news_sentiment_scores(
+    tickers: list[str],
+    as_of_date: str,
+    lookback_days: int = 3,
+) -> dict[str, float]:
+    """Fetch per-ticker news sentiment scores using Finnhub company-news + lexicon.
+
+    Returns a dict mapping ticker -> raw sentiment score in [-1, 1].
+    Uses only news published on or before *as_of_date* (backward-looking).
+    Returns NaN for tickers with no scoreable headlines or on API failure.
+    """
+    try:
+        from trader_koo.news_sentiment import _finnhub_get, _finnhub_key
+        from trader_koo.rss_news import _score_headline
+    except ImportError:
+        LOG.warning("News sentiment modules not available; skipping news features")
+        return {}
+
+    api_key = _finnhub_key()
+    if not api_key:
+        LOG.debug("FINNHUB_API_KEY not set; news_sentiment_score will be NaN")
+        return {}
+
+    date_to = as_of_date
+    date_from = (
+        pd.Timestamp(as_of_date) - pd.Timedelta(days=lookback_days)
+    ).strftime("%Y-%m-%d")
+
+    scores: dict[str, float] = {}
+    for ticker in tickers:
+        try:
+            articles = _finnhub_get(
+                "company-news",
+                {"symbol": ticker, "from": date_from, "to": date_to},
+                api_key,
+            )
+            if not isinstance(articles, list):
+                scores[ticker] = np.nan
+                continue
+
+            # Filter articles to only those published on or before as_of_date
+            # Finnhub returns datetime as unix timestamp in "datetime" field
+            as_of_ts = pd.Timestamp(as_of_date).timestamp() + 86400  # end of day
+            headline_scores: list[float] = []
+            for item in articles[:30]:
+                if not isinstance(item, dict):
+                    continue
+                article_ts = item.get("datetime")
+                if isinstance(article_ts, int | float) and article_ts > as_of_ts:
+                    continue  # skip future articles (safety check)
+                headline = str(item.get("headline") or "").strip()
+                summary = str(item.get("summary") or "").strip()
+                if not headline:
+                    continue
+                raw, _bullish, _bearish = _score_headline(headline, summary)
+                if raw is not None and raw != 0.0:
+                    headline_scores.append(raw)
+
+            if headline_scores:
+                scores[ticker] = sum(headline_scores) / len(headline_scores)
+            else:
+                scores[ticker] = np.nan
+        except Exception as exc:
+            LOG.debug("News sentiment fetch failed for %s: %s", ticker, exc)
+            scores[ticker] = np.nan
+
+    return scores
+
+
+def _parse_finviz_earnings_date(
+    raw_json_str: str | None,
+    as_of_date: dt.date,
+) -> dt.date | None:
+    """Extract and parse earnings date from Finviz raw_json.
+
+    Uses the same parsing logic as catalyst_data.parse_earnings_value
+    but inlined here to avoid a circular import and keep the feature
+    pipeline self-contained.
+    """
+    if not raw_json_str:
+        return None
+    try:
+        raw_obj = json.loads(raw_json_str)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(raw_obj, dict):
+        return None
+
+    # Extract the earnings value from the raw object
+    earnings_raw = None
+    for key in ("Earnings", "Earnings Date", "earnings", "earningsDate"):
+        value = raw_obj.get(key)
+        if value not in {None, ""}:
+            out = str(value).strip()
+            if out and out != "-":
+                earnings_raw = out
+                break
+    if not earnings_raw:
+        return None
+
+    # Parse the earnings string into a date
+    upper = earnings_raw.upper()
+    # Strip session tokens (BMO/AMC) before date parsing
+    cleaned = upper
+    for token in (
+        "BMO", "AMC", "BEFORE OPEN", "BEFORE MARKET OPEN",
+        "AFTER CLOSE", "AFTER MARKET CLOSE", "/", "|",
+    ):
+        cleaned = cleaned.replace(token, " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
+
+    parsed_date: dt.date | None = None
+    if cleaned.startswith("TODAY"):
+        parsed_date = as_of_date
+    elif cleaned.startswith("TOMORROW"):
+        parsed_date = as_of_date + dt.timedelta(days=1)
+    else:
+        fragments = [cleaned]
+        if "," in cleaned:
+            fragments.append(cleaned.replace(",", ""))
+        for frag in fragments:
+            for fmt in ("%b %d %Y", "%B %d %Y", "%b %d", "%B %d"):
+                try:
+                    parsed = dt.datetime.strptime(frag, fmt)
+                except ValueError:
+                    continue
+                year = parsed.year if "%Y" in fmt else as_of_date.year
+                parsed_date = dt.date(year, parsed.month, parsed.day)
+                # If no year in format and date is far in the past, bump year
+                if "%Y" not in fmt and parsed_date < (as_of_date - dt.timedelta(days=45)):
+                    parsed_date = dt.date(year + 1, parsed.month, parsed.day)
+                break
+            if parsed_date is not None:
+                break
+
+    return parsed_date
+
+
+def _get_earnings_proximity(
+    conn: sqlite3.Connection,
+    tickers: list[str],
+    as_of_date: str,
+) -> dict[str, float]:
+    """Return days-to-next-earnings for each ticker.
+
+    Data sources (checked in order):
+    1. Finnhub earnings calendar cached in external_data_cache
+    2. Finviz fundamentals "Earnings" field (from raw_json)
+
+    Only earnings dates on or after as_of_date are considered (no leakage).
+    Returns {ticker: days_to_next_earnings} with NaN for missing data.
+    """
+    as_of = dt.date.fromisoformat(as_of_date)
+    result: dict[str, float] = {}
+
+    # --- Source 1: Finnhub / Alpha Vantage cached calendar ---
+    try:
+        has_cache_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='external_data_cache' LIMIT 1"
+        ).fetchone()
+        if has_cache_table:
+            # Find all earnings calendar cache entries (any date range)
+            cache_rows = conn.execute(
+                "SELECT payload_json FROM external_data_cache "
+                "WHERE cache_key LIKE 'finnhub:earnings_calendar:%' "
+                "   OR cache_key LIKE 'alpha_vantage:earnings_calendar:%'"
+            ).fetchall()
+            for (payload_json,) in cache_rows:
+                try:
+                    events = json.loads(payload_json or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(events, list):
+                    continue
+                for event in events:
+                    ticker = str(event.get("ticker") or "").upper().strip()
+                    edate_str = str(event.get("earnings_date") or "").strip()
+                    if not ticker or not edate_str:
+                        continue
+                    try:
+                        edate = dt.date.fromisoformat(edate_str[:10])
+                    except ValueError:
+                        continue
+                    # Only future or same-day earnings (no leakage)
+                    if edate < as_of:
+                        continue
+                    days = (edate - as_of).days
+                    # Keep the closest earnings date per ticker
+                    if ticker not in result or days < result[ticker]:
+                        result[ticker] = float(days)
+    except Exception as exc:
+        LOG.debug("Earnings cache lookup failed (non-fatal): %s", exc)
+
+    # --- Source 2: Finviz fundamentals (latest snapshot on or before as_of) ---
+    try:
+        has_fund_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='finviz_fundamentals' LIMIT 1"
+        ).fetchone()
+        if has_fund_table:
+            # Get the latest snapshot on or before as_of_date
+            snap_row = conn.execute(
+                "SELECT snapshot_ts FROM finviz_fundamentals "
+                "WHERE snapshot_ts <= ? "
+                "ORDER BY snapshot_ts DESC LIMIT 1",
+                (as_of_date + "T23:59:59Z",),
+            ).fetchone()
+            if snap_row:
+                snapshot_ts = snap_row[0]
+                if tickers:
+                    placeholders = ",".join("?" * len(tickers))
+                    fund_rows = conn.execute(
+                        f"SELECT ticker, raw_json FROM finviz_fundamentals "
+                        f"WHERE snapshot_ts = ? AND ticker IN ({placeholders})",
+                        (snapshot_ts, *tickers),
+                    ).fetchall()
+                else:
+                    fund_rows = conn.execute(
+                        "SELECT ticker, raw_json FROM finviz_fundamentals "
+                        "WHERE snapshot_ts = ?",
+                        (snapshot_ts,),
+                    ).fetchall()
+                for ticker_val, raw_json in fund_rows:
+                    ticker = str(ticker_val or "").upper().strip()
+                    if not ticker:
+                        continue
+                    # Skip if we already have a closer date from the calendar API
+                    edate = _parse_finviz_earnings_date(raw_json, as_of)
+                    if edate is None or edate < as_of:
+                        continue
+                    days = (edate - as_of).days
+                    if ticker not in result or days < result[ticker]:
+                        result[ticker] = float(days)
+    except Exception as exc:
+        LOG.debug("Finviz earnings lookup failed (non-fatal): %s", exc)
+
+    return result
 
 
 def _get_yolo_data(
@@ -218,6 +474,9 @@ def extract_features_for_universe(
     all_tickers = sorted(df["ticker"].unique().tolist())
     yolo_data = _get_yolo_data(conn, all_tickers, as_of_date)
 
+    # Earnings proximity (days to next earnings report)
+    earnings_proximity = _get_earnings_proximity(conn, all_tickers, as_of_date)
+
     # Seasonality from as_of_date
     dow = as_of_ts.dayofweek
     month = as_of_ts.month
@@ -308,6 +567,15 @@ def extract_features_for_universe(
             "day_of_week": float(dow), "month": float(month),
             "is_month_end": float(is_month_end), "is_quarter_end": float(is_quarter_end),
             "has_yolo_pattern": float(yolo[0]), "yolo_confidence": yolo[1],
+            "days_to_next_earnings": earnings_proximity.get(str(ticker), np.nan),
+            "is_earnings_week": (
+                1.0
+                if str(ticker) in earnings_proximity
+                and earnings_proximity[str(ticker)] <= 7
+                else 0.0
+                if str(ticker) in earnings_proximity
+                else np.nan
+            ),
             "rank_ret_5d": np.nan, "rank_ret_21d": np.nan,
             "rank_vol_21d": np.nan, "rank_volume_ratio": np.nan,
         }
@@ -386,6 +654,48 @@ def extract_features_for_universe(
         feat_df["sector_momentum_21d"] = sector_mom_21d
     except Exception as exc:
         LOG.warning("Sector feature extraction failed (non-fatal): %s", exc)
+
+    # News sentiment per ticker (Finnhub company-news + lexicon scoring)
+    # NOTE: Uses only articles published on or before as_of_date — no data leakage.
+    # Falls back to NaN when FINNHUB_API_KEY is not set or API is unreachable.
+    try:
+        ticker_list = feat_df["ticker"].tolist() if "ticker" in feat_df.columns else []
+        sentiment_scores = _get_news_sentiment_scores(ticker_list, as_of_date)
+        if sentiment_scores:
+            feat_df["news_sentiment_score"] = feat_df["ticker"].map(
+                lambda t: sentiment_scores.get(t, np.nan)
+            )
+        else:
+            feat_df["news_sentiment_score"] = np.nan
+    except Exception as exc:
+        LOG.warning("News sentiment feature extraction failed (non-fatal): %s", exc)
+
+    # Polymarket prediction market probabilities (date-level, same for all tickers)
+    # NOTE: These are LIVE market prices — only meaningful for forward scoring.
+    # During historical training (as_of_date in the past), the API still returns
+    # current prices, which would be data leakage. We only populate these when
+    # as_of_date is today (live scoring); otherwise they stay NaN.
+    try:
+        today_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        is_live_scoring = as_of_date >= today_str
+
+        if is_live_scoring:
+            from trader_koo.ml.external_data import get_polymarket_macro_probabilities
+
+            poly_probs = get_polymarket_macro_probabilities()
+            for col_name, value in poly_probs.items():
+                if col_name in FEATURE_COLUMNS:
+                    feat_df[col_name] = value
+        else:
+            # Historical date — Polymarket data would be leakage, fill NaN
+            for col_name in [
+                "polymarket_fed_cut_prob",
+                "polymarket_recession_prob",
+                "polymarket_macro_sentiment",
+            ]:
+                feat_df[col_name] = np.nan
+    except Exception as exc:
+        LOG.warning("Polymarket feature extraction failed (non-fatal): %s", exc)
 
     # Ensure all expected columns exist
     for col in FEATURE_COLUMNS:
