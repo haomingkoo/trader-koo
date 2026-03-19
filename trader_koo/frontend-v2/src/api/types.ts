@@ -330,6 +330,7 @@ export interface HmmRegime {
   regimes: HmmRegimeDay[];
   current_state: string;
   current_probs: Record<string, number>;
+  transition_risk_pct: number | null;
   transition_matrix: number[][];
   days_in_current: number;
 }

@@ -108,13 +108,27 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
         try:
             from trader_koo.structure.hmm_regime import predict_regimes
 
-            if len(spy_rows) >= 50:
-                closes = [float(_value(r, "close", 0)) for r in reversed(spy_rows)]
-                regimes = predict_regimes(closes)
-                if regimes:
-                    latest = regimes[-1]
-                    ctx["hmm_regime_at_entry"] = str(latest.get("regime", ""))
-                    ctx["hmm_confidence_at_entry"] = latest.get("confidence")
+            spy_ohlcv = conn.execute(
+                """
+                SELECT date, open, high, low, close, volume
+                FROM price_daily
+                WHERE ticker = 'SPY' AND close IS NOT NULL
+                ORDER BY date ASC
+                """,
+            ).fetchall()
+            if len(spy_ohlcv) >= 60:
+                import pandas as pd
+
+                spy_df = pd.DataFrame(
+                    spy_ohlcv,
+                    columns=["date", "open", "high", "low", "close", "volume"],
+                )
+                result = predict_regimes(spy_df, ticker="SPY")
+                if result:
+                    ctx["hmm_regime_at_entry"] = str(result.get("current_state", ""))
+                    probs = result.get("current_probs") or {}
+                    current_label = result.get("current_state", "")
+                    ctx["hmm_confidence_at_entry"] = probs.get(current_label)
         except Exception as exc:
             LOG.debug("HMM regime capture skipped: %s", exc)
 

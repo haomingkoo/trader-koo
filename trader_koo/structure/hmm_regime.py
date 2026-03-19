@@ -308,12 +308,17 @@ def predict_regimes(
         else:
             break
 
+    # Transition risk: probability of switching away from current state tomorrow.
+    # This is more informative than the posterior (which is always ~100%).
+    self_transition_prob = float(sorted_transmat[current_state_int, current_state_int])
+    transition_risk = round((1.0 - self_transition_prob) * 100, 1)
+
     elapsed_ms = (time.monotonic() - t0) * 1000
     LOG.info(
-        "HMM regime: %s -> %s (%.0f%% confidence, %d consecutive days, %.0fms)",
+        "HMM regime: %s -> %s (%.1f%% transition risk, %d consecutive days, %.0fms)",
         cache_key,
         current_label,
-        max(current_probs.values()) * 100,
+        transition_risk,
         days_in_current,
         elapsed_ms,
     )
@@ -322,6 +327,7 @@ def predict_regimes(
         "regimes": regimes,
         "current_state": current_label,
         "current_probs": current_probs,
+        "transition_risk_pct": transition_risk,
         "transition_matrix": [
             [round(float(v), 4) for v in row] for row in sorted_transmat
         ],

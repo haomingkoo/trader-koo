@@ -142,9 +142,8 @@ export default function ChartCommentarySidebar({
     null;
 
   const regimeLabel = hmmRegime?.current_state ?? null;
-  const regimeProbs = hmmRegime?.current_probs ?? null;
   const regimeDays = hmmRegime?.days_in_current ?? null;
-  const regimeConfidence = regimeProbs && regimeLabel ? regimeProbs[regimeLabel] : null;
+  const transitionRisk = hmmRegime?.transition_risk_pct ?? null;
   const regimeVariant: "green" | "amber" | "red" | "muted" =
     regimeLabel === "low_vol"
       ? "green"
@@ -180,8 +179,8 @@ export default function ChartCommentarySidebar({
         {regimeLabel ? (
           <Badge variant={regimeVariant}>
             HMM {regimeDisplay[regimeLabel] ?? regimeLabel.toUpperCase()}
-            {regimeConfidence != null && ` ${(regimeConfidence * 100).toFixed(0)}%`}
             {regimeDays != null && ` (${regimeDays}d)`}
+            {transitionRisk != null && ` · ${transitionRisk.toFixed(1)}% shift risk`}
           </Badge>
         ) : (
           <Badge variant="muted">REGIME N/A</Badge>
