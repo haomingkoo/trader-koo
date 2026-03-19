@@ -3,9 +3,14 @@
 Simulates what would happen if you followed the model's predictions:
 - Each week, score the universe
 - Pick the top N tickers by predicted win probability
-- Enter long positions with position sizing
+- Enter long OR short positions with position sizing
 - Apply triple-barrier exits (profit target, stop loss, time expiry)
 - Track portfolio equity curve vs SPY buy-and-hold
+
+Direction logic:
+- prob > long_threshold (default 0.55) -> long signal (model confident price rises)
+- prob < short_threshold (default 0.45) -> short signal (model confident price falls)
+- between thresholds -> skip (no edge)
 
 NO LOOK-AHEAD: the model used for each week is trained only on data
 available before that week (walk-forward validation).
@@ -36,6 +41,114 @@ DEFAULT_POSITION_PCT = 15.0  # % of capital per position
 DEFAULT_COMMISSION_PER_TRADE = 5.0  # flat $ per round trip
 DEFAULT_SLIPPAGE_PCT = 0.05  # 5 bps per side
 
+# Direction thresholds
+DEFAULT_LONG_THRESHOLD = 0.55
+DEFAULT_SHORT_THRESHOLD = 0.45
+
+
+def _compute_exit(
+    pos: dict[str, Any],
+    exit_price: float,
+    exit_date: str,
+    exit_reason: str,
+    trading_days_held: int,
+) -> dict[str, Any]:
+    """Build a trade-log entry for a closed position (direction-aware)."""
+    direction = pos["direction"]
+    entry_price = pos["entry_price"]
+    shares = pos["shares"]
+
+    if direction == "long":
+        pnl = (exit_price - entry_price) * shares - DEFAULT_COMMISSION_PER_TRADE
+        return_pct = (exit_price / entry_price - 1) * 100
+    else:  # short
+        pnl = (entry_price - exit_price) * shares - DEFAULT_COMMISSION_PER_TRADE
+        return_pct = (1 - exit_price / entry_price) * 100
+
+    return {
+        **pos,
+        "exit_date": exit_date,
+        "exit_price": round(exit_price, 2),
+        "exit_reason": exit_reason,
+        "pnl": round(pnl, 2),
+        "return_pct": round(return_pct, 2),
+        "days_held": trading_days_held,
+    }
+
+
+def _return_cash_on_close(
+    pos: dict[str, Any],
+    exit_price: float,
+    pnl: float,
+) -> float:
+    """Compute cash returned when a position is closed.
+
+    Long: invested capital was entry_price * shares; returned = that + pnl.
+    Short: proceeds from short sale (entry_price * shares) were already
+           added to cash at entry. On cover, we pay exit_price * shares.
+           Net cash change = -(exit_price * shares) - commission,
+           but pnl already includes commission, so return the pnl portion
+           plus release the margin reserve.
+    """
+    entry_price = pos["entry_price"]
+    shares = pos["shares"]
+
+    if pos["direction"] == "long":
+        return entry_price * shares + pnl
+    # Short: margin reserve (entry_price * shares) was deducted at open.
+    # Now we return reserve + pnl.
+    return entry_price * shares + pnl
+
+
+def _apply_exit_slippage(
+    price: float,
+    direction: str,
+    exit_reason: str,
+) -> float:
+    """Apply slippage on exit — always works against you.
+
+    Long exits sell shares: slippage pushes price DOWN.
+    Short exits buy-to-cover: slippage pushes price UP.
+    """
+    slip = DEFAULT_SLIPPAGE_PCT / 100
+    if direction == "long":
+        return price * (1 - slip)
+    # Short: covering means buying, so slippage pushes price up
+    return price * (1 + slip)
+
+
+def _mark_to_market(
+    pos: dict[str, Any],
+    current_price: float,
+) -> float:
+    """Unrealized position value for portfolio accounting.
+
+    Long: current_price * shares (you own shares worth this much).
+    Short: entry_price * shares + (entry_price - current_price) * shares
+         = (2 * entry_price - current_price) * shares
+    Equivalently for short: the margin reserve plus unrealized PnL.
+    """
+    shares = pos["shares"]
+    entry_price = pos["entry_price"]
+    if pos["direction"] == "long":
+        return current_price * shares
+    # Short: margin collateral + unrealized gain/loss
+    return entry_price * shares + (entry_price - current_price) * shares
+
+
+def _hit_target(price: float, target: float, direction: str) -> bool:
+    """Check if price hit the profit target."""
+    if direction == "long":
+        return price >= target
+    return price <= target  # short profits when price drops
+
+
+def _hit_stop(price: float, stop: float, direction: str) -> bool:
+    """Check if price hit the stop loss."""
+    if direction == "long":
+        return price <= stop
+    return price >= stop  # short stops out when price rises
+
 
 def run_backtest(
     conn: sqlite3.Connection,
@@ -50,6 +163,7 @@ def run_backtest(
     profit_mult: float = 1.5,  # Must match trainer.py labels
     stop_mult: float = 2.0,
     min_win_prob: float = 0.55,
+    short_threshold: float = DEFAULT_SHORT_THRESHOLD,
     initial_capital: float = DEFAULT_INITIAL_CAPITAL,
 ) -> dict[str, Any]:
     """Run a full walk-forward backtest.
@@ -57,7 +171,10 @@ def run_backtest(
     For each rebalance date:
     1. Train LightGBM on [date - train_window, date] (no future data)
     2. Score the universe
-    3. Pick top N tickers above min_win_prob
+    3. Pick top N tickers:
+       - prob > min_win_prob -> long
+       - prob < short_threshold -> short
+       - between thresholds -> skip
     4. Simulate positions with triple-barrier exits
     5. Track portfolio value
 
@@ -79,12 +196,24 @@ def run_backtest(
     max_holding_days : int
         Time barrier for triple-barrier exit.
     profit_mult, stop_mult : float
-        Barrier multipliers (× daily vol).
+        Barrier multipliers (x daily vol).
     min_win_prob : float
-        Minimum predicted probability to enter a trade.
+        Minimum predicted probability to enter a long trade.
+    short_threshold : float
+        Maximum predicted probability to enter a short trade.
+        Must be < min_win_prob (dead zone between them = no trade).
     initial_capital : float
         Starting portfolio value.
     """
+    if short_threshold >= min_win_prob:
+        return {
+            "ok": False,
+            "error": (
+                f"short_threshold ({short_threshold}) must be < "
+                f"min_win_prob ({min_win_prob})"
+            ),
+        }
+
     if end_date is None:
         row = conn.execute("SELECT MAX(date) FROM price_daily WHERE ticker='SPY'").fetchone()
         end_date = str(row[0]) if row else dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
@@ -121,8 +250,10 @@ def run_backtest(
     models_trained = 0
 
     LOG.info(
-        "Backtest: %s to %s, %d rebalance dates, max %d positions",
+        "Backtest: %s to %s, %d rebalance dates, max %d positions, "
+        "long>%.2f short<%.2f",
         start_date, end_date, len(rebalance_dates), max_positions,
+        min_win_prob, short_threshold,
     )
 
     for rebalance_idx, rebalance_date in enumerate(rebalance_dates):
@@ -133,6 +264,7 @@ def run_backtest(
         for pos in open_positions:
             # Get prices since entry
             entry_date = pos["entry_date"]
+            direction = pos["direction"]
             prices = conn.execute(
                 "SELECT date, CAST(close AS REAL) AS close FROM price_daily WHERE ticker=? AND date > ? AND date <= ? ORDER BY date",
                 (pos["ticker"], entry_date, rebalance_date),
@@ -146,35 +278,49 @@ def run_backtest(
                 # to match labels.py which iterates by index
                 trading_days_held = bar_idx + 1
 
-                # Apply slippage on exit
-                exit_price_adj = price * (1 - DEFAULT_SLIPPAGE_PCT / 100)
+                # Apply slippage on exit (direction-aware)
+                exit_price_adj = _apply_exit_slippage(
+                    price, direction, "market",
+                )
 
-                if price >= pos["target"]:
-                    pnl = (exit_price_adj - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
-                    cash += pos["entry_price"] * pos["shares"] + pnl
-                    trade_log.append({**pos, "exit_date": price_date, "exit_price": round(exit_price_adj, 2),
-                                      "exit_reason": "target_hit", "pnl": round(pnl, 2),
-                                      "return_pct": round((exit_price_adj / pos["entry_price"] - 1) * 100, 2),
-                                      "days_held": trading_days_held})
+                if _hit_target(price, pos["target"], direction):
+                    exit_price_adj = _apply_exit_slippage(
+                        price, direction, "target_hit",
+                    )
+                    trade_entry = _compute_exit(
+                        pos, exit_price_adj, price_date,
+                        "target_hit", trading_days_held,
+                    )
+                    cash += _return_cash_on_close(
+                        pos, exit_price_adj, trade_entry["pnl"],
+                    )
+                    trade_log.append(trade_entry)
                     closed = True
                     break
-                elif price <= pos["stop"]:
-                    exit_price_adj = price * (1 - DEFAULT_SLIPPAGE_PCT / 100)  # slippage works against you on stops
-                    pnl = (exit_price_adj - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
-                    cash += pos["entry_price"] * pos["shares"] + pnl
-                    trade_log.append({**pos, "exit_date": price_date, "exit_price": round(exit_price_adj, 2),
-                                      "exit_reason": "stopped_out", "pnl": round(pnl, 2),
-                                      "return_pct": round((exit_price_adj / pos["entry_price"] - 1) * 100, 2),
-                                      "days_held": trading_days_held})
+                elif _hit_stop(price, pos["stop"], direction):
+                    # On stops, slippage works against you
+                    exit_price_adj = _apply_exit_slippage(
+                        price, direction, "stopped_out",
+                    )
+                    trade_entry = _compute_exit(
+                        pos, exit_price_adj, price_date,
+                        "stopped_out", trading_days_held,
+                    )
+                    cash += _return_cash_on_close(
+                        pos, exit_price_adj, trade_entry["pnl"],
+                    )
+                    trade_log.append(trade_entry)
                     closed = True
                     break
                 elif trading_days_held >= max_holding_days:
-                    pnl = (exit_price_adj - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
-                    cash += pos["entry_price"] * pos["shares"] + pnl
-                    trade_log.append({**pos, "exit_date": price_date, "exit_price": round(exit_price_adj, 2),
-                                      "exit_reason": "time_expired", "pnl": round(pnl, 2),
-                                      "return_pct": round((exit_price_adj / pos["entry_price"] - 1) * 100, 2),
-                                      "days_held": trading_days_held})
+                    trade_entry = _compute_exit(
+                        pos, exit_price_adj, price_date,
+                        "time_expired", trading_days_held,
+                    )
+                    cash += _return_cash_on_close(
+                        pos, exit_price_adj, trade_entry["pnl"],
+                    )
+                    trade_log.append(trade_entry)
                     closed = True
                     break
 
@@ -216,15 +362,18 @@ def run_backtest(
                                   "positions": len(open_positions), "note": f"train_error: {exc}"})
             continue
 
-        # 3. Score universe
+        # 3. Score universe — pick longs AND shorts
         available_slots = max_positions - len(open_positions)
         if available_slots <= 0:
-            # Update portfolio value
+            # Update portfolio value (direction-aware mark-to-market)
             pos_value = sum(
-                float(conn.execute(
-                    "SELECT CAST(close AS REAL) FROM price_daily WHERE ticker=? AND date<=? ORDER BY date DESC LIMIT 1",
-                    (p["ticker"], rebalance_date),
-                ).fetchone()[0]) * p["shares"]
+                _mark_to_market(
+                    p,
+                    float(conn.execute(
+                        "SELECT CAST(close AS REAL) FROM price_daily WHERE ticker=? AND date<=? ORDER BY date DESC LIMIT 1",
+                        (p["ticker"], rebalance_date),
+                    ).fetchone()[0]),
+                )
                 for p in open_positions
             )
             portfolio_value = cash + pos_value
@@ -242,20 +391,40 @@ def run_backtest(
             ).fillna(0.0)
             probs = model.predict_proba(X_score)[:, 1]
             scored = pd.DataFrame({"ticker": features.index, "prob": probs})
-            scored = scored[scored["prob"] >= min_win_prob].sort_values("prob", ascending=False)
 
-            # Exclude tickers we already hold
+            # Long candidates: high win probability
+            longs = scored[scored["prob"] >= min_win_prob].copy()
+            longs["direction"] = "long"
+            # Rank by probability descending (strongest long signal first)
+            longs["signal_strength"] = longs["prob"]
+            longs = longs.sort_values("signal_strength", ascending=False)
+
+            # Short candidates: low win probability (model says price will DROP)
+            shorts = scored[scored["prob"] <= short_threshold].copy()
+            shorts["direction"] = "short"
+            # Rank by inverse probability (lowest prob = strongest short signal)
+            shorts["signal_strength"] = 1.0 - shorts["prob"]
+            shorts = shorts.sort_values("signal_strength", ascending=False)
+
+            # Merge and rank all candidates by signal strength
+            candidates = pd.concat([longs, shorts], ignore_index=True)
+            candidates = candidates.sort_values(
+                "signal_strength", ascending=False,
+            )
+
+            # Exclude tickers we already hold (same ticker, any direction)
             held = {p["ticker"] for p in open_positions}
-            scored = scored[~scored["ticker"].isin(held)]
-            picks = scored.head(available_slots)
+            candidates = candidates[~candidates["ticker"].isin(held)]
+            picks = candidates.head(available_slots)
         except Exception as exc:
             LOG.warning("Scoring failed for %s: %s", rebalance_date, exc)
             continue
 
-        # 4. Open new positions
+        # 4. Open new positions (direction-aware)
         for _, pick in picks.iterrows():
             ticker = str(pick["ticker"])
             prob = float(pick["prob"])
+            direction = str(pick["direction"])
 
             entry_row = conn.execute(
                 "SELECT CAST(close AS REAL) AS close FROM price_daily WHERE ticker=? AND date=?",
@@ -267,8 +436,12 @@ def run_backtest(
             if entry_price <= 0:
                 continue
 
-            # Slippage
-            entry_price *= (1 + DEFAULT_SLIPPAGE_PCT / 100)
+            # Slippage on entry — always works against you
+            # Long: buying pushes price UP; Short: selling pushes price DOWN
+            if direction == "long":
+                entry_price *= (1 + DEFAULT_SLIPPAGE_PCT / 100)
+            else:
+                entry_price *= (1 - DEFAULT_SLIPPAGE_PCT / 100)
 
             # Position sizing (% of current portfolio)
             position_value = portfolio_value * (position_pct / 100)
@@ -289,9 +462,16 @@ def run_backtest(
             if daily_vol <= 0:
                 continue
 
-            target = entry_price * (1 + profit_mult * daily_vol)
-            stop = entry_price * (1 - stop_mult * daily_vol)
+            # Direction-aware barriers
+            if direction == "long":
+                target = entry_price * (1 + profit_mult * daily_vol)
+                stop = entry_price * (1 - stop_mult * daily_vol)
+            else:  # short
+                target = entry_price * (1 - profit_mult * daily_vol)
+                stop = entry_price * (1 + stop_mult * daily_vol)
 
+            # Reserve capital: both longs and shorts tie up capital
+            # (shorts require margin collateral equal to position value)
             cost = shares * entry_price + DEFAULT_COMMISSION_PER_TRADE / 2
             if cost > cash:
                 continue
@@ -299,6 +479,7 @@ def run_backtest(
 
             open_positions.append({
                 "ticker": ticker,
+                "direction": direction,
                 "entry_date": rebalance_date,
                 "entry_price": round(entry_price, 2),
                 "shares": shares,
@@ -307,7 +488,7 @@ def run_backtest(
                 "predicted_prob": round(prob, 4),
             })
 
-        # 5. Update portfolio value
+        # 5. Update portfolio value (direction-aware mark-to-market)
         pos_value = 0.0
         for p in open_positions:
             latest = conn.execute(
@@ -315,7 +496,7 @@ def run_backtest(
                 (p["ticker"], rebalance_date),
             ).fetchone()
             if latest:
-                pos_value += float(latest[0]) * p["shares"]
+                pos_value += _mark_to_market(p, float(latest[0]))
         portfolio_value = cash + pos_value
         equity_curve.append({
             "date": rebalance_date,
@@ -334,11 +515,28 @@ def run_backtest(
     losses = [t for t in trade_log if t.get("pnl", 0) <= 0]
     win_rate = len(wins) / len(trade_log) * 100 if trade_log else 0
 
+    # Direction breakdown
+    long_trades = [t for t in trade_log if t.get("direction") == "long"]
+    short_trades = [t for t in trade_log if t.get("direction") == "short"]
+    long_wins = [t for t in long_trades if t.get("pnl", 0) > 0]
+    short_wins = [t for t in short_trades if t.get("pnl", 0) > 0]
+    long_win_rate = len(long_wins) / len(long_trades) * 100 if long_trades else 0
+    short_win_rate = len(short_wins) / len(short_trades) * 100 if short_trades else 0
+
     equity_series = pd.Series([e["portfolio"] for e in equity_curve])
-    daily_returns = equity_series.pct_change().dropna()
-    # Annualize based on actual observation frequency (252 trading days / rebalance_frequency)
-    periods_per_year = 252 / max(rebalance_frequency, 1)
-    sharpe = float(daily_returns.mean() / daily_returns.std() * np.sqrt(periods_per_year)) if len(daily_returns) > 1 and daily_returns.std() > 0 else 0.0
+    period_returns = equity_series.pct_change().dropna()
+    # Convert multi-day rebalance-period returns to daily-equivalent returns.
+    # Each observation spans `rebalance_frequency` trading days, so dividing
+    # the period return by the number of days approximates the average daily
+    # return and — critically — scales volatility to a daily basis, preventing
+    # Sharpe inflation from the smoother multi-day series.
+    freq = max(rebalance_frequency, 1)
+    daily_equiv_returns = period_returns / freq
+    sharpe = (
+        float(daily_equiv_returns.mean() / daily_equiv_returns.std() * np.sqrt(252))
+        if len(daily_equiv_returns) > 1 and daily_equiv_returns.std() > 0
+        else 0.0
+    )
     max_dd = float(((equity_series / equity_series.cummax()) - 1).min() * 100)
 
     avg_win = np.mean([t["return_pct"] for t in wins]) if wins else 0
@@ -352,9 +550,17 @@ def run_backtest(
             "spy_return_pct": round(spy_return_pct, 2),
             "alpha_pct": round(total_return_pct - spy_return_pct, 2),
             "sharpe_ratio": round(sharpe, 3),
+            "sharpe_note": (
+                f"Daily-equivalent Sharpe: {freq}-day rebalance returns "
+                "divided by period length, annualized with sqrt(252)"
+            ),
             "max_drawdown_pct": round(max_dd, 2),
             "total_trades": len(trade_log),
+            "long_trades": len(long_trades),
+            "short_trades": len(short_trades),
             "win_rate_pct": round(win_rate, 1),
+            "long_win_rate_pct": round(long_win_rate, 1),
+            "short_win_rate_pct": round(short_win_rate, 1),
             "avg_win_pct": round(float(avg_win), 2),
             "avg_loss_pct": round(float(avg_loss), 2),
             "profit_factor": round(profit_factor, 2),
@@ -374,5 +580,6 @@ def run_backtest(
             "profit_mult": profit_mult,
             "stop_mult": stop_mult,
             "min_win_prob": min_win_prob,
+            "short_threshold": short_threshold,
         },
     }

@@ -239,58 +239,76 @@ def _score_market_volatility(conn: sqlite3.Connection) -> tuple[float | None, st
 
 
 def _score_stock_breadth(conn: sqlite3.Connection) -> tuple[float | None, str]:
-    """Market breadth from tracked tickers: advancing vs declining."""
+    """Market breadth: 5-day average of advancing vs declining ratios."""
     try:
-        rows = conn.execute(
+        # Get the last 6 distinct trading dates (need 6 to form 5 day-over-day pairs)
+        date_rows = conn.execute(
             """
-            SELECT ticker, CAST(close AS REAL) AS close
-            FROM price_daily
-            WHERE date = (SELECT MAX(date) FROM price_daily)
-              AND close IS NOT NULL
+            SELECT DISTINCT date FROM price_daily
+            WHERE close IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 6
             """,
         ).fetchall()
 
-        if len(rows) < 10:
+        dates = [str(r[0]) for r in date_rows]
+        if len(dates) < 2:
             return None, "Insufficient breadth data"
 
-        # Get previous day's closes
-        prev_rows = conn.execute(
-            """
-            SELECT p.ticker, CAST(p.close AS REAL) AS close
-            FROM price_daily p
-            WHERE p.date = (
-                SELECT MAX(date) FROM price_daily
-                WHERE date < (SELECT MAX(date) FROM price_daily)
-            )
-              AND p.close IS NOT NULL
+        # Fetch closes for all tickers across these dates in one query
+        placeholders = ",".join("?" for _ in dates)
+        close_rows = conn.execute(
+            f"""
+            SELECT date, ticker, CAST(close AS REAL) AS close
+            FROM price_daily
+            WHERE date IN ({placeholders})
+              AND close IS NOT NULL
             """,
+            dates,
         ).fetchall()
 
-        prev_map = {str(r[0]): float(r[1]) for r in prev_rows}
+        # Build {date -> {ticker -> close}} map
+        closes_by_date: dict[str, dict[str, float]] = {}
+        for row in close_rows:
+            d = str(row[0])
+            ticker = str(row[1])
+            closes_by_date.setdefault(d, {})[ticker] = float(row[2])
 
-        advancers = 0
-        decliners = 0
-        for row in rows:
-            ticker = str(row[0])
-            current = float(row[1])
-            prev = prev_map.get(ticker)
-            if prev is None or prev == 0:
-                continue
-            if current > prev:
-                advancers += 1
-            elif current < prev:
-                decliners += 1
+        # Compute advancing % for each consecutive day pair
+        daily_ratios: list[float] = []
+        for i in range(len(dates) - 1):
+            current_date = dates[i]
+            prev_date = dates[i + 1]
+            current_map = closes_by_date.get(current_date, {})
+            prev_map = closes_by_date.get(prev_date, {})
 
-        total = advancers + decliners
-        if total == 0:
+            advancers = 0
+            decliners = 0
+            for ticker, cur_close in current_map.items():
+                prev_close = prev_map.get(ticker)
+                if prev_close is None or prev_close == 0:
+                    continue
+                if cur_close > prev_close:
+                    advancers += 1
+                elif cur_close < prev_close:
+                    decliners += 1
+
+            total = advancers + decliners
+            if total >= 10:
+                daily_ratios.append((advancers / total) * 100)
+
+        if not daily_ratios:
             return None, "No advancing/declining data"
 
-        pct_advancing = (advancers / total) * 100
+        avg_pct_advancing = sum(daily_ratios) / len(daily_ratios)
 
         # Map: 30% advancing = score 0, 70% advancing = score 100
-        score = max(0, min(100, (pct_advancing - 30) * (100 / 40)))
+        score = max(0, min(100, (avg_pct_advancing - 30) * (100 / 40)))
 
-        detail = f"{pct_advancing:.1f}% advancing ({advancers} vs {decliners})"
+        detail = (
+            f"{avg_pct_advancing:.1f}% avg advancing "
+            f"({len(daily_ratios)}-day breadth window)"
+        )
         return round(score, 1), detail
 
     except Exception as exc:
@@ -303,50 +321,27 @@ def _score_stock_strength(conn: sqlite3.Connection) -> tuple[float | None, str]:
     try:
         rows = conn.execute(
             """
-            SELECT
-                ticker,
-                CAST(close AS REAL) AS close,
-                CAST(MAX(high) OVER (
-                    PARTITION BY ticker
-                    ORDER BY date
-                    ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
-                ) AS REAL) AS high_52w,
-                CAST(MIN(low) OVER (
-                    PARTITION BY ticker
-                    ORDER BY date
-                    ROWS BETWEEN 251 PRECEDING AND CURRENT ROW
-                ) AS REAL) AS low_52w
-            FROM price_daily
-            WHERE date = (SELECT MAX(date) FROM price_daily)
-              AND close IS NOT NULL
+            WITH latest AS (
+                SELECT ticker, CAST(close AS REAL) AS close
+                FROM price_daily
+                WHERE date = (SELECT MAX(date) FROM price_daily)
+                  AND close IS NOT NULL
+            ),
+            yearly AS (
+                SELECT
+                    ticker,
+                    MAX(CAST(high AS REAL)) AS high_52w,
+                    MIN(CAST(low AS REAL)) AS low_52w
+                FROM price_daily
+                WHERE date >= date((SELECT MAX(date) FROM price_daily), '-252 days')
+                  AND high IS NOT NULL AND low IS NOT NULL
+                GROUP BY ticker
+            )
+            SELECT l.ticker, l.close, y.high_52w, y.low_52w
+            FROM latest l
+            JOIN yearly y ON l.ticker = y.ticker
             """,
         ).fetchall()
-
-        if len(rows) < 10:
-            # Fallback: use a simpler query
-            rows = conn.execute(
-                """
-                WITH latest AS (
-                    SELECT ticker, CAST(close AS REAL) AS close
-                    FROM price_daily
-                    WHERE date = (SELECT MAX(date) FROM price_daily)
-                      AND close IS NOT NULL
-                ),
-                yearly AS (
-                    SELECT
-                        ticker,
-                        MAX(CAST(high AS REAL)) AS high_52w,
-                        MIN(CAST(low AS REAL)) AS low_52w
-                    FROM price_daily
-                    WHERE date >= date((SELECT MAX(date) FROM price_daily), '-252 days')
-                      AND high IS NOT NULL AND low IS NOT NULL
-                    GROUP BY ticker
-                )
-                SELECT l.ticker, l.close, y.high_52w, y.low_52w
-                FROM latest l
-                JOIN yearly y ON l.ticker = y.ticker
-                """,
-            ).fetchall()
 
         if len(rows) < 10:
             return None, "Insufficient 52-week data"
