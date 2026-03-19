@@ -669,7 +669,7 @@ export function buildChartData(
         yref: "y",
         x: 1.0,
         y: lvl,
-        text: `${tierLabel} ${String(r.type).toUpperCase()} ${formatChartNumber(lvl)} (${r.touches ?? "-"})`,
+        text: `${tierLabel} ${r.type === "support" ? "SUP" : "RES"} ${formatChartNumber(lvl)} (${r.touches ?? "-"})`,
         showarrow: false,
         xanchor: "left",
         yanchor: "middle",

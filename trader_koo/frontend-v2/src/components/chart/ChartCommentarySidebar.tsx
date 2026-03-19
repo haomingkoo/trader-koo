@@ -96,9 +96,9 @@ function DebateRolesInline({
                     {role.evidence.filter(Boolean).map((evidence, evidenceIndex) => (
                       <li
                         key={evidenceIndex}
-                        className="text-[10px] text-[var(--muted)] before:mr-1 before:content-['\u2022']"
+                        className="text-[10px] text-[var(--muted)]"
                       >
-                        {String(evidence)}
+                        <span className="mr-1 text-[var(--line)]">-</span>{String(evidence)}
                       </li>
                     ))}
                   </ul>

@@ -57,13 +57,13 @@ export default function FearGreedGauge() {
 
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-      {/* Compact header: gauge + score + label inline */}
-      <div className="flex items-center gap-4">
+      {/* Compact header: gauge + score — stacks on mobile */}
+      <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start sm:gap-4">
         <div className="shrink-0">
           <GaugeSvg score={score} scoreColor={color} />
         </div>
-        <div className="flex-1 space-y-2">
-          <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
               Market Sentiment
             </span>
