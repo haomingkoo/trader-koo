@@ -21,16 +21,19 @@ const fmtPct = (
 const fmtPrice = (value: number | null | undefined): string =>
   typeof value === "number" ? `$${value.toFixed(2)}` : "\u2014";
 
-const fmtDollars = (value: number | null | undefined): string => {
+const fmtDollars = (value: number | null | undefined, compact = false): string => {
   if (typeof value !== "number") return "\u2014";
-  const abs = Math.abs(value);
-  const formatted =
-    abs >= 1_000_000
-      ? `$${(abs / 1_000_000).toFixed(2)}M`
-      : abs >= 1_000
-        ? `$${(abs / 1_000).toFixed(1)}K`
-        : `$${abs.toFixed(0)}`;
-  return value < 0 ? `-${formatted}` : formatted;
+  if (compact) {
+    const abs = Math.abs(value);
+    const formatted =
+      abs >= 1_000_000
+        ? `$${(abs / 1_000_000).toFixed(2)}M`
+        : abs >= 1_000
+          ? `$${(abs / 1_000).toFixed(1)}K`
+          : `$${abs.toFixed(0)}`;
+    return value < 0 ? `-${formatted}` : formatted;
+  }
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
 const pnlColor = (value: number | null | undefined): string => {
@@ -67,8 +70,8 @@ export function PaperTradePortfolioHero({
           </div>
         </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-5">
-          <Stat label="Realized P&L" value={fmtDollars(realizedPnl)} tone={pnlColor(realizedPnl)} />
-          <Stat label="Unrealized P&L" value={fmtDollars(unrealizedPnl)} tone={pnlColor(unrealizedPnl)} />
+          <Stat label="Realized P&L" value={fmtDollars(realizedPnl, true)} tone={pnlColor(realizedPnl)} />
+          <Stat label="Unrealized P&L" value={fmtDollars(unrealizedPnl, true)} tone={pnlColor(unrealizedPnl)} />
           <Stat label="Open" value={String(overall.open_count ?? 0)} />
           <Stat label="Win Rate" value={fmtPct(overall.win_rate_pct)} />
           <Stat
