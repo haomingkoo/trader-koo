@@ -55,3 +55,4 @@ memory/
 task*_summary.md
 task*_implementation_summary.md
 task*_verification_summary.md
+.claude/worktrees/

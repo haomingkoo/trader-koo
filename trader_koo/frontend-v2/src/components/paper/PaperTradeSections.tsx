@@ -1,6 +1,8 @@
 import { Link } from "react-router-dom";
+import { useMemo } from "react";
 import type {
   PaperTrade,
+  PaperTradeDirectionStats,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
 } from "../../api/types";
@@ -253,17 +255,340 @@ export function PaperTradeEquityCurve({
   );
 }
 
+/* ── Performance Attribution ── */
+function AttributionTable({
+  title,
+  data,
+  showAvgR = false,
+}: {
+  title: string;
+  data: Record<string, PaperTradeDirectionStats>;
+  showAvgR?: boolean;
+}) {
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return (
+      <div className="text-xs text-[var(--muted)]">No {title.toLowerCase()} data yet.</div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-2 text-xs font-semibold text-[var(--text)]">{title}</div>
+      <div className="overflow-x-auto rounded-lg border border-[var(--line)]">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+              <th className="px-3 py-1.5 font-semibold">Category</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Trades</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Win Rate</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Avg P&L</th>
+              {showAvgR && (
+                <th className="px-3 py-1.5 font-semibold text-right">Avg R</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([key, stats]) => (
+              <tr key={key} className="border-b border-[var(--line)]/60 last:border-b-0">
+                <td className="px-3 py-1.5 font-medium text-[var(--text)] capitalize">
+                  {key.replace(/_/g, " ")}
+                </td>
+                <td className="px-3 py-1.5 text-right text-[var(--text)]">{stats.total}</td>
+                <td className="px-3 py-1.5 text-right text-[var(--text)]">
+                  {fmtPct(stats.win_rate_pct)}
+                </td>
+                <td className={`px-3 py-1.5 text-right font-medium ${pnlColor(stats.avg_pnl_pct)}`}>
+                  {fmtPct(stats.avg_pnl_pct, "%", true)}
+                </td>
+                {showAvgR && (
+                  <td className={`px-3 py-1.5 text-right font-medium ${pnlColor((stats as Record<string, unknown>).avg_r_multiple as number | null)}`}>
+                    {typeof (stats as Record<string, unknown>).avg_r_multiple === "number"
+                      ? `${((stats as Record<string, unknown>).avg_r_multiple as number).toFixed(2)}R`
+                      : "\u2014"}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ExitReasonTable({
+  data,
+}: {
+  data: Record<string, number>;
+}) {
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return (
+      <div className="text-xs text-[var(--muted)]">No exit reason data yet.</div>
+    );
+  }
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+
+  return (
+    <div>
+      <div className="mb-2 text-xs font-semibold text-[var(--text)]">By Exit Reason</div>
+      <div className="overflow-x-auto rounded-lg border border-[var(--line)]">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+              <th className="px-3 py-1.5 font-semibold">Reason</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Count</th>
+              <th className="px-3 py-1.5 font-semibold text-right">% of Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries
+              .sort(([, a], [, b]) => b - a)
+              .map(([reason, count]) => (
+                <tr key={reason} className="border-b border-[var(--line)]/60 last:border-b-0">
+                  <td className="px-3 py-1.5 font-medium text-[var(--text)] capitalize">
+                    {reason.replace(/_/g, " ")}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-[var(--text)]">{count}</td>
+                  <td className="px-3 py-1.5 text-right text-[var(--muted)]">
+                    {total > 0 ? `${((count / total) * 100).toFixed(1)}%` : "\u2014"}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export function PaperTradePerformanceAttribution({
+  summary,
+}: {
+  summary: PaperTradeSummary;
+}) {
+  const hasData =
+    Object.keys(summary.by_direction).length > 0 ||
+    Object.keys(summary.by_family).length > 0 ||
+    Object.keys(summary.by_exit_reason).length > 0;
+
+  if (!hasData) return null;
+
+  return (
+    <details className="group rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-[var(--text)] select-none">
+        Performance Attribution
+        <span className="ml-2 text-xs text-[var(--muted)] group-open:hidden">
+          (click to expand)
+        </span>
+      </summary>
+      <div className="grid gap-6 border-t border-[var(--line)] px-4 py-4 sm:grid-cols-2 lg:grid-cols-3">
+        <AttributionTable
+          title="By Direction"
+          data={summary.by_direction}
+          showAvgR
+        />
+        <AttributionTable
+          title="By Setup Family"
+          data={summary.by_family}
+        />
+        <ExitReasonTable data={summary.by_exit_reason} />
+      </div>
+    </details>
+  );
+}
+
+/* ── ML Calibration ── */
+interface CalibrationBucket {
+  label: string;
+  min: number;
+  max: number;
+  total: number;
+  wins: number;
+  actualWinRate: number | null;
+}
+
+const ML_BUCKETS: Array<{ label: string; min: number; max: number }> = [
+  { label: "0-40%", min: 0, max: 0.4 },
+  { label: "40-50%", min: 0.4, max: 0.5 },
+  { label: "50-60%", min: 0.5, max: 0.6 },
+  { label: "60-70%", min: 0.6, max: 0.7 },
+  { label: "70%+", min: 0.7, max: 1.01 },
+];
+
+export function PaperTradeMLCalibration({
+  trades,
+}: {
+  trades: PaperTrade[];
+}) {
+  const buckets = useMemo<CalibrationBucket[]>(() => {
+    const closedWithML = trades.filter(
+      (t) =>
+        t.status !== "open" &&
+        typeof t.ml_predicted_win_prob === "number" &&
+        t.ml_predicted_win_prob != null,
+    );
+
+    return ML_BUCKETS.map(({ label, min, max }) => {
+      const inBucket = closedWithML.filter(
+        (t) => t.ml_predicted_win_prob! >= min && t.ml_predicted_win_prob! < max,
+      );
+      const wins = inBucket.filter((t) => {
+        const pnl = t.pnl_pct ?? 0;
+        return pnl > 0;
+      }).length;
+      const total = inBucket.length;
+      return {
+        label,
+        min,
+        max,
+        total,
+        wins,
+        actualWinRate: total > 0 ? (wins / total) * 100 : null,
+      };
+    });
+  }, [trades]);
+
+  const totalScored = buckets.reduce((sum, b) => sum + b.total, 0);
+
+  if (totalScored === 0) {
+    return (
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+        <div className="text-sm font-semibold text-[var(--text)]">ML Calibration</div>
+        <div className="mt-2 text-xs text-[var(--muted)]">
+          No closed trades with ML predictions yet. Calibration data will appear once trades with
+          ml_predicted_win_prob are resolved.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-[var(--text)]">ML Calibration</div>
+        <span className="text-xs text-[var(--muted)]">{totalScored} scored trades</span>
+      </div>
+      <p className="mt-1 text-[10px] text-[var(--muted)]">
+        Compares ML predicted win probability buckets to actual outcomes. A well-calibrated model
+        shows actual win rates rising with predicted probability.
+      </p>
+      <div className="mt-3 overflow-x-auto rounded-lg border border-[var(--line)]">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+              <th className="px-3 py-1.5 font-semibold">Predicted Prob</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Trades</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Wins</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Actual Win Rate</th>
+              <th className="px-3 py-1.5 font-semibold text-right">Calibration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {buckets.map((bucket) => {
+              const midpoint = ((bucket.min + Math.min(bucket.max, 1)) / 2) * 100;
+              const diff =
+                bucket.actualWinRate != null ? bucket.actualWinRate - midpoint : null;
+              const calibrationColor =
+                diff == null
+                  ? ""
+                  : Math.abs(diff) <= 10
+                    ? "text-[var(--green)]"
+                    : Math.abs(diff) <= 20
+                      ? "text-[var(--amber)]"
+                      : "text-[var(--red)]";
+
+              return (
+                <tr
+                  key={bucket.label}
+                  className="border-b border-[var(--line)]/60 last:border-b-0"
+                >
+                  <td className="px-3 py-1.5 font-medium text-[var(--text)]">
+                    {bucket.label}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-[var(--text)]">
+                    {bucket.total}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-[var(--text)]">
+                    {bucket.wins}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-[var(--text)]">
+                    {bucket.actualWinRate != null
+                      ? `${bucket.actualWinRate.toFixed(1)}%`
+                      : "\u2014"}
+                  </td>
+                  <td className={`px-3 py-1.5 text-right font-medium ${calibrationColor}`}>
+                    {diff != null
+                      ? `${diff > 0 ? "+" : ""}${diff.toFixed(1)}pp`
+                      : "\u2014"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── CSV Export ── */
+const CSV_COLUMNS = [
+  "ticker",
+  "direction",
+  "entry_price",
+  "exit_price",
+  "entry_date",
+  "exit_date",
+  "pnl_pct",
+  "r_multiple",
+  "status",
+  "exit_reason",
+  "setup_family",
+  "setup_tier",
+  "ml_predicted_win_prob",
+] as const;
+
+function escapeCsvField(value: unknown): string {
+  if (value == null) return "";
+  const str = String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+export function exportTradesToCsv(trades: PaperTrade[]): void {
+  const header = CSV_COLUMNS.join(",");
+  const rows = trades.map((trade) =>
+    CSV_COLUMNS.map((col) =>
+      escapeCsvField((trade as Record<string, unknown>)[col]),
+    ).join(","),
+  );
+  const csvContent = [header, ...rows].join("\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `paper_trades_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 /* ── Filters ── */
 export function PaperTradeFilters({
   statusFilter,
   directionFilter,
   tradeCount,
+  trades,
   onStatusChange,
   onDirectionChange,
 }: {
   statusFilter: string;
   directionFilter: string;
   tradeCount: number;
+  trades: PaperTrade[];
   onStatusChange: (value: string) => void;
   onDirectionChange: (value: string) => void;
 }) {
@@ -297,6 +622,14 @@ export function PaperTradeFilters({
         </select>
       </label>
       <span className="text-[var(--muted)]">Showing {tradeCount} trade(s)</span>
+      <button
+        type="button"
+        onClick={() => exportTradesToCsv(trades)}
+        disabled={trades.length === 0}
+        className="rounded border border-[var(--line)] bg-[var(--bg)] px-3 py-1 text-[var(--text)] transition-colors hover:bg-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Export CSV
+      </button>
     </div>
   );
 }

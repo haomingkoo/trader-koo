@@ -7,6 +7,8 @@ import {
   PaperTradePortfolioHero,
   PaperTradeOpenPositions,
   PaperTradeEquityCurve,
+  PaperTradePerformanceAttribution,
+  PaperTradeMLCalibration,
   PaperTradeFilters,
   PaperTradeLogTable,
 } from "../components/paper/PaperTradeSections";
@@ -98,10 +100,17 @@ export default function PaperTradePage() {
 
       <PaperTradeEquityCurve equityCurve={equityCurve} />
 
+      {summary && (
+        <PaperTradePerformanceAttribution summary={summary} />
+      )}
+
+      <PaperTradeMLCalibration trades={trades} />
+
       <PaperTradeFilters
         statusFilter={statusFilter}
         directionFilter={dirFilter}
         tradeCount={trades.length}
+        trades={trades}
         onStatusChange={setStatusFilter}
         onDirectionChange={setDirFilter}
       />
