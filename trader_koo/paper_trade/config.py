@@ -33,6 +33,8 @@ class PaperTradeConfig:
     caution_position_scale: float
     high_vol_position_scale: float
     earnings_position_scale: float
+    ml_enabled: bool = True
+    ml_min_win_prob: float = 0.55
 
 
 def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:

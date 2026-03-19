@@ -15,6 +15,7 @@ import type {
   CryptoStructurePayload,
   CryptoCorrelationPayload,
   CryptoMarketStructurePayload,
+  CryptoOpenInterestPayload,
   VixMetricsPayload,
   FearGreedPayload,
 } from "./types";
@@ -155,6 +156,18 @@ export function useCryptoCorrelation(symbol = "BTC-USD", benchmark = "SPY", limi
       ),
     staleTime: 60_000,
     refetchInterval: 60_000,
+  });
+}
+
+export function useCryptoOpenInterest(symbol = "BTC-USD", period = "1h", limit = 100) {
+  return useQuery({
+    queryKey: ["crypto-open-interest", symbol, period, limit],
+    queryFn: () =>
+      apiFetch<CryptoOpenInterestPayload>(
+        `/api/crypto/open-interest/${symbol}?period=${period}&limit=${limit}`,
+      ),
+    staleTime: 300_000,
+    refetchInterval: 300_000,
   });
 }
 

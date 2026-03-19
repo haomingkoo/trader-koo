@@ -23,6 +23,25 @@ function ma(arr: number[], n: number): (number | null)[] {
   });
 }
 
+function ema(arr: number[], n: number): (number | null)[] {
+  if (arr.length < n) return arr.map(() => null);
+  const multiplier = 2 / (n + 1);
+  const result: (number | null)[] = [];
+  // Seed with SMA of first n values
+  let seed = 0;
+  for (let i = 0; i < n; i++) {
+    seed += arr[i];
+    result.push(null);
+  }
+  seed /= n;
+  result[n - 1] = seed;
+  for (let i = n; i < arr.length; i++) {
+    seed = (arr[i] - seed) * multiplier + seed;
+    result.push(seed);
+  }
+  return result;
+}
+
 function lastFinite(values: Array<number | null | undefined>): number | null {
   for (let i = values.length - 1; i >= 0; i -= 1) {
     const value = values[i];
@@ -114,6 +133,9 @@ export const CHART_OVERLAY_OPTIONS = [
   { key: "ma20", label: "20 MA", minBars: 20 },
   { key: "ma50", label: "50 MA", minBars: 50 },
   { key: "ma200", label: "200 MA", minBars: 200 },
+  { key: "ema20", label: "20 EMA", minBars: 20 },
+  { key: "ema50", label: "50 EMA", minBars: 50 },
+  { key: "ema200", label: "200 EMA", minBars: 200 },
   { key: "bollinger", label: "Bollinger", minBars: 20 },
 ] as const;
 
@@ -125,6 +147,9 @@ export const DEFAULT_CHART_OVERLAYS: ChartOverlayState = {
   ma20: true,
   ma50: true,
   ma200: false,
+  ema20: false,
+  ema50: false,
+  ema200: false,
   bollinger: false,
 };
 
@@ -479,6 +504,42 @@ export function buildChartData(
       y: ma(close, 200),
       name: "MA200",
       line: { color: "#c07bff", width: 1.2 },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+  if (overlays.ema20) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: ema(close, 20),
+      name: "EMA20",
+      line: { color: "#38bdf8", width: 1.2, dash: "dot" },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+  if (overlays.ema50) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: ema(close, 50),
+      name: "EMA50",
+      line: { color: "#facc15", width: 1.2, dash: "dot" },
+      xaxis: "x",
+      yaxis: "y",
+    });
+  }
+  if (overlays.ema200) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: ema(close, 200),
+      name: "EMA200",
+      line: { color: "#a78bfa", width: 1.2, dash: "dot" },
       xaxis: "x",
       yaxis: "y",
     });

@@ -147,12 +147,13 @@ export function buildCandlestickChart(
       name: symbol,
       xaxis: "x",
       yaxis: "y",
+      whiskerwidth: 0.8,
       increasing: {
-        line: { color: "#38d39f" },
+        line: { color: "#38d39f", width: 1.5 },
         fillcolor: "rgba(56,211,159,0.85)",
       },
       decreasing: {
-        line: { color: "#ff6b6b" },
+        line: { color: "#ff6b6b", width: 1.5 },
         fillcolor: "rgba(255,107,107,0.85)",
       },
     },
@@ -396,6 +397,9 @@ export function buildCandlestickChart(
       gridcolor: "rgba(255,255,255,0.06)",
       domain: [0.28, 1],
       title: "Price",
+      autorange: true,
+      fixedrange: false,
+      rangemode: "normal",
     },
     yaxis2: {
       gridcolor: "rgba(255,255,255,0.04)",

@@ -220,6 +220,43 @@ def create_paper_trades_from_report(
             )
             continue
 
+        # ML score check — reject if predicted win probability too low
+        ml_prediction: dict[str, Any] = {}
+        if config.ml_enabled:
+            try:
+                from trader_koo.ml.scorer import score_single_ticker
+
+                ml_score = score_single_ticker(
+                    conn, ticker=ticker, as_of_date=report_date,
+                )
+                if (
+                    ml_score.get("model_available")
+                    and ml_score.get("predicted_win_prob") is not None
+                ):
+                    if ml_score["predicted_win_prob"] < config.ml_min_win_prob:
+                        LOG.info(
+                            "Paper trade skipped: %s %s ML win prob %.2f < %.2f threshold",
+                            direction.upper(),
+                            ticker,
+                            ml_score["predicted_win_prob"],
+                            config.ml_min_win_prob,
+                        )
+                        continue
+                    ml_prediction = ml_score
+                else:
+                    LOG.debug(
+                        "ML scoring unavailable for %s: %s",
+                        ticker, ml_score.get("note", "no model"),
+                    )
+            except Exception as exc:
+                LOG.warning("ML scoring failed (allowing trade): %s", exc)
+
+        # Capture market context at entry (VIX, regime, HMM state)
+        from trader_koo.paper_trade.context import capture_market_context
+
+        market_ctx = capture_market_context(conn)
+        market_ctx["bot_version"] = config.bot_version
+
         # Critic review — devil's advocate that kills low-conviction trades
         try:
             from trader_koo.paper_trade.critic import critic_review
@@ -250,12 +287,6 @@ def create_paper_trades_from_report(
         except Exception as exc:
             LOG.warning("Critic check failed (allowing trade): %s", exc)
 
-        # Capture market context at entry (VIX, regime, HMM state)
-        from trader_koo.paper_trade.context import capture_market_context
-
-        market_ctx = capture_market_context(conn)
-        market_ctx["bot_version"] = config.bot_version
-
         before_changes = conn.total_changes
         conn.execute(
             """
@@ -275,7 +306,8 @@ def create_paper_trades_from_report(
                 entry_plan, exit_plan, sizing_summary,
                 review_status, review_summary,
                 bot_version, vix_at_entry, vix_percentile_at_entry,
-                regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry
+                regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry,
+                ml_predicted_win_prob, ml_confidence, ml_signal
             ) VALUES (
                 ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -291,6 +323,7 @@ def create_paper_trades_from_report(
                 ?, ?,
                 ?, ?, ?,
                 ?, ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?
             )
@@ -345,6 +378,9 @@ def create_paper_trades_from_report(
                 market_ctx["regime_state_at_entry"],
                 market_ctx["hmm_regime_at_entry"],
                 market_ctx["hmm_confidence_at_entry"],
+                ml_prediction.get("predicted_win_prob"),
+                ml_prediction.get("confidence"),
+                ml_prediction.get("signal"),
             ),
         )
         if conn.total_changes > before_changes:

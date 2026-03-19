@@ -742,6 +742,11 @@ export interface PaperTradeSummaryOverall {
   profit_factor?: number | null;
   target_hit_rate_pct?: number | null;
   stopped_out_rate_pct?: number | null;
+  starting_capital?: number;
+  portfolio_value?: number;
+  realized_pnl?: number;
+  unrealized_pnl?: number;
+  total_return_pct?: number;
 }
 
 export interface PaperTradeDirectionStats {
@@ -913,6 +918,26 @@ export interface CryptoStructurePayload {
   trendlines: TrendlineRow[];
   hmm_regime: HmmRegime | null;
   context: CryptoStructureContext;
+}
+
+export interface CryptoOpenInterestBar {
+  timestamp: string;
+  open_interest: number;
+  open_interest_value: number;
+}
+
+export interface CryptoOpenInterestPayload {
+  ok: boolean;
+  symbol: string;
+  period: string;
+  count: number;
+  oi_bars: CryptoOpenInterestBar[];
+  current_oi: {
+    symbol: string;
+    open_interest: number;
+    timestamp: string;
+  } | null;
+  oi_change_24h_pct: number | null;
 }
 
 export interface CryptoCorrelationWindow {

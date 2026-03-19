@@ -221,6 +221,50 @@ def crypto_indicators(symbol: str) -> dict[str, Any]:
     }
 
 
+@router.get("/api/crypto/open-interest/{symbol}")
+def crypto_open_interest(
+    symbol: str,
+    period: str = Query("1h", description="OI period: 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d"),
+    limit: int = Query(100, ge=1, le=500, description="Max OI snapshots"),
+) -> dict[str, Any]:
+    """Open interest history from Binance Futures."""
+    from trader_koo.crypto.binance_oi import (
+        fetch_current_open_interest,
+        fetch_open_interest_history,
+    )
+
+    normalised = _normalise_symbol(symbol)
+    snapshots = fetch_open_interest_history(normalised, period=period, limit=limit)
+    current = fetch_current_open_interest(normalised)
+
+    oi_bars = [
+        {
+            "timestamp": s.timestamp.isoformat(),
+            "open_interest": s.sum_open_interest,
+            "open_interest_value": s.sum_open_interest_value,
+        }
+        for s in snapshots
+    ]
+
+    # Compute 24h change if we have enough data
+    oi_change_24h = None
+    if len(snapshots) >= 2:
+        latest_val = snapshots[-1].sum_open_interest_value
+        oldest_val = snapshots[0].sum_open_interest_value
+        if oldest_val > 0:
+            oi_change_24h = round((latest_val - oldest_val) / oldest_val * 100, 2)
+
+    return {
+        "ok": True,
+        "symbol": normalised,
+        "period": period,
+        "count": len(oi_bars),
+        "oi_bars": oi_bars,
+        "current_oi": current,
+        "oi_change_24h_pct": oi_change_24h,
+    }
+
+
 @router.websocket("/ws/crypto")
 async def ws_crypto(websocket: WebSocket) -> None:
     """Push live crypto ticks to the browser as they arrive from Binance.
