@@ -583,24 +583,17 @@ if DIST_V2.exists() and DIST_V2.is_dir():
         "Expires": "0",
     }
 
-    if _root_v2_assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(_root_v2_assets)), name="root-assets")
-
     if _root_v2_index.is_file():
-        @app.get("/{spa_path:path}", include_in_schema=False)
-        def root_spa_fallback(spa_path: str = "") -> Any:
-            # Only serve SPA for known frontend routes, not API paths
-            first_segment = spa_path.split("/")[0] if spa_path else ""
-            if first_segment in _SPA_ROUTES:
-                static_file = DIST_V2 / spa_path
-                if spa_path and static_file.is_file():
-                    return FileResponse(str(static_file))
-                return FileResponse(str(_root_v2_index), headers=_root_shell_headers)
-            # For unknown paths, try static file or 404
-            static_file = DIST_V2 / spa_path
-            if spa_path and static_file.is_file():
-                return FileResponse(str(static_file))
-            return FileResponse(str(_root_v2_index), headers=_root_shell_headers)
+        # Only intercept KNOWN SPA routes at root level.
+        # Do NOT use a wildcard catch-all — it breaks /v2/assets, /api, etc.
+        for _route in _SPA_ROUTES:
+            def _make_handler(_r: str = _route):
+                def _handler() -> Any:
+                    return FileResponse(str(_root_v2_index), headers=_root_shell_headers)
+                _handler.__name__ = f"spa_{_r.replace('-', '_')}"
+                return _handler
+            app.get(f"/{_route}", include_in_schema=False)(_make_handler())
+            app.get(f"/{_route}/{{rest:path}}", include_in_schema=False)(_make_handler())
 
 
 # Legacy /v2 mount (backward compatibility)
