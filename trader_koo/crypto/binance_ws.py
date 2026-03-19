@@ -184,15 +184,15 @@ class BinanceWSClient:
     def _run_forever(self) -> None:
         backoff = INITIAL_BACKOFF_SEC
         while self._running:
-            # Record disconnect time so we can gap-fill after reconnect
-            disconnect_ts = dt.datetime.now(dt.timezone.utc)
-
             try:
-                self._connect()
-                # If _connect() ran successfully for a while, reset backoff
+                self._connect()  # blocks while WS is connected
+                # _connect() returned = WS disconnected
                 backoff = INITIAL_BACKOFF_SEC
             except Exception as exc:
                 LOG.error("Binance WS unexpected error: %s", exc)
+
+            # NOW the WS is truly disconnected — record the actual disconnect time
+            disconnect_ts = dt.datetime.now(dt.timezone.utc)
 
             with self._lock:
                 self._connected = False
@@ -200,25 +200,29 @@ class BinanceWSClient:
             if not self._running:
                 break
 
-            # Trigger gap-fill callback for the disconnect window
-            reconnect_ts = dt.datetime.now(dt.timezone.utc)
-            gap_seconds = (reconnect_ts - disconnect_ts).total_seconds()
-            if gap_seconds > 120 and self._on_gap_detected:
-                LOG.warning(
-                    "Binance WS was disconnected for %.0fs — triggering gap-fill",
-                    gap_seconds,
-                )
-                try:
-                    self._on_gap_detected(disconnect_ts, reconnect_ts)
-                except Exception as exc:
-                    LOG.warning("Gap-fill callback failed: %s", exc)
-
             LOG.warning(
                 "Binance WS disconnected — reconnecting in %.1f s",
                 backoff,
             )
             time.sleep(backoff)
             backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SEC)
+
+            # After sleeping, trigger gap-fill in a SEPARATE thread
+            # so it doesn't block WS reconnection
+            reconnect_ts = dt.datetime.now(dt.timezone.utc)
+            gap_seconds = (reconnect_ts - disconnect_ts).total_seconds()
+            if gap_seconds > 120 and self._on_gap_detected:
+                LOG.warning(
+                    "Binance WS gap detected: %.0fs — triggering background gap-fill",
+                    gap_seconds,
+                )
+                import threading as _thr
+                _thr.Thread(
+                    target=self._on_gap_detected,
+                    args=(disconnect_ts, reconnect_ts),
+                    name="crypto-gap-fill",
+                    daemon=True,
+                ).start()
 
         LOG.info("Binance WS run-loop exited")
 

@@ -144,7 +144,9 @@ def score_single_ticker(
         }
 
     X = features.loc[[ticker]].reindex(columns=feature_cols)
-    X = X.fillna(X.median())  # consistent with score_universe
+    # Single-row median() returns the row itself (NaN stays NaN).
+    # Fill with 0 as a safe default for single-ticker scoring.
+    X = X.fillna(0.0)
 
     try:
         raw = float(model.predict(X.values)[0])
