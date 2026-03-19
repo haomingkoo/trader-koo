@@ -185,6 +185,23 @@ def create_paper_trades_from_report(
         )
         return 0
 
+    # Portfolio drawdown circuit breaker — halt new entries if drawdown exceeds limit
+    try:
+        snapshot_row = conn.execute(
+            "SELECT equity_index FROM paper_portfolio_snapshots ORDER BY snapshot_date DESC LIMIT 1"
+        ).fetchone()
+        if snapshot_row and snapshot_row[0] is not None:
+            equity_index = float(snapshot_row[0])
+            drawdown_pct = (100.0 - equity_index)  # equity starts at 100
+            if drawdown_pct >= config.max_drawdown_pct:
+                LOG.warning(
+                    "CIRCUIT BREAKER: portfolio drawdown %.1f%% exceeds %.1f%% limit, blocking new entries",
+                    drawdown_pct, config.max_drawdown_pct,
+                )
+                return 0
+    except Exception as exc:
+        LOG.debug("Drawdown check skipped: %s", exc)
+
     remaining_slots = config.max_open - open_count
     inserted = 0
 
@@ -500,16 +517,38 @@ def mark_to_market(
             )
             closed += 1
         else:
+            # Trailing stop logic: protect profits on winning trades
+            new_stop = stop_loss
+            if stop_loss is not None and entry_price > 0:
+                risk = abs(entry_price - stop_loss)
+                if risk > 0:
+                    if direction == "long":
+                        current_r = (new_hwm - entry_price) / risk
+                        if current_r >= 1.5:
+                            # Trail stop at HWM minus 0.5R
+                            trail_stop = new_hwm - (0.5 * risk)
+                            new_stop = max(stop_loss, trail_stop)
+                        elif current_r >= 1.0:
+                            # Move stop to breakeven
+                            new_stop = max(stop_loss, entry_price)
+                    else:  # short
+                        current_r = (entry_price - new_lwm) / risk
+                        if current_r >= 1.5:
+                            trail_stop = new_lwm + (0.5 * risk)
+                            new_stop = min(stop_loss, trail_stop)
+                        elif current_r >= 1.0:
+                            new_stop = min(stop_loss, entry_price)
+
             now = dt.datetime.now(dt.timezone.utc).isoformat()
             conn.execute(
                 """
                 UPDATE paper_trades SET
                     current_price = ?, unrealized_pnl_pct = ?,
                     last_mtm_date = ?, high_water_mark = ?, low_water_mark = ?,
-                    updated_ts = ?
+                    stop_loss = ?, updated_ts = ?
                 WHERE id = ?
                 """,
-                (current_price, unrealized, price_date, new_hwm, new_lwm, now, trade_id),
+                (current_price, unrealized, price_date, new_hwm, new_lwm, new_stop, now, trade_id),
             )
         updated += 1
 

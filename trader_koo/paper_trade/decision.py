@@ -171,7 +171,7 @@ def compute_stop_and_target(
         if isinstance(support, (int, float)) and 0 < float(support) < entry:
             target_price = float(support)
         else:
-            target_price = entry - (risk * 2.0)
+            target_price = max(entry - (risk * 2.0), 0.01)  # floor at 0.01 — stock can't go negative
 
     return {
         "stop_loss": round(stop_loss, 2),
