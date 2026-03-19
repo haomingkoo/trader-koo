@@ -52,6 +52,12 @@ const features: FeatureCard[] = [
     description:
       "Live BTC and ETH prices via Binance WebSocket feed with 1-minute candlestick charts, 24h volume, and real-time price change tracking.",
   },
+  {
+    to: "/markets",
+    title: "Prediction Markets",
+    description:
+      "Finance-relevant Polymarket events sorted by volume. Fed rate cuts, recession odds, geopolitical events — macro regime signals from prediction markets.",
+  },
 ];
 
 export default function GuidePage() {

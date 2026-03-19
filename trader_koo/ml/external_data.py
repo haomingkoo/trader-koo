@@ -390,6 +390,79 @@ def fetch_polymarket_markets(
         return []
 
 
+def get_polymarket_macro_probabilities() -> dict[str, float]:
+    """Extract aggregate Polymarket probabilities for ML features.
+
+    Returns 3 features:
+    - polymarket_fed_cut_prob: highest "Yes" probability among rate-cut markets (0-100)
+    - polymarket_recession_prob: highest "Yes" probability among recession markets (0-100)
+    - polymarket_macro_sentiment: average "Yes" probability across all finance events
+      (crude fear/greed proxy — higher = more bullish macro consensus)
+
+    NOTE: These are LIVE market prices from Polymarket's current order book.
+    They are only meaningful for live/forward scoring. During historical training,
+    Polymarket odds for past dates are NOT available via API, so these will be NaN.
+    The model must tolerate missing values for these columns.
+    """
+    try:
+        events = fetch_polymarket_events(limit=50)
+    except Exception as exc:
+        LOG.warning("Polymarket macro prob fetch failed: %s", exc)
+        return {
+            "polymarket_fed_cut_prob": float("nan"),
+            "polymarket_recession_prob": float("nan"),
+            "polymarket_macro_sentiment": float("nan"),
+        }
+
+    if not events:
+        return {
+            "polymarket_fed_cut_prob": float("nan"),
+            "polymarket_recession_prob": float("nan"),
+            "polymarket_macro_sentiment": float("nan"),
+        }
+
+    fed_cut_probs: list[float] = []
+    recession_probs: list[float] = []
+    all_yes_probs: list[float] = []
+
+    for ev in events:
+        title_lower = ev.get("title", "").lower()
+        top = ev.get("top_market")
+        if not top:
+            continue
+
+        # Extract "Yes" probability (first outcome price)
+        prices = top.get("prices_pct") or []
+        outcomes = top.get("outcomes") or []
+        yes_prob: float | None = None
+        for outcome, price in zip(outcomes, prices):
+            if str(outcome).lower() == "yes" and price is not None:
+                yes_prob = float(price)
+                break
+        # Fallback: first price if no explicit "Yes" label
+        if yes_prob is None and prices and prices[0] is not None:
+            yes_prob = float(prices[0])
+
+        if yes_prob is None:
+            continue
+
+        all_yes_probs.append(yes_prob)
+
+        if "rate cut" in title_lower or "interest rate" in title_lower:
+            fed_cut_probs.append(yes_prob)
+        if "recession" in title_lower:
+            recession_probs.append(yes_prob)
+
+    return {
+        # Take max prob if multiple matching markets exist (most relevant/active one)
+        "polymarket_fed_cut_prob": max(fed_cut_probs) if fed_cut_probs else float("nan"),
+        "polymarket_recession_prob": max(recession_probs) if recession_probs else float("nan"),
+        "polymarket_macro_sentiment": (
+            sum(all_yes_probs) / len(all_yes_probs) if all_yes_probs else float("nan")
+        ),
+    }
+
+
 def get_macro_snapshot() -> dict[str, Any]:
     """Return a complete macro snapshot for display or ML feature enrichment.
 
