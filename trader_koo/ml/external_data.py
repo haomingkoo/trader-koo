@@ -154,6 +154,94 @@ _FINANCE_KEYWORDS = frozenset({
 })
 
 
+def fetch_polymarket_events(
+    *,
+    limit: int = 15,
+) -> list[dict[str, Any]]:
+    """Fetch curated finance-relevant Polymarket events (grouped markets).
+
+    Uses events API for better grouping, filters for macro/finance relevance,
+    sorts by total volume. Returns event-level data with embedded markets.
+    """
+    cache_key = f"poly_events_{limit}"
+    with _cache_lock:
+        cached = _polymarket_cache.get(cache_key)
+        if cached and cached.get("expires_at", 0) > dt.datetime.now(dt.timezone.utc).timestamp():
+            return cached["data"]
+
+    try:
+        url = f"{_POLYMARKET_GAMMA}/events?limit=200&active=true&closed=false"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "trader-koo/1.0",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw_events = json.loads(resp.read().decode("utf-8"))
+
+        if not isinstance(raw_events, list):
+            return []
+
+        # Filter for finance/macro relevance
+        relevant: list[dict[str, Any]] = []
+        for ev in raw_events:
+            title = str(ev.get("title", "")).lower()
+            desc = str(ev.get("description", "")).lower()
+            text = f"{title} {desc}"
+            if not any(kw in text for kw in _FINANCE_KEYWORDS):
+                continue
+
+            raw_markets = ev.get("markets") or []
+            total_volume = sum(float(m.get("volume", 0) or 0) for m in raw_markets)
+
+            # Parse the top market for this event (highest volume)
+            top_market = None
+            if raw_markets:
+                sorted_mkts = sorted(raw_markets, key=lambda m: float(m.get("volume", 0) or 0), reverse=True)
+                m = sorted_mkts[0]
+                outcomes = m.get("outcomes") or []
+                prices_raw = m.get("outcomePrices") or []
+                prices = []
+                for p in prices_raw:
+                    try:
+                        prices.append(round(float(p) * 100, 1))
+                    except (TypeError, ValueError):
+                        prices.append(None)
+                top_market = {
+                    "question": str(m.get("question", "")).strip(),
+                    "outcomes": outcomes,
+                    "prices_pct": prices,
+                    "volume": round(float(m.get("volume", 0) or 0), 2),
+                }
+
+            relevant.append({
+                "title": str(ev.get("title", "")).strip(),
+                "slug": ev.get("slug", ""),
+                "market_count": len(raw_markets),
+                "total_volume": round(total_volume, 2),
+                "end_date": ev.get("endDate"),
+                "image": ev.get("image"),
+                "url": f"https://polymarket.com/event/{ev.get('slug', '')}",
+                "top_market": top_market,
+            })
+
+        # Sort by volume, return top N
+        relevant.sort(key=lambda e: e["total_volume"], reverse=True)
+        result = relevant[:limit]
+
+        with _cache_lock:
+            _polymarket_cache[cache_key] = {
+                "data": result,
+                "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=_cache_ttl_sec)).timestamp(),
+            }
+
+        LOG.info("Polymarket events: %d relevant / %d total", len(relevant), len(raw_events))
+        return result
+
+    except Exception as exc:
+        LOG.warning("Polymarket events fetch failed: %s", exc)
+        return []
+
+
 def fetch_polymarket_markets(
     *,
     limit: int = 20,
