@@ -28,7 +28,7 @@ export function StructureCard({
   const context = structure.context;
   const regime = structure.hmm_regime;
   const regimeLabel = regime?.current_state?.replaceAll("_", " ") ?? "unavailable";
-  const regimeConf = regime?.current_probs?.[regime.current_state] ?? null;
+  const transitionRisk = regime?.transition_risk_pct ?? null;
 
   return (
     <GlassCard label="Structure Engine">
@@ -74,8 +74,8 @@ export function StructureCard({
             {formatLevelContext(regimeLabel)}
           </div>
           <div className="mt-1 text-[11px] text-[var(--muted)]">
-            {regimeConf != null
-              ? `${(regimeConf * 100).toFixed(0)}% confidence · ${regime?.days_in_current ?? 0} bars`
+            {regime?.days_in_current != null
+              ? `${regime.days_in_current} bars${transitionRisk != null ? ` · ${transitionRisk.toFixed(1)}% shift risk` : ""}`
               : "Insufficient bars for stable regime fit"}
           </div>
         </div>
