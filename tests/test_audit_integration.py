@@ -168,8 +168,16 @@ def test_app(temp_db_path, monkeypatch):
     patches = [
         patch("trader_koo.backend.services.database.DB_PATH", temp_db_path),
         patch("trader_koo.backend.services.database.get_conn", _fake_get_conn),
-        patch("trader_koo.backend.routers.admin.DB_PATH", temp_db_path),
-        patch("trader_koo.backend.routers.admin.get_conn", _fake_get_conn),
+        # Patch DB_PATH / get_conn in each admin sub-module that imports them
+        patch("trader_koo.backend.routers.admin._shared.DB_PATH", temp_db_path),
+        patch("trader_koo.backend.routers.admin.data.DB_PATH", temp_db_path),
+        patch("trader_koo.backend.routers.admin.data.get_conn", _fake_get_conn),
+        patch("trader_koo.backend.routers.admin.pipeline.DB_PATH", temp_db_path),
+        patch("trader_koo.backend.routers.admin.pipeline.get_conn", _fake_get_conn),
+        patch("trader_koo.backend.routers.admin.email_admin.DB_PATH", temp_db_path),
+        patch("trader_koo.backend.routers.admin.ml.get_conn", _fake_get_conn),
+        patch("trader_koo.backend.routers.admin.system.DB_PATH", temp_db_path),
+        patch("trader_koo.backend.routers.admin.system.get_conn", _fake_get_conn),
     ]
     for p in patches:
         p.start()
