@@ -581,9 +581,12 @@ if DIST_V2.exists() and DIST_V2.is_dir():
         "Expires": "0",
     }
 
+    if _root_v2_assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_root_v2_assets)), name="root-assets")
+
     if _root_v2_index.is_file():
         # Only intercept KNOWN SPA routes at root level.
-        # Do NOT use a wildcard catch-all — it breaks /v2/assets, /api, etc.
+        # Do NOT use a wildcard catch-all — it breaks /assets, /api, etc.
         for _route in _SPA_ROUTES:
             def _make_handler(_r: str = _route):
                 def _handler() -> Any:
