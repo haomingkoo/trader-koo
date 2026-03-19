@@ -87,7 +87,11 @@ def score_universe(
 
     # Align columns with what the model expects
     X = features.reindex(columns=feature_cols)
-    X = X.fillna(X.median())
+    # Use training medians for imputation (prevents train/serve skew)
+    train_medians = meta.get("train_medians", {}) if meta else {}
+    if train_medians:
+        X = X.fillna({k: v for k, v in train_medians.items() if k in X.columns})
+    X = X.fillna(0.0)  # fallback for any remaining NaN
 
     try:
         # Booster.predict() returns raw margins, need to convert to probabilities
@@ -144,9 +148,12 @@ def score_single_ticker(
         }
 
     X = features.loc[[ticker]].reindex(columns=feature_cols)
-    # Single-row median() returns the row itself (NaN stays NaN).
-    # Fill with 0 as a safe default for single-ticker scoring.
-    X = X.fillna(0.0)
+    # Use training medians for consistent imputation (same as training time).
+    # Previously used fillna(0.0) which caused train/serve skew.
+    train_medians = meta.get("train_medians", {}) if meta else {}
+    if train_medians:
+        X = X.fillna({k: v for k, v in train_medians.items() if k in X.columns})
+    X = X.fillna(0.0)  # fallback for any remaining NaN
 
     try:
         raw = float(model.predict(X.values)[0])
