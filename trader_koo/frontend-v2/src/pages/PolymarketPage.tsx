@@ -78,10 +78,10 @@ function EventCard({ event }: { event: PolyEvent }) {
         {event.title}
       </h3>
 
-      {top && top.outcomes.length > 0 && (
+      {top && Array.isArray(top.outcomes) && top.outcomes.length > 0 && (
         <div className="mt-2 space-y-1">
           {top.outcomes.map((outcome, i) => (
-            <PriceBar key={outcome} label={outcome} pct={top.prices_pct[i]} />
+            <PriceBar key={outcome} label={String(outcome)} pct={Array.isArray(top.prices_pct) ? top.prices_pct[i] : null} />
           ))}
         </div>
       )}

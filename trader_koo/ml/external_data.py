@@ -198,8 +198,24 @@ def fetch_polymarket_events(
             if raw_markets:
                 sorted_mkts = sorted(raw_markets, key=lambda m: float(m.get("volume", 0) or 0), reverse=True)
                 m = sorted_mkts[0]
-                outcomes = m.get("outcomes") or []
-                prices_raw = m.get("outcomePrices") or []
+                raw_outcomes = m.get("outcomes") or []
+                # Polymarket sometimes returns outcomes as a JSON string, not a list
+                if isinstance(raw_outcomes, str):
+                    try:
+                        import json as _json
+                        raw_outcomes = _json.loads(raw_outcomes)
+                    except Exception:
+                        raw_outcomes = [raw_outcomes]
+                outcomes = list(raw_outcomes) if isinstance(raw_outcomes, (list, tuple)) else []
+
+                raw_prices = m.get("outcomePrices") or []
+                if isinstance(raw_prices, str):
+                    try:
+                        import json as _json
+                        raw_prices = _json.loads(raw_prices)
+                    except Exception:
+                        raw_prices = []
+                prices_raw = list(raw_prices) if isinstance(raw_prices, (list, tuple)) else []
                 prices = []
                 for p in prices_raw:
                     try:
