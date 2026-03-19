@@ -263,7 +263,11 @@ def paper_trade_summary(
     total = len(all_closed)
     if total == 0:
         return {
-            "overall": {"total_trades": 0, "open_count": open_trades},
+            "overall": {
+                "total_trades": 0, "open_count": open_trades,
+                "starting_capital": 1_000_000.0, "portfolio_value": 1_000_000.0,
+                "realized_pnl": 0, "unrealized_pnl": 0, "total_return_pct": 0,
+            },
             "by_direction": {},
             "by_family": {},
             "by_tier": {},
@@ -292,6 +296,30 @@ def paper_trade_summary(
     hit_target_count = sum(1 for row in all_closed if row[5] == "target_hit")
     stopped_out_count = sum(1 for row in all_closed if row[5] == "stopped_out")
 
+    # Portfolio value tracking ($1M starting capital)
+    STARTING_CAPITAL = 1_000_000.0
+    # Each closed trade's PnL is position_size_pct × pnl_pct / 100
+    # Default position size ~8% (tier B), so each trade risks ~8% of capital
+    realized_pnl_dollars = 0.0
+    for row in all_closed:
+        trade_pnl_pct = float(row[0])
+        # Approximate: position_size defaults to 8% of capital
+        position_dollars = STARTING_CAPITAL * 0.08
+        realized_pnl_dollars += position_dollars * (trade_pnl_pct / 100)
+
+    # Unrealized P&L from open trades
+    open_rows = conn.execute(
+        "SELECT unrealized_pnl_pct, position_size_pct FROM paper_trades WHERE status = 'open'"
+    ).fetchall()
+    unrealized_pnl_dollars = 0.0
+    for orow in open_rows:
+        u_pnl = float(orow[0] or 0)
+        pos_pct = float(orow[1] or 8.0)
+        position_dollars = STARTING_CAPITAL * (pos_pct / 100)
+        unrealized_pnl_dollars += position_dollars * (u_pnl / 100)
+
+    portfolio_value = STARTING_CAPITAL + realized_pnl_dollars + unrealized_pnl_dollars
+
     overall = {
         "total_trades": total,
         "open_count": open_trades,
@@ -310,6 +338,12 @@ def paper_trade_summary(
         "profit_factor": profit_factor,
         "target_hit_rate_pct": round(hit_target_count / total * 100, 1),
         "stopped_out_rate_pct": round(stopped_out_count / total * 100, 1),
+        # Portfolio tracking
+        "starting_capital": STARTING_CAPITAL,
+        "portfolio_value": round(portfolio_value, 2),
+        "realized_pnl": round(realized_pnl_dollars, 2),
+        "unrealized_pnl": round(unrealized_pnl_dollars, 2),
+        "total_return_pct": round((portfolio_value - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 2),
     }
 
     by_direction: dict[str, dict[str, Any]] = {}
