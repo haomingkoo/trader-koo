@@ -119,17 +119,20 @@ def fit_hmm(
     scaler = StandardScaler()
     scaled = scaler.fit_transform(features)
     scaled = np.asarray(scaled, dtype=float)
-    if scaled.ndim != 2 or scaled.shape[0] < 40:
-        raise ValueError("HMM regime: scaled feature matrix too small")
+    if scaled.ndim != 2 or scaled.shape[0] < 120:
+        raise ValueError(
+            f"HMM regime: need >= 120 samples for stable fit, got {scaled.shape[0]}"
+        )
     if not np.isfinite(scaled).all():
         raise ValueError("HMM regime: scaled feature matrix contains non-finite values")
 
     best_model: GaussianHMM | None = None
     best_score = float("-inf")
-    for seed in (42, 7, 123):
+    # 10 random restarts — EM is sensitive to initialization
+    for seed in (42, 7, 123, 0, 17, 31, 55, 73, 88, 99):
         model = GaussianHMM(
             n_components=n_states,
-            covariance_type="diag",
+            covariance_type="tied",  # shared full covariance — models feature correlations
             min_covar=1e-3,
             n_iter=n_iter,
             random_state=seed,
@@ -141,6 +144,10 @@ def fit_hmm(
             model.fit(scaled)
         if any(issubclass(w.category, RuntimeWarning) for w in caught):
             LOG.debug("HMM regime: runtime warnings during fit for seed=%s", seed)
+            continue
+        # Skip models that didn't converge
+        if hasattr(model, "monitor_") and not model.monitor_.converged:
+            LOG.debug("HMM regime: seed=%s did not converge after %d iterations", seed, n_iter)
             continue
         try:
             score = float(model.score(scaled))
@@ -189,9 +196,9 @@ def predict_regimes(
         LOG.warning("HMM regime: empty DataFrame provided")
         return None
 
-    if len(df) < 60:
+    if len(df) < 140:
         LOG.warning(
-            "HMM regime: insufficient data (%d rows, need >= 60)", len(df)
+            "HMM regime: insufficient data (%d rows, need >= 140)", len(df)
         )
         return None
 
