@@ -21,7 +21,7 @@ SESSION_LABELS = {
     "TBD": "TBD",
     "AMC": "After Hours",
 }
-CACHE_PROVIDER = "alpha_vantage"
+CACHE_PROVIDER = "finnhub"
 CACHE_TTL_HOURS = max(1, int(os.getenv("TRADER_KOO_EARNINGS_CACHE_HOURS", "6")))
 ALPHA_VANTAGE_TIMEOUT_SEC = max(5, int(os.getenv("TRADER_KOO_ALPHA_VANTAGE_TIMEOUT_SEC", "20")))
 
@@ -362,66 +362,134 @@ def _fetch_alpha_vantage_calendar_rows(api_key: str, horizon: str) -> list[dict[
     return out
 
 
+def _finnhub_api_key() -> str:
+    return str(os.getenv("FINNHUB_API_KEY", "")).strip()
+
+
+def _fetch_finnhub_calendar_rows(api_key: str, from_date: str, to_date: str) -> list[dict[str, Any]]:
+    """Fetch full-market earnings calendar from Finnhub (free tier)."""
+    qs = urllib.parse.urlencode({
+        "from": from_date,
+        "to": to_date,
+        "token": api_key,
+    })
+    url = f"https://finnhub.io/api/v1/calendar/earnings?{qs}"
+    req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    raw_rows = data.get("earningsCalendar") or []
+    out: list[dict[str, Any]] = []
+    for row in raw_rows:
+        symbol = str(row.get("symbol") or "").upper().strip()
+        report_date = str(row.get("date") or "").strip()
+        if not symbol or not report_date:
+            continue
+        # Map Finnhub hour field to our session format
+        hour = str(row.get("hour") or "").lower()
+        if hour == "bmo":
+            session = "BMO"
+        elif hour == "amc":
+            session = "AMC"
+        else:
+            session = "TBD"
+        out.append({
+            "ticker": symbol,
+            "company_name": None,
+            "earnings_date": report_date,
+            "earnings_session": session,
+            "fiscal_date_ending": None,
+            "estimate_eps": _to_float(row.get("epsEstimate")),
+            "actual_eps": _to_float(row.get("epsActual")),
+            "estimate_revenue": _to_float(row.get("revenueEstimate")),
+            "actual_revenue": _to_float(row.get("revenueActual")),
+            "currency": "USD",
+            "source": "finnhub",
+        })
+    LOG.info("Finnhub earnings: %d rows from %s to %s", len(out), from_date, to_date)
+    return out
+
+
 def _get_primary_calendar_rows(conn: sqlite3.Connection, days: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    api_key = _alpha_vantage_key()
-    if not api_key:
-        return [], {
-            "provider": None,
-            "enabled": False,
-            "detail": "TRADER_KOO_ALPHA_VANTAGE_KEY not configured",
-            "used_cache": False,
-            "stale": False,
-        }
+    """Try Finnhub first (better BMO/AMC data, generous rate limit), then Alpha Vantage."""
+    today = dt.date.today()
+    from_date = today.isoformat()
+    to_date = (today + dt.timedelta(days=days)).isoformat()
 
-    horizon = _alpha_vantage_horizon(days)
-    cache_key = f"{CACHE_PROVIDER}:earnings_calendar:{horizon}"
-    cached = _cache_load(conn, cache_key)
-    if cached and cached.get("is_fresh"):
-        return list(cached.get("payload") or []), {
-            "provider": CACHE_PROVIDER,
-            "enabled": True,
-            "used_cache": True,
-            "stale": False,
-            "age_hours": cached.get("age_hours"),
-            "fetched_ts": cached.get("fetched_ts"),
-            "horizon": horizon,
-            "detail": "Using cached Alpha Vantage earnings calendar",
-        }
-
-    try:
-        rows = _fetch_alpha_vantage_calendar_rows(api_key, horizon)
-        cached = _cache_store(conn, cache_key, CACHE_PROVIDER, rows, CACHE_TTL_HOURS)
-        return rows, {
-            "provider": CACHE_PROVIDER,
-            "enabled": True,
-            "used_cache": False,
-            "stale": False,
-            "age_hours": cached.get("age_hours"),
-            "fetched_ts": cached.get("fetched_ts"),
-            "horizon": horizon,
-            "detail": "Fetched Alpha Vantage earnings calendar",
-        }
-    except Exception as exc:
-        LOG.warning("Alpha Vantage earnings calendar fetch failed: %s", exc)
-        if cached:
+    # 1. Try Finnhub (primary — 60 calls/min, full market, BMO/AMC session)
+    finnhub_key = _finnhub_api_key()
+    if finnhub_key:
+        cache_key = f"finnhub:earnings_calendar:{from_date}:{to_date}"
+        cached = _cache_load(conn, cache_key)
+        if cached and cached.get("is_fresh"):
             return list(cached.get("payload") or []), {
-                "provider": CACHE_PROVIDER,
+                "provider": "FINNHUB",
                 "enabled": True,
                 "used_cache": True,
-                "stale": True,
+                "stale": False,
                 "age_hours": cached.get("age_hours"),
                 "fetched_ts": cached.get("fetched_ts"),
-                "horizon": horizon,
-                "detail": f"Using stale Alpha Vantage cache after fetch failure: {exc}",
+                "detail": "Using cached Finnhub earnings calendar",
             }
-        return [], {
-            "provider": CACHE_PROVIDER,
-            "enabled": True,
-            "used_cache": False,
-            "stale": False,
-            "horizon": horizon,
-            "detail": f"Alpha Vantage fetch failed: {exc}",
-        }
+        try:
+            rows = _fetch_finnhub_calendar_rows(finnhub_key, from_date, to_date)
+            if rows:
+                cached = _cache_store(conn, cache_key, "finnhub", rows, CACHE_TTL_HOURS)
+                return rows, {
+                    "provider": "FINNHUB",
+                    "enabled": True,
+                    "used_cache": False,
+                    "stale": False,
+                    "age_hours": cached.get("age_hours"),
+                    "fetched_ts": cached.get("fetched_ts"),
+                    "detail": f"Fetched {len(rows)} Finnhub earnings events",
+                }
+        except Exception as exc:
+            LOG.warning("Finnhub earnings calendar fetch failed: %s", exc)
+            if cached:
+                return list(cached.get("payload") or []), {
+                    "provider": "FINNHUB",
+                    "enabled": True,
+                    "used_cache": True,
+                    "stale": True,
+                    "detail": f"Using stale Finnhub cache: {exc}",
+                }
+
+    # 2. Fallback to Alpha Vantage
+    av_key = _alpha_vantage_key()
+    if av_key:
+        horizon = _alpha_vantage_horizon(days)
+        cache_key = f"alpha_vantage:earnings_calendar:{horizon}"
+        cached = _cache_load(conn, cache_key)
+        if cached and cached.get("is_fresh"):
+            return list(cached.get("payload") or []), {
+                "provider": "ALPHA_VANTAGE",
+                "enabled": True,
+                "used_cache": True,
+                "stale": False,
+                "detail": "Using cached Alpha Vantage earnings calendar",
+            }
+        try:
+            rows = _fetch_alpha_vantage_calendar_rows(av_key, horizon)
+            cached = _cache_store(conn, cache_key, "alpha_vantage", rows, CACHE_TTL_HOURS)
+            return rows, {
+                "provider": "ALPHA_VANTAGE",
+                "enabled": True,
+                "used_cache": False,
+                "stale": False,
+                "detail": f"Fetched {len(rows)} Alpha Vantage earnings events",
+            }
+        except Exception as exc:
+            LOG.warning("Alpha Vantage earnings fetch failed: %s", exc)
+
+    # 3. No calendar API available
+    return [], {
+        "provider": None,
+        "enabled": False,
+        "detail": "No earnings calendar API configured (set FINNHUB_API_KEY or TRADER_KOO_ALPHA_VANTAGE_KEY)",
+        "used_cache": False,
+        "stale": False,
+    }
 
 
 def _load_latest_yolo_map(conn: sqlite3.Connection, tickers: set[str] | None = None) -> dict[str, dict[str, Any]]:
@@ -661,8 +729,8 @@ def build_earnings_calendar_payload(
             return
         if event_date < market_date or event_date > max_date:
             return
-        if effective_universe and ticker not in effective_universe:
-            return
+        # Allow all tickers from primary calendar (Finnhub/Alpha Vantage).
+        # Only filter Finviz-sourced rows to tracked universe.
         key = (ticker, event_date.isoformat())
         row = dict(merged.get(key) or {})
         fund = fundamentals_map.get(ticker) or {}

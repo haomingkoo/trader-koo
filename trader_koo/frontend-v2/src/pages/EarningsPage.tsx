@@ -257,8 +257,7 @@ export default function EarningsPage() {
           {data?.market_date ? <Badge variant="muted">Market date {data.market_date}</Badge> : null}
         </div>
         <p className="mt-3 text-xs text-[var(--muted)]">
-          This is a tracked-universe earnings calendar, not a full-market feed like Unusual Whales.
-          It focuses on the names we already score and monitor.
+          Full-market earnings calendar powered by Finnhub. Tracked tickers are highlighted.
         </p>
       </div>
 
