@@ -35,6 +35,8 @@ class PaperTradeConfig:
     earnings_position_scale: float
     ml_enabled: bool = True
     ml_min_win_prob: float = 0.55
+    max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
+    max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this
 
 
 def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:

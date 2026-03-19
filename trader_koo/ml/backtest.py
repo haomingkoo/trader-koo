@@ -159,7 +159,7 @@ def run_backtest(
                     closed = True
                     break
                 elif price <= pos["stop"]:
-                    exit_price_adj = price * (1 + DEFAULT_SLIPPAGE_PCT / 100)  # slippage works against you on stops
+                    exit_price_adj = price * (1 - DEFAULT_SLIPPAGE_PCT / 100)  # slippage works against you on stops
                     pnl = (exit_price_adj - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
                     cash += pos["entry_price"] * pos["shares"] + pnl
                     trade_log.append({**pos, "exit_date": price_date, "exit_price": round(exit_price_adj, 2),
@@ -183,13 +183,19 @@ def run_backtest(
 
         open_positions = still_open
 
-        # 2. Train model on data up to rebalance_date (no future data)
+        # 2. Train model on data up to rebalance_date - embargo
+        # Labels near rebalance_date use future prices (up to max_holding_days).
+        # End training data early so no label's outcome window overlaps with
+        # the trading period. Embargo = max_holding_days + 5-day buffer.
+        embargo_days = max_holding_days + 5
+        train_end_ts = rebalance_ts - pd.Timedelta(days=embargo_days)
+        train_end_date = train_end_ts.strftime("%Y-%m-%d")
         train_start = (rebalance_ts - pd.Timedelta(days=train_window_days)).strftime("%Y-%m-%d")
         try:
             dataset = build_dataset(
                 conn,
                 start_date=train_start,
-                end_date=rebalance_date,
+                end_date=train_end_date,
                 sample_frequency=5,
             )
             if len(dataset) < 50:
@@ -230,7 +236,10 @@ def run_backtest(
             features = extract_features_for_universe(conn, as_of_date=rebalance_date)
             if features.empty:
                 continue
-            X_score = features.reindex(columns=feature_cols).fillna(0.0)
+            # Use same training medians for imputation (consistent with training)
+            X_score = features.reindex(columns=feature_cols).fillna(
+                dataset[feature_cols].median()
+            ).fillna(0.0)
             probs = model.predict_proba(X_score)[:, 1]
             scored = pd.DataFrame({"ticker": features.index, "prob": probs})
             scored = scored[scored["prob"] >= min_win_prob].sort_values("prob", ascending=False)
