@@ -108,6 +108,8 @@ def _check_portfolio_concentration(
     ticker: str,
     direction: str,
     row: dict[str, Any],
+    *,
+    max_open: int = 5,
 ) -> tuple[bool, str]:
     """Limit total open trades and avoid sector/family clustering."""
     try:
@@ -118,7 +120,6 @@ def _check_portfolio_concentration(
         return True, "Could not check portfolio — allowing"
 
     open_count = len(open_trades)
-    max_open = 5  # Hard cap for concentrated portfolio
 
     if open_count >= max_open:
         return False, f"Portfolio full: {open_count}/{max_open} positions open. Wait for exits."
@@ -189,6 +190,7 @@ def critic_review(
     evaluation: dict[str, Any],
     plan: dict[str, Any],
     market_ctx: dict[str, Any],
+    max_open: int = 5,
 ) -> dict[str, Any]:
     """Run all critic checks against a proposed trade.
 
@@ -215,7 +217,7 @@ def critic_review(
         ("debate_strength", lambda: _check_debate_strength(row, evaluation)),
         ("risk_reward", lambda: _check_risk_reward(plan)),
         ("regime_alignment", lambda: _check_regime_alignment(row, evaluation, market_ctx)),
-        ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row)),
+        ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row, max_open=max_open)),
         ("volatility_environment", lambda: _check_volatility_environment(market_ctx)),
         ("caution_flags", lambda: _check_caution_flags(evaluation)),
     ]
