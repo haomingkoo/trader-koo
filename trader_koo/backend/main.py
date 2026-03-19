@@ -532,14 +532,20 @@ async def api_key_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
-# Static file serving: v1 frontend
+# Root: serve v2 React app at / (promoted from /v2)
 # ---------------------------------------------------------------------------
 
 
 @app.get("/", include_in_schema=False)
 def root() -> Any:
-    if FRONTEND_INDEX.exists():
-        return FileResponse(str(FRONTEND_INDEX))
+    """Serve v2 React dashboard at root. v1 is retired."""
+    v2_index = DIST_V2 / "index.html" if DIST_V2.exists() else None
+    if v2_index and v2_index.is_file():
+        return FileResponse(str(v2_index), headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        })
     return {"ok": True, "message": "trader_koo API is up", "docs": "/docs"}
 
 
@@ -562,7 +568,42 @@ app.include_router(streaming_router)
 # v2 React frontend (served from dist-v2/)
 # ---------------------------------------------------------------------------
 
+# SPA routes at root level (v2 promoted to /)
+_SPA_ROUTES = {
+    "report", "vix", "earnings", "chart", "crypto",
+    "opportunities", "paper-trades", "markets",
+}
+
 if DIST_V2.exists() and DIST_V2.is_dir():
+    _root_v2_index = DIST_V2 / "index.html"
+    _root_v2_assets = DIST_V2 / "assets"
+    _root_shell_headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
+    if _root_v2_assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_root_v2_assets)), name="root-assets")
+
+    if _root_v2_index.is_file():
+        @app.get("/{spa_path:path}", include_in_schema=False)
+        def root_spa_fallback(spa_path: str = "") -> Any:
+            # Only serve SPA for known frontend routes, not API paths
+            first_segment = spa_path.split("/")[0] if spa_path else ""
+            if first_segment in _SPA_ROUTES:
+                static_file = DIST_V2 / spa_path
+                if spa_path and static_file.is_file():
+                    return FileResponse(str(static_file))
+                return FileResponse(str(_root_v2_index), headers=_root_shell_headers)
+            # For unknown paths, try static file or 404
+            static_file = DIST_V2 / spa_path
+            if spa_path and static_file.is_file():
+                return FileResponse(str(static_file))
+            return FileResponse(str(_root_v2_index), headers=_root_shell_headers)
+
+
+# Legacy /v2 mount (backward compatibility)
     _v2_index = DIST_V2 / "index.html"
     _v2_assets = DIST_V2 / "assets"
     _v2_shell_headers = {
