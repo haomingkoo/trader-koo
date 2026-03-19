@@ -139,36 +139,42 @@ def run_backtest(
             ).fetchall()
 
             closed = False
-            for price_row in prices:
+            for bar_idx, price_row in enumerate(prices):
                 price_date = str(price_row[0])
                 price = float(price_row[1])
-                days_held = (pd.Timestamp(price_date) - pd.Timestamp(entry_date)).days
+                # Use trading-day count (bar index) not calendar days
+                # to match labels.py which iterates by index
+                trading_days_held = bar_idx + 1
+
+                # Apply slippage on exit
+                exit_price_adj = price * (1 - DEFAULT_SLIPPAGE_PCT / 100)
 
                 if price >= pos["target"]:
-                    pnl = (price - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
+                    pnl = (exit_price_adj - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
                     cash += pos["entry_price"] * pos["shares"] + pnl
-                    trade_log.append({**pos, "exit_date": price_date, "exit_price": price,
+                    trade_log.append({**pos, "exit_date": price_date, "exit_price": round(exit_price_adj, 2),
                                       "exit_reason": "target_hit", "pnl": round(pnl, 2),
-                                      "return_pct": round((price / pos["entry_price"] - 1) * 100, 2),
-                                      "days_held": days_held})
+                                      "return_pct": round((exit_price_adj / pos["entry_price"] - 1) * 100, 2),
+                                      "days_held": trading_days_held})
                     closed = True
                     break
                 elif price <= pos["stop"]:
-                    pnl = (price - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
+                    exit_price_adj = price * (1 + DEFAULT_SLIPPAGE_PCT / 100)  # slippage works against you on stops
+                    pnl = (exit_price_adj - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
                     cash += pos["entry_price"] * pos["shares"] + pnl
-                    trade_log.append({**pos, "exit_date": price_date, "exit_price": price,
+                    trade_log.append({**pos, "exit_date": price_date, "exit_price": round(exit_price_adj, 2),
                                       "exit_reason": "stopped_out", "pnl": round(pnl, 2),
-                                      "return_pct": round((price / pos["entry_price"] - 1) * 100, 2),
-                                      "days_held": days_held})
+                                      "return_pct": round((exit_price_adj / pos["entry_price"] - 1) * 100, 2),
+                                      "days_held": trading_days_held})
                     closed = True
                     break
-                elif days_held >= max_holding_days:
-                    pnl = (price - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
+                elif trading_days_held >= max_holding_days:
+                    pnl = (exit_price_adj - pos["entry_price"]) * pos["shares"] - DEFAULT_COMMISSION_PER_TRADE
                     cash += pos["entry_price"] * pos["shares"] + pnl
-                    trade_log.append({**pos, "exit_date": price_date, "exit_price": price,
+                    trade_log.append({**pos, "exit_date": price_date, "exit_price": round(exit_price_adj, 2),
                                       "exit_reason": "time_expired", "pnl": round(pnl, 2),
-                                      "return_pct": round((price / pos["entry_price"] - 1) * 100, 2),
-                                      "days_held": days_held})
+                                      "return_pct": round((exit_price_adj / pos["entry_price"] - 1) * 100, 2),
+                                      "days_held": trading_days_held})
                     closed = True
                     break
 
@@ -321,7 +327,9 @@ def run_backtest(
 
     equity_series = pd.Series([e["portfolio"] for e in equity_curve])
     daily_returns = equity_series.pct_change().dropna()
-    sharpe = float(daily_returns.mean() / daily_returns.std() * np.sqrt(52)) if len(daily_returns) > 1 and daily_returns.std() > 0 else 0.0
+    # Annualize based on actual observation frequency (252 trading days / rebalance_frequency)
+    periods_per_year = 252 / max(rebalance_frequency, 1)
+    sharpe = float(daily_returns.mean() / daily_returns.std() * np.sqrt(periods_per_year)) if len(daily_returns) > 1 and daily_returns.std() > 0 else 0.0
     max_dd = float(((equity_series / equity_series.cummax()) - 1).min() * 100)
 
     avg_win = np.mean([t["return_pct"] for t in wins]) if wins else 0
