@@ -572,9 +572,11 @@ mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 
+LOG.info("DIST_V2 path: %s exists=%s", DIST_V2, DIST_V2.exists())
 if DIST_V2.exists() and DIST_V2.is_dir():
     _root_v2_index = DIST_V2 / "index.html"
     _root_v2_assets = DIST_V2 / "assets"
+    LOG.info("DIST_V2 assets dir: %s exists=%s", _root_v2_assets, _root_v2_assets.is_dir())
     _root_shell_headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
