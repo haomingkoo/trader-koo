@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 import resource
 import sys
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query
+
+LOG = logging.getLogger("trader_koo.routers.system")
 
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
 from trader_koo.backend.services.market_data import days_since, hours_since
@@ -42,13 +45,7 @@ APP_VERSION = str(os.getenv("TRADER_KOO_APP_VERSION", "0.2.0") or "0.2.0").strip
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")
 
 
-def _clean_optional_url(value: Any) -> str | None:
-    raw = str(value or "").strip()
-    if not raw or raw == "*":
-        return None
-    if raw.startswith(("http://", "https://")):
-        return raw.rstrip("/")
-    return raw
+from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
 
 
 def _first_env(names: list[str]) -> str | None:
@@ -113,23 +110,7 @@ CONTROL_CENTER_ACTIONS = [
 # Resource helpers
 # ---------------------------------------------------------------------------
 
-def _current_rss_mb() -> float | None:
-    status_path = Path("/proc/self/status")
-    if status_path.exists():
-        try:
-            for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("VmRSS:"):
-                    kb = int(line.split()[1])
-                    return kb / 1024.0
-        except Exception:
-            pass
-    try:
-        rss_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-        if sys.platform == "darwin":
-            rss_kb = rss_kb / 1024.0
-        return rss_kb / 1024.0
-    except Exception:
-        return None
+from trader_koo.backend.utils import current_rss_mb as _current_rss_mb
 
 
 def _max_rss_mb() -> float | None:
@@ -199,7 +180,8 @@ def polymarket_data(limit: int = 15) -> dict[str, Any]:
         events = fetch_polymarket_events(limit=limit)
         return {"ok": True, "count": len(events), "events": events}
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "events": []}
+        LOG.exception("Failed to fetch Polymarket events: %s", exc)
+        return {"ok": False, "error": "Unable to fetch Polymarket data", "events": []}
 
 
 @router.get("/api/macro-data")
@@ -210,7 +192,8 @@ def macro_data_public() -> dict[str, Any]:
 
         return {"ok": True, **get_macro_snapshot()}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        LOG.exception("Failed to fetch macro data: %s", exc)
+        return {"ok": False, "error": "Unable to fetch macro data"}
 
 
 @router.get("/api/status")

@@ -34,7 +34,7 @@ export function StructureCard({
     <GlassCard label="Structure Engine">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div>
-          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+          <div className="label-xs">
             Level Context
           </div>
           <div className="mt-1 text-lg font-bold text-[var(--text)]">
@@ -45,7 +45,7 @@ export function StructureCard({
           </div>
         </div>
         <div>
-          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+          <div className="label-xs">
             Nearest Support
           </div>
           <div className="mt-1 text-lg font-bold tabular-nums text-[var(--blue)]">
@@ -56,7 +56,7 @@ export function StructureCard({
           </div>
         </div>
         <div>
-          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+          <div className="label-xs">
             Nearest Resistance
           </div>
           <div className="mt-1 text-lg font-bold tabular-nums text-[var(--red)]">
@@ -67,7 +67,7 @@ export function StructureCard({
           </div>
         </div>
         <div>
-          <div className="text-[9px] font-semibold uppercase text-[var(--muted)]">
+          <div className="label-xs">
             HMM Regime
           </div>
           <div className="mt-1 text-lg font-bold text-[var(--text)]">

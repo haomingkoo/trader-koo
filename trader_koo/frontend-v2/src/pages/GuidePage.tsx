@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import Card from "../components/ui/Card";
 import PipelineOpsPanel from "../components/PipelineOpsPanel";
@@ -59,6 +59,24 @@ export default function GuidePage() {
   const [settingsTab, setSettingsTab] = useState<"general" | "operations">(
     "general",
   );
+
+  useEffect(() => {
+    document.title = "Guide \u2014 Trader Koo";
+  }, []);
+
+  const handleEscapeKey = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSettingsOpen(false);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (settingsOpen) {
+      document.addEventListener("keydown", handleEscapeKey);
+      return () => document.removeEventListener("keydown", handleEscapeKey);
+    }
+  }, [settingsOpen, handleEscapeKey]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -164,7 +182,7 @@ export default function GuidePage() {
 
       {settingsOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 px-4 py-8 backdrop-blur-sm">
-          <div className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel)] shadow-2xl">
+          <div role="dialog" aria-modal="true" aria-label="Settings and Admin" className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel)] shadow-2xl">
             <div className="flex items-center justify-between border-b border-[var(--line)] px-5 py-4">
               <div>
                 <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text)]">

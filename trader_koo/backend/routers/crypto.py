@@ -331,7 +331,12 @@ async def ws_crypto(websocket: WebSocket) -> None:
         """Drain the queue and push to the client."""
         while True:
             data = await queue.get()
-            await websocket.send_text(json.dumps(data))
+            try:
+                await websocket.send_text(json.dumps(data))
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
 
     try:
         # Run reader and writer concurrently; if either exits, cancel both

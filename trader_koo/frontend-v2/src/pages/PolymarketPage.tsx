@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Spinner from "../components/ui/Spinner";
 import { apiFetch } from "../api/client";
@@ -98,6 +99,10 @@ function EventCard({ event }: { event: PolyEvent }) {
 }
 
 export default function PolymarketPage() {
+  useEffect(() => {
+    document.title = "Polymarket \u2014 Trader Koo";
+  }, []);
+
   const { data, isLoading, error } = usePolymarket();
 
   if (isLoading) return <Spinner className="mt-12" />;

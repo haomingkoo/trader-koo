@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useReport } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
 import Spinner from "../components/ui/Spinner";
@@ -15,6 +16,10 @@ import SetupQualitySection from "../components/report/SetupQualitySection";
 /* ── Main Page ── */
 
 export default function ReportPage() {
+  useEffect(() => {
+    document.title = "Daily Report \u2014 Trader Koo";
+  }, []);
+
   const { data, isLoading, error } = useReport();
   const activeTicker = useChartStore((s) => s.ticker);
 

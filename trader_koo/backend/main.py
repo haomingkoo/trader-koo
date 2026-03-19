@@ -59,6 +59,7 @@ from trader_koo.ratelimit.integration import initialize_rate_limiting
 # ---------------------------------------------------------------------------
 
 from trader_koo.backend.services.database import DB_PATH
+from trader_koo.backend.utils import client_ip as _client_ip
 from trader_koo.backend.services.scheduler import create_scheduler
 from trader_koo.backend.services.pipeline import (
     reconcile_stale_running_runs,
@@ -158,17 +159,6 @@ import threading
 
 _ADMIN_AUTH_LOCK = threading.Lock()
 _ADMIN_AUTH_STATE: dict[str, dict[str, float]] = {}
-
-
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
-    if request.client and request.client.host:
-        return request.client.host
-    return "-"
 
 
 def _prune_admin_auth_state(now_ts: float) -> None:

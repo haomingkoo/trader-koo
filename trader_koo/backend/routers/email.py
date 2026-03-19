@@ -47,30 +47,13 @@ LOG = logging.getLogger("trader_koo.routers.email")
 # Env-derived helpers
 # ---------------------------------------------------------------------------
 
-def _clean_optional_url(value: Any) -> str | None:
-    raw = str(value or "").strip()
-    if not raw or raw == "*":
-        return None
-    if raw.startswith(("http://", "https://")):
-        return raw.rstrip("/")
-    return raw
-
+from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
+from trader_koo.backend.utils import client_ip as _client_ip
 
 STATUS_APP_URL = _clean_optional_url(os.getenv("TRADER_KOO_APP_URL")) or _clean_optional_url(
     os.getenv("TRADER_KOO_ALLOWED_ORIGIN")
 )
 STATUS_BASE_URL = _clean_optional_url(os.getenv("TRADER_KOO_BASE_URL"))
-
-
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
-    if request.client and request.client.host:
-        return request.client.host
-    return "-"
 
 
 def _smtp_settings() -> dict[str, Any]:
@@ -350,7 +333,8 @@ async def email_subscribe(request: Request) -> dict[str, Any]:
                 source_ip=source_ip,
                 details=str(exc),
             )
-            raise HTTPException(status_code=500, detail=f"Unable to send confirmation email: {exc}") from exc
+            LOG.exception("Failed to send confirmation email to %s: %s", email, exc)
+            raise HTTPException(status_code=500, detail="Unable to send confirmation email") from exc
 
     detail = (
         "Confirmation email sent. Check inbox/spam and click confirm."

@@ -61,12 +61,14 @@ def export_table_csv(
     request: Request,
     table_name: str,
     limit: int = Query(default=0, ge=0, description="Row limit (0 = all)"),
-    where: str = Query(default="", description="Optional WHERE clause, e.g. ticker='AAPL'"),
+    ticker: str = Query(default="", description="Filter by ticker symbol"),
+    date_from: str = Query(default="", description="Filter rows >= this date (YYYY-MM-DD)"),
+    date_to: str = Query(default="", description="Filter rows <= this date (YYYY-MM-DD)"),
 ) -> StreamingResponse:
     """Export a single table as CSV.
 
     Only tables in the EXPORTABLE_TABLES whitelist are allowed.
-    The optional `where` parameter accepts simple column filters.
+    Use typed query parameters (ticker, date_from, date_to) for filtering.
     """
     if table_name not in EXPORTABLE_TABLES:
         raise HTTPException(
@@ -80,14 +82,21 @@ def export_table_csv(
             raise HTTPException(status_code=404, detail=f"Table '{table_name}' does not exist")
 
         query = f"SELECT * FROM {table_name}"  # noqa: S608 — table_name is whitelisted
+        conditions: list[str] = []
         params: list[str] = []
 
-        if where:
-            # Basic safety: reject anything that looks like SQL injection
-            dangerous = {"drop", "delete", "update", "insert", "alter", "create", "--", ";"}
-            if any(tok in where.lower() for tok in dangerous):
-                raise HTTPException(status_code=400, detail="Invalid WHERE clause")
-            query += f" WHERE {where}"
+        if ticker:
+            conditions.append("ticker = ?")
+            params.append(ticker.upper())
+        if date_from:
+            conditions.append("date >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("date <= ?")
+            params.append(date_to)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
 
         if limit > 0:
             query += f" LIMIT {limit}"
@@ -107,7 +116,10 @@ def export_table_csv(
             buf.write(line + "\n")
 
         buf.seek(0)
-        LOG.info("Exported %d rows from %s (where=%r, limit=%d)", len(rows), table_name, where, limit)
+        LOG.info(
+            "Exported %d rows from %s (ticker=%r, date_from=%r, date_to=%r, limit=%d)",
+            len(rows), table_name, ticker, date_from, date_to, limit,
+        )
 
         return StreamingResponse(
             iter([buf.getvalue()]),

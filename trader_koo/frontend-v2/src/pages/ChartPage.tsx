@@ -41,6 +41,10 @@ export default function ChartPage() {
   );
   const { livePrice, streamingActive } = useLiveEquityPrice(ticker);
 
+  useEffect(() => {
+    document.title = "Chart \u2014 Trader Koo";
+  }, []);
+
   // Pick up ticker from URL query param ?t=AAPL
   useEffect(() => {
     const urlTicker = searchParams.get("t");
@@ -175,6 +179,12 @@ export default function ChartPage() {
       {error && (
         <div className="mt-4 text-center text-sm text-[var(--red)]">
           Failed to load chart: {String((error as Error)?.message ?? "Unknown error")}
+        </div>
+      )}
+
+      {!data && !isLoading && !error && (
+        <div className="mt-16 text-center text-sm text-[var(--muted)]">
+          Enter a ticker symbol above to view chart analysis
         </div>
       )}
 

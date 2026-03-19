@@ -9,7 +9,6 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
-import resource
 import subprocess
 import sys
 from pathlib import Path
@@ -47,24 +46,7 @@ RUN_LOG_PATH = LOG_DIR / "cron_daily.log"
 # Resource helpers
 # ---------------------------------------------------------------------------
 
-def _current_rss_mb() -> float | None:
-    """Current RSS in MB (Linux /proc preferred, macOS ru_maxrss fallback)."""
-    status_path = Path("/proc/self/status")
-    if status_path.exists():
-        try:
-            for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("VmRSS:"):
-                    kb = int(line.split()[1])
-                    return kb / 1024.0
-        except Exception:
-            pass
-    try:
-        rss_kb = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-        if sys.platform == "darwin":
-            rss_kb = rss_kb / 1024.0
-        return rss_kb / 1024.0
-    except Exception:
-        return None
+from trader_koo.backend.utils import current_rss_mb as _current_rss_mb
 
 
 def _fmt_mb(value: float | None) -> str:
