@@ -190,6 +190,29 @@ def vix_pattern_markers() -> dict[str, Any]:
     }
 
 
+@router.get("/api/polymarket")
+def polymarket_markets(limit: int = 20) -> dict[str, Any]:
+    """Public endpoint: fetch active Polymarket prediction markets."""
+    try:
+        from trader_koo.ml.external_data import fetch_polymarket_markets
+
+        markets = fetch_polymarket_markets(limit=limit)
+        return {"ok": True, "count": len(markets), "markets": markets}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "markets": []}
+
+
+@router.get("/api/macro-data")
+def macro_data_public() -> dict[str, Any]:
+    """Public endpoint: FRED yield curve + M2 data."""
+    try:
+        from trader_koo.ml.external_data import get_macro_snapshot
+
+        return {"ok": True, **get_macro_snapshot()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 @router.get("/api/status")
 def status() -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
