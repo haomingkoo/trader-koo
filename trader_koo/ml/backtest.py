@@ -47,7 +47,7 @@ def run_backtest(
     max_positions: int = DEFAULT_MAX_POSITIONS,
     position_pct: float = DEFAULT_POSITION_PCT,
     max_holding_days: int = 10,
-    profit_mult: float = 2.0,
+    profit_mult: float = 1.5,  # Must match trainer.py labels
     stop_mult: float = 2.0,
     min_win_prob: float = 0.55,
     initial_capital: float = DEFAULT_INITIAL_CAPITAL,

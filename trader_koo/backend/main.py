@@ -81,6 +81,7 @@ from trader_koo.backend.routers.email import router as email_router
 from trader_koo.backend.routers.usage import router as usage_router
 from trader_koo.backend.routers.admin import router as admin_router
 from trader_koo.backend.routers.crypto import router as crypto_router
+from trader_koo.backend.routers.data_sync import router as data_sync_router
 from trader_koo.backend.routers.streaming import router as streaming_router
 
 # Usage module helpers needed at startup
@@ -561,6 +562,7 @@ app.include_router(paper_trades_router)
 app.include_router(email_router)
 app.include_router(usage_router)
 app.include_router(admin_router)
+app.include_router(data_sync_router)
 app.include_router(crypto_router)
 app.include_router(streaming_router)
 

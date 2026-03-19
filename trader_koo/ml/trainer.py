@@ -152,9 +152,11 @@ def build_dataset(
         how="inner",
     )
 
-    # Binary target: positive return over holding period
-    # Using return_pct > 0 gives better label balance than triple-barrier hit
-    dataset["target"] = (dataset["return_pct"] > 0).astype(int)
+    # Binary target: triple-barrier profit target hit
+    # label=+1 means price hit the profit target before stop or time expiry.
+    # This is more informative than raw return > 0 (which adds noise from
+    # barely-positive expired trades). Per ML expert review.
+    dataset["target"] = (dataset["label"] == 1).astype(int)
 
     LOG.info(
         "Dataset built: %d samples, %d tickers, %d dates, target balance: %.1f%% positive",
@@ -175,7 +177,7 @@ def train_walk_forward(
     train_days: int = 180,
     test_days: int = 60,
     step_days: int = 30,
-    embargo_days: int = 5,
+    embargo_days: int = 15,  # Must be >= max_holding_days (10) + buffer
 ) -> dict[str, Any]:
     """Train LightGBM with walk-forward validation.
 
@@ -194,8 +196,10 @@ def train_walk_forward(
         end_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
     LOG.info("Building full dataset from %s to %s", start_date, end_date)
-    # Sample every 2 trading days for denser data (was 5 — too sparse)
-    dataset = build_dataset(conn, start_date=start_date, end_date=end_date, sample_frequency=2)
+    # Sample every 5 trading days (weekly) to get independent samples.
+    # With 10-day holding period, frequency=2 creates 80% label overlap (bad).
+    # frequency=5 gives ~50% overlap which is acceptable for LightGBM.
+    dataset = build_dataset(conn, start_date=start_date, end_date=end_date, sample_frequency=5)
     if dataset.empty or len(dataset) < 100:
         return {
             "ok": False,
