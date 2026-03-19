@@ -9,6 +9,7 @@ import {
   Bitcoin,
   Search,
   Wallet,
+  BarChart3,
   ChevronLeft,
   ChevronRight,
   X,
@@ -30,6 +31,7 @@ const navItems: NavItem[] = [
   { to: "/crypto", label: "Crypto", Icon: Bitcoin },
   { to: "/opportunities", label: "Opportunities", Icon: Search },
   { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
+  { to: "/markets", label: "Markets", Icon: BarChart3 },
 ];
 
 export default function Sidebar({

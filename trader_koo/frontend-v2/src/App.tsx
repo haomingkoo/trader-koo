@@ -11,6 +11,7 @@ const ChartPage = lazy(() => import("./pages/ChartPage"));
 const OpportunitiesPage = lazy(() => import("./pages/OpportunitiesPage"));
 const PaperTradePage = lazy(() => import("./pages/PaperTradePage"));
 const CryptoPage = lazy(() => import("./pages/CryptoPage"));
+const PolymarketPage = lazy(() => import("./pages/PolymarketPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 function routeElement(
@@ -83,6 +84,14 @@ export default function App() {
             <PaperTradePage />,
             "Loading paper trades",
             "Reconstructing performance, equity curve, and trade history.",
+          )}
+        />
+        <Route
+          path="markets"
+          element={routeElement(
+            <PolymarketPage />,
+            "Loading prediction markets",
+            "Fetching live odds from Polymarket.",
           )}
         />
         <Route

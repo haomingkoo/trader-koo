@@ -140,31 +140,34 @@ def get_m2_growth() -> dict[str, float | None]:
 # Polymarket (public CLOB API — no auth needed)
 # ---------------------------------------------------------------------------
 
-_POLYMARKET_BASE = "https://clob.polymarket.com"
+_POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 
 
 def fetch_polymarket_markets(
     *,
-    query: str = "",
-    limit: int = 10,
+    limit: int = 20,
+    tag: str = "",
 ) -> list[dict[str, Any]]:
-    """Fetch active Polymarket markets.
+    """Fetch active Polymarket prediction markets via Gamma API.
 
-    Returns list of markets with title, outcome prices, volume, etc.
+    Returns list of markets with question, outcome prices, volume, liquidity.
     """
-    cache_key = f"poly_{query}_{limit}"
+    cache_key = f"poly_{tag}_{limit}"
     with _cache_lock:
         cached = _polymarket_cache.get(cache_key)
         if cached and cached.get("expires_at", 0) > dt.datetime.now(dt.timezone.utc).timestamp():
             return cached["data"]
 
     try:
-        # Polymarket's CLOB API for markets
-        params = {"limit": str(limit), "active": "true"}
-        if query:
-            params["tag"] = query
+        params: dict[str, str] = {
+            "limit": str(limit),
+            "active": "true",
+            "closed": "false",
+        }
+        if tag:
+            params["tag"] = tag
         qs = urllib.parse.urlencode(params)
-        url = f"{_POLYMARKET_BASE}/markets?{qs}"
+        url = f"{_POLYMARKET_GAMMA}/markets?{qs}"
         req = urllib.request.Request(url, headers={
             "User-Agent": "trader-koo/1.0",
             "Accept": "application/json",
@@ -177,12 +180,26 @@ def fetch_polymarket_markets(
             for market in data:
                 if not isinstance(market, dict):
                     continue
+                outcomes = market.get("outcomes") or []
+                prices_raw = market.get("outcomePrices") or []
+                prices = []
+                for p in prices_raw:
+                    try:
+                        prices.append(round(float(p) * 100, 1))
+                    except (TypeError, ValueError):
+                        prices.append(None)
+
                 markets.append({
-                    "question": market.get("question", ""),
-                    "condition_id": market.get("condition_id", ""),
-                    "tokens": market.get("tokens", []),
-                    "active": market.get("active", False),
-                    "closed": market.get("closed", False),
+                    "question": str(market.get("question") or "").strip(),
+                    "slug": market.get("slug", ""),
+                    "outcomes": outcomes,
+                    "prices_pct": prices,  # percentage (0-100)
+                    "volume": round(float(market.get("volume") or 0), 2),
+                    "liquidity": round(float(market.get("liquidity") or 0), 2),
+                    "end_date": market.get("endDate"),
+                    "image": market.get("image"),
+                    "active": bool(market.get("active")),
+                    "url": f"https://polymarket.com/event/{market.get('slug', '')}",
                 })
 
         with _cache_lock:
@@ -191,7 +208,7 @@ def fetch_polymarket_markets(
                 "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=_cache_ttl_sec)).timestamp(),
             }
 
-        LOG.info("Polymarket: fetched %d markets (query=%s)", len(markets), query)
+        LOG.info("Polymarket: fetched %d markets", len(markets))
         return markets
 
     except Exception as exc:
