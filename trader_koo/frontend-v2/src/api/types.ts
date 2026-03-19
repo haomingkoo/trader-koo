@@ -717,6 +717,7 @@ export interface PaperTrade {
   sizing_summary?: string | null;
   review_status?: string | null;
   review_summary?: string | null;
+  ml_predicted_win_prob?: number | null;
 }
 
 export interface PaperTradeList {
