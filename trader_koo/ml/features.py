@@ -87,7 +87,7 @@ def _obv_slope(close: pd.Series, volume: pd.Series, window: int = 10) -> float:
         return np.nan
     x = np.arange(len(recent), dtype=float)
     slope = np.polyfit(x, recent.values, 1)[0]
-    return slope / (recent.abs().mean() + 1e-10)  # normalize
+    return slope / max(recent.abs().mean(), 1.0)  # normalize; floor at 1.0 to avoid extreme values for low-volume stocks
 
 
 def _autocorrelation(series: pd.Series, lag: int) -> float:

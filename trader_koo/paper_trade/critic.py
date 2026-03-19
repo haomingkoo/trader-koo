@@ -222,12 +222,20 @@ def critic_review(
         ("caution_flags", lambda: _check_caution_flags(evaluation)),
     ]
 
+    # Checks that depend on external data availability — fail open on error
+    data_dependent_checks = {"regime_alignment", "volatility_environment"}
+
     for name, fn in name_fn_pairs:
         try:
             passed, reason = fn()
             checks.append((name, passed, reason))
         except Exception as exc:
-            checks.append((name, True, f"Check error (allowing): {exc}"))
+            if name in data_dependent_checks:
+                LOG.warning("Critic check '%s' failed open (data unavailable): %s", name, exc)
+                checks.append((name, True, f"Check error — data unavailable (allowing): {exc}"))
+            else:
+                LOG.error("Critic check '%s' failed closed (rejecting): %s", name, exc)
+                checks.append((name, False, f"Check error (rejecting): {exc}"))
 
     passed_count = sum(1 for _, p, _ in checks if p)
     total = len(checks)
