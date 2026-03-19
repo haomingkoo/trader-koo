@@ -143,6 +143,17 @@ def get_m2_growth() -> dict[str, float | None]:
 _POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 
 
+_FINANCE_KEYWORDS = frozenset({
+    "fed", "rate cut", "rate hike", "recession", "bitcoin", "btc", "eth",
+    "inflation", "cpi", "gdp", "tariff", "trump", "china", "war", "oil",
+    "gold", "stock", "market", "interest rate", "bank", "economy",
+    "election", "trade", "dollar", "treasury", "unemployment", "crypto",
+    "default", "debt ceiling", "stimulus", "sanctions", "opec", "fomc",
+    "powell", "fiscal", "monetary", "yield", "bond", "s&p", "nasdaq",
+    "microstrategy", "tesla", "apple", "nvidia", "earnings",
+})
+
+
 def fetch_polymarket_markets(
     *,
     limit: int = 20,
@@ -159,8 +170,10 @@ def fetch_polymarket_markets(
             return cached["data"]
 
     try:
+        # Fetch a large batch and filter for finance-relevant markets
+        fetch_limit = max(limit * 10, 200)  # oversample then filter
         params: dict[str, str] = {
-            "limit": str(limit),
+            "limit": str(fetch_limit),
             "active": "true",
             "closed": "false",
         }
@@ -202,14 +215,30 @@ def fetch_polymarket_markets(
                     "url": f"https://polymarket.com/event/{market.get('slug', '')}",
                 })
 
+        # Filter for finance/macro relevance using keywords
+        relevant = [
+            m for m in markets
+            if any(kw in str(m.get("question", "")).lower() for kw in _FINANCE_KEYWORDS)
+        ]
+
+        # Sort by volume (highest first) and cap at requested limit
+        relevant.sort(key=lambda m: m.get("volume", 0), reverse=True)
+        result = relevant[:limit]
+
+        # If we don't have enough relevant markets, pad with top-volume general ones
+        if len(result) < limit:
+            remaining = [m for m in markets if m not in relevant]
+            remaining.sort(key=lambda m: m.get("volume", 0), reverse=True)
+            result.extend(remaining[: limit - len(result)])
+
         with _cache_lock:
             _polymarket_cache[cache_key] = {
-                "data": markets,
+                "data": result,
                 "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=_cache_ttl_sec)).timestamp(),
             }
 
-        LOG.info("Polymarket: fetched %d markets", len(markets))
-        return markets
+        LOG.info("Polymarket: %d relevant / %d total, returning %d", len(relevant), len(markets), len(result))
+        return result
 
     except Exception as exc:
         LOG.warning("Polymarket fetch failed: %s", exc)

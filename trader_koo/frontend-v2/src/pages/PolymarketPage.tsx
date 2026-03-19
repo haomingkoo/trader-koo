@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Spinner from "../components/ui/Spinner";
 import { apiFetch } from "../api/client";
@@ -88,8 +89,17 @@ function MarketCard({ market }: { market: PolymarketMarket }) {
   );
 }
 
+const FILTER_CATEGORIES: Record<string, string[]> = {
+  "All": [],
+  "Macro": ["fed", "rate", "recession", "inflation", "gdp", "economy", "fiscal", "monetary", "fomc", "powell"],
+  "Crypto": ["bitcoin", "btc", "eth", "crypto", "microstrategy"],
+  "Geopolitical": ["trump", "china", "war", "tariff", "sanctions", "election", "trade"],
+  "Commodities": ["oil", "gold", "opec"],
+};
+
 export default function PolymarketPage() {
   const { data, isLoading, error } = usePolymarket();
+  const [activeFilter, setActiveFilter] = useState("All");
 
   if (isLoading) return <Spinner className="mt-12" />;
   if (error) {
@@ -100,7 +110,13 @@ export default function PolymarketPage() {
     );
   }
 
-  const markets = data?.markets ?? [];
+  const allMarkets = data?.markets ?? [];
+  const filterKeywords = FILTER_CATEGORIES[activeFilter] ?? [];
+  const markets = filterKeywords.length === 0
+    ? allMarkets
+    : allMarkets.filter((m) =>
+        filterKeywords.some((kw) => m.question.toLowerCase().includes(kw))
+      );
 
   return (
     <div className="space-y-6">
@@ -122,9 +138,29 @@ export default function PolymarketPage() {
       </div>
 
       <p className="text-sm text-[var(--muted)]">
-        Live prediction market odds from Polymarket. These probabilities reflect real-money
-        bets on future events — useful as a regime signal for macro awareness.
+        Live prediction market odds from Polymarket. Real-money bets on future events —
+        useful as a regime signal. Filtered for finance-relevant markets.
       </p>
+
+      <div className="flex flex-wrap gap-1.5">
+        {Object.keys(FILTER_CATEGORIES).map((cat) => (
+          <button
+            key={cat}
+            onClick={() => setActiveFilter(cat)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
+              activeFilter === cat
+                ? "bg-[var(--accent)] text-white"
+                : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+            }`}
+          >
+            {cat} {cat !== "All" && `(${
+              (data?.markets ?? []).filter((m) =>
+                (FILTER_CATEGORIES[cat] ?? []).some((kw) => m.question.toLowerCase().includes(kw))
+              ).length
+            })`}
+          </button>
+        ))}
+      </div>
 
       {markets.length === 0 ? (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-8 text-center text-sm text-[var(--muted)]">
