@@ -15,6 +15,7 @@ import {
 import CryptoAnalyticsPanels from "../components/crypto/CryptoAnalyticsPanels";
 import CryptoToolbar from "../components/crypto/CryptoToolbar";
 import CryptoChartPanel from "../components/crypto/CryptoChartPanel";
+import PlotlyWrapper from "../components/PlotlyWrapper";
 import {
   mergeClosedBarIntoHistory,
   type FormingCandleData,
@@ -435,11 +436,11 @@ export default function CryptoPage() {
               </div>
             </div>
             <div className="h-[180px]">
-              <CryptoChartPanel
-                chartData={[
+              <PlotlyWrapper
+                data={[
                   {
-                    type: "scatter",
-                    mode: "lines",
+                    type: "scatter" as const,
+                    mode: "lines" as const,
                     fill: "tozeroy",
                     x: openInterestData.oi_bars.map((b) => b.timestamp),
                     y: openInterestData.oi_bars.map((b) => b.open_interest_value),
@@ -448,7 +449,7 @@ export default function CryptoPage() {
                     fillcolor: "rgba(245,158,11,0.08)",
                   },
                 ]}
-                chartLayout={{
+                layout={{
                   paper_bgcolor: oiTheme.bg,
                   plot_bgcolor: oiTheme.bg,
                   font: { color: oiTheme.font, size: 10 },
@@ -461,7 +462,8 @@ export default function CryptoPage() {
                   showlegend: false,
                   height: 180,
                 }}
-                onRelayout={() => {}}
+                config={{ responsive: true, displayModeBar: false }}
+                style={{ width: "100%", height: 180 }}
               />
             </div>
           </div>
