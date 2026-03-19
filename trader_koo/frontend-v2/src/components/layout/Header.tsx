@@ -1,3 +1,4 @@
+import { ArrowUpRight } from "lucide-react";
 import ClockStrip from "./ClockStrip";
 import PipelineStatusBadge from "./PipelineStatusBadge";
 import {
@@ -10,8 +11,8 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   const { data } = usePipelineStatus();
 
   return (
-    <header className="border-b border-[var(--line)] px-4 pb-3 pt-3 [padding-top:max(0.75rem,env(safe-area-inset-top))]">
-      <div className="flex flex-col gap-3">
+    <header className="border-b border-[var(--line)] px-4 pb-2 pt-2 [padding-top:max(0.5rem,env(safe-area-inset-top))]">
+      <div className="flex flex-col gap-2">
         <div className="flex items-center gap-3">
           <button
             onClick={onMenuToggle}
@@ -30,22 +31,32 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <h1 className="text-lg font-bold tracking-wide text-[var(--text)] md:text-base">
-            trader_koo
-          </h1>
+          <a
+            href="https://kooexperience.com/"
+            className="text-lg font-bold tracking-wide text-[var(--text)] transition-colors hover:text-[var(--accent)] md:text-base"
+          >
+            HK
+          </a>
+          <span className="text-[10px] font-medium tracking-wider text-[var(--muted)]">
+            Trader Koo
+          </span>
+          <a
+            href="https://kooexperience.com/"
+            className="ml-auto flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] transition-colors hover:text-[var(--accent)]"
+          >
+            Portfolio <ArrowUpRight size={12} />
+          </a>
         </div>
 
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] xl:items-start">
+        <div className="grid gap-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] xl:items-start">
           <ClockStrip />
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
             <EquityPriceStrip />
             <CryptoPriceStrip />
           </div>
         </div>
 
-        <div className="flex items-start justify-start">
-          <PipelineStatusBadge data={data} />
-        </div>
+        <PipelineStatusBadge data={data} />
       </div>
     </header>
   );
