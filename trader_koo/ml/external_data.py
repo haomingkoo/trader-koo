@@ -20,6 +20,13 @@ from typing import Any
 
 LOG = logging.getLogger(__name__)
 
+# Load .env for local development (Railway sets env vars directly)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 _cache_lock = threading.Lock()
 _fred_cache: dict[str, Any] = {}
 _polymarket_cache: dict[str, Any] = {}
@@ -42,24 +49,24 @@ _FRED_SERIES = {
 }
 
 
+def _fred_api_key() -> str:
+    return str(os.getenv("FRED_API_KEY", "")).strip()
+
+
 def fetch_fred_series(
     series_id: str,
     *,
     lookback_days: int = 365,
     as_of_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch a FRED series via CSV download (no API key required).
+    """Fetch a FRED series via the official FRED API.
 
-    Parameters
-    ----------
-    as_of_date : str | None
-        If provided (YYYY-MM-DD), use this as the vintage date so we only
-        see data that was actually published by that date (prevents look-ahead
-        bias from FRED data revisions). If None, uses today.
+    Uses FRED_API_KEY env var. Falls back to CSV scraping if no key set.
+    The vintage_date parameter ensures we only see data published by
+    as_of_date (prevents look-ahead bias from FRED data revisions).
 
     Returns list of {date: str, value: float} dicts, sorted by date.
     """
-    # Use as_of_date for vintage to prevent revision leakage
     if as_of_date:
         vintage = as_of_date
         end = dt.datetime.strptime(as_of_date, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
@@ -67,7 +74,6 @@ def fetch_fred_series(
         end = dt.datetime.now(dt.timezone.utc)
         vintage = end.strftime("%Y-%m-%d")
 
-    # Cache key includes vintage to prevent cross-date contamination
     cache_key = f"fred_{series_id}_{lookback_days}_{vintage}"
     with _cache_lock:
         cached = _fred_cache.get(cache_key)
@@ -75,41 +81,64 @@ def fetch_fred_series(
             return cached["data"]
 
     start = end - dt.timedelta(days=lookback_days)
-
-    url = (
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv"
-        f"?bgcolor=%23e1e9f0&chart_type=line&drp=0"
-        f"&fo=open%20sans&graph_bgcolor=%23ffffff&height=450"
-        f"&mode=fred&recession_bars=on&txtcolor=%23444444"
-        f"&ts=12&tts=12&width=1168&nt=0&thu=0&trc=0"
-        f"&show_legend=yes&show_axis_titles=yes&show_tooltip=yes"
-        f"&id={series_id}"
-        f"&scale=left&cosd={start.strftime('%Y-%m-%d')}"
-        f"&coed={end.strftime('%Y-%m-%d')}"
-        f"&line_color=%234572a7&link_values=false"
-        f"&line_style=solid&mark_type=none&mw=3"
-        f"&lw=2&ost=-99999&oet=99999&mma=0&fml=a"
-        f"&fq=Daily&fam=avg&fgst=lin&fgsnd={start.strftime('%Y-%m-%d')}"
-        f"&line_index=1&transformation=lin&vintage_date={vintage}"
-        f"&revision_date={vintage}&nd={start.strftime('%Y-%m-%d')}"
-    )
+    api_key = _fred_api_key()
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode("utf-8")
+        if api_key:
+            # Use official FRED API via requests (urllib has connection issues)
+            import requests as _requests
 
-        rows: list[dict[str, Any]] = []
-        for line in raw.strip().split("\n")[1:]:  # skip header
-            parts = line.strip().split(",")
-            if len(parts) >= 2:
-                date_str = parts[0].strip()
-                val_str = parts[1].strip()
-                if val_str and val_str != "." and val_str != "":
+            params = {
+                "series_id": series_id,
+                "api_key": api_key,
+                "file_type": "json",
+                "observation_start": start.strftime("%Y-%m-%d"),
+                "observation_end": end.strftime("%Y-%m-%d"),
+                "realtime_start": vintage,
+                "realtime_end": vintage,
+            }
+            resp = _requests.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params=params,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            rows: list[dict[str, Any]] = []
+            for obs in data.get("observations", []):
+                val_str = str(obs.get("value", "")).strip()
+                date_str = str(obs.get("date", "")).strip()
+                if date_str and val_str and val_str != ".":
                     try:
                         rows.append({"date": date_str, "value": float(val_str)})
                     except ValueError:
                         continue
+        else:
+            # Fallback: CSV scraping (no API key needed but slower)
+            url = (
+                f"https://fred.stlouisfed.org/graph/fredgraph.csv"
+                f"?id={series_id}"
+                f"&cosd={start.strftime('%Y-%m-%d')}"
+                f"&coed={end.strftime('%Y-%m-%d')}"
+                f"&vintage_date={vintage}"
+                f"&revision_date={vintage}"
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8")
+
+            rows = []
+            for line in raw.strip().split("\n")[1:]:
+                parts = line.strip().split(",")
+                if len(parts) >= 2:
+                    date_str = parts[0].strip()
+                    val_str = parts[1].strip()
+                    if val_str and val_str != "." and val_str != "":
+                        try:
+                            rows.append({"date": date_str, "value": float(val_str)})
+                        except ValueError:
+                            continue
 
         with _cache_lock:
             _fred_cache[cache_key] = {
@@ -117,7 +146,7 @@ def fetch_fred_series(
                 "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=_cache_ttl_sec)).timestamp(),
             }
 
-        LOG.info("FRED %s: fetched %d observations", series_id, len(rows))
+        LOG.info("FRED %s: fetched %d observations%s", series_id, len(rows), " (API)" if api_key else " (CSV)")
         return rows
 
     except Exception as exc:
