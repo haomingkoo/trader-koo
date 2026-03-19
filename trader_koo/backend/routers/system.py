@@ -191,15 +191,15 @@ def vix_pattern_markers() -> dict[str, Any]:
 
 
 @router.get("/api/polymarket")
-def polymarket_markets(limit: int = 20) -> dict[str, Any]:
-    """Public endpoint: fetch active Polymarket prediction markets."""
+def polymarket_data(limit: int = 15) -> dict[str, Any]:
+    """Public endpoint: curated finance-relevant Polymarket events."""
     try:
-        from trader_koo.ml.external_data import fetch_polymarket_markets
+        from trader_koo.ml.external_data import fetch_polymarket_events
 
-        markets = fetch_polymarket_markets(limit=limit)
-        return {"ok": True, "count": len(markets), "markets": markets}
+        events = fetch_polymarket_events(limit=limit)
+        return {"ok": True, "count": len(events), "events": events}
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "markets": []}
+        return {"ok": False, "error": str(exc), "events": []}
 
 
 @router.get("/api/macro-data")
