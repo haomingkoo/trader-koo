@@ -344,27 +344,29 @@ def extract_features_for_universe(
     except Exception as exc:
         LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
 
-    # Sector rotation features
+    # Sector rotation features (cached — one DB query per date, not per ticker)
     try:
         from trader_koo.ml.sector_rotation import compute_sector_features, TICKER_SECTOR_MAP
 
-        # Compute market-wide sector stats once (no ticker arg)
+        # This call caches the date-level sector data (1 batch query)
         market_sector = compute_sector_features(conn, as_of_date=as_of_date)
         for k in ["leading_sector_momentum", "lagging_sector_momentum", "sector_dispersion"]:
             if k in FEATURE_COLUMNS:
                 feat_df[k] = market_sector.get(k, np.nan)
 
-        # Per-ticker sector rank + momentum (use lookup map, not DB per ticker)
-        ticker_col = "ticker" if "ticker" in feat_df.columns else feat_df.index
-        for k in ["sector_rank", "sector_momentum_5d", "sector_momentum_21d"]:
-            if k in FEATURE_COLUMNS and k not in feat_df.columns:
-                feat_df[k] = np.nan
-        # Batch compute: one DB query per sector ETF already done inside compute_sector_features
-        for i, tkr in enumerate(ticker_col):
-            per_ticker = compute_sector_features(conn, as_of_date=as_of_date, ticker=str(tkr))
-            for k in ["sector_rank", "sector_momentum_5d", "sector_momentum_21d"]:
-                if k in FEATURE_COLUMNS:
-                    feat_df.at[feat_df.index[i], k] = per_ticker.get(k, np.nan)
+        # Per-ticker lookup from cache — no additional DB queries
+        ticker_list = feat_df["ticker"].tolist() if "ticker" in feat_df.columns else feat_df.index.tolist()
+        sector_ranks = []
+        sector_mom_5d = []
+        sector_mom_21d = []
+        for tkr in ticker_list:
+            s = compute_sector_features(conn, as_of_date=as_of_date, ticker=str(tkr))
+            sector_ranks.append(s.get("sector_rank", np.nan))
+            sector_mom_5d.append(s.get("sector_momentum_5d", np.nan))
+            sector_mom_21d.append(s.get("sector_momentum_21d", np.nan))
+        feat_df["sector_rank"] = sector_ranks
+        feat_df["sector_momentum_5d"] = sector_mom_5d
+        feat_df["sector_momentum_21d"] = sector_mom_21d
     except Exception as exc:
         LOG.warning("Sector feature extraction failed (non-fatal): %s", exc)
 
