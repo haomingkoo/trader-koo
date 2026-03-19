@@ -96,7 +96,7 @@ def fetch_fred_series(
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read().decode("utf-8")
 
         rows: list[dict[str, Any]] = []
@@ -214,7 +214,7 @@ def fetch_polymarket_events(
             "User-Agent": "trader-koo/1.0",
             "Accept": "application/json",
         })
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             raw_events = json.loads(resp.read().decode("utf-8"))
 
         if not isinstance(raw_events, list):
@@ -332,7 +332,7 @@ def fetch_polymarket_markets(
             "User-Agent": "trader-koo/1.0",
             "Accept": "application/json",
         })
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         markets = []
