@@ -144,13 +144,25 @@ _POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 
 
 _FINANCE_KEYWORDS = frozenset({
-    "fed", "rate cut", "rate hike", "recession", "bitcoin", "btc", "eth",
-    "inflation", "cpi", "gdp", "tariff", "trump", "china", "war", "oil",
-    "gold", "stock", "market", "interest rate", "bank", "economy",
-    "election", "trade", "dollar", "treasury", "unemployment", "crypto",
-    "default", "debt ceiling", "stimulus", "sanctions", "opec", "fomc",
-    "powell", "fiscal", "monetary", "yield", "bond", "s&p", "nasdaq",
-    "microstrategy", "tesla", "apple", "nvidia", "earnings",
+    "fed ", "rate cut", "rate hike", "recession", "bitcoin", "btc ",
+    "inflation", "cpi ", "gdp ", "tariff", "china", "iran",
+    "oil price", "crude oil", "gold price", "stock market",
+    "interest rate", "central bank", "economy", "economic",
+    "debt ceiling", "stimulus", "sanctions", "opec", "fomc",
+    "powell", "fiscal", "monetary", "yield curve", "bond",
+    "s&p 500", "nasdaq", "dow jones", "microstrategy",
+    "ceasefire", "invade", "invasion",
+    "crypto market", "ethereum", "defi",
+})
+
+_EXCLUDE_KEYWORDS = frozenset({
+    "nba", "nfl", "nhl", "mlb", "fifa", "world cup", "premier league",
+    "la liga", "champions league", "serie a", "bundesliga",
+    "ufc", "boxing", "tennis", "golf", "masters", "wimbledon",
+    "oscar", "grammy", "emmy", "super bowl", "mvp",
+    "gta", "rihanna", "jesus", "bitboy", "airdrop",
+    "weather", "temperature", "tweet", "tiktok", "youtube",
+    "stanley cup", "formula 1", "f1 ", "mma",
 })
 
 
@@ -187,6 +199,10 @@ def fetch_polymarket_events(
             title = str(ev.get("title", "")).lower()
             desc = str(ev.get("description", "")).lower()
             text = f"{title} {desc}"
+            # Exclude sports/entertainment first
+            if any(kw in text for kw in _EXCLUDE_KEYWORDS):
+                continue
+            # Then require finance relevance
             if not any(kw in text for kw in _FINANCE_KEYWORDS):
                 continue
 
