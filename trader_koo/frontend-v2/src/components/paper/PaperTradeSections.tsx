@@ -216,7 +216,7 @@ function HeroMetric({
   tone?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 backdrop-blur-sm">
+    <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] px-4 py-3 backdrop-blur-sm">
       <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
         {label}
       </div>
@@ -281,7 +281,7 @@ export function PaperTradeHero({
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-          <div className="rounded-[24px] border border-white/8 bg-[rgba(8,12,22,0.55)] p-4 backdrop-blur-sm">
+          <div className="rounded-[24px] border border-[var(--line)] bg-[var(--panel)] p-4 backdrop-blur-sm">
             <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
               Capital Discipline
             </div>
@@ -304,7 +304,7 @@ export function PaperTradeHero({
               </div>
             </div>
           </div>
-          <div className="rounded-[24px] border border-white/8 bg-[rgba(8,12,22,0.55)] p-4 backdrop-blur-sm sm:col-span-2 xl:col-span-1">
+          <div className="rounded-[24px] border border-[var(--line)] bg-[var(--panel)] p-4 backdrop-blur-sm sm:col-span-2 xl:col-span-1">
             <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">
               Policy Guardrails
             </div>
