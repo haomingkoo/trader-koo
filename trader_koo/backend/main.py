@@ -574,6 +574,12 @@ _SPA_ROUTES = {
     "opportunities", "paper-trades", "markets",
 }
 
+# Ensure .js files are served with correct MIME type (some Linux systems lack this)
+import mimetypes
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("image/svg+xml", ".svg")
+
 if DIST_V2.exists() and DIST_V2.is_dir():
     _root_v2_index = DIST_V2 / "index.html"
     _root_v2_assets = DIST_V2 / "assets"
