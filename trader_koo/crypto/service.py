@@ -65,8 +65,8 @@ _subscribers: dict[str, _Subscription] = {}
 # Maximum concurrent browser WebSocket subscribers
 MAX_WS_SUBSCRIBERS = 50
 
-# Flush interval in seconds (5 minutes)
-FLUSH_INTERVAL_SEC = 300
+# Flush interval — reduced from 300s to 60s to minimize data loss on crash
+FLUSH_INTERVAL_SEC = 60
 _INTERVAL_TO_MINUTES: dict[str, int] = {
     "1m": 1,
     "5m": 5,
@@ -429,6 +429,32 @@ def _refresh_recent_native_history(
     return _merge_bars(refreshed, existing_bars)
 
 
+def _on_ws_gap_detected(disconnect_ts: dt.datetime, reconnect_ts: dt.datetime) -> None:
+    """Called by the WS client when it detects a gap after reconnecting.
+
+    Backfills 1m and 1h bars for the gap window from Binance REST API.
+    """
+    gap_minutes = int((reconnect_ts - disconnect_ts).total_seconds() / 60)
+    LOG.info("Gap-fill triggered: %d minutes gap, backfilling...", gap_minutes)
+
+    for symbol in SYMBOL_MAP.values():
+        # Backfill 1m bars for the gap
+        limit_1m = min(gap_minutes + 10, 1000)
+        try:
+            _backfill_history(symbol, "1m", limit_1m)
+        except Exception as exc:
+            LOG.warning("1m gap-fill failed for %s: %s", symbol, exc)
+
+        # Also refresh 1h to cover the gap
+        limit_1h = max(gap_minutes // 60 + 2, 10)
+        try:
+            _backfill_history(symbol, "1h", limit_1h)
+        except Exception as exc:
+            LOG.warning("1h gap-fill failed for %s: %s", symbol, exc)
+
+    LOG.info("Gap-fill complete for %d-minute window", gap_minutes)
+
+
 def _warm_backfill_history() -> None:
     if _db_path_str is None:
         return
@@ -532,6 +558,7 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
         on_tick=_broadcast_tick,
         on_bar_update=_on_binance_bar_update,
         on_candle_close=_on_binance_candle_close,
+        on_gap_detected=_on_ws_gap_detected,
     )
 
     # Pre-fill from DB before starting live feed

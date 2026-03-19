@@ -345,6 +345,24 @@ async def lifespan(_app: FastAPI):
     _scheduler.start()
     LOG.info("Scheduler started -- daily_update: 22:00 UTC Mon-Fri | weekly_yolo: 00:30 UTC Sat")
     LOG.info("Application startup complete - ready to serve requests")
+
+    # Prefetch sentiment data in background so first user request is fast
+    def _prefetch_sentiment() -> None:
+        try:
+            from trader_koo.structure.fear_greed import compute_fear_greed_index
+            from trader_koo.backend.services.database import get_conn
+
+            conn = get_conn()
+            try:
+                compute_fear_greed_index(conn)
+                LOG.info("Sentiment prefetch complete")
+            finally:
+                conn.close()
+        except Exception as exc:
+            LOG.debug("Sentiment prefetch failed (non-fatal): %s", exc)
+
+    threading.Thread(target=_prefetch_sentiment, daemon=True, name="sentiment-prefetch").start()
+
     yield
     stop_equity_feed()
     stop_crypto_feed()
