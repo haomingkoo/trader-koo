@@ -69,6 +69,8 @@ DEFAULT_SOFT_FAIL_TICKERS = (
     "FXI",
     "UUP",
     "IWM",
+    "XLK", "XLF", "XLV", "XLE", "XLY", "XLP",
+    "XLI", "XLU", "XLB", "XLRE", "XLC", "IGV",
 )
 LOG = logging.getLogger("trader_koo.ingest")
 
@@ -877,6 +879,19 @@ def run(args: argparse.Namespace) -> None:
         "FXI",    # China large-cap ETF (China risk proxy)
         "UUP",    # USD bull ETF (dollar strength proxy)
         "IWM",    # Russell 2000 small-cap (risk appetite)
+        # Sector ETFs (sector rotation signals)
+        "XLK",    # Technology
+        "XLF",    # Financials
+        "XLV",    # Health Care
+        "XLE",    # Energy
+        "XLY",    # Consumer Discretionary
+        "XLP",    # Consumer Staples
+        "XLI",    # Industrials
+        "XLU",    # Utilities
+        "XLB",    # Materials
+        "XLRE",   # Real Estate
+        "XLC",    # Communication Services
+        "IGV",    # Software (sub-sector)
     ]
     for t in ALWAYS_FETCH:
         if t not in tickers:

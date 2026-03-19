@@ -60,6 +60,9 @@ FEATURE_COLUMNS = [
     "macro_gold_ret_5d", "macro_gold_ret_21d",
     "macro_oil_ret_5d", "macro_oil_ret_21d",
     "macro_em_ret_5d", "macro_smallcap_ret_5d", "macro_usd_ret_5d",
+    # Sector rotation (from sector_rotation.py)
+    "sector_rank", "sector_momentum_5d", "sector_momentum_21d",
+    "leading_sector_momentum", "lagging_sector_momentum", "sector_dispersion",
 ]
 
 
@@ -340,6 +343,30 @@ def extract_features_for_universe(
         feat_df["fred_fed_funds_rate"] = get_fred_latest("DFF")
     except Exception as exc:
         LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
+
+    # Sector rotation features
+    try:
+        from trader_koo.ml.sector_rotation import compute_sector_features, TICKER_SECTOR_MAP
+
+        # Compute market-wide sector stats once (no ticker arg)
+        market_sector = compute_sector_features(conn, as_of_date=as_of_date)
+        for k in ["leading_sector_momentum", "lagging_sector_momentum", "sector_dispersion"]:
+            if k in FEATURE_COLUMNS:
+                feat_df[k] = market_sector.get(k, np.nan)
+
+        # Per-ticker sector rank + momentum (use lookup map, not DB per ticker)
+        ticker_col = "ticker" if "ticker" in feat_df.columns else feat_df.index
+        for k in ["sector_rank", "sector_momentum_5d", "sector_momentum_21d"]:
+            if k in FEATURE_COLUMNS and k not in feat_df.columns:
+                feat_df[k] = np.nan
+        # Batch compute: one DB query per sector ETF already done inside compute_sector_features
+        for i, tkr in enumerate(ticker_col):
+            per_ticker = compute_sector_features(conn, as_of_date=as_of_date, ticker=str(tkr))
+            for k in ["sector_rank", "sector_momentum_5d", "sector_momentum_21d"]:
+                if k in FEATURE_COLUMNS:
+                    feat_df.at[feat_df.index[i], k] = per_ticker.get(k, np.nan)
+    except Exception as exc:
+        LOG.warning("Sector feature extraction failed (non-fatal): %s", exc)
 
     # Ensure all expected columns exist
     for col in FEATURE_COLUMNS:
