@@ -90,7 +90,10 @@ def score_universe(
     X = X.fillna(X.median())
 
     try:
-        probs = model.predict(X.values)
+        # Booster.predict() returns raw margins, need to convert to probabilities
+        raw = model.predict(X.values)
+        # Sigmoid to convert log-odds to probability
+        probs = 1.0 / (1.0 + np.exp(-raw))
     except Exception as exc:
         LOG.warning("Model prediction failed: %s", exc)
         return []
@@ -141,10 +144,11 @@ def score_single_ticker(
         }
 
     X = features.loc[[ticker]].reindex(columns=feature_cols)
-    X = X.fillna(0.0)
+    X = X.fillna(X.median())  # consistent with score_universe
 
     try:
-        prob = float(model.predict(X.values)[0])
+        raw = float(model.predict(X.values)[0])
+        prob = 1.0 / (1.0 + np.exp(-raw))  # sigmoid for Booster
     except Exception as exc:
         return {
             "ticker": ticker,
