@@ -115,6 +115,9 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "regime_state_at_entry", "regime_state_at_entry TEXT")
     _ensure_column(conn, "paper_trades", "hmm_regime_at_entry", "hmm_regime_at_entry TEXT")
     _ensure_column(conn, "paper_trades", "hmm_confidence_at_entry", "hmm_confidence_at_entry REAL")
+    _ensure_column(conn, "paper_trades", "ml_predicted_win_prob", "ml_predicted_win_prob REAL")
+    _ensure_column(conn, "paper_trades", "ml_confidence", "ml_confidence REAL")
+    _ensure_column(conn, "paper_trades", "ml_signal", "ml_signal TEXT")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bot_versions (

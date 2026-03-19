@@ -3,16 +3,11 @@ import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTradeSummaryOverall } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 import {
-  PaperTradeHero,
-  PaperTradeBotOverview,
-  PaperTradeBreakdownPanels,
-  PaperTradeEdgePanels,
+  PaperTradePortfolioHero,
+  PaperTradeOpenPositions,
   PaperTradeEquityCurve,
-  PaperTradeFeedbackPanel,
   PaperTradeFilters,
   PaperTradeLogTable,
-  PaperTradeOpenPlans,
-  PaperTradeSummaryGrid,
 } from "../components/paper/PaperTradeSections";
 
 export default function PaperTradePage() {
@@ -47,21 +42,6 @@ export default function PaperTradePage() {
   };
   const trades = tradesData?.trades ?? [];
   const equityCurve = summary?.equity_curve ?? [];
-  const latestEquity =
-    equityCurve.length > 0
-      ? equityCurve[equityCurve.length - 1].equity_index
-      : null;
-  const maxDrawdown = (() => {
-    if (equityCurve.length < 2) return null;
-    let peak = equityCurve[0].equity_index;
-    let maxDd = 0;
-    for (const point of equityCurve) {
-      if (point.equity_index > peak) peak = point.equity_index;
-      const dd = ((peak - point.equity_index) / peak) * 100;
-      if (dd > maxDd) maxDd = dd;
-    }
-    return maxDd;
-  })();
 
   return (
     <div className="space-y-6">
@@ -69,34 +49,11 @@ export default function PaperTradePage() {
         Paper trades are simulated and do not represent real money. Simulated results may not reflect actual trading conditions.
       </div>
 
-      <PaperTradeHero
-        overall={overall}
-        latestEquity={latestEquity}
-        maxDrawdown={maxDrawdown}
-        policy={summary?.policy}
-      />
+      <PaperTradePortfolioHero overall={overall} />
 
-      <PaperTradeSummaryGrid
-        overall={overall}
-        maxDrawdown={maxDrawdown}
-        latestEquity={latestEquity}
-      />
-
-      <PaperTradeBotOverview overall={overall} policy={summary?.policy} />
+      <PaperTradeOpenPositions trades={trades} />
 
       <PaperTradeEquityCurve equityCurve={equityCurve} />
-
-      <PaperTradeBreakdownPanels summary={summary} />
-
-      <PaperTradeOpenPlans trades={trades} />
-
-      <PaperTradeEdgePanels
-        familyEdges={summary?.family_edges ?? []}
-        regimeEdges={summary?.regime_edges ?? []}
-        vixBucketEdges={summary?.vix_bucket_edges ?? []}
-      />
-
-      <PaperTradeFeedbackPanel feedback={summary?.feedback ?? []} />
 
       <PaperTradeFilters
         statusFilter={statusFilter}

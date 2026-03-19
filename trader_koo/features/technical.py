@@ -28,6 +28,7 @@ def add_basic_features(df: pd.DataFrame, cfg: FeatureConfig) -> pd.DataFrame:
     out["ret_1d"] = out["close"].pct_change(1)
     for w in cfg.ma_windows:
         out[f"ma{w}"] = out["close"].rolling(w, min_periods=w).mean()
+        out[f"ema{w}"] = out["close"].ewm(span=w, min_periods=w, adjust=False).mean()
     return out
 
 

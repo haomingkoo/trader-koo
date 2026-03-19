@@ -59,6 +59,7 @@ def _make_setup_row(
     support_level: float = 140.0,
     resistance_level: float = 165.0,
     risk_note: str = "Standard risk controls.",
+    debate_agreement_score: float = 80.0,
 ) -> dict:
     return {
         "ticker": ticker,
@@ -74,6 +75,7 @@ def _make_setup_row(
         "observation": "Test setup",
         "action": "Buy on breakout",
         "risk_note": risk_note,
+        "debate_agreement_score": debate_agreement_score,
     }
 
 
@@ -246,7 +248,7 @@ class TestCreatePaperTrades:
         assert trade == ("AAPL", "long", "open", "approved", "approved")
 
     def test_stores_decision_metadata_for_flagged_trade(self, conn):
-        rows = [_make_setup_row(actionability="conditional", risk_note="High volatility into earnings")]
+        rows = [_make_setup_row(actionability="conditional", risk_note="Watch earnings date")]
 
         inserted = create_paper_trades_from_report(
             conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",

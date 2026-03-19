@@ -156,13 +156,24 @@ _FINANCE_KEYWORDS = frozenset({
 })
 
 _EXCLUDE_KEYWORDS = frozenset({
-    "nba", "nfl", "nhl", "mlb", "fifa", "world cup", "premier league",
-    "la liga", "champions league", "serie a", "bundesliga",
-    "ufc", "boxing", "tennis", "golf", "masters", "wimbledon",
-    "oscar", "grammy", "emmy", "super bowl", "mvp",
-    "gta", "rihanna", "jesus", "bitboy", "airdrop",
-    "weather", "temperature", "tweet", "tiktok", "youtube",
-    "stanley cup", "formula 1", "f1 ", "mma",
+    # Team sports
+    "nba", "nfl", "nhl", "mlb", "mls", "fifa", "world cup", "premier league",
+    "la liga", "champions league", "serie a", "bundesliga", "euroleague",
+    "cricket", "rugby", "soccer", "futbol",
+    # Individual sports
+    "ufc", "boxing", "tennis", "golf", "masters", "wimbledon", "mma",
+    "formula 1", "f1 ", "nascar", "cycling", "marathon", "olympics",
+    # Esports
+    "valorant", "cs2 ", "dota", "league of legends", "esport",
+    # Entertainment / pop culture
+    "oscar", "grammy", "emmy", "super bowl", "mvp", "stanley cup",
+    "movie", "film", "album", "tv show", "reality tv", "award show",
+    "gta", "rihanna", "kardashian", "taylor swift", "celebrity",
+    # Social media / meme
+    "tweet", "tiktok", "youtube", "instagram", "influencer",
+    "jesus", "bitboy", "airdrop", "meme coin",
+    # Weather / misc
+    "weather", "temperature", "earthquake", "hurricane",
 })
 
 
@@ -335,21 +346,19 @@ def fetch_polymarket_markets(
                     "url": f"https://polymarket.com/event/{market.get('slug', '')}",
                 })
 
-        # Filter for finance/macro relevance using keywords
-        relevant = [
-            m for m in markets
-            if any(kw in str(m.get("question", "")).lower() for kw in _FINANCE_KEYWORDS)
-        ]
+        # Filter: exclude sports/entertainment, then require finance relevance
+        relevant = []
+        for m in markets:
+            text = str(m.get("question", "")).lower()
+            if any(kw in text for kw in _EXCLUDE_KEYWORDS):
+                continue
+            if not any(kw in text for kw in _FINANCE_KEYWORDS):
+                continue
+            relevant.append(m)
 
         # Sort by volume (highest first) and cap at requested limit
         relevant.sort(key=lambda m: m.get("volume", 0), reverse=True)
         result = relevant[:limit]
-
-        # If we don't have enough relevant markets, pad with top-volume general ones
-        if len(result) < limit:
-            remaining = [m for m in markets if m not in relevant]
-            remaining.sort(key=lambda m: m.get("volume", 0), reverse=True)
-            result.extend(remaining[: limit - len(result)])
 
         with _cache_lock:
             _polymarket_cache[cache_key] = {

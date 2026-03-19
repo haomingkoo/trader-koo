@@ -889,6 +889,10 @@ def build_dashboard_payload(
         "ma50",
         "ma100",
         "ma200",
+        "ema20",
+        "ema50",
+        "ema100",
+        "ema200",
         "atr",
         "atr_pct",
     ]

@@ -23,16 +23,21 @@ from typing import Any
 
 @dataclass
 class FormingCandle:
-    """An incomplete (still-forming) 1-minute candle."""
+    """An incomplete (still-forming) candle that aggregates live ticks.
+
+    For the daily chart, this represents "today so far" — it accumulates
+    all ticks since market open and never resets within the trading day.
+    """
 
     symbol: str
-    minute_start: dt.datetime  # floored to minute boundary
+    minute_start: dt.datetime  # timestamp of first tick (or floored to minute)
     open: float
     high: float
     low: float
     close: float
     volume: int
     tick_count: int
+    last_update: dt.datetime  # timestamp of most recent tick
 
 
 _lock = threading.Lock()
@@ -56,22 +61,20 @@ def update_tick(
     If the tick belongs to a new minute, the old candle is discarded
     (it is now "closed") and a fresh candle begins.
     """
-    minute = _floor_to_minute(timestamp)
-
     with _lock:
         existing = _candles.get(symbol)
 
-        if existing is None or existing.minute_start != minute:
-            # New candle for this minute
+        if existing is None:
             _candles[symbol] = FormingCandle(
                 symbol=symbol,
-                minute_start=minute,
+                minute_start=timestamp,
                 open=price,
                 high=price,
                 low=price,
                 close=price,
                 volume=volume,
                 tick_count=1,
+                last_update=timestamp,
             )
         else:
             # Update the existing forming candle
@@ -80,6 +83,7 @@ def update_tick(
             existing.close = price
             existing.volume += volume
             existing.tick_count += 1
+            existing.last_update = timestamp
 
 
 def get_forming_candle(symbol: str) -> dict[str, Any] | None:
@@ -96,9 +100,10 @@ def get_forming_candle(symbol: str) -> dict[str, Any] | None:
         if candle is None:
             return None
 
-    # Discard stale candles (more than 2 minutes old)
-    age_sec = (now - candle.minute_start).total_seconds()
-    if age_sec > 120:
+    # Discard candles if no tick received in the last 5 minutes
+    # (generous window — Finnhub can have gaps between trades)
+    age_since_last_tick = (now - candle.last_update).total_seconds()
+    if age_since_last_tick > 300:
         return None
 
     return {
