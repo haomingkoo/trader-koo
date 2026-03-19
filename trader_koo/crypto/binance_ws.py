@@ -59,6 +59,7 @@ class BinanceWSClient:
         on_tick: Callable[[CryptoTick], None] | None = None,
         on_bar_update: Callable[[CryptoBar], None] | None = None,
         on_candle_close: Callable[[CryptoBar], None] | None = None,
+        on_gap_detected: Callable[[dt.datetime, dt.datetime], None] | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._connected = False
@@ -68,6 +69,7 @@ class BinanceWSClient:
         self._on_tick = on_tick
         self._on_bar_update = on_bar_update
         self._on_candle_close = on_candle_close
+        self._on_gap_detected = on_gap_detected
 
         # Latest tick per symbol
         self._ticks: dict[str, CryptoTick] = {}
@@ -182,8 +184,13 @@ class BinanceWSClient:
     def _run_forever(self) -> None:
         backoff = INITIAL_BACKOFF_SEC
         while self._running:
+            # Record disconnect time so we can gap-fill after reconnect
+            disconnect_ts = dt.datetime.now(dt.timezone.utc)
+
             try:
                 self._connect()
+                # If _connect() ran successfully for a while, reset backoff
+                backoff = INITIAL_BACKOFF_SEC
             except Exception as exc:
                 LOG.error("Binance WS unexpected error: %s", exc)
 
@@ -192,6 +199,19 @@ class BinanceWSClient:
 
             if not self._running:
                 break
+
+            # Trigger gap-fill callback for the disconnect window
+            reconnect_ts = dt.datetime.now(dt.timezone.utc)
+            gap_seconds = (reconnect_ts - disconnect_ts).total_seconds()
+            if gap_seconds > 120 and self._on_gap_detected:
+                LOG.warning(
+                    "Binance WS was disconnected for %.0fs — triggering gap-fill",
+                    gap_seconds,
+                )
+                try:
+                    self._on_gap_detected(disconnect_ts, reconnect_ts)
+                except Exception as exc:
+                    LOG.warning("Gap-fill callback failed: %s", exc)
 
             LOG.warning(
                 "Binance WS disconnected — reconnecting in %.1f s",
