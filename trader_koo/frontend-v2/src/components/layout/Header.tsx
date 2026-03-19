@@ -1,4 +1,5 @@
-import { ArrowUpRight } from "lucide-react";
+import { useState, useEffect } from "react";
+import { ArrowUpRight, Sun, Moon } from "lucide-react";
 import ClockStrip from "./ClockStrip";
 import PipelineStatusBadge from "./PipelineStatusBadge";
 import {
@@ -7,8 +8,25 @@ import {
 } from "./HeaderMarketStrips";
 import { usePipelineStatus } from "../../api/hooks";
 
+function useTheme() {
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("theme") as "dark" | "light") || "dark";
+    }
+    return "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  return { theme, toggle: () => setTheme((t) => (t === "dark" ? "light" : "dark")) };
+}
+
 export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   const { data } = usePipelineStatus();
+  const { theme, toggle: toggleTheme } = useTheme();
 
   return (
     <header className="border-b border-[var(--line)] px-4 pb-2 pt-2 [padding-top:max(0.5rem,env(safe-area-inset-top))]">
@@ -40,12 +58,21 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
           <span className="text-[10px] font-medium tracking-wider text-[var(--muted)]">
             Trader Koo
           </span>
-          <a
-            href="https://kooexperience.com/"
-            className="ml-auto flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] transition-colors hover:text-[var(--accent)]"
-          >
-            Portfolio <ArrowUpRight size={12} />
-          </a>
+          <div className="ml-auto flex items-center gap-3">
+            <button
+              onClick={toggleTheme}
+              className="rounded p-1 text-[var(--muted)] transition-colors hover:bg-[var(--panel-hover)] hover:text-[var(--text)]"
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <a
+              href="https://kooexperience.com/"
+              className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] transition-colors hover:text-[var(--accent)]"
+            >
+              Portfolio <ArrowUpRight size={12} />
+            </a>
+          </div>
         </div>
 
         <div className="grid gap-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] xl:items-start">
