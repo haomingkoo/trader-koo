@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-:root {
+/* Dark theme (default) */
+:root, [data-theme="dark"] {
   --bg: #0b0f16;
   --panel: #121927;
   --panel-hover: #1a2236;
@@ -12,6 +13,21 @@
   --amber: #f8c24e;
   --blue: #6aa9ff;
   --accent: #4a9eff;
+}
+
+/* Light theme */
+[data-theme="light"] {
+  --bg: #f5f7fa;
+  --panel: #ffffff;
+  --panel-hover: #f0f2f5;
+  --muted: #6b7280;
+  --text: #111827;
+  --line: #e5e7eb;
+  --green: #059669;
+  --red: #dc2626;
+  --amber: #d97706;
+  --blue: #2563eb;
+  --accent: #3b82f6;
 }
 
 body {
