@@ -538,6 +538,93 @@ def macro_snapshot(request: Request) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+@router.get("/api/admin/ml-shap-analysis")
+@require_admin_auth
+def ml_shap_analysis(request: Request) -> dict[str, Any]:
+    """Run SHAP analysis on the current model to explain feature importance."""
+    try:
+        from trader_koo.ml.scorer import load_model
+        from trader_koo.ml.features import FEATURE_COLUMNS, extract_features_for_universe
+        from trader_koo.ml.shap_analysis import compute_shap_summary
+
+        model, meta = load_model()
+        if model is None:
+            return {"ok": False, "error": "No model loaded"}
+
+        feature_cols = meta.get("feature_columns", FEATURE_COLUMNS) if meta else FEATURE_COLUMNS
+        conn = get_conn()
+        try:
+            today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+            features = extract_features_for_universe(conn, as_of_date=today)
+            if features.empty:
+                return {"ok": False, "error": "No feature data available"}
+            X = features.reindex(columns=feature_cols)
+            result = compute_shap_summary(model, X)
+            return {"ok": True, **result}
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@router.get("/api/admin/ml-drift-check")
+@require_admin_auth
+def ml_drift_check(
+    request: Request,
+    window_days: int = Query(default=30),
+) -> dict[str, Any]:
+    """Check model drift — is the model still accurate on recent trades?"""
+    try:
+        from trader_koo.ml.drift_detection import check_model_drift
+
+        conn = get_conn()
+        try:
+            return check_model_drift(conn, window_days=window_days)
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@router.post("/api/admin/seed-ticker-history")
+@require_admin_auth
+def seed_ticker_history(
+    request: Request,
+    tickers: str = Query(default="GLD,USO,TLT,HYG,IEF,EEM,IWM,UUP,XLK,XLF,XLV,XLE,XLY,XLP,XLI,XLU,XLB,XLRE,XLC,IGV"),
+    start_date: str = Query(default="2020-01-01"),
+) -> dict[str, Any]:
+    """Seed historical price data for specific tickers (e.g. new commodity/sector ETFs).
+
+    This runs a targeted ingest for just the listed tickers with full history.
+    """
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    if not ticker_list:
+        return {"ok": False, "error": "No tickers specified"}
+
+    def _run_seed() -> None:
+        import subprocess
+        script = str(PROJECT_DIR / "scripts" / "update_market_db.py")
+        cmd = [
+            sys.executable, script,
+            "--tickers", ",".join(ticker_list),
+            "--price-start", start_date,
+            "--price-lookback-days", "0",
+            "--full-price-refresh",
+            "--skip-price", "false",
+            "--db-path", str(DB_PATH),
+            "--log-file", str(LOG_DIR / "seed_history.log"),
+        ]
+        subprocess.run(cmd, capture_output=False)
+
+    thread = threading.Thread(target=_run_seed, daemon=True)
+    thread.start()
+    return {
+        "ok": True,
+        "message": f"Seeding history for {len(ticker_list)} tickers from {start_date}",
+        "tickers": ticker_list,
+    }
+
+
 _backtest_thread: threading.Thread | None = None
 _backtest_result: dict[str, Any] | None = None
 
