@@ -594,32 +594,12 @@ if DIST_V2.exists() and DIST_V2.is_dir():
             app.get(f"/{_route}/{{rest:path}}", include_in_schema=False)(_make_handler())
 
 
-# Legacy /v2 mount (backward compatibility)
-    _v2_index = DIST_V2 / "index.html"
-    _v2_assets = DIST_V2 / "assets"
-    _v2_shell_headers = {
-        # Never let the SPA shell stick around across deploys: old index.html files
-        # point at hashed lazy-route chunks that disappear on the next build.
-        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        "Pragma": "no-cache",
-        "Expires": "0",
-    }
+# /v2 redirect — v2 was promoted to / so redirect any old /v2 links
+    from starlette.responses import RedirectResponse
 
-    # Only mount hashed assets when the build output is fully present.
-    if _v2_assets.is_dir():
-        app.mount("/v2/assets", StaticFiles(directory=str(_v2_assets)), name="v2-assets")
-
-    if _v2_index.is_file():
-        @app.get("/v2", include_in_schema=False)
-        @app.get("/v2/", include_in_schema=False)
-        def v2_index() -> Any:
-            return FileResponse(str(_v2_index), headers=_v2_shell_headers)
-
-        # Catch-all for SPA routing — any /v2/* path that isn't an asset serves index.html
-        @app.get("/v2/{rest_of_path:path}", include_in_schema=False)
-        def v2_spa_fallback(rest_of_path: str = "") -> Any:
-            # Serve static files if they exist (favicon, etc.)
-            static_file = DIST_V2 / rest_of_path
-            if rest_of_path and static_file.is_file():
-                return FileResponse(str(static_file))
-            return FileResponse(str(_v2_index), headers=_v2_shell_headers)
+    @app.get("/v2", include_in_schema=False)
+    @app.get("/v2/", include_in_schema=False)
+    @app.get("/v2/{rest_of_path:path}", include_in_schema=False)
+    def v2_redirect(rest_of_path: str = "") -> Any:
+        target = f"/{rest_of_path}" if rest_of_path else "/"
+        return RedirectResponse(url=target, status_code=301)
