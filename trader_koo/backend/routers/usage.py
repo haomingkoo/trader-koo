@@ -56,15 +56,7 @@ def _clean_feedback_text(value: Any, *, max_len: int = 400) -> str | None:
     return text[:max_len]
 
 
-def _client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
-    if request.client and request.client.host:
-        return request.client.host
-    return "-"
+from trader_koo.backend.utils import client_ip as _client_ip
 
 
 def prune_analytics_sessions() -> None:

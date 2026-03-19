@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useReport, useVixMetrics } from "../api/hooks";
 import Card from "../components/ui/Card";
 import Spinner from "../components/ui/Spinner";
@@ -14,6 +15,10 @@ import {
 } from "../components/vix/VixSections";
 
 export default function VixPage() {
+  useEffect(() => {
+    document.title = "VIX \u2014 Trader Koo";
+  }, []);
+
   const { data, isLoading, error } = useReport();
   const {
     data: metricsData,

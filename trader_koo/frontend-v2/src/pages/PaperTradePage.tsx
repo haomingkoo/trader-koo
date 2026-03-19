@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTradeSummaryOverall } from "../api/types";
 import Spinner from "../components/ui/Spinner";
@@ -11,6 +11,10 @@ import {
 } from "../components/paper/PaperTradeSections";
 
 export default function PaperTradePage() {
+  useEffect(() => {
+    document.title = "Paper Trades \u2014 Trader Koo";
+  }, []);
+
   const [statusFilter, setStatusFilter] = useState("all");
   const [dirFilter, setDirFilter] = useState("all");
 

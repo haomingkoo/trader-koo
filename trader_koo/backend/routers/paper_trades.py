@@ -60,44 +60,12 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
     try:
         ensure_paper_trade_schema(conn)
         row = conn.execute(
-            """
-            SELECT id, report_date, ticker, direction, entry_price, entry_date,
-                   target_price, stop_loss, atr_at_entry, exit_price, exit_date,
-                   exit_reason, status, current_price, unrealized_pnl_pct,
-                   pnl_pct, r_multiple, high_water_mark, low_water_mark,
-                   setup_family, setup_tier, score, signal_bias, actionability,
-                   observation, action_text, risk_note, yolo_pattern, yolo_recency,
-                   debate_agreement_score, last_mtm_date, created_ts, updated_ts,
-                   decision_version, decision_state, analyst_stage, debate_stage,
-                   risk_stage, portfolio_decision, decision_summary,
-                   decision_reasons, risk_flags,
-                   position_size_pct, risk_budget_pct, stop_distance_pct,
-                   expected_reward_pct, expected_r_multiple,
-                   entry_plan, exit_plan, sizing_summary,
-                   review_status, review_summary
-            FROM paper_trades WHERE id = ?
-            """,
+            "SELECT * FROM paper_trades WHERE id = ?",
             (trade_id,),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail=f"Paper trade {trade_id} not found")
-        keys = [
-            "id", "report_date", "ticker", "direction", "entry_price", "entry_date",
-            "target_price", "stop_loss", "atr_at_entry", "exit_price", "exit_date",
-            "exit_reason", "status", "current_price", "unrealized_pnl_pct",
-            "pnl_pct", "r_multiple", "high_water_mark", "low_water_mark",
-            "setup_family", "setup_tier", "score", "signal_bias", "actionability",
-            "observation", "action_text", "risk_note", "yolo_pattern", "yolo_recency",
-            "debate_agreement_score", "last_mtm_date", "created_ts", "updated_ts",
-            "decision_version", "decision_state", "analyst_stage", "debate_stage",
-            "risk_stage", "portfolio_decision", "decision_summary",
-            "decision_reasons", "risk_flags",
-            "position_size_pct", "risk_budget_pct", "stop_distance_pct",
-            "expected_reward_pct", "expected_r_multiple",
-            "entry_plan", "exit_plan", "sizing_summary",
-            "review_status", "review_summary",
-        ]
-        trade = dict(zip(keys, row))
+        trade = dict(row)
         for key in ("decision_reasons", "risk_flags"):
             raw = trade.get(key)
             if raw is None:

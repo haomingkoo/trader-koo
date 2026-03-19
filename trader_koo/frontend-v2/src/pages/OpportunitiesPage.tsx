@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useOpportunities } from "../api/hooks";
 import type { OpportunityRow } from "../api/types";
@@ -136,6 +136,10 @@ const opportunityColumns = [
 ];
 
 export default function OpportunitiesPage() {
+  useEffect(() => {
+    document.title = "Opportunities \u2014 Trader Koo";
+  }, []);
+
   const [view, setView] = useState<View>("all");
   const apiView = view === "deep_value" ? "undervalued" : view;
   const { data, isLoading, error } = useOpportunities({

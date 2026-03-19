@@ -4,6 +4,7 @@ import type {
   PaperTradeSummary,
   PaperTradeSummaryOverall,
 } from "../../api/types";
+import { getPlotlyColors } from "../../lib/plotlyTheme";
 import PlotlyWrapper from "../PlotlyWrapper";
 import Badge, { tierVariant } from "../ui/Badge";
 import Table from "../ui/Table";
@@ -54,7 +55,7 @@ export function PaperTradePortfolioHero({
     <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-5">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">
+          <div className="label-sm tracking-widest">
             Portfolio Value
           </div>
           <div className="mt-1 text-3xl font-bold tracking-tight text-[var(--text)]">
@@ -91,7 +92,7 @@ function Stat({
 }) {
   return (
     <div>
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+      <div className="label-xs tracking-widest">
         {label}
       </div>
       <div className={`mt-0.5 text-lg font-semibold ${tone}`}>{value}</div>
@@ -197,6 +198,8 @@ export function PaperTradeEquityCurve({
     );
   }
 
+  const theme = getPlotlyColors();
+
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
       <PlotlyWrapper
@@ -221,13 +224,13 @@ export function PaperTradeEquityCurve({
           },
         ]}
         layout={{
-          paper_bgcolor: "transparent",
-          plot_bgcolor: "transparent",
+          paper_bgcolor: theme.bg,
+          plot_bgcolor: theme.bg,
           margin: { t: 20, r: 16, b: 40, l: 50 },
-          font: { color: "#9ca3af", size: 11 },
-          xaxis: { gridcolor: "rgba(255,255,255,0.04)" },
+          font: { color: theme.font, size: 11 },
+          xaxis: { gridcolor: theme.grid },
           yaxis: {
-            gridcolor: "rgba(255,255,255,0.06)",
+            gridcolor: theme.grid,
             title: { text: "Equity", font: { size: 11 } },
           },
           legend: {

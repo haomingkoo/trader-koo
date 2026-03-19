@@ -4,6 +4,7 @@ import type {
   LevelRow,
 } from "../../api/types";
 import type { FormingCandleData } from "../../hooks/useCryptoSubscription";
+import { getPlotlyColors } from "../plotlyTheme";
 
 export interface CryptoOverlayState {
   sma20: boolean;
@@ -376,11 +377,13 @@ export function buildCandlestickChart(
     });
   }
 
+  const theme = getPlotlyColors();
+
   const layout: Record<string, unknown> = {
-    paper_bgcolor: "transparent",
-    plot_bgcolor: "transparent",
+    paper_bgcolor: theme.bg,
+    plot_bgcolor: theme.bg,
     uirevision: uirevisionKey ?? symbol,
-    font: { color: "#8ea0bd", size: 11 },
+    font: { color: theme.font, size: 11 },
     margin: { t: 30, r: 60, b: 50, l: 60 },
     dragmode: "zoom",
     legend: {
@@ -390,11 +393,11 @@ export function buildCandlestickChart(
       xanchor: "left",
     },
     xaxis: {
-      gridcolor: "rgba(255,255,255,0.04)",
+      gridcolor: theme.grid,
       rangeslider: { visible: false },
     },
     yaxis: {
-      gridcolor: "rgba(255,255,255,0.06)",
+      gridcolor: theme.grid,
       domain: [0.28, 1],
       title: "Price",
       autorange: true,
@@ -402,7 +405,7 @@ export function buildCandlestickChart(
       rangemode: "normal",
     },
     yaxis2: {
-      gridcolor: "rgba(255,255,255,0.04)",
+      gridcolor: theme.grid,
       domain: [0, 0.22],
       title: "Volume",
     },

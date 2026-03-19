@@ -166,14 +166,7 @@ def get_audit_logger() -> AuditLogger:
     return AuditLogger(conn)
 
 
-def _clean_optional_url(value: Any) -> str | None:
-    raw = str(value or "").strip()
-    if not raw or raw == "*":
-        return None
-    if raw.startswith(("http://", "https://")):
-        return raw.rstrip("/")
-    return raw
-
+from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
 
 STATUS_APP_URL = _clean_optional_url(os.getenv("TRADER_KOO_APP_URL")) or _clean_optional_url(
     os.getenv("TRADER_KOO_ALLOWED_ORIGIN")

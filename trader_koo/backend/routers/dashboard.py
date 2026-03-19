@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Path as FastPath, Query
 
 from trader_koo.backend.services.chart_builder import build_dashboard_payload
 from trader_koo.backend.services.database import get_conn, get_yolo_patterns
@@ -39,7 +39,7 @@ def tickers(limit: int = Query(default=200, ge=1, le=2000)) -> dict[str, Any]:
 
 @router.get("/api/dashboard/{ticker}")
 def dashboard(
-    ticker: str,
+    ticker: str = FastPath(pattern=r"^[A-Z0-9._\^-]{1,20}$"),
     months: int = Query(default=3, ge=0, le=240),
     report_generated_ts: str | None = Query(default=None),
 ) -> dict[str, Any]:

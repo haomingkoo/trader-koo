@@ -24,6 +24,7 @@ import {
   buildCandlestickChart,
   type CryptoOverlayState,
 } from "../lib/crypto/buildCandlestickChart";
+import { getPlotlyColors } from "../lib/plotlyTheme";
 
 /* ── Constants ── */
 
@@ -194,6 +195,10 @@ export default function CryptoPage() {
     [selectedSymbol, selectedInterval],
   );
   const [zoomState, setZoomState] = useState<PersistedZoomState>(() => readZoomState(zoomKey));
+
+  useEffect(() => {
+    document.title = "Crypto \u2014 Trader Koo";
+  }, []);
 
   const { data: summary } = useCryptoSummary();
   const { data: indicatorsData } = useCryptoIndicators(selectedSymbol);
@@ -405,60 +410,63 @@ export default function CryptoPage() {
       />
 
       {/* Open Interest Panel */}
-      {openInterestData && openInterestData.oi_bars.length > 0 && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-[var(--text)]">
-              Open Interest ({selectedSymbol})
-            </h3>
-            <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
-              {openInterestData.current_oi && (
-                <span>
-                  Current: <span className="font-medium text-[var(--text)]">
-                    {(openInterestData.current_oi.open_interest).toLocaleString()} contracts
+      {openInterestData && openInterestData.oi_bars.length > 0 && (() => {
+        const oiTheme = getPlotlyColors();
+        return (
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-[var(--text)]">
+                Open Interest ({selectedSymbol})
+              </h3>
+              <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
+                {openInterestData.current_oi && (
+                  <span>
+                    Current: <span className="font-medium text-[var(--text)]">
+                      {(openInterestData.current_oi.open_interest).toLocaleString()} contracts
+                    </span>
                   </span>
-                </span>
-              )}
-              {openInterestData.oi_change_24h_pct != null && (
-                <span className={openInterestData.oi_change_24h_pct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
-                  {openInterestData.oi_change_24h_pct > 0 ? "+" : ""}
-                  {openInterestData.oi_change_24h_pct.toFixed(2)}% 24h
-                </span>
-              )}
+                )}
+                {openInterestData.oi_change_24h_pct != null && (
+                  <span className={openInterestData.oi_change_24h_pct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                    {openInterestData.oi_change_24h_pct > 0 ? "+" : ""}
+                    {openInterestData.oi_change_24h_pct.toFixed(2)}% 24h
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="h-[180px]">
+              <CryptoChartPanel
+                chartData={[
+                  {
+                    type: "scatter",
+                    mode: "lines",
+                    fill: "tozeroy",
+                    x: openInterestData.oi_bars.map((b) => b.timestamp),
+                    y: openInterestData.oi_bars.map((b) => b.open_interest_value),
+                    name: "Open Interest (USD)",
+                    line: { color: "#f59e0b", width: 1.5 },
+                    fillcolor: "rgba(245,158,11,0.08)",
+                  },
+                ]}
+                chartLayout={{
+                  paper_bgcolor: oiTheme.bg,
+                  plot_bgcolor: oiTheme.bg,
+                  font: { color: oiTheme.font, size: 10 },
+                  margin: { t: 10, r: 10, b: 30, l: 60 },
+                  xaxis: { gridcolor: oiTheme.grid },
+                  yaxis: {
+                    gridcolor: oiTheme.grid,
+                    title: { text: "OI Value (USD)", font: { size: 10 } },
+                  },
+                  showlegend: false,
+                  height: 180,
+                }}
+                onRelayout={() => {}}
+              />
             </div>
           </div>
-          <div className="h-[180px]">
-            <CryptoChartPanel
-              chartData={[
-                {
-                  type: "scatter",
-                  mode: "lines",
-                  fill: "tozeroy",
-                  x: openInterestData.oi_bars.map((b) => b.timestamp),
-                  y: openInterestData.oi_bars.map((b) => b.open_interest_value),
-                  name: "Open Interest (USD)",
-                  line: { color: "#f59e0b", width: 1.5 },
-                  fillcolor: "rgba(245,158,11,0.08)",
-                },
-              ]}
-              chartLayout={{
-                paper_bgcolor: "transparent",
-                plot_bgcolor: "transparent",
-                font: { color: "#8ea0bd", size: 10 },
-                margin: { t: 10, r: 10, b: 30, l: 60 },
-                xaxis: { gridcolor: "rgba(255,255,255,0.04)" },
-                yaxis: {
-                  gridcolor: "rgba(255,255,255,0.06)",
-                  title: { text: "OI Value (USD)", font: { size: 10 } },
-                },
-                showlegend: false,
-                height: 180,
-              }}
-              onRelayout={() => {}}
-            />
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Info footer */}
       <div className="text-xs text-[var(--muted)]">

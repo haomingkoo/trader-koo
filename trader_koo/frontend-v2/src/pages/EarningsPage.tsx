@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useEarnings } from "../api/hooks";
 import type { EarningsRow } from "../api/types";
@@ -180,6 +180,10 @@ const earningsColumns = [
 ];
 
 export default function EarningsPage() {
+  useEffect(() => {
+    document.title = "Earnings \u2014 Trader Koo";
+  }, []);
+
   const [days, setDays] = useState(30);
   const [viewMode, setViewMode] = useState<ViewMode>("calendar");
   const { data, isLoading, error } = useEarnings(days);
