@@ -10,3 +10,4 @@ hmmlearn>=0.3
 scikit-learn>=1.5
 lightgbm>=4.0
 shap>=0.45
+python-multipart>=0.0.9
