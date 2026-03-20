@@ -246,12 +246,16 @@ def _parse_single_market(m: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             prices.append(None)
 
+    is_resolved = bool(m.get("closed") or m.get("resolved"))
+
     return {
         "question": str(m.get("question", "")).strip(),
         "outcomes": outcomes,
         "prices_pct": prices,
         "volume": round(float(m.get("volume", 0) or 0), 2),
         "end_date": m.get("endDate"),
+        "resolved": is_resolved,
+        "active": not is_resolved,
     }
 
 
@@ -273,6 +277,41 @@ def _parse_event_markets(
 
     parsed.sort(key=_sort_key)
     return parsed
+
+
+def _classify_event_type(markets: list[dict[str, Any]]) -> str:
+    """Classify an event as 'simple', 'timeline', or 'multi_outcome'.
+
+    - simple: single sub-market with YES/NO outcomes
+    - timeline: sub-markets have different end_dates (date-based milestones)
+    - multi_outcome: multiple sub-markets sharing end_date or >3 non-YES/NO outcomes
+    """
+    if len(markets) <= 1:
+        # Single market — check if it's YES/NO
+        if markets:
+            outcomes = [str(o).lower() for o in (markets[0].get("outcomes") or [])]
+            if set(outcomes) <= {"yes", "no"}:
+                return "simple"
+            return "multi_outcome"
+        return "simple"
+
+    # Multiple sub-markets — check if end_dates differ (timeline)
+    end_dates = {m.get("end_date") for m in markets if m.get("end_date")}
+    if len(end_dates) > 1:
+        return "timeline"
+
+    # Check if outcomes are non-YES/NO across sub-markets
+    non_yesno_count = 0
+    for m in markets:
+        outcomes = [str(o).lower() for o in (m.get("outcomes") or [])]
+        if not (set(outcomes) <= {"yes", "no"}):
+            non_yesno_count += 1
+
+    if non_yesno_count > 3:
+        return "multi_outcome"
+
+    # Multiple markets with same end_date
+    return "multi_outcome"
 
 
 def fetch_polymarket_events(
@@ -328,6 +367,13 @@ def fetch_polymarket_events(
                 else None
             )
 
+            # Count active vs resolved sub-markets
+            active_count = sum(1 for m in parsed_markets if m.get("active"))
+            resolved_count = sum(1 for m in parsed_markets if m.get("resolved"))
+
+            # Classify event type
+            event_type = _classify_event_type(parsed_markets)
+
             relevant.append({
                 "title": str(ev.get("title", "")).strip(),
                 "slug": ev.get("slug", ""),
@@ -338,6 +384,9 @@ def fetch_polymarket_events(
                 "url": f"https://polymarket.com/event/{ev.get('slug', '')}",
                 "top_market": top_market,
                 "markets": parsed_markets,
+                "active_count": active_count,
+                "resolved_count": resolved_count,
+                "event_type": event_type,
             })
 
         # Sort by volume, return top N
