@@ -758,22 +758,45 @@ def extract_features_for_universe(
 
         # Credit spread velocity: 5d and 21d change in high-yield OAS.
         # Widening OAS = rising credit stress = risk-off signal.
-        hy_rows = fetch_fred_series(
-            "BAMLH0A0HYM2", lookback_days=90, as_of_date=as_of_date,
-        )
-        hy_values = [
-            r for r in hy_rows if r["date"] <= as_of_date
-        ]
-        if len(hy_values) >= 6:
-            feat_df["fred_hy_oas_change_5d"] = (
-                hy_values[-1]["value"] - hy_values[-6]["value"]
-            )
+        # Use bulk-prefetched data when available (training path).
+        from trader_koo.ml.external_data import _fred_bulk_store
+        with __import__("threading").Lock():
+            hy_df = _fred_bulk_store.get("BAMLH0A0HYM2")
+
+        if hy_df is not None and not hy_df.empty:
+            # Fast path: lookup from bulk store
+            mask = hy_df["date"] <= as_of_date
+            hy_subset = hy_df.loc[mask]
+            if len(hy_subset) >= 6:
+                feat_df["fred_hy_oas_change_5d"] = (
+                    float(hy_subset["value"].iloc[-1]) - float(hy_subset["value"].iloc[-6])
+                )
+            else:
+                feat_df["fred_hy_oas_change_5d"] = np.nan
+            if len(hy_subset) >= 22:
+                feat_df["fred_hy_oas_change_21d"] = (
+                    float(hy_subset["value"].iloc[-1]) - float(hy_subset["value"].iloc[-22])
+                )
+            else:
+                feat_df["fred_hy_oas_change_21d"] = np.nan
         else:
-            feat_df["fred_hy_oas_change_5d"] = np.nan
-        if len(hy_values) >= 22:
-            feat_df["fred_hy_oas_change_21d"] = (
-                hy_values[-1]["value"] - hy_values[-22]["value"]
+            # Slow path: per-date API call (fallback for live scoring)
+            hy_rows = fetch_fred_series(
+                "BAMLH0A0HYM2", lookback_days=90, as_of_date=as_of_date,
             )
+            hy_values = [r for r in hy_rows if r["date"] <= as_of_date]
+            if len(hy_values) >= 6:
+                feat_df["fred_hy_oas_change_5d"] = (
+                    hy_values[-1]["value"] - hy_values[-6]["value"]
+                )
+            else:
+                feat_df["fred_hy_oas_change_5d"] = np.nan
+            if len(hy_values) >= 22:
+                feat_df["fred_hy_oas_change_21d"] = (
+                    hy_values[-1]["value"] - hy_values[-22]["value"]
+                )
+            else:
+                feat_df["fred_hy_oas_change_21d"] = np.nan
         else:
             feat_df["fred_hy_oas_change_21d"] = np.nan
     except (KeyError, ValueError, urllib.error.URLError) as exc:
