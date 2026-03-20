@@ -366,6 +366,26 @@ def _run_spike_alerts() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Macro monitor (yields, commodities, VIX, dollar)
+# ---------------------------------------------------------------------------
+
+def _run_macro_alert() -> None:
+    """Periodic job: check macro instruments and send risk regime alerts."""
+    from trader_koo.notifications.macro_monitor import send_macro_alert
+
+    _append_run_log("MACRO_MONITOR", "Macro alert check started")
+    LOG.info("Scheduler: starting macro alert check")
+    try:
+        sent = send_macro_alert(DB_PATH)
+        status = "sent" if sent else "no alert needed"
+        _append_run_log("MACRO_MONITOR", f"Macro alert check: {status}")
+        LOG.info("Scheduler: macro alert check: %s", status)
+    except Exception as exc:
+        _append_run_log("MACRO_MONITOR", f"Macro alert check failed: {exc}")
+        LOG.error("Scheduler: macro alert check failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
 
@@ -438,5 +458,25 @@ def create_scheduler() -> BackgroundScheduler:
         LOG.info("Spike alert job registered: every 15min")
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — spike alert job not registered")
+
+    # Macro monitor — every 15 min during US market hours (Mon-Fri)
+    if telegram_configured:
+        scheduler.add_job(
+            _run_macro_alert,
+            CronTrigger(
+                minute="*/15",
+                hour="14-21",
+                day_of_week="mon-fri",
+                timezone="UTC",
+            ),
+            id="macro_alert",
+            replace_existing=True,
+        )
+        LOG.info(
+            "Macro alert job registered: every 15min during US market hours "
+            "(14:00-21:00 UTC, Mon-Fri)"
+        )
+    else:
+        LOG.info("TELEGRAM_BOT_TOKEN not set — macro alert job not registered")
 
     return scheduler

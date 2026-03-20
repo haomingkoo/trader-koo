@@ -19,6 +19,7 @@ import type {
   VixMetricsPayload,
   FearGreedPayload,
   AlertsPayload,
+  MacroLivePayload,
 } from "./types";
 
 export function useReport() {
@@ -223,6 +224,15 @@ export function useAlerts(limit: number = 50) {
   return useQuery({
     queryKey: ["alerts", limit],
     queryFn: () => apiFetch<AlertsPayload>(`/api/alerts?limit=${limit}`),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+}
+
+export function useMacroLive() {
+  return useQuery({
+    queryKey: ["macro-live"],
+    queryFn: () => apiFetch<MacroLivePayload>("/api/macro-live"),
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
