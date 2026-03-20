@@ -73,12 +73,12 @@ FEATURE_COLUMNS = [
     "news_sentiment_score",
     # Earnings proximity (vol expansion + positioning into catalyst)
     "days_to_next_earnings", "is_earnings_week",
-    # Polymarket prediction market probabilities (from external_data.py)
-    # NOTE: Live-only features — Polymarket API returns current prices, not historical.
-    # These will be NaN during historical training. Only useful for live scoring.
-    "polymarket_fed_cut_prob",
-    "polymarket_recession_prob",
-    "polymarket_macro_sentiment",
+    # NOTE: Polymarket features (polymarket_fed_cut_prob, polymarket_recession_prob,
+    # polymarket_macro_sentiment) are intentionally EXCLUDED from training features.
+    # They are always NaN during historical training (API returns current prices only),
+    # so the model never learns from them and they cause distribution shift at inference.
+    # They are still computed and available via extract_features_for_universe() for
+    # display purposes but are not part of the model's feature vector.
 ]
 
 
