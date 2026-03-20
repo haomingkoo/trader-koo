@@ -599,22 +599,4 @@ if DIST_V2.exists() and DIST_V2.is_dir():
             app.get(f"/{_route}/{{rest:path}}", include_in_schema=False)(_make_handler())
 
 
-# /v2 redirect — v2 was promoted to / so redirect page routes only.
-    # Don't redirect /v2/assets/* — old hashed filenames won't exist in new build.
-    from starlette.responses import RedirectResponse, JSONResponse
-
-    @app.get("/v2", include_in_schema=False)
-    @app.get("/v2/", include_in_schema=False)
-    def v2_redirect_root() -> Any:
-        return RedirectResponse(url="/", status_code=301)
-
-    @app.get("/v2/{rest_of_path:path}", include_in_schema=False)
-    def v2_redirect_path(rest_of_path: str = "") -> Any:
-        # Old asset requests (hashed JS/CSS) can't be redirected — they don't exist
-        if rest_of_path.startswith("assets/"):
-            return JSONResponse(
-                {"error": "v2 assets retired — clear browser cache and reload"},
-                status_code=410,  # Gone
-            )
-        target = f"/{rest_of_path}" if rest_of_path else "/"
-        return RedirectResponse(url=target, status_code=301)
+    # v2 routes removed — v2 is now the root. No redirects needed.
