@@ -33,6 +33,11 @@
 - [x] SHAP analysis and drift detection
 - [x] Walk-forward backtest vs SPY with slippage modeling
 - [x] HMM regime detection (3-state Gaussian)
+- [x] Early stopping with purged validation set (50 rounds, lr=0.01, leaves=15, depth=3)
+- [x] 3 target modes: return_sign, barrier, cross-sectional rank
+- [x] Cross-sectional rank normalization for all per-ticker features
+- [x] Volume-confirmed momentum + ATR expansion + gap features
+- [x] High/low barrier touches (not just close)
 
 ## Phase 4: Frontend (React 19 + Vite + Tailwind)
 
@@ -76,6 +81,9 @@
 - [ ] Retrain model with FRED features
 - [ ] Earnings calendar redesign (Unusual Whales-style 5-day grid with Premarket/TBD/Afterhours)
 - [ ] IBKR API integration (account upgraded to Pro, API tested with `ib_async`, not yet coded)
+- [ ] Local retraining with rank features + early stopping — target AUC 0.53+
+- [ ] Optuna hyperparameter optimization within walk-forward
+- [ ] Increase max_positions from 5 to 20-30 for small-edge exploitation
 
 ## Phase 8: Future
 

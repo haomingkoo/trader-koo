@@ -78,7 +78,7 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - Market Sentiment widget now supports optional Alpha Vantage news sentiment, but it still does not use Twitter/Reddit social scraping
 - FRED features need bulk-fetch architecture (per-date API calls too slow for ML training)
 - Polymarket page shows aggregated YES/NO only — needs timeline sub-markets with individual date milestones
-- ML model AUC 0.5235 — useful as filter, not signal generator
+- ML model AUC 0.5235 pre-fix. Bug fixes applied: early stopping, barrier alignment, intraday barrier touches, cross-sectional ranking. Retraining pending.
 - Frontend has zero test coverage
 - `test_v2_shell_routes_disable_caching` references deleted `/v2` routes (broken test)
 
