@@ -75,7 +75,10 @@ def generate_triple_barrier_labels(
 
     df = pd.read_sql_query(
         f"""
-        SELECT ticker, date, CAST(close AS REAL) AS close
+        SELECT ticker, date,
+               CAST(high AS REAL) AS high,
+               CAST(low AS REAL) AS low,
+               CAST(close AS REAL) AS close
         FROM price_daily
         WHERE date >= ? AND close IS NOT NULL AND close > 0
           {ticker_clause}
@@ -101,6 +104,8 @@ def generate_triple_barrier_labels(
             continue
 
         close = grp["close"]
+        high = grp["high"]
+        low = grp["low"]
         dates = grp["date"]
         daily_vol = _compute_daily_vol(close)
 
@@ -126,16 +131,21 @@ def generate_triple_barrier_labels(
             days_held = 0
 
             for future_idx in range(entry_idx + 1, min(entry_idx + 1 + max_holding_days, len(grp))):
+                future_high = float(high.iloc[future_idx])
+                future_low = float(low.iloc[future_idx])
                 future_close = float(close.iloc[future_idx])
                 days_held = future_idx - entry_idx
 
-                if future_close >= upper:
+                # Check HIGH for profit target (intraday touch counts —
+                # limit orders fill at barrier price in real trading)
+                if future_high >= upper:
                     label = 1
                     exit_date = dates.iloc[future_idx]
                     exit_reason = "profit_target"
                     exit_price = future_close
                     break
-                elif future_close <= lower:
+                # Check LOW for stop loss (intraday touch counts)
+                elif future_low <= lower:
                     label = -1
                     exit_date = dates.iloc[future_idx]
                     exit_reason = "stop_loss"
