@@ -45,17 +45,20 @@ export default function ChartPage() {
     document.title = "Chart \u2014 Trader Koo";
   }, []);
 
-  // Pick up ticker from URL query param ?t=AAPL
+  // Pick up ticker from URL query param ?t=AAPL (initial mount only)
+  const [urlConsumed, setUrlConsumed] = useState(false);
   useEffect(() => {
+    if (urlConsumed) return;
     const urlTicker = searchParams.get("t");
     if (urlTicker) {
       const clean = urlTicker.trim().toUpperCase();
-      if (clean && clean !== ticker) {
+      if (clean) {
         setTicker(clean);
         setInputValue(clean);
       }
     }
-  }, [searchParams, setTicker, ticker]);
+    setUrlConsumed(true);
+  }, [searchParams, setTicker, urlConsumed]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -91,6 +94,9 @@ export default function ChartPage() {
   const currentPrice = livePrice?.price ?? fundamentals.price;
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
   const commentary = data?.chart_commentary ?? null;
+  const freshness = (data as Record<string, unknown> | undefined)?.data_freshness as
+    | { latest_price_date?: string; age_hours?: number; is_stale?: boolean }
+    | undefined;
   const isWeekly = timeframe === "weekly";
   const livePayload = useMemo(
     () => applyLivePriceToPayload(data, livePrice),
@@ -161,6 +167,15 @@ export default function ChartPage() {
           refetch();
         }}
       />
+
+      {/* Data freshness indicator */}
+      {freshness?.latest_price_date && (
+        <div className={`text-[10px] mb-1 ${freshness.is_stale ? "text-[var(--red)]" : "text-[var(--muted)]"}`}>
+          Price data as of <strong>{freshness.latest_price_date}</strong>
+          {freshness.age_hours != null && ` (${freshness.age_hours < 24 ? `${freshness.age_hours.toFixed(0)}h ago` : `${(freshness.age_hours / 24).toFixed(1)}d ago`})`}
+          {freshness.is_stale && " — STALE"}
+        </div>
+      )}
 
       <ChartOverlayControls
         overlayOptions={CHART_OVERLAY_OPTIONS}
