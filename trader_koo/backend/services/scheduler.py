@@ -418,24 +418,24 @@ def create_scheduler() -> BackgroundScheduler:
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — morning summary job not registered")
 
-    # Polymarket snapshot — every hour, 24/7
+    # Polymarket snapshot + spike detection — every 15 min, 24/7
     scheduler.add_job(
         _run_polymarket_snapshot,
-        IntervalTrigger(hours=1),
+        IntervalTrigger(minutes=15),
         id="polymarket_snapshot",
         replace_existing=True,
     )
-    LOG.info("Polymarket snapshot job registered: every 1h (24/7)")
+    LOG.info("Polymarket snapshot job registered: every 15min (24/7)")
 
-    # Spike detection + alerts — every 2 hours (only sends if Telegram configured)
+    # Spike alerts — every 15 min (only sends if Telegram configured)
     if telegram_configured:
         scheduler.add_job(
             _run_spike_alerts,
-            IntervalTrigger(hours=2),
+            IntervalTrigger(minutes=15),
             id="spike_alerts",
             replace_existing=True,
         )
-        LOG.info("Spike alert job registered: every 2h")
+        LOG.info("Spike alert job registered: every 15min")
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — spike alert job not registered")
 
