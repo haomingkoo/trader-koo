@@ -14,6 +14,16 @@ export default defineConfig({
   build: {
     outDir: "../../dist-v2",
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          plotly: ["plotly.js"],
+          react: ["react", "react-dom"],
+          router: ["react-router-dom"],
+          query: ["@tanstack/react-query"],
+        },
+      },
+    },
   },
 });
