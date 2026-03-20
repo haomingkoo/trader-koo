@@ -562,6 +562,43 @@ export interface DashboardPayload {
   live_candle?: LiveCandle;
 }
 
+/** Fast-path payload from /api/dashboard/{ticker}/quick (no LLM/HMM). */
+export interface DashboardQuickPayload {
+  ticker: string;
+  asof: string;
+  chart: OhlcvRow[];
+  levels: LevelRow[];
+  gaps: GapRow[];
+  trendlines: TrendlineRow[];
+  patterns: PatternRow[];
+  hybrid_patterns: HybridPatternRow[];
+  pattern_overlays: PatternOverlayRow[];
+  candlestick_patterns: CandlestickPatternRow[];
+  yolo_audit: YoloAuditRow[];
+  yolo_patterns: YoloPatternRow[];
+  fundamentals: Fundamentals;
+  options_summary: OptionsSummary;
+  earnings_markers: EarningsMarker[];
+  cv_proxy_patterns?: PatternOverlayRow[];
+  hybrid_cv_compare?: Record<string, unknown>[];
+  data_sources?: Record<string, unknown>;
+  data_freshness?: {
+    latest_price_date: string | null;
+    age_hours: number | null;
+    is_stale: boolean;
+  };
+  live_candle?: LiveCandle;
+  meta?: Record<string, unknown>;
+}
+
+/** Slow-path payload from /api/dashboard/{ticker}/commentary (LLM + HMM). */
+export interface DashboardCommentaryPayload {
+  ticker: string;
+  chart_commentary: ChartCommentary;
+  hmm_regime: HmmRegime | null;
+  report_generated_ts: string | null;
+}
+
 /* ── Opportunities ── */
 export interface OpportunityRow {
   ticker: string;

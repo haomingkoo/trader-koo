@@ -859,7 +859,278 @@ def _compute_data_freshness(
 
 
 # ---------------------------------------------------------------------------
-# Main dashboard builder
+# Shared model preparation (used by both quick and full builders)
+# ---------------------------------------------------------------------------
+
+def _prepare_model_and_features(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+) -> tuple[
+    pd.DataFrame,   # prices (full)
+    pd.DataFrame,   # model (features + pivots)
+    pd.DataFrame,   # chart_rows (view window, date-formatted)
+    pd.DataFrame,   # levels
+    pd.DataFrame,   # gaps
+    pd.DataFrame,   # trendlines
+    pd.DataFrame,   # patterns
+    pd.DataFrame,   # candle_patterns
+    pd.DataFrame,   # hybrid_patterns
+    pd.DataFrame,   # cv_proxy_patterns
+    pd.DataFrame,   # hybrid_cv_compare
+    pd.DataFrame,   # pattern_overlays
+    dict[str, Any],  # fund
+]:
+    """Compute price model, features, and technical structure.
+
+    Returns all intermediate artifacts needed by both the quick and
+    full dashboard builders so the heavy DataFrame work runs once.
+    """
+    fund = get_latest_fundamentals(conn, ticker)
+    prices = get_price_df(conn, ticker)
+    if prices.empty:
+        raise HTTPException(
+            status_code=404, detail=f"No price data for {ticker}"
+        )
+
+    max_date = prices["date"].max()
+    if months <= 0:
+        calc_cutoff = prices["date"].min()
+        view_cutoff = prices["date"].min()
+    else:
+        calc_cutoff = max_date - pd.DateOffset(months=max(6, months * 2))
+        view_cutoff = max_date - pd.DateOffset(months=max(1, months))
+
+    model_prices = prices[prices["date"] >= calc_cutoff].reset_index(
+        drop=True
+    )
+    model = add_basic_features(model_prices, FEATURE_CFG)
+    model = compute_pivots(model, left=3, right=3)
+
+    last_close = float(model["close"].iloc[-1])
+    levels_raw = build_levels_from_pivots(model, LEVEL_CFG)
+    levels = select_target_levels(levels_raw, last_close, LEVEL_CFG)
+    levels = add_fallback_levels(model, levels, last_close, LEVEL_CFG)
+
+    gaps = select_gaps_for_display(
+        detect_gaps(model),
+        last_close=last_close,
+        asof=max_date,
+        cfg=GAP_CFG,
+    )
+    trendlines = detect_trendlines(
+        model, last_close=last_close, cfg=TREND_CFG
+    )
+    patterns = detect_patterns(model, cfg=PATTERN_CFG)
+    candle_patterns = detect_candlestick_patterns(model, cfg=CANDLE_CFG)
+    hybrid_patterns = score_hybrid_patterns(
+        model, patterns, candle_patterns, HYBRID_PATTERN_CFG
+    )
+    cv_proxy_patterns = detect_cv_proxy_patterns(model, cfg=CV_PROXY_CFG)
+    hybrid_cv_compare = compare_hybrid_vs_cv(
+        hybrid_patterns, cv_proxy_patterns, HYBRID_CV_CMP_CFG
+    )
+    pattern_overlays = build_pattern_overlays(
+        patterns=patterns,
+        hybrid_patterns=hybrid_patterns,
+        cv_proxy_patterns=cv_proxy_patterns,
+        max_rows=10,
+    )
+
+    chart_rows = model[model["date"] >= view_cutoff].copy()
+    for col in ["date"]:
+        chart_rows[col] = (
+            pd.to_datetime(chart_rows[col], errors="coerce")
+            .dt.strftime("%Y-%m-%d")
+        )
+
+    chart_cols = [
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "ma20",
+        "ma50",
+        "ma100",
+        "ma200",
+        "ema20",
+        "ema50",
+        "ema100",
+        "ema200",
+        "atr",
+        "atr_pct",
+    ]
+    chart_rows = chart_rows[
+        [c for c in chart_cols if c in chart_rows.columns]
+    ].copy()
+
+    return (
+        prices,
+        model,
+        chart_rows,
+        levels,
+        gaps,
+        trendlines,
+        patterns,
+        candle_patterns,
+        hybrid_patterns,
+        cv_proxy_patterns,
+        hybrid_cv_compare,
+        pattern_overlays,
+        fund,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quick dashboard builder (fast path — no LLM / HMM)
+# ---------------------------------------------------------------------------
+
+def build_dashboard_quick_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+) -> dict[str, Any]:
+    """Build the fast-path dashboard payload (DB data + technical analysis).
+
+    Skips chart commentary (LLM/debate) and HMM regime detection so the
+    frontend can render the chart immediately.
+    """
+    ticker = ticker.upper().strip()
+    (
+        _prices,
+        _model,
+        chart_rows,
+        levels,
+        gaps,
+        trendlines,
+        patterns,
+        candle_patterns,
+        hybrid_patterns,
+        cv_proxy_patterns,
+        hybrid_cv_compare,
+        pattern_overlays,
+        fund,
+    ) = _prepare_model_and_features(conn, ticker, months)
+
+    market_date = dt.datetime.now(_MARKET_TZ).date()
+    earnings_markers = get_ticker_earnings_markers(
+        conn,
+        ticker=ticker,
+        market_date=market_date,
+        forward_days=120,
+        max_markers=3,
+    )
+    yolo_pats = get_yolo_patterns(conn, ticker)
+    yolo_aud = get_yolo_audit(conn, ticker, limit=14)
+    data_freshness = _compute_data_freshness(conn, ticker)
+
+    return {
+        "ticker": ticker,
+        "asof": chart_rows["date"].iloc[-1],
+        "fundamentals": fund,
+        "options_summary": get_latest_options_summary(conn, ticker),
+        "chart": _serialize_df(chart_rows),
+        "levels": _serialize_df(levels),
+        "gaps": _serialize_df(gaps),
+        "trendlines": _serialize_df(trendlines),
+        "patterns": _serialize_df(patterns),
+        "candlestick_patterns": _serialize_df(candle_patterns),
+        "hybrid_patterns": _serialize_df(hybrid_patterns),
+        "cv_proxy_patterns": _serialize_df(cv_proxy_patterns),
+        "hybrid_cv_compare": _serialize_df(hybrid_cv_compare),
+        "pattern_overlays": _serialize_df(pattern_overlays),
+        "yolo_patterns": yolo_pats,
+        "yolo_audit": yolo_aud,
+        "earnings_markers": earnings_markers,
+        "data_sources": get_data_sources(conn, ticker),
+        "data_freshness": data_freshness,
+        "meta": {
+            "schema": ["date", "open", "high", "low", "close", "volume"],
+            "config": {
+                "level": LEVEL_CFG.__dict__,
+                "gap": GAP_CFG.__dict__,
+                "trendline": TREND_CFG.__dict__,
+                "pattern": PATTERN_CFG.__dict__,
+                "candlestick_pattern": CANDLE_CFG.__dict__,
+                "hybrid_pattern": HYBRID_PATTERN_CFG.__dict__,
+                "cv_proxy_pattern": CV_PROXY_CFG.__dict__,
+                "hybrid_cv_compare": HYBRID_CV_CMP_CFG.__dict__,
+            },
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Commentary-only builder (slow path — LLM + debate + HMM)
+# ---------------------------------------------------------------------------
+
+def build_commentary_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+    *,
+    report_dir: Path,
+    report_generated_ts: str | None = None,
+) -> dict[str, Any]:
+    """Build the slow-path commentary payload (LLM narrative + HMM regime).
+
+    Designed to be called after the quick endpoint has already returned
+    chart data to the frontend.
+    """
+    ticker = ticker.upper().strip()
+    (
+        prices,
+        model,
+        _chart_rows,
+        levels,
+        _gaps,
+        _trendlines,
+        _patterns,
+        candle_patterns,
+        _hybrid_patterns,
+        _cv_proxy_patterns,
+        _hybrid_cv_compare,
+        _pattern_overlays,
+        fund,
+    ) = _prepare_model_and_features(conn, ticker, months)
+
+    yolo_pats = get_yolo_patterns(conn, ticker)
+    yolo_aud = get_yolo_audit(conn, ticker, limit=14)
+    setup_override = latest_report_setup_for_ticker(
+        report_dir,
+        ticker,
+        generated_ts=report_generated_ts,
+    )
+    chart_commentary = _build_chart_commentary_payload(
+        ticker=ticker,
+        fund=fund,
+        model=model,
+        levels=levels,
+        candle_patterns=candle_patterns,
+        yolo_patterns=yolo_pats,
+        yolo_audit=yolo_aud,
+        setup_override=setup_override,
+    )
+
+    # HMM regime detection — fail gracefully, never fake data
+    hmm_regime = None
+    try:
+        hmm_regime = hmm_predict_regimes(prices, ticker=ticker)
+    except Exception as exc:
+        LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
+
+    return {
+        "ticker": ticker,
+        "chart_commentary": chart_commentary,
+        "hmm_regime": hmm_regime,
+        "report_generated_ts": report_generated_ts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main dashboard builder (backward-compatible full payload)
 # ---------------------------------------------------------------------------
 
 def build_dashboard_payload(
@@ -886,70 +1157,22 @@ def build_dashboard_payload(
         Optional pinned report timestamp for snapshot override.
     """
     ticker = ticker.upper().strip()
-    fund = get_latest_fundamentals(conn, ticker)
-    prices = get_price_df(conn, ticker)
-    if prices.empty:
-        raise HTTPException(status_code=404, detail=f"No price data for {ticker}")
+    (
+        prices,
+        model,
+        chart_rows,
+        levels,
+        gaps,
+        trendlines,
+        patterns,
+        candle_patterns,
+        hybrid_patterns,
+        cv_proxy_patterns,
+        hybrid_cv_compare,
+        pattern_overlays,
+        fund,
+    ) = _prepare_model_and_features(conn, ticker, months)
 
-    max_date = prices["date"].max()
-    if months <= 0:
-        calc_cutoff = prices["date"].min()
-        view_cutoff = prices["date"].min()
-    else:
-        calc_cutoff = max_date - pd.DateOffset(months=max(6, months * 2))
-        view_cutoff = max_date - pd.DateOffset(months=max(1, months))
-
-    model_prices = prices[prices["date"] >= calc_cutoff].reset_index(drop=True)
-    model = add_basic_features(model_prices, FEATURE_CFG)
-    model = compute_pivots(model, left=3, right=3)
-
-    last_close = float(model["close"].iloc[-1])
-    levels_raw = build_levels_from_pivots(model, LEVEL_CFG)
-    levels = select_target_levels(levels_raw, last_close, LEVEL_CFG)
-    levels = add_fallback_levels(model, levels, last_close, LEVEL_CFG)
-
-    gaps = select_gaps_for_display(
-        detect_gaps(model),
-        last_close=last_close,
-        asof=max_date,
-        cfg=GAP_CFG,
-    )
-    trendlines = detect_trendlines(model, last_close=last_close, cfg=TREND_CFG)
-    patterns = detect_patterns(model, cfg=PATTERN_CFG)
-    candle_patterns = detect_candlestick_patterns(model, cfg=CANDLE_CFG)
-    hybrid_patterns = score_hybrid_patterns(model, patterns, candle_patterns, HYBRID_PATTERN_CFG)
-    cv_proxy_patterns = detect_cv_proxy_patterns(model, cfg=CV_PROXY_CFG)
-    hybrid_cv_compare = compare_hybrid_vs_cv(hybrid_patterns, cv_proxy_patterns, HYBRID_CV_CMP_CFG)
-    pattern_overlays = build_pattern_overlays(
-        patterns=patterns,
-        hybrid_patterns=hybrid_patterns,
-        cv_proxy_patterns=cv_proxy_patterns,
-        max_rows=10,
-    )
-
-    chart_rows = model[model["date"] >= view_cutoff].copy()
-    for col in ["date"]:
-        chart_rows[col] = pd.to_datetime(chart_rows[col], errors="coerce").dt.strftime("%Y-%m-%d")
-
-    chart_cols = [
-        "date",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "ma20",
-        "ma50",
-        "ma100",
-        "ma200",
-        "ema20",
-        "ema50",
-        "ema100",
-        "ema200",
-        "atr",
-        "atr_pct",
-    ]
-    chart_rows = chart_rows[[c for c in chart_cols if c in chart_rows.columns]].copy()
     market_date = dt.datetime.now(_MARKET_TZ).date()
     earnings_markers = get_ticker_earnings_markers(
         conn,

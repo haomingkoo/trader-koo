@@ -112,15 +112,43 @@ function DebateRolesInline({
   );
 }
 
+function CommentaryLoadingSkeleton() {
+  return (
+    <GlassCard label="Chart Commentary">
+      <div className="animate-pulse space-y-3">
+        <div className="flex flex-wrap gap-1.5">
+          <div className="h-5 w-14 rounded bg-[var(--line)]" />
+          <div className="h-5 w-16 rounded bg-[var(--line)]" />
+          <div className="h-5 w-20 rounded bg-[var(--line)]" />
+          <div className="h-5 w-28 rounded bg-[var(--line)]" />
+        </div>
+        <div className="space-y-2">
+          <div className="h-3 w-full rounded bg-[var(--line)]" />
+          <div className="h-3 w-5/6 rounded bg-[var(--line)]" />
+          <div className="h-3 w-4/6 rounded bg-[var(--line)]" />
+          <div className="h-3 w-3/4 rounded bg-[var(--line)]" />
+        </div>
+        <p className="text-[10px] text-[var(--muted)]">Loading analysis...</p>
+      </div>
+    </GlassCard>
+  );
+}
+
 interface ChartCommentarySidebarProps {
   commentary: ChartCommentary | null;
   hmmRegime: HmmRegime | null;
+  isLoading?: boolean;
 }
 
 export default function ChartCommentarySidebar({
   commentary,
   hmmRegime,
+  isLoading = false,
 }: ChartCommentarySidebarProps) {
+  if (isLoading) {
+    return <CommentaryLoadingSkeleton />;
+  }
+
   if (!commentary) {
     return (
       <GlassCard label="Chart Commentary">

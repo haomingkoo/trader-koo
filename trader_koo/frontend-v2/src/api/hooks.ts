@@ -3,6 +3,8 @@ import { apiFetch } from "./client";
 import type {
   DailyReportPayload,
   DashboardPayload,
+  DashboardQuickPayload,
+  DashboardCommentaryPayload,
   PaperTradeSummary,
   PaperTradeList,
   OpportunitiesPayload,
@@ -34,6 +36,32 @@ export function useChart(ticker: string, enabled: boolean = true) {
   return useQuery({
     queryKey: ["chart", ticker],
     queryFn: () => apiFetch<DashboardPayload>(`/api/dashboard/${ticker}?months=0`),
+    staleTime: 2 * 60 * 1000,
+    enabled: enabled && ticker.length > 0,
+  });
+}
+
+/** Fast path: price data, levels, patterns, fundamentals (no LLM/HMM). */
+export function useChartQuick(ticker: string, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["chart-quick", ticker],
+    queryFn: () =>
+      apiFetch<DashboardQuickPayload>(
+        `/api/dashboard/${ticker}/quick?months=0`,
+      ),
+    staleTime: 2 * 60 * 1000,
+    enabled: enabled && ticker.length > 0,
+  });
+}
+
+/** Slow path: chart commentary, debate engine, HMM regime. */
+export function useChartCommentary(ticker: string, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["chart-commentary", ticker],
+    queryFn: () =>
+      apiFetch<DashboardCommentaryPayload>(
+        `/api/dashboard/${ticker}/commentary?months=0`,
+      ),
     staleTime: 2 * 60 * 1000,
     enabled: enabled && ticker.length > 0,
   });

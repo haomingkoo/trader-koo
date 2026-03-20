@@ -8,7 +8,11 @@ from typing import Any
 
 from fastapi import APIRouter, Path as FastPath, Query
 
-from trader_koo.backend.services.chart_builder import build_dashboard_payload
+from trader_koo.backend.services.chart_builder import (
+    build_commentary_payload,
+    build_dashboard_payload,
+    build_dashboard_quick_payload,
+)
 from trader_koo.backend.services.database import get_conn, get_yolo_patterns
 
 LOG = logging.getLogger("trader_koo.routers.dashboard")
@@ -16,6 +20,20 @@ LOG = logging.getLogger("trader_koo.routers.dashboard")
 router = APIRouter()
 
 REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
+
+
+def _attach_live_candle(payload: dict[str, Any], ticker: str) -> None:
+    """Attach live forming candle to *payload* in-place (best-effort)."""
+    try:
+        from trader_koo.streaming.service import get_forming_candle
+
+        live_candle = get_forming_candle(ticker.upper())
+        if live_candle is not None:
+            payload["live_candle"] = live_candle
+    except Exception:
+        LOG.debug(
+            "Could not attach live candle for %s", ticker, exc_info=True
+        )
 
 
 @router.get("/api/tickers")
@@ -40,12 +58,56 @@ def tickers(
         conn.close()
 
 
+@router.get("/api/dashboard/{ticker}/quick")
+def dashboard_quick(
+    ticker: str = FastPath(pattern=r"^[A-Z0-9._\^-]{1,20}$"),
+    months: int = Query(default=3, ge=0, le=240),
+) -> dict[str, Any]:
+    """Fast-path dashboard: price data, levels, patterns, fundamentals.
+
+    Skips LLM commentary and HMM regime so the chart renders immediately.
+    """
+    conn = get_conn()
+    try:
+        payload = build_dashboard_quick_payload(conn, ticker=ticker, months=months)
+    finally:
+        conn.close()
+
+    _attach_live_candle(payload, ticker)
+    return payload
+
+
+@router.get("/api/dashboard/{ticker}/commentary")
+def dashboard_commentary(
+    ticker: str = FastPath(pattern=r"^[A-Z0-9._\^-]{1,20}$"),
+    months: int = Query(default=3, ge=0, le=240),
+    report_generated_ts: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Slow-path dashboard: chart commentary, debate engine, HMM regime.
+
+    Called in the background after the quick endpoint has returned.
+    """
+    conn = get_conn()
+    try:
+        payload = build_commentary_payload(
+            conn,
+            ticker=ticker,
+            months=months,
+            report_dir=REPORT_DIR,
+            report_generated_ts=report_generated_ts,
+        )
+    finally:
+        conn.close()
+    return payload
+
+
 @router.get("/api/dashboard/{ticker}")
 def dashboard(
     ticker: str = FastPath(pattern=r"^[A-Z0-9._\^-]{1,20}$"),
     months: int = Query(default=3, ge=0, le=240),
     report_generated_ts: str | None = Query(default=None),
 ) -> dict[str, Any]:
+    """Full dashboard payload (backward-compatible)."""
     conn = get_conn()
     try:
         payload = build_dashboard_payload(
@@ -58,16 +120,7 @@ def dashboard(
     finally:
         conn.close()
 
-    # Attach live forming candle when streaming data is available
-    try:
-        from trader_koo.streaming.service import get_forming_candle
-
-        live_candle = get_forming_candle(ticker.upper())
-        if live_candle is not None:
-            payload["live_candle"] = live_candle
-    except Exception:
-        LOG.debug("Could not attach live candle for %s", ticker, exc_info=True)
-
+    _attach_live_candle(payload, ticker)
     return payload
 
 
