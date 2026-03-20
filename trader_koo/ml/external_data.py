@@ -27,10 +27,16 @@ try:
 except ImportError:
     pass
 
+import pandas as pd
+
 _cache_lock = threading.Lock()
 _fred_cache: dict[str, Any] = {}
 _polymarket_cache: dict[str, Any] = {}
 _cache_ttl_sec = 3600  # 1 hour
+
+# In-memory store for bulk-prefetched FRED data.
+# Maps series_id -> DataFrame with columns [date, value], sorted by date.
+_fred_bulk_store: dict[str, pd.DataFrame] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +57,112 @@ _FRED_SERIES = {
 
 def _fred_api_key() -> str:
     return str(os.getenv("FRED_API_KEY", "")).strip()
+
+
+def prefetch_fred_series_bulk(
+    series_ids: list[str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, pd.DataFrame]:
+    """Fetch full history for multiple FRED series in bulk (one API call each).
+
+    DFF, T10Y2Y, BAMLH0A0HYM2 are never revised, so we can safely pull the
+    entire date range in a single request per series instead of making
+    per-date API calls during feature extraction.
+
+    Results are cached in the module-level ``_fred_bulk_store`` so repeated
+    calls within the same process are free.
+
+    Returns
+    -------
+    dict mapping series_id -> DataFrame with columns [date, value] sorted
+    by date ascending.
+    """
+    api_key = _fred_api_key()
+    if not api_key:
+        LOG.warning("FRED_API_KEY not set; bulk prefetch skipped")
+        return {}
+
+    import requests as _requests
+
+    result: dict[str, pd.DataFrame] = {}
+
+    for series_id in series_ids:
+        # Skip if already prefetched with a range that covers the request
+        with _cache_lock:
+            existing = _fred_bulk_store.get(series_id)
+            if existing is not None and not existing.empty:
+                existing_min = str(existing["date"].iloc[0])
+                existing_max = str(existing["date"].iloc[-1])
+                if existing_min <= start_date and existing_max >= end_date:
+                    result[series_id] = existing
+                    continue
+
+        try:
+            params = {
+                "series_id": series_id,
+                "api_key": api_key,
+                "file_type": "json",
+                "observation_start": start_date,
+                "observation_end": end_date,
+            }
+            resp = _requests.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params=params,
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            rows: list[dict[str, str | float]] = []
+            for obs in data.get("observations", []):
+                val_str = str(obs.get("value", "")).strip()
+                date_str = str(obs.get("date", "")).strip()
+                if date_str and val_str and val_str != ".":
+                    try:
+                        rows.append({"date": date_str, "value": float(val_str)})
+                    except ValueError:
+                        continue
+
+            df = pd.DataFrame(rows, columns=["date", "value"])
+            df = df.sort_values("date").reset_index(drop=True)
+
+            with _cache_lock:
+                _fred_bulk_store[series_id] = df
+
+            result[series_id] = df
+            LOG.info(
+                "FRED bulk prefetch %s: %d observations (%s to %s)",
+                series_id, len(df), start_date, end_date,
+            )
+
+        except Exception as exc:
+            LOG.warning("FRED bulk prefetch failed for %s: %s", series_id, exc)
+
+    return result
+
+
+def lookup_fred_value(series_id: str, as_of_date: str) -> float | None:
+    """Look up the most recent FRED value on or before *as_of_date*.
+
+    Uses the in-memory bulk store populated by ``prefetch_fred_series_bulk``.
+    Returns ``None`` if the series has not been prefetched or no observation
+    exists on or before the requested date, allowing the caller to fall back
+    to the per-date ``fetch_fred_series`` API call.
+    """
+    with _cache_lock:
+        df = _fred_bulk_store.get(series_id)
+
+    if df is None or df.empty:
+        return None
+
+    # All dates are ISO strings — lexicographic comparison is valid
+    mask = df["date"] <= as_of_date
+    valid = df.loc[mask]
+    if valid.empty:
+        return None
+
+    return float(valid["value"].iloc[-1])
 
 
 def fetch_fred_series(
