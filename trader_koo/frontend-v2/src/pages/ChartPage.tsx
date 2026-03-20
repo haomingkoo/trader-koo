@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useChart } from "../api/hooks";
+import { useChartQuick, useChartCommentary } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
 import { useLiveEquityPrice } from "../hooks/useLiveEquityPrice";
-import type { LiveCandle } from "../api/types";
+import type { DashboardPayload, LiveCandle } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 import ChartToolbar from "../components/chart/ChartToolbar";
 import ChartFundamentals from "../components/chart/ChartFundamentals";
@@ -68,7 +68,38 @@ export default function ChartPage() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  const { data, isLoading, error, refetch } = useChart(ticker);
+  // Progressive loading: fast path first, commentary in background
+  const {
+    data: quickData,
+    isLoading: quickLoading,
+    error: quickError,
+    refetch: refetchQuick,
+  } = useChartQuick(ticker);
+
+  const {
+    data: commentaryData,
+    isLoading: commentaryLoading,
+    refetch: refetchCommentary,
+  } = useChartCommentary(ticker);
+
+  // Merge quick + commentary into a DashboardPayload-compatible shape
+  const data = useMemo((): DashboardPayload | undefined => {
+    if (!quickData) return undefined;
+    return {
+      ...quickData,
+      report_generated_ts: commentaryData?.report_generated_ts ?? null,
+      chart_commentary: commentaryData?.chart_commentary ?? ({} as DashboardPayload["chart_commentary"]),
+      hmm_regime: commentaryData?.hmm_regime ?? null,
+    };
+  }, [quickData, commentaryData]);
+
+  const isLoading = quickLoading;
+  const error = quickError;
+
+  const handleRefresh = useCallback(() => {
+    void refetchQuick();
+    void refetchCommentary();
+  }, [refetchQuick, refetchCommentary]);
 
   const handleLoad = useCallback(() => {
     const clean = inputValue.trim().toUpperCase();
@@ -93,10 +124,8 @@ export default function ChartPage() {
   };
   const currentPrice = livePrice?.price ?? fundamentals.price;
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
-  const commentary = data?.chart_commentary ?? null;
-  const freshness = (data as Record<string, unknown> | undefined)?.data_freshness as
-    | { latest_price_date?: string; age_hours?: number; is_stale?: boolean }
-    | undefined;
+  const commentary = commentaryData?.chart_commentary ?? null;
+  const freshness = quickData?.data_freshness ?? undefined;
   const isWeekly = timeframe === "weekly";
   const livePayload = useMemo(
     () => applyLivePriceToPayload(data, livePrice),
@@ -163,9 +192,7 @@ export default function ChartPage() {
         onInputKeyDown={handleKeyDown}
         onLoad={handleLoad}
         onSelectTimeframe={setTimeframe}
-        onRefresh={() => {
-          refetch();
-        }}
+        onRefresh={handleRefresh}
       />
 
       {/* Data freshness indicator */}
@@ -224,10 +251,18 @@ export default function ChartPage() {
               />
             }
             desktopCommentary={
-              <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
+              <ChartCommentarySidebar
+                commentary={commentary}
+                hmmRegime={commentaryData?.hmm_regime ?? null}
+                isLoading={commentaryLoading}
+              />
             }
             mobileCommentary={
-              <ChartCommentarySidebar commentary={commentary} hmmRegime={data?.hmm_regime ?? null} />
+              <ChartCommentarySidebar
+                commentary={commentary}
+                hmmRegime={commentaryData?.hmm_regime ?? null}
+                isLoading={commentaryLoading}
+              />
             }
           />
 
