@@ -30,10 +30,10 @@ import pandas as pd
 
 LOG = logging.getLogger(__name__)
 
-# Pruned feature set based on actual feature importance from first training runs.
-# Dropped: seasonality (zero signal), YOLO (insufficient data), binary MA flags
-# (too coarse), redundant macro features. Kept top 25 by importance.
-FEATURE_COLUMNS = [
+# Full feature set (51 features) — kept for reference / ablation comparison.
+# Pruned from the original set based on first training runs (dropped seasonality,
+# YOLO, binary MA flags, redundant macro features).
+FEATURE_COLUMNS_FULL = [
     # === Per-ticker features (what makes THIS stock different) ===
     # Momentum (multi-horizon)
     "ret_1d", "ret_5d", "ret_10d", "ret_21d", "ret_63d",
@@ -62,6 +62,9 @@ FEATURE_COLUMNS = [
     "fred_yield_curve_10y2y",
     "fred_high_yield_oas",
     "fred_fed_funds_rate",
+    # Credit spread velocity (change in HY OAS — leading risk signal)
+    "fred_hy_oas_change_5d",
+    "fred_hy_oas_change_21d",
     # Commodities + global risk (from macro_features.py)
     "macro_gold_ret_5d", "macro_gold_ret_21d",
     "macro_oil_ret_5d", "macro_oil_ret_21d",
@@ -80,6 +83,40 @@ FEATURE_COLUMNS = [
     # They are still computed and available via extract_features_for_universe() for
     # display purposes but are not part of the model's feature vector.
 ]
+
+# Slim feature set (~15 features) — top non-redundant features by panel importance.
+# Drops correlated pairs (ret_5d/rank_ret_5d, vol_5d/atr_pct_14, overlapping VIX).
+# Used as default for training; reduces overfitting risk and training time.
+FEATURE_COLUMNS_SLIM = [
+    # Per-ticker: momentum (multi-horizon, no rank duplicates)
+    "ret_1d",                   # importance: 1595
+    "ret_21d",                  # importance: 1558
+    "ret_63d",                  # importance: 1334
+    # Per-ticker: volatility (one measure, not two correlated ones)
+    "atr_pct_14",               # importance: 1884
+    "vol_21d",                  # importance: 1557
+    # Per-ticker: cross-sectional rank (one vol rank, best-performing)
+    "rank_vol_21d",             # importance: 1534
+    # Per-ticker: trend / mean-reversion
+    "dist_ma50_pct",            # trend position vs key MA
+    "mean_reversion_5d",        # short-term reversion signal
+    # Macro: broad market (strongest single macro feature)
+    "macro_sp500_ret_63d",      # importance: 2529
+    # Macro: rates
+    "macro_tnx_ret_21d",        # importance: 1510
+    # Macro: credit stress velocity (leading indicator)
+    "fred_hy_oas_change_5d",    # new: 5d change in HY OAS
+    # Sector rotation (top cluster)
+    "sector_dispersion",        # importance: 2217
+    "leading_sector_momentum",  # importance: 1402
+    "sector_rank",              # per-ticker sector positioning
+    # Earnings catalyst
+    "days_to_next_earnings",    # vol expansion into catalyst
+]
+
+# Default feature set used by the trainer and scorer.
+# Switch to FEATURE_COLUMNS_FULL for ablation experiments.
+FEATURE_COLUMNS = FEATURE_COLUMNS_SLIM
 
 
 def _safe_pct_change(series: pd.Series, periods: int) -> pd.Series:
@@ -411,11 +448,19 @@ def extract_features_for_universe(
     as_of_date: str,
     lookback_days: int = 300,
     tickers: list[str] | None = None,
+    feature_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """Extract feature matrix for all tickers as of a specific date.
 
     All computations use only data on or before *as_of_date*.
+
+    Parameters
+    ----------
+    feature_columns : list[str] | None
+        Which features to return. Defaults to FEATURE_COLUMNS (slim set).
+        Pass FEATURE_COLUMNS_FULL for the full 51-feature set.
     """
+    output_cols = feature_columns if feature_columns is not None else FEATURE_COLUMNS
     cutoff_start = pd.Timestamp(as_of_date) - pd.Timedelta(days=lookback_days)
     ticker_clause = ""
     params: list[Any] = [cutoff_start.strftime("%Y-%m-%d"), as_of_date]
@@ -442,7 +487,7 @@ def extract_features_for_universe(
         params=params,
     )
     if df.empty:
-        return pd.DataFrame(columns=["ticker"] + FEATURE_COLUMNS)
+        return pd.DataFrame(columns=["ticker"] + output_cols)
 
     df["date"] = pd.to_datetime(df["date"])
     as_of_ts = pd.Timestamp(as_of_date)
@@ -582,7 +627,7 @@ def extract_features_for_universe(
         results.append(row)
 
     if not results:
-        return pd.DataFrame(columns=["ticker"] + FEATURE_COLUMNS)
+        return pd.DataFrame(columns=["ticker"] + output_cols)
 
     feat_df = pd.DataFrame(results)
 
@@ -602,7 +647,7 @@ def extract_features_for_universe(
         macro = extract_macro_features(conn, as_of_date=as_of_date, lookback_days=lookback_days)
         for col_name in MACRO_FEATURE_COLUMNS:
             macro_col = f"macro_{col_name}"
-            if macro_col in FEATURE_COLUMNS:
+            if macro_col in FEATURE_COLUMNS_FULL:
                 feat_df[macro_col] = macro.get(col_name, np.nan)
     except Exception as exc:
         LOG.warning("Macro feature extraction failed (non-fatal): %s", exc)
@@ -626,17 +671,38 @@ def extract_features_for_universe(
                     value = r["value"]
                     break
             feat_df[col_name] = value
+
+        # Credit spread velocity: 5d and 21d change in high-yield OAS.
+        # Widening OAS = rising credit stress = risk-off signal.
+        hy_rows = fetch_fred_series(
+            "BAMLH0A0HYM2", lookback_days=90, as_of_date=as_of_date,
+        )
+        hy_values = [
+            r for r in hy_rows if r["date"] <= as_of_date
+        ]
+        if len(hy_values) >= 6:
+            feat_df["fred_hy_oas_change_5d"] = (
+                hy_values[-1]["value"] - hy_values[-6]["value"]
+            )
+        else:
+            feat_df["fred_hy_oas_change_5d"] = np.nan
+        if len(hy_values) >= 22:
+            feat_df["fred_hy_oas_change_21d"] = (
+                hy_values[-1]["value"] - hy_values[-22]["value"]
+            )
+        else:
+            feat_df["fred_hy_oas_change_21d"] = np.nan
     except Exception as exc:
         LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
 
     # Sector rotation features (cached — one DB query per date, not per ticker)
     try:
-        from trader_koo.ml.sector_rotation import compute_sector_features, TICKER_SECTOR_MAP
+        from trader_koo.ml.sector_rotation import compute_sector_features
 
         # This call caches the date-level sector data (1 batch query)
         market_sector = compute_sector_features(conn, as_of_date=as_of_date)
         for k in ["leading_sector_momentum", "lagging_sector_momentum", "sector_dispersion"]:
-            if k in FEATURE_COLUMNS:
+            if k in FEATURE_COLUMNS_FULL:
                 feat_df[k] = market_sector.get(k, np.nan)
 
         # Per-ticker lookup from cache — no additional DB queries
@@ -684,7 +750,7 @@ def extract_features_for_universe(
 
             poly_probs = get_polymarket_macro_probabilities()
             for col_name, value in poly_probs.items():
-                if col_name in FEATURE_COLUMNS:
+                if col_name in FEATURE_COLUMNS_FULL:
                     feat_df[col_name] = value
         else:
             # Historical date — Polymarket data would be leakage, fill NaN
@@ -697,9 +763,9 @@ def extract_features_for_universe(
     except Exception as exc:
         LOG.warning("Polymarket feature extraction failed (non-fatal): %s", exc)
 
-    # Ensure all expected columns exist
-    for col in FEATURE_COLUMNS:
+    # Ensure all expected columns exist (compute full set, return requested subset)
+    for col in FEATURE_COLUMNS_FULL:
         if col not in feat_df.columns:
             feat_df[col] = np.nan
 
-    return feat_df.set_index("ticker")[FEATURE_COLUMNS].copy()
+    return feat_df.set_index("ticker")[output_cols].copy()
