@@ -31,7 +31,11 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from trader_koo.ml.features import FEATURE_COLUMNS, extract_features_for_universe
+from trader_koo.ml.features import (
+    FEATURE_COLUMNS,
+    FEATURE_COLUMNS_FULL,
+    extract_features_for_universe,
+)
 from trader_koo.ml.labels import generate_triple_barrier_labels
 
 LOG = logging.getLogger(__name__)
@@ -86,6 +90,7 @@ def build_dataset(
     start_date: str,
     end_date: str,
     sample_frequency: int = 5,
+    feature_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """Build a labeled feature dataset for training.
 
@@ -100,6 +105,9 @@ def build_dataset(
         Date range (YYYY-MM-DD) for the dataset.
     sample_frequency : int
         Sample every Nth trading day (default 5 = weekly).
+    feature_columns : list[str] | None
+        Which feature set to extract. Defaults to FEATURE_COLUMNS (slim).
+        Pass FEATURE_COLUMNS_FULL for the full set.
     """
     trading_dates = _get_trading_dates(conn, start_date, end_date)
     if not trading_dates:
@@ -117,7 +125,10 @@ def build_dataset(
     all_labels: list[pd.DataFrame] = []
 
     for date in sampled_dates:
-        features = extract_features_for_universe(conn, as_of_date=date, strict=True)
+        features = extract_features_for_universe(
+            conn, as_of_date=date, strict=True,
+            feature_columns=feature_columns,
+        )
         if features.empty:
             continue
         features["entry_date"] = date
@@ -180,6 +191,8 @@ def train_walk_forward(
     test_days: int = 60,
     step_days: int = 30,
     embargo_days: int = 15,  # Must be >= max_holding_days (10) + buffer
+    feature_columns: list[str] | None = None,
+    backfill_sentiment: bool = False,
 ) -> dict[str, Any]:
     """Train LightGBM with walk-forward validation.
 
@@ -192,10 +205,44 @@ def train_walk_forward(
 
     The LAST fold's model is saved as the production model.
 
+    Parameters
+    ----------
+    feature_columns : list[str] | None
+        Which feature set to use. Defaults to FEATURE_COLUMNS (slim).
+        Pass FEATURE_COLUMNS_FULL for the full 51-feature set.
+    backfill_sentiment : bool
+        If True, pre-warm the news_sentiment_cache for all tickers and
+        sampled training dates before building the dataset.  Slow (one-time)
+        but avoids per-ticker API calls during feature extraction.
+
     Returns training report with per-fold metrics.
     """
     if end_date is None:
         end_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+
+    # Optionally backfill sentiment cache before training
+    if backfill_sentiment:
+        try:
+            from trader_koo.ml.sentiment_cache import backfill_sentiment_cache
+
+            # Get all active tickers from the universe
+            ticker_rows = conn.execute(
+                "SELECT DISTINCT ticker FROM price_daily "
+                "WHERE date >= ? AND date <= ? "
+                "AND ticker NOT LIKE '^%%'",
+                (start_date, end_date),
+            ).fetchall()
+            all_tickers = sorted(str(r[0]) for r in ticker_rows)
+            LOG.info(
+                "Backfilling sentiment cache: %d tickers, %s to %s",
+                len(all_tickers), start_date, end_date,
+            )
+            backfill_sentiment_cache(
+                conn, all_tickers, start_date, end_date,
+                sample_frequency=5,
+            )
+        except Exception as exc:
+            LOG.warning("Sentiment backfill failed (non-fatal): %s", exc)
 
     # Bulk-prefetch FRED series for the full training date range.
     # These 3 series (DFF, T10Y2Y, BAMLH0A0HYM2) are never revised, so
@@ -215,10 +262,12 @@ def train_walk_forward(
     # Sample frequency must be >= max_holding_days (10) to avoid label overlap.
     # Previously frequency=5 with 10-day holding meant consecutive samples
     # shared 50% of their outcome window, leaking label information.
+    use_features = feature_columns if feature_columns is not None else FEATURE_COLUMNS
     max_holding_days = 10
     dataset = build_dataset(
         conn, start_date=start_date, end_date=end_date,
         sample_frequency=max_holding_days,
+        feature_columns=use_features,
     )
     if dataset.empty or len(dataset) < 100:
         return {
@@ -228,7 +277,7 @@ def train_walk_forward(
         }
 
     dataset["entry_date_ts"] = pd.to_datetime(dataset["entry_date"])
-    feature_cols = [c for c in FEATURE_COLUMNS if c in dataset.columns]
+    feature_cols = [c for c in use_features if c in dataset.columns]
 
     # Walk-forward folds
     all_dates = sorted(dataset["entry_date_ts"].unique())

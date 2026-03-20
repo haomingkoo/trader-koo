@@ -32,6 +32,16 @@ def _get_credentials() -> tuple[str, str] | None:
     return token, chat_id
 
 
+def is_configured() -> bool:
+    """Return True when both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set."""
+    return _get_credentials() is not None
+
+
+def send_message(text: str, parse_mode: str = "Markdown") -> bool:
+    """Convenience alias for ``send_telegram_message``."""
+    return send_telegram_message(text, parse_mode=parse_mode)
+
+
 # ------------------------------------------------------------------
 # Low-level send
 # ------------------------------------------------------------------
