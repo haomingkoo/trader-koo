@@ -167,6 +167,14 @@ export default function OpportunitiesPage() {
     );
   }
 
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-8 text-center text-sm text-[var(--muted)]">
+        No opportunities match the current filters. Try adjusting your criteria.
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">

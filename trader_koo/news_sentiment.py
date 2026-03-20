@@ -197,7 +197,7 @@ def _fetch_finnhub_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
     # Step 1: Fetch company news per ticker and score headlines with lexicon.
     # Note: /news-sentiment is premium-only (403 on free tier).
     # /company-news is free and returns recent headlines we can score ourselves.
-    from trader_koo.rss_news import _score_headline, _score_to_100 as _rss_score_to_100
+    from trader_koo.rss_news import _score_headline
 
     date_to = now_utc.strftime("%Y-%m-%d")
     date_from = (now_utc - dt.timedelta(hours=lookback_hours)).strftime("%Y-%m-%d")

@@ -13,10 +13,7 @@ from trader_koo.paper_trade.decision import (
     evaluate_setup_for_paper_trade as _evaluate_setup_for_paper_trade_impl,
     qualify_setup_for_paper_trade as _qualify_setup_for_paper_trade_impl,
 )
-from trader_koo.paper_trade.schema import (
-    decode_json_list as _decode_json_list,
-    ensure_paper_trade_schema,
-)
+from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.paper_trade.summary import (
     list_paper_trades as _list_paper_trades_impl,
     paper_trade_summary as _paper_trade_summary_impl,
