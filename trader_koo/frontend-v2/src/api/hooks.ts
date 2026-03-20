@@ -18,6 +18,7 @@ import type {
   CryptoOpenInterestPayload,
   VixMetricsPayload,
   FearGreedPayload,
+  AlertsPayload,
 } from "./types";
 
 export function useReport() {
@@ -215,6 +216,15 @@ export function useUpdateTradeNotes() {
       void queryClient.invalidateQueries({ queryKey: ["paper-trades"] });
       void queryClient.invalidateQueries({ queryKey: ["paper-trades-summary"] });
     },
+  });
+}
+
+export function useAlerts(limit: number = 50) {
+  return useQuery({
+    queryKey: ["alerts", limit],
+    queryFn: () => apiFetch<AlertsPayload>(`/api/alerts?limit=${limit}`),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 }
 

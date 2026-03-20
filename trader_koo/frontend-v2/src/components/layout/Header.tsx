@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ArrowUpRight, Sun, Moon } from "lucide-react";
 import ClockStrip from "./ClockStrip";
 import PipelineStatusBadge from "./PipelineStatusBadge";
+import NotificationBell from "./NotificationBell";
 import {
   CryptoPriceStrip,
   EquityPriceStrip,
@@ -59,6 +60,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
             Trader Koo
           </span>
           <div className="ml-auto flex items-center gap-3">
+            <NotificationBell />
             <button
               onClick={toggleTheme}
               className="rounded p-1 text-[var(--muted)] transition-colors hover:bg-[var(--panel-hover)] hover:text-[var(--text)]"
