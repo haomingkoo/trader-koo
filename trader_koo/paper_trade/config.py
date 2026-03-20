@@ -33,7 +33,7 @@ class PaperTradeConfig:
     caution_position_scale: float
     high_vol_position_scale: float
     earnings_position_scale: float
-    ml_enabled: bool = True
+    ml_enabled: bool = False  # Disabled — AUC 0.5051 (random). Rule-based pipeline decides.
     ml_min_win_prob: float = 0.55
     max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
     max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this
