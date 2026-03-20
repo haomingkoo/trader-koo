@@ -28,13 +28,25 @@ def train_ml_model(
     request: Request,
     start_date: str = Query(default="2025-06-01"),
     end_date: str = Query(default=None),
+    target_mode: str = Query(default="return_sign"),
 ) -> dict[str, Any]:
     """Train the swing-trade LightGBM model in a background thread.
 
     The model trains asynchronously because it can take several minutes.
     Use GET /api/admin/ml-model-status to check progress and results.
+
+    target_mode: "return_sign" (default), "barrier", or "rank".
     """
     global _ml_train_thread, _ml_train_result
+
+    if target_mode not in {"return_sign", "barrier", "rank"}:
+        return {
+            "ok": False,
+            "error": (
+                f"Invalid target_mode '{target_mode}'. "
+                "Choose from: 'return_sign', 'barrier', 'rank'."
+            ),
+        }
 
     if _ml_train_thread and _ml_train_thread.is_alive():
         return {
@@ -56,6 +68,7 @@ def train_ml_model(
                     conn,
                     start_date=start_date,
                     end_date=end_date,
+                    target_mode=target_mode,
                 )
             finally:
                 conn.close()
@@ -74,11 +87,13 @@ def train_ml_model(
     return {
         "ok": True,
         "message": (
-            f"Training started in background (start_date={start_date}). "
+            f"Training started in background "
+            f"(start_date={start_date}, target_mode={target_mode}). "
             "Check /api/admin/ml-model-status for results."
         ),
         "start_date": start_date,
         "end_date": end_date,
+        "target_mode": target_mode,
     }
 
 

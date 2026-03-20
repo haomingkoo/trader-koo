@@ -43,14 +43,16 @@ DEFAULT_MODEL_DIR = Path("/data/models")
 LOCAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "data" / "models"
 
 # LightGBM hyperparameters — conservative to avoid overfitting
+# num_leaves=15, max_depth=3 keep trees shallow; n_estimators=500 with
+# early_stopping(50) lets boosting find the right iteration count.
 LGBM_PARAMS = {
     "objective": "binary",
     "metric": "auc",
     "boosting_type": "gbdt",
-    "num_leaves": 31,
-    "max_depth": 5,
-    "learning_rate": 0.05,
-    "n_estimators": 200,
+    "num_leaves": 15,
+    "max_depth": 3,
+    "learning_rate": 0.01,
+    "n_estimators": 500,
     "min_child_samples": 20,
     "subsample": 0.8,
     "colsample_bytree": 0.8,
@@ -164,11 +166,10 @@ def build_dataset(
         how="inner",
     )
 
-    # Binary target: triple-barrier profit target hit
-    # label=+1 means price hit the profit target before stop or time expiry.
-    # This is more informative than raw return > 0 (which adds noise from
-    # barely-positive expired trades). Per ML expert review.
-    dataset["target"] = (dataset["label"] == 1).astype(int)
+    # Target column is set later by _apply_target_mode() based on the
+    # chosen target_mode.  Default placeholder so build_dataset() callers
+    # that don't go through train_walk_forward() still get a target.
+    dataset["target"] = (dataset["return_pct"] > 0).astype(int)
 
     LOG.info(
         "Dataset built: %d samples, %d tickers, %d dates, target balance: %.1f%% positive",
@@ -178,6 +179,46 @@ def build_dataset(
         dataset["target"].mean() * 100,
     )
 
+    return dataset
+
+
+def _apply_target_mode(dataset: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Set the binary ``target`` column based on the chosen labeling strategy.
+
+    Parameters
+    ----------
+    dataset : pd.DataFrame
+        Must contain ``label``, ``return_pct`` columns from triple-barrier
+        labeling.
+    mode : str
+        ``"return_sign"`` — target = 1 if return_pct > 0, else 0.
+        ``"barrier"`` — original triple-barrier (label == +1 means profit
+        target was hit before stop or time expiry).
+        ``"rank"`` — cross-sectional rank within each entry_date; top
+        quintile = 1, bottom quintile = 0, middle 60% dropped.
+    """
+    if mode == "return_sign":
+        dataset["target"] = (dataset["return_pct"] > 0).astype(int)
+    elif mode == "barrier":
+        dataset["target"] = (dataset["label"] == 1).astype(int)
+    elif mode == "rank":
+        # Cross-sectional quintile ranking per entry date
+        dataset["rank_pct"] = dataset.groupby("entry_date")["return_pct"].rank(
+            pct=True,
+        )
+        # Top 20% = 1, bottom 20% = 0, middle dropped
+        dataset["target"] = np.where(
+            dataset["rank_pct"] >= 0.8, 1,
+            np.where(dataset["rank_pct"] <= 0.2, 0, np.nan),
+        )
+        dataset = dataset.dropna(subset=["target"]).copy()
+        dataset["target"] = dataset["target"].astype(int)
+        dataset = dataset.drop(columns=["rank_pct"])
+    else:
+        raise ValueError(
+            f"Unknown target_mode '{mode}'. "
+            "Choose from: 'return_sign', 'barrier', 'rank'."
+        )
     return dataset
 
 
@@ -192,6 +233,7 @@ def train_walk_forward(
     embargo_days: int = 15,  # Must be >= max_holding_days (10) + buffer
     feature_columns: list[str] | None = None,
     backfill_sentiment: bool = False,
+    target_mode: str = "return_sign",
 ) -> dict[str, Any]:
     """Train LightGBM with walk-forward validation.
 
@@ -213,6 +255,11 @@ def train_walk_forward(
         If True, pre-warm the news_sentiment_cache for all tickers and
         sampled training dates before building the dataset.  Slow (one-time)
         but avoids per-ticker API calls during feature extraction.
+    target_mode : str
+        How to define the binary target.  One of:
+        ``"return_sign"`` (default) — 1 if return_pct > 0, else 0.
+        ``"barrier"`` — original triple-barrier (label == +1).
+        ``"rank"`` — cross-sectional top/bottom quintile.
 
     Returns training report with per-fold metrics.
     """
@@ -275,6 +322,18 @@ def train_walk_forward(
             "samples": len(dataset),
         }
 
+    # Apply target labeling strategy before walk-forward splits
+    dataset = _apply_target_mode(dataset, target_mode)
+    if len(dataset) < 100:
+        return {
+            "ok": False,
+            "error": (
+                f"Insufficient data after target_mode='{target_mode}': "
+                f"{len(dataset)} samples (need ≥100)"
+            ),
+            "samples": len(dataset),
+        }
+
     dataset["entry_date_ts"] = pd.to_datetime(dataset["entry_date"])
     feature_cols = [c for c in use_features if c in dataset.columns]
 
@@ -315,9 +374,16 @@ def train_walk_forward(
         X_train = X_train.fillna(train_medians)
         X_test = X_test.fillna(train_medians)
 
-        # Train
+        # Train with early stopping against OOS validation set
         model = lgb.LGBMClassifier(**LGBM_PARAMS)
-        model.fit(X_train, y_train)
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_test, y_test)],
+            callbacks=[
+                lgb.early_stopping(50, verbose=False),
+                lgb.log_evaluation(0),
+            ],
+        )
 
         # Predict (out-of-sample)
         y_pred = model.predict(X_test)
@@ -405,6 +471,7 @@ def train_walk_forward(
     return {
         "ok": True,
         "model_path": str(model_path),
+        "target_mode": target_mode,
         "folds": folds,
         "fold_count": len(folds),
         "total_samples": len(dataset),
