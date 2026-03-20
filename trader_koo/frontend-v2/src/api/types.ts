@@ -718,6 +718,7 @@ export interface PaperTrade {
   review_status?: string | null;
   review_summary?: string | null;
   ml_predicted_win_prob?: number | null;
+  notes?: string | null;
 }
 
 export interface PaperTradeList {

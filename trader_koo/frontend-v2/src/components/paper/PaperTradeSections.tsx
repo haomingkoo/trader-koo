@@ -1,11 +1,12 @@
 import { Link } from "react-router-dom";
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
 import type {
   PaperTrade,
   PaperTradeDirectionStats,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
 } from "../../api/types";
+import { useUpdateTradeNotes } from "../../api/hooks";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
 import PlotlyWrapper from "../PlotlyWrapper";
 import Badge, { tierVariant } from "../ui/Badge";
@@ -44,6 +45,73 @@ const pnlColor = (value: number | null | undefined): string => {
   if (value < 0) return "text-[var(--red)]";
   return "";
 };
+
+/* ── Inline Trade Notes ── */
+function TradeNotes({ trade }: { trade: PaperTrade }) {
+  const mutation = useUpdateTradeNotes();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(trade.notes ?? "");
+
+  const save = useCallback(() => {
+    const trimmed = draft.trim();
+    mutation.mutate(
+      { tradeId: trade.id, notes: trimmed },
+      { onSuccess: () => setEditing(false) },
+    );
+  }, [draft, mutation, trade.id]);
+
+  const cancel = useCallback(() => {
+    setDraft(trade.notes ?? "");
+    setEditing(false);
+  }, [trade.notes]);
+
+  if (editing) {
+    return (
+      <div className="mt-1 flex flex-col gap-1">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={2}
+          className="w-full rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+          placeholder="Add a note..."
+          autoFocus
+        />
+        <div className="flex gap-1">
+          <button
+            type="button"
+            onClick={save}
+            disabled={mutation.isPending}
+            className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {mutation.isPending ? "Saving..." : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={cancel}
+            className="rounded border border-[var(--line)] px-2 py-0.5 text-[10px] text-[var(--muted)] hover:bg-[var(--panel)]"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const hasNotes = Boolean(trade.notes);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setDraft(trade.notes ?? "");
+        setEditing(true);
+      }}
+      className="mt-1 block max-w-full truncate text-left text-[10px] text-[var(--muted)] hover:text-[var(--accent)]"
+      title={hasNotes ? trade.notes! : "Click to add a note"}
+    >
+      {hasNotes ? trade.notes : "+ note"}
+    </button>
+  );
+}
 
 /* ── Portfolio Hero ── */
 export function PaperTradePortfolioHero({
@@ -139,6 +207,7 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
               <th className="px-3 py-2 font-semibold">Plan R</th>
               <th className="px-3 py-2 font-semibold">Tier</th>
               <th className="px-3 py-2 font-semibold">Entry Date</th>
+              <th className="px-3 py-2 font-semibold">Notes</th>
             </tr>
           </thead>
           <tbody>
@@ -179,6 +248,9 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
                     )}
                   </td>
                   <td className="px-3 py-2 text-[var(--muted)]">{t.entry_date ?? "\u2014"}</td>
+                  <td className="px-3 py-2 min-w-[120px] max-w-[200px]">
+                    <TradeNotes trade={t} />
+                  </td>
                 </tr>
               );
             })}
@@ -548,6 +620,7 @@ const CSV_COLUMNS = [
   "setup_family",
   "setup_tier",
   "ml_predicted_win_prob",
+  "notes",
 ] as const;
 
 function escapeCsvField(value: unknown): string {
@@ -737,6 +810,14 @@ export const tradeColumns = [
     key: "entry_date" as const,
     label: "Entry Date",
     render: (value: unknown) => String(value ?? "\u2014"),
+  },
+  {
+    key: "notes" as const,
+    label: "Notes",
+    render: (_value: unknown, row: unknown) => {
+      const trade = row as PaperTrade;
+      return <TradeNotes trade={trade} />;
+    },
   },
 ];
 
