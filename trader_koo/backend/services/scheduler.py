@@ -463,12 +463,7 @@ def create_scheduler() -> BackgroundScheduler:
     if telegram_configured:
         scheduler.add_job(
             _run_macro_alert,
-            CronTrigger(
-                minute="*/15",
-                hour="14-21",
-                day_of_week="mon-fri",
-                timezone="UTC",
-            ),
+            IntervalTrigger(minutes=15),
             id="macro_alert",
             replace_existing=True,
         )
