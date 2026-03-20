@@ -92,7 +92,7 @@ export default function NotificationBell() {
   }, [navigate]);
 
   const handleAlertClick = useCallback(
-    (alert: AlertItem) => {
+    (_alert: AlertItem) => {
       setOpen(false);
       navigate("/alerts");
     },
