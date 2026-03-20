@@ -101,13 +101,7 @@ export default function Sidebar({
           </NavLink>
         ))}
       </nav>
-      <div className="border-t border-[var(--line)] px-3 py-2">
-        {!collapsed && (
-          <div className="text-[10px] text-[var(--muted)]">
-            v2 beta
-          </div>
-        )}
-      </div>
+      <div className="border-t border-[var(--line)] px-3 py-2" />
     </>
   );
 
