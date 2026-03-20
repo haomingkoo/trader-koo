@@ -5,16 +5,17 @@ All features are backward-looking — no future data is used.
 Feature categories:
 1. Multi-horizon momentum (1d, 5d, 10d, 21d, 63d returns)
 2. Volatility (realized vol, ATR %, Bollinger bandwidth)
-3. Volume (ratio vs 20d MA, on-balance volume trend)
-4. Mean-reversion (distance from MA20/50/200)
-5. Regime context (VIX level, VIX percentile, VIX MA ratio)
-6. Time series (lag autocorrelation, recent trend strength)
-7. Seasonality (day of week, month, quarter effects)
-8. YOLO patterns (if available in DB)
-9. Cross-sectional ranks
-10. News sentiment (Finnhub company-news + RSS lexicon scoring)
-11. Earnings proximity (days to next earnings, earnings week flag)
-12. Polymarket prediction market probabilities
+3. Volume (ratio vs 20d MA, OBV trend, volume-confirmed momentum)
+4. Range expansion (ATR expansion, gap percentage)
+5. Mean-reversion (distance from MA20/50/200)
+6. Regime context (VIX level, VIX percentile, VIX MA ratio)
+7. Time series (lag autocorrelation, recent trend strength)
+8. Seasonality (day of week, month, quarter effects)
+9. YOLO patterns (if available in DB)
+10. Cross-sectional ranks
+11. News sentiment (Finnhub company-news + RSS lexicon scoring)
+12. Earnings proximity (days to next earnings, earnings week flag)
+13. Polymarket prediction market probabilities
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ import pandas as pd
 
 LOG = logging.getLogger(__name__)
 
-# Full feature set (51 features) — kept for reference / ablation comparison.
+# Full feature set (54 features) — kept for reference / ablation comparison.
 # Pruned from the original set based on first training runs (dropped seasonality,
 # YOLO, binary MA flags, redundant macro features).
 FEATURE_COLUMNS_FULL = [
@@ -42,6 +43,11 @@ FEATURE_COLUMNS_FULL = [
     "vol_5d", "vol_21d", "atr_pct_14", "bb_width",
     # Volume
     "volume_ratio_20d", "obv_slope_10d",
+    "volume_confirmed_momentum",
+    # ATR expansion (breakout vs consolidation)
+    "atr_expansion_5d",
+    # Gap
+    "gap_pct_1d",
     # Trend position (distance from key MAs)
     "dist_ma20_pct", "dist_ma50_pct", "dist_ma200_pct",
     # Time series (autocorrelation = mean-reversion signal)
@@ -85,7 +91,7 @@ FEATURE_COLUMNS_FULL = [
     # display purposes but are not part of the model's feature vector.
 ]
 
-# Slim feature set (~15 features) — top non-redundant features by panel importance.
+# Slim feature set (~18 features) — top non-redundant features by panel importance.
 # Drops correlated pairs (ret_5d/rank_ret_5d, vol_5d/atr_pct_14, overlapping VIX).
 # Used as default for training; reduces overfitting risk and training time.
 FEATURE_COLUMNS_SLIM = [
@@ -98,6 +104,10 @@ FEATURE_COLUMNS_SLIM = [
     "vol_21d",                  # importance: 1557
     # Per-ticker: cross-sectional rank (one vol rank, best-performing)
     "rank_vol_21d",             # importance: 1534
+    # Per-ticker: volume acceleration + range expansion
+    "volume_confirmed_momentum",  # institutional accumulation/distribution
+    "atr_expansion_5d",           # breakout vs consolidation regime
+    "gap_pct_1d",                 # overnight gap signal
     # Per-ticker: trend / mean-reversion
     "dist_ma50_pct",            # trend position vs key MA
     "mean_reversion_5d",        # short-term reversion signal
@@ -603,6 +613,33 @@ def extract_features_for_universe(
         vol_ratio = float(volume.iloc[i]) / float(vol_ma20.iloc[i]) if float(vol_ma20.iloc[i]) > 0 else np.nan
         obv_slope = _obv_slope(close, volume, 10)
 
+        # Volume-confirmed momentum: 3d/20d volume ratio signed by 3d return
+        vol_3d = volume.rolling(3, min_periods=2).mean()
+        vol_ratio_3d_20d = vol_3d / vol_ma20
+        ret_3d = close.pct_change(3)
+        vol_conf_mom = (
+            float(vol_ratio_3d_20d.iloc[i] * np.sign(ret_3d.iloc[i]))
+            if n > 20 and np.isfinite(ret_3d.iloc[i]) and float(vol_ma20.iloc[i]) > 0
+            else np.nan
+        )
+
+        # ATR expansion: 5d ATR / 20d ATR (>1 = expanding range, <1 = contracting)
+        atr_5 = tr.rolling(5, min_periods=3).mean()
+        atr_20 = tr.rolling(20, min_periods=10).mean()
+        atr_exp = (
+            float(atr_5.iloc[i] / atr_20.iloc[i])
+            if n > 20 and float(atr_20.iloc[i]) > 0
+            else np.nan
+        )
+
+        # Gap percentage: overnight gap from yesterday's close to today's open
+        open_prices = grp["open"]
+        gap_pct = (
+            float((open_prices.iloc[i] - close.iloc[i - 1]) / close.iloc[i - 1])
+            if n > 1 and float(close.iloc[i - 1]) > 0
+            else np.nan
+        )
+
         # Mean-reversion / trend
         ma50 = close.rolling(50, min_periods=25).mean()
         ma200 = close.rolling(200, min_periods=100).mean()
@@ -634,6 +671,9 @@ def extract_features_for_universe(
             "bb_width": bb_width if np.isfinite(bb_width) else np.nan,
             "volume_ratio_20d": vol_ratio if np.isfinite(vol_ratio) else np.nan,
             "obv_slope_10d": obv_slope if np.isfinite(obv_slope) else np.nan,
+            "volume_confirmed_momentum": vol_conf_mom if np.isfinite(vol_conf_mom) else np.nan,
+            "atr_expansion_5d": atr_exp if np.isfinite(atr_exp) else np.nan,
+            "gap_pct_1d": gap_pct if np.isfinite(gap_pct) else np.nan,
             "dist_ma20_pct": dist_ma20 if np.isfinite(dist_ma20) else np.nan,
             "dist_ma50_pct": dist_ma50 if np.isfinite(dist_ma50) else np.nan,
             "dist_ma200_pct": dist_ma200 if np.isfinite(dist_ma200) else np.nan,
