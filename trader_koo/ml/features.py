@@ -5,14 +5,14 @@ All features are backward-looking — no future data is used.
 Feature categories:
 1. Multi-horizon momentum (1d, 5d, 10d, 21d, 63d returns)
 2. Volatility (realized vol, ATR %, Bollinger bandwidth)
-3. Volume (ratio vs 20d MA, OBV trend, volume-confirmed momentum)
-4. Range expansion (ATR expansion, gap percentage)
-5. Mean-reversion (distance from MA20/50/200)
-6. Regime context (VIX level, VIX percentile, VIX MA ratio)
-7. Time series (lag autocorrelation, recent trend strength)
-8. Seasonality (day of week, month, quarter effects)
-9. YOLO patterns (if available in DB)
-10. Cross-sectional ranks
+3. Volume (ratio vs 20d MA, on-balance volume trend)
+4. Mean-reversion (distance from MA20/50/200)
+5. Regime context (VIX level, VIX percentile, VIX MA ratio)
+6. Time series (lag autocorrelation, recent trend strength)
+7. Seasonality (day of week, month, quarter effects)
+8. YOLO patterns (if available in DB)
+9. Cross-sectional ranks (legacy 4)
+10. Cross-sectional rank normalization (xrank_* for all per-ticker features)
 11. News sentiment (Finnhub company-news + RSS lexicon scoring)
 12. Earnings proximity (days to next earnings, earnings week flag)
 13. Polymarket prediction market probabilities
@@ -32,7 +32,7 @@ import pandas as pd
 
 LOG = logging.getLogger(__name__)
 
-# Full feature set (54 features) — kept for reference / ablation comparison.
+# Full feature set (68 features) — kept for reference / ablation comparison.
 # Pruned from the original set based on first training runs (dropped seasonality,
 # YOLO, binary MA flags, redundant macro features).
 FEATURE_COLUMNS_FULL = [
@@ -43,11 +43,6 @@ FEATURE_COLUMNS_FULL = [
     "vol_5d", "vol_21d", "atr_pct_14", "bb_width",
     # Volume
     "volume_ratio_20d", "obv_slope_10d",
-    "volume_confirmed_momentum",
-    # ATR expansion (breakout vs consolidation)
-    "atr_expansion_5d",
-    # Gap
-    "gap_pct_1d",
     # Trend position (distance from key MAs)
     "dist_ma20_pct", "dist_ma50_pct", "dist_ma200_pct",
     # Time series (autocorrelation = mean-reversion signal)
@@ -55,8 +50,14 @@ FEATURE_COLUMNS_FULL = [
     "trend_strength_10d", "mean_reversion_5d",
     # VIX regime (per-ticker duplicate but strongest cluster)
     "vix_level", "vix_percentile", "vix_ma20_ratio", "vix_ret_5d",
-    # Cross-sectional rank (where this stock sits vs peers)
+    # Cross-sectional rank (where this stock sits vs peers) — legacy 4
     "rank_ret_5d", "rank_ret_21d", "rank_vol_21d", "rank_volume_ratio",
+    # Cross-sectional rank-normalized per-ticker features (xrank_*)
+    "xrank_ret_1d", "xrank_ret_5d", "xrank_ret_21d", "xrank_ret_63d",
+    "xrank_vol_5d", "xrank_vol_21d", "xrank_atr_pct_14",
+    "xrank_dist_ma20_pct", "xrank_dist_ma50_pct", "xrank_dist_ma200_pct",
+    "xrank_bb_width", "xrank_obv_slope_10d", "xrank_volume_ratio_20d",
+    "xrank_mean_reversion_5d", "xrank_autocorr_lag1",
     # === Macro features (same for all tickers — market environment) ===
     # Treasury (rate environment — #6 in importance)
     "macro_tnx_close", "macro_tnx_ret_21d",
@@ -91,38 +92,44 @@ FEATURE_COLUMNS_FULL = [
     # display purposes but are not part of the model's feature vector.
 ]
 
-# Slim feature set (~18 features) — top non-redundant features by panel importance.
+# Slim feature set (14 features) — top non-redundant features by panel importance.
 # Drops correlated pairs (ret_5d/rank_ret_5d, vol_5d/atr_pct_14, overlapping VIX).
-# Used as default for training; reduces overfitting risk and training time.
+# Uses xrank_ (cross-sectional rank) for per-ticker features to normalize across tickers.
 FEATURE_COLUMNS_SLIM = [
-    # Per-ticker: momentum (multi-horizon, no rank duplicates)
-    "ret_1d",                   # importance: 1595
-    "ret_21d",                  # importance: 1558
-    "ret_63d",                  # importance: 1334
-    # Per-ticker: volatility (one measure, not two correlated ones)
-    "atr_pct_14",               # importance: 1884
-    "vol_21d",                  # importance: 1557
-    # Per-ticker: cross-sectional rank (one vol rank, best-performing)
-    "rank_vol_21d",             # importance: 1534
-    # Per-ticker: volume acceleration + range expansion
-    "volume_confirmed_momentum",  # institutional accumulation/distribution
-    "atr_expansion_5d",           # breakout vs consolidation regime
-    "gap_pct_1d",                 # overnight gap signal
-    # Per-ticker: trend / mean-reversion
-    "dist_ma50_pct",            # trend position vs key MA
-    "mean_reversion_5d",        # short-term reversion signal
+    # Per-ticker: momentum (rank-normalized across tickers)
+    "xrank_ret_1d",             # importance: 1595 (was ret_1d)
+    "xrank_ret_21d",            # importance: 1558 (was ret_21d)
+    "ret_63d",                  # importance: 1334 (kept raw — long horizon)
+    # Per-ticker: volatility (rank-normalized)
+    "xrank_atr_pct_14",         # importance: 1884 (was atr_pct_14)
+    "xrank_vol_21d",            # importance: 1557 (was vol_21d)
+    # Per-ticker: trend / mean-reversion (rank-normalized)
+    "xrank_dist_ma50_pct",      # trend position vs key MA
+    "xrank_mean_reversion_5d",  # short-term reversion signal
     # Macro: broad market (strongest single macro feature)
     "macro_sp500_ret_63d",      # importance: 2529
     # Macro: rates
     "macro_tnx_ret_21d",        # importance: 1510
     # Macro: credit stress velocity (leading indicator)
-    "fred_hy_oas_change_5d",    # new: 5d change in HY OAS
+    "fred_hy_oas_change_5d",    # 5d change in HY OAS
     # Sector rotation (top cluster)
     "sector_dispersion",        # importance: 2217
     "leading_sector_momentum",  # importance: 1402
     "sector_rank",              # per-ticker sector positioning
     # Earnings catalyst
     "days_to_next_earnings",    # vol expansion into catalyst
+]
+
+# Ranked feature set (7 features) — contrarian-recommended minimal set.
+# Only cross-sectional ranks for per-ticker features + macro context.
+FEATURE_COLUMNS_RANKED = [
+    "xrank_ret_21d",            # momentum rank across tickers
+    "xrank_vol_21d",            # volatility rank across tickers
+    "xrank_atr_pct_14",         # ATR rank across tickers
+    "xrank_dist_ma50_pct",      # trend position rank across tickers
+    "macro_sp500_ret_63d",      # macro: broad market (raw — same for all)
+    "sector_rank",              # already cross-sectional
+    "fred_hy_oas_change_5d",    # macro: credit stress (raw — same for all)
 ]
 
 # Default feature set used by the trainer and scorer.
@@ -613,33 +620,6 @@ def extract_features_for_universe(
         vol_ratio = float(volume.iloc[i]) / float(vol_ma20.iloc[i]) if float(vol_ma20.iloc[i]) > 0 else np.nan
         obv_slope = _obv_slope(close, volume, 10)
 
-        # Volume-confirmed momentum: 3d/20d volume ratio signed by 3d return
-        vol_3d = volume.rolling(3, min_periods=2).mean()
-        vol_ratio_3d_20d = vol_3d / vol_ma20
-        ret_3d = close.pct_change(3)
-        vol_conf_mom = (
-            float(vol_ratio_3d_20d.iloc[i] * np.sign(ret_3d.iloc[i]))
-            if n > 20 and np.isfinite(ret_3d.iloc[i]) and float(vol_ma20.iloc[i]) > 0
-            else np.nan
-        )
-
-        # ATR expansion: 5d ATR / 20d ATR (>1 = expanding range, <1 = contracting)
-        atr_5 = tr.rolling(5, min_periods=3).mean()
-        atr_20 = tr.rolling(20, min_periods=10).mean()
-        atr_exp = (
-            float(atr_5.iloc[i] / atr_20.iloc[i])
-            if n > 20 and float(atr_20.iloc[i]) > 0
-            else np.nan
-        )
-
-        # Gap percentage: overnight gap from yesterday's close to today's open
-        open_prices = grp["open"]
-        gap_pct = (
-            float((open_prices.iloc[i] - close.iloc[i - 1]) / close.iloc[i - 1])
-            if n > 1 and float(close.iloc[i - 1]) > 0
-            else np.nan
-        )
-
         # Mean-reversion / trend
         ma50 = close.rolling(50, min_periods=25).mean()
         ma200 = close.rolling(200, min_periods=100).mean()
@@ -671,9 +651,6 @@ def extract_features_for_universe(
             "bb_width": bb_width if np.isfinite(bb_width) else np.nan,
             "volume_ratio_20d": vol_ratio if np.isfinite(vol_ratio) else np.nan,
             "obv_slope_10d": obv_slope if np.isfinite(obv_slope) else np.nan,
-            "volume_confirmed_momentum": vol_conf_mom if np.isfinite(vol_conf_mom) else np.nan,
-            "atr_expansion_5d": atr_exp if np.isfinite(atr_exp) else np.nan,
-            "gap_pct_1d": gap_pct if np.isfinite(gap_pct) else np.nan,
             "dist_ma20_pct": dist_ma20 if np.isfinite(dist_ma20) else np.nan,
             "dist_ma50_pct": dist_ma50 if np.isfinite(dist_ma50) else np.nan,
             "dist_ma200_pct": dist_ma200 if np.isfinite(dist_ma200) else np.nan,
@@ -704,7 +681,7 @@ def extract_features_for_universe(
 
     feat_df = pd.DataFrame(results)
 
-    # Cross-sectional ranks
+    # Cross-sectional ranks (legacy 4 — kept for backward compatibility)
     for col, rank_col in [
         ("ret_5d", "rank_ret_5d"), ("ret_21d", "rank_ret_21d"),
         ("vol_21d", "rank_vol_21d"), ("volume_ratio_20d", "rank_volume_ratio"),
@@ -712,6 +689,26 @@ def extract_features_for_universe(
         valid = feat_df[col].notna()
         if valid.sum() >= 5:
             feat_df.loc[valid, rank_col] = feat_df.loc[valid, col].rank(pct=True)
+
+    # Cross-sectional rank normalization for ALL per-ticker features.
+    # Rank within the same date so each feature is on [0, 1] regardless of
+    # ticker-specific scale (e.g., AAPL vol vs a small biotech).
+    _PER_TICKER_XRANK_COLS = [
+        "ret_1d", "ret_5d", "ret_21d", "ret_63d",
+        "vol_5d", "vol_21d", "atr_pct_14",
+        "dist_ma20_pct", "dist_ma50_pct", "dist_ma200_pct",
+        "bb_width", "obv_slope_10d", "volume_ratio_20d",
+        "mean_reversion_5d", "autocorr_lag1",
+    ]
+    for col in _PER_TICKER_XRANK_COLS:
+        xrank_col = f"xrank_{col}"
+        if col in feat_df.columns:
+            valid = feat_df[col].notna()
+            feat_df[xrank_col] = np.nan
+            if valid.sum() >= 5:
+                feat_df.loc[valid, xrank_col] = (
+                    feat_df.loc[valid, col].rank(pct=True)
+                )
 
     # Merge macro features (same for all tickers on this date)
     try:
