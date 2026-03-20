@@ -271,6 +271,25 @@ def _run_weekly_yolo() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Morning summary (Telegram push at 00:00 UTC = 08:00 SGT)
+# ---------------------------------------------------------------------------
+
+def _run_morning_summary() -> None:
+    """Send the daily morning briefing to Telegram (Mon-Fri)."""
+    from trader_koo.notifications.morning_summary import send_morning_summary
+
+    _append_run_log("MORNING", "Morning summary job started")
+    LOG.info("Scheduler: starting morning summary push")
+    ok = send_morning_summary(DB_PATH, REPORT_DIR)
+    if ok:
+        _append_run_log("MORNING", "Morning summary sent OK")
+        LOG.info("Scheduler: morning summary sent to Telegram")
+    else:
+        _append_run_log("MORNING", "Morning summary failed or skipped")
+        LOG.warning("Scheduler: morning summary failed or was skipped (Telegram not configured?)")
+
+
+# ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
 
@@ -302,4 +321,17 @@ def create_scheduler() -> BackgroundScheduler:
         id="weekly_yolo",
         replace_existing=True,
     )
+
+    # Morning summary — only register if Telegram is configured
+    if os.getenv("TELEGRAM_BOT_TOKEN", ""):
+        scheduler.add_job(
+            _run_morning_summary,
+            CronTrigger(hour=0, minute=0, day_of_week="mon-fri", timezone="UTC"),
+            id="morning_summary",
+            replace_existing=True,
+        )
+        LOG.info("Morning summary job registered: daily 00:00 UTC (08:00 SGT) Mon-Fri")
+    else:
+        LOG.info("TELEGRAM_BOT_TOKEN not set — morning summary job not registered")
+
     return scheduler
