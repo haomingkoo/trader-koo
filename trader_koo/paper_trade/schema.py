@@ -118,6 +118,7 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "ml_predicted_win_prob", "ml_predicted_win_prob REAL")
     _ensure_column(conn, "paper_trades", "ml_confidence", "ml_confidence REAL")
     _ensure_column(conn, "paper_trades", "ml_signal", "ml_signal TEXT")
+    _ensure_column(conn, "paper_trades", "notes", "notes TEXT DEFAULT ''")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bot_versions (

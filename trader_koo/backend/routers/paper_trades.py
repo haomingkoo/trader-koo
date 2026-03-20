@@ -1,13 +1,18 @@
-"""Paper trade endpoints: list, summary, detail."""
+"""Paper trade endpoints: list, summary, detail, notes."""
 from __future__ import annotations
 
 import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from trader_koo.backend.services.database import get_conn
 from trader_koo.paper_trades import ensure_paper_trade_schema, list_paper_trades, paper_trade_summary
+
+
+class NotesUpdate(BaseModel):
+    notes: str = ""
 
 router = APIRouter()
 
@@ -77,5 +82,30 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
                 payload = []
             trade[key] = payload if isinstance(payload, list) else []
         return {"ok": True, "trade": trade}
+    finally:
+        conn.close()
+
+
+@router.patch("/api/paper-trades/{trade_id}/notes")
+def api_update_trade_notes(trade_id: int, body: NotesUpdate) -> dict[str, Any]:
+    """Update the notes field on a paper trade."""
+    conn = get_conn()
+    try:
+        ensure_paper_trade_schema(conn)
+        row = conn.execute(
+            "SELECT id FROM paper_trades WHERE id = ?",
+            (trade_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Paper trade {trade_id} not found",
+            )
+        conn.execute(
+            "UPDATE paper_trades SET notes = ?, updated_ts = CURRENT_TIMESTAMP WHERE id = ?",
+            (body.notes, trade_id),
+        )
+        conn.commit()
+        return {"ok": True, "trade_id": trade_id, "notes": body.notes}
     finally:
         conn.close()

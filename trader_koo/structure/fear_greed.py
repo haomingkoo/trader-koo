@@ -572,7 +572,19 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
     if score is not None:
         valid_scores.append(score)
 
-    # Compute overall score
+    # Compute overall score using empirically-informed weights.
+    # Rationale: VIX is the strongest real-time fear signal; breadth and
+    # momentum capture market internals with moderate predictive value;
+    # 52-week strength is a slower-moving confirmer; put/call ratio is
+    # noisy and often unavailable, so receives the smallest weight.
+    _COMPONENT_WEIGHTS: dict[str, float] = {
+        "Market Volatility": 0.30,
+        "Stock Price Breadth": 0.25,
+        "Market Momentum": 0.25,
+        "Stock Price Strength": 0.15,
+        "Put/Call Ratio": 0.05,
+    }
+
     if not valid_scores:
         blended_score, blended_label, blended_color, blended_summary, active_weights = _blended_sentiment(
             None,
@@ -604,7 +616,16 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
             "components": components,
         }
 
-    overall = round(sum(valid_scores) / len(valid_scores))
+    # Weighted average: only include available components, then re-normalize
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for comp in components:
+        if comp["score"] is not None:
+            w = _COMPONENT_WEIGHTS.get(comp["name"], 0.0)
+            weighted_sum += comp["score"] * w
+            weight_total += w
+
+    overall = round(weighted_sum / weight_total) if weight_total > 0 else round(sum(valid_scores) / len(valid_scores))
     label, color = _label_for_score(overall)
     blended_score, blended_label, blended_color, blended_summary, active_weights = _blended_sentiment(
         overall,

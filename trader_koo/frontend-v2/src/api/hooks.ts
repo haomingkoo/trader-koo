@@ -199,6 +199,25 @@ export function useFearGreed() {
   });
 }
 
+export function useUpdateTradeNotes() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tradeId, notes }: { tradeId: number; notes: string }) => {
+      return apiFetch<{ ok: boolean; trade_id: number; notes: string }>(
+        `/api/paper-trades/${tradeId}/notes`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ notes }),
+        },
+      );
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["paper-trades"] });
+      void queryClient.invalidateQueries({ queryKey: ["paper-trades-summary"] });
+    },
+  });
+}
+
 export function useTriggerUpdate() {
   const queryClient = useQueryClient();
   return useMutation({
