@@ -382,7 +382,7 @@ def run_backtest(
             continue
 
         try:
-            features = extract_features_for_universe(conn, as_of_date=rebalance_date)
+            features = extract_features_for_universe(conn, as_of_date=rebalance_date, strict=True)
             if features.empty:
                 continue
             # Use same training medians for imputation (consistent with training)

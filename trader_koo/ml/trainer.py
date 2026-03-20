@@ -117,7 +117,7 @@ def build_dataset(
     all_labels: list[pd.DataFrame] = []
 
     for date in sampled_dates:
-        features = extract_features_for_universe(conn, as_of_date=date)
+        features = extract_features_for_universe(conn, as_of_date=date, strict=True)
         if features.empty:
             continue
         features["entry_date"] = date
