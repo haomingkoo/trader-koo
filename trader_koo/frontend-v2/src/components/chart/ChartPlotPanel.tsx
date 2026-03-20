@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import PlotlyWrapper from "../PlotlyWrapper";
 
 interface ChartPlotPanelProps {
@@ -9,6 +10,11 @@ export default function ChartPlotPanel({
   chartData,
   chartLayout,
 }: ChartPlotPanelProps) {
+  const isMobile = useMemo(
+    () => typeof window !== "undefined" && window.innerWidth < 768,
+    [],
+  );
+
   if (chartData && chartLayout) {
     return (
       <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
@@ -17,7 +23,7 @@ export default function ChartPlotPanel({
           layout={chartLayout}
           config={{
             responsive: true,
-            displayModeBar: true,
+            displayModeBar: isMobile ? false : "hover",
             scrollZoom: true,
           }}
           style={{ width: "100%", height: (chartLayout.height as number) ?? 580 }}
