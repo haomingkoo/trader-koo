@@ -95,17 +95,23 @@ function leadingProb(market: SubMarket): number {
   return (prices[0] ?? 0) as number;
 }
 
-/** Extract a short label from a sub-market question for timeline/multi-outcome display. */
-function shortLabel(market: SubMarket, eventType: string): string {
-  if (eventType === "timeline" && market.end_date) {
-    return formatShortDate(market.end_date);
-  }
-  // For multi-outcome, try to extract the distinguishing part of the question
-  const q = market.question;
-  // Common pattern: "Will X happen?" -> just use the question
-  // Or the question IS the outcome name (e.g., "Russia", "Turkey")
-  if (q.length <= 40) return q;
-  return q.slice(0, 37) + "...";
+/** Extract a readable label from a sub-market question.
+ *  Shows the full question (wrapped) — never truncate to unreadable "...".
+ *  For timeline events, prepend the date badge if available.
+ */
+function shortLabel(market: SubMarket): string {
+  const q = market.question.trim();
+  // Strip common prefixes that repeat the event title
+  const cleaned = q
+    .replace(/^Will\s+/i, "")
+    .replace(/\?$/, "");
+  return cleaned || q;
+}
+
+/** Format a date badge for timeline rows. */
+function dateBadge(market: SubMarket): string | null {
+  if (!market.end_date) return null;
+  return formatShortDate(market.end_date);
 }
 
 /* ------------------------------------------------------------------ */
@@ -143,33 +149,46 @@ interface SubMarketRowProps {
 
 function SubMarketRow({ market, eventType, muted = false }: SubMarketRowProps) {
   const pct = leadingProb(market);
-  const label = shortLabel(market, eventType);
+  const label = shortLabel(market);
+  const date = dateBadge(market);
   const color = probColor(pct);
   const opacity = muted ? "opacity-40" : "";
 
   return (
-    <div className={`flex items-center gap-2 ${opacity}`}>
-      <span
-        className={`w-20 shrink-0 truncate text-[10px] font-medium ${muted ? "line-through text-[var(--muted)]" : "text-[var(--text)]"}`}
-        title={market.question}
-      >
-        {label}
-      </span>
-      <div className="relative h-3.5 flex-1 rounded bg-[var(--line)]">
-        <div
-          className="absolute left-0 top-0 h-full rounded transition-all"
-          style={{
-            width: `${Math.min(100, Math.max(2, pct))}%`,
-            backgroundColor: color,
-          }}
-        />
-        <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold tabular-nums text-white drop-shadow">
-          {pct.toFixed(0)}%
+    <div className={`rounded-lg border border-[var(--line)]/30 px-2.5 py-1.5 ${opacity} ${!muted ? "bg-[var(--bg)]/50" : ""}`}>
+      {/* Question text — full, wrapped */}
+      <div className="flex items-start justify-between gap-2">
+        <p
+          className={`text-[11px] leading-snug ${muted ? "line-through text-[var(--muted)]" : "text-[var(--text)] font-medium"}`}
+        >
+          {label}
+        </p>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {date && (
+            <span className="rounded bg-[var(--line)] px-1.5 py-0.5 text-[8px] font-mono text-[var(--muted)]">
+              {date}
+            </span>
+          )}
+          <span className="text-[10px] font-bold tabular-nums" style={{ color }}>
+            {pct.toFixed(0)}%
+          </span>
+        </div>
+      </div>
+      {/* Probability bar */}
+      <div className="mt-1 flex items-center gap-2">
+        <div className="relative h-2.5 flex-1 rounded-full bg-[var(--line)]">
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-all"
+            style={{
+              width: `${Math.min(100, Math.max(2, pct))}%`,
+              backgroundColor: color,
+            }}
+          />
+        </div>
+        <span className="w-11 shrink-0 text-right text-[8px] tabular-nums text-[var(--muted)]">
+          {formatVolume(market.volume)}
         </span>
       </div>
-      <span className="w-12 shrink-0 text-right text-[8px] tabular-nums text-[var(--muted)]">
-        {formatVolume(market.volume)}
-      </span>
     </div>
   );
 }
