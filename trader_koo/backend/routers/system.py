@@ -196,6 +196,23 @@ def macro_data_public() -> dict[str, Any]:
         return {"ok": False, "error": "Unable to fetch macro data"}
 
 
+@router.get("/api/macro-live")
+def macro_live() -> dict[str, Any]:
+    """Public endpoint: live macro instrument prices + risk regime.
+
+    Returns current prices and daily percent change for yields,
+    commodities, VIX, and dollar, plus an inferred risk regime
+    (RISK_OFF / RISK_ON / MIXED).
+    """
+    try:
+        from trader_koo.notifications.macro_monitor import get_macro_live
+
+        return get_macro_live(DB_PATH)
+    except Exception as exc:
+        LOG.exception("Failed to fetch macro live data: %s", exc)
+        return {"ok": False, "error": "Unable to fetch macro live data"}
+
+
 @router.get("/api/status")
 def status() -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)

@@ -7,6 +7,7 @@ import {
   CryptoPriceStrip,
   EquityPriceStrip,
 } from "./HeaderMarketStrips";
+import MacroStrip from "./MacroStrip";
 import { usePipelineStatus } from "../../api/hooks";
 
 function useTheme() {
@@ -82,6 +83,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
           <div className="flex flex-col gap-2">
             <EquityPriceStrip />
             <CryptoPriceStrip />
+            <MacroStrip />
           </div>
         </div>
 

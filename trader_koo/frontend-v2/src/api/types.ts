@@ -1235,3 +1235,32 @@ export interface AlertsPayload {
   alerts: AlertItem[];
   unread_count: number;
 }
+
+/* ── Macro Live ── */
+export interface MacroInstrument {
+  ticker: string;
+  name: string;
+  emoji: string;
+  current: number | null;
+  prev_close: number | null;
+  change_pct: number | null;
+  threshold_pct: number;
+  exceeded: boolean;
+}
+
+export interface MacroRegime {
+  regime: string;
+  confidence: number;
+  reasoning: string;
+  signals: string[];
+  risk_off_score?: number;
+  risk_on_score?: number;
+}
+
+export interface MacroLivePayload {
+  ok: boolean;
+  instruments: MacroInstrument[];
+  regime: MacroRegime;
+  checked_at: string;
+  error?: string;
+}
