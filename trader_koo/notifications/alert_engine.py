@@ -1,8 +1,11 @@
 """Intraday price alert engine.
 
-Monitors real-time Finnhub equity ticks against support/resistance
-levels from the latest daily report.  Fires Telegram alerts when
-price approaches or crosses key levels for active setups.
+Polls Finnhub REST API for current prices of the top 10 setup tickers
+from the nightly report, then checks proximity to support/resistance
+levels and fires Telegram alerts when triggered.
+
+Uses REST polling (not WebSocket) to avoid consuming Finnhub's 50-symbol
+WebSocket cap — those slots are reserved for the interactive dashboard.
 
 Designed to run as an ``asyncio`` background task inside the FastAPI
 lifespan — failure never propagates to the main application.
@@ -18,6 +21,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from trader_koo.notifications.telegram import send_price_alert
 
 LOG = logging.getLogger("trader_koo.notifications.alert_engine")
@@ -28,11 +33,18 @@ DEFAULT_COOLDOWN_SEC = 4 * 3600
 # Proximity threshold: fire when price is within this % of a level
 DEFAULT_PROXIMITY_PCT = 0.01
 
-# How often the engine polls for new ticks (seconds)
-POLL_INTERVAL_SEC = 2.0
+# REST poll interval: 2 minutes (10 tickers = 5 calls/min, within 60/min)
+POLL_INTERVAL_SEC = 120
 
 # How often the engine reloads setups from the daily report (seconds)
 SETUP_REFRESH_INTERVAL_SEC = 6 * 3600  # every 6 hours
+
+# Maximum number of setup tickers to monitor via REST polling
+MAX_POLL_TICKERS = 10
+
+# Finnhub REST API
+FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
+FINNHUB_REQUEST_TIMEOUT_SEC = 10
 
 # US market hours in Eastern Time (ET = UTC-5 / EDT = UTC-4)
 MARKET_OPEN_ET = dt.time(9, 30)
@@ -76,7 +88,11 @@ def _ensure_telegram_alerts_table(conn: sqlite3.Connection) -> None:
 
 
 class AlertEngine:
-    """Monitors streaming ticks and fires Telegram price alerts.
+    """Polls Finnhub REST API and fires Telegram price alerts.
+
+    Monitors the top 10 setup tickers from the nightly report against
+    their support/resistance levels.  Polls every 2 minutes during US
+    market hours (9:30-16:00 ET, Mon-Fri).
 
     Parameters
     ----------
@@ -84,6 +100,8 @@ class AlertEngine:
         Path to the SQLite database (``/data/trader_koo.db``).
     report_dir:
         Path to the directory containing daily report JSON files.
+    finnhub_api_key:
+        Finnhub API key for REST quote polling.
     proximity_pct:
         Fire alert when price is within this fraction of a level
         (default 0.01 = 1 %).
@@ -96,11 +114,16 @@ class AlertEngine:
         self,
         db_path: Path,
         report_dir: Path,
+        finnhub_api_key: str = "",
         proximity_pct: float = DEFAULT_PROXIMITY_PCT,
         cooldown_sec: int = DEFAULT_COOLDOWN_SEC,
     ) -> None:
         self._db_path = db_path
         self._report_dir = report_dir
+        self._finnhub_api_key = (
+            finnhub_api_key
+            or os.getenv("FINNHUB_API_KEY", "").strip()
+        )
         self._proximity_pct = proximity_pct
         self._cooldown_sec = cooldown_sec
 
@@ -118,7 +141,7 @@ class AlertEngine:
     # ------------------------------------------------------------------
 
     def load_setups(self) -> int:
-        """Load active setups from the latest daily report.
+        """Load top 10 active setups from the latest daily report.
 
         Returns the number of ticker-level pairs now being watched.
         """
@@ -149,13 +172,19 @@ class AlertEngine:
                 continue
             ticker = str(row.get("ticker") or "").strip().upper()
             if not ticker or ticker.startswith("^"):
-                # Skip index-only rows like ^VIX
                 continue
 
-            tier = str(row.get("setup_tier") or "D").strip().upper()
-            bias = str(row.get("signal_bias") or "neutral").strip().lower()
+            # Cap at top 10 tickers for REST polling budget
+            if len(new_watchlist) >= MAX_POLL_TICKERS:
+                break
 
-            # Extract support/resistance levels from the row
+            tier = str(
+                row.get("setup_tier") or "D"
+            ).strip().upper()
+            bias = str(
+                row.get("signal_bias") or "neutral"
+            ).strip().lower()
+
             levels = self._extract_levels_for_ticker(ticker)
             entries: list[dict[str, Any]] = []
             for lvl in levels:
@@ -176,9 +205,11 @@ class AlertEngine:
             self._watchlist = new_watchlist
 
         LOG.info(
-            "Alert engine loaded %d tickers with %d levels",
+            "Alert engine loaded %d tickers with %d levels "
+            "(capped at %d for REST polling)",
             len(new_watchlist),
             total_levels,
+            MAX_POLL_TICKERS,
         )
         return total_levels
 
@@ -192,8 +223,6 @@ class AlertEngine:
         try:
             conn = sqlite3.connect(str(self._db_path))
             conn.row_factory = sqlite3.Row
-            # Check if the report has levels stored; otherwise compute
-            # from price history using the structure module.
             from trader_koo.backend.services.database import (
                 get_price_df,
                 table_exists,
@@ -234,11 +263,96 @@ class AlertEngine:
             return []
 
     # ------------------------------------------------------------------
+    # Finnhub REST price polling
+    # ------------------------------------------------------------------
+
+    def _poll_finnhub_quote(self, ticker: str) -> float | None:
+        """Fetch current price for *ticker* via Finnhub REST API.
+
+        Returns the current price (``c`` field) or ``None`` on failure.
+        Uses ``GET /api/v1/quote?symbol={ticker}&token={key}``.
+        """
+        if not self._finnhub_api_key:
+            LOG.warning(
+                "FINNHUB_API_KEY not set — cannot poll quote for %s",
+                ticker,
+            )
+            return None
+
+        try:
+            with httpx.Client(
+                timeout=FINNHUB_REQUEST_TIMEOUT_SEC,
+            ) as client:
+                resp = client.get(
+                    FINNHUB_QUOTE_URL,
+                    params={
+                        "symbol": ticker,
+                        "token": self._finnhub_api_key,
+                    },
+                )
+            if resp.status_code != 200:
+                LOG.warning(
+                    "Finnhub quote API returned %d for %s",
+                    resp.status_code,
+                    ticker,
+                )
+                return None
+
+            data = resp.json()
+            price = data.get("c")  # "c" = current price
+            if price is None or price == 0:
+                LOG.debug(
+                    "Finnhub returned no price for %s: %s", ticker, data
+                )
+                return None
+            return float(price)
+        except httpx.HTTPError as exc:
+            LOG.warning("Finnhub HTTP error for %s: %s", ticker, exc)
+            return None
+        except Exception as exc:
+            LOG.warning(
+                "Finnhub quote poll failed for %s: %s", ticker, exc
+            )
+            return None
+
+    async def _poll_all_tickers(self) -> dict[str, float]:
+        """Poll Finnhub REST API for all watched tickers.
+
+        Runs synchronous HTTP calls in a thread executor to avoid
+        blocking the async event loop.  Returns {ticker: price}.
+        """
+        with self._lock:
+            tickers = list(self._watchlist.keys())
+
+        if not tickers:
+            return {}
+
+        loop = asyncio.get_running_loop()
+        results: dict[str, float] = {}
+
+        for ticker in tickers:
+            try:
+                price = await loop.run_in_executor(
+                    None, self._poll_finnhub_quote, ticker
+                )
+                if price is not None:
+                    results[ticker] = price
+            except Exception as exc:
+                LOG.debug("Poll executor error for %s: %s", ticker, exc)
+
+        LOG.debug(
+            "Polled %d/%d tickers successfully",
+            len(results),
+            len(tickers),
+        )
+        return results
+
+    # ------------------------------------------------------------------
     # Tick processing
     # ------------------------------------------------------------------
 
     def _check_tick(self, ticker: str, price: float) -> None:
-        """Evaluate a single tick against watched levels."""
+        """Evaluate a single price against watched levels."""
         now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
 
         with self._lock:
@@ -253,7 +367,6 @@ class AlertEngine:
 
             distance_pct = abs(price - level) / level
 
-            # Determine alert type
             if distance_pct <= self._proximity_pct:
                 if entry["level_type"] == "support":
                     if price < level:
@@ -276,7 +389,6 @@ class AlertEngine:
                     continue
                 self._cooldowns[cooldown_key] = now_ts
 
-            # Send alert
             sent = send_price_alert(
                 ticker=ticker,
                 current_price=price,
@@ -338,51 +450,27 @@ class AlertEngine:
             LOG.warning("Failed to persist alert: %s", exc)
 
     # ------------------------------------------------------------------
-    # Subscription management
-    # ------------------------------------------------------------------
-
-    def _subscribe_tickers(self) -> int:
-        """Subscribe watched tickers to the Finnhub streaming feed.
-
-        Returns the number of symbols successfully subscribed.
-        """
-        from trader_koo.streaming.service import subscribe_symbol
-
-        with self._lock:
-            tickers = list(self._watchlist.keys())
-
-        subscribed = 0
-        for ticker in tickers:
-            if subscribe_symbol(ticker):
-                subscribed += 1
-            else:
-                LOG.debug(
-                    "Could not subscribe %s (feed full or unavailable)",
-                    ticker,
-                )
-        LOG.info(
-            "Alert engine subscribed %d/%d tickers to equity feed",
-            subscribed,
-            len(tickers),
-        )
-        return subscribed
-
-    # ------------------------------------------------------------------
     # Main run loop (async)
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Long-running async task — polls ticks and fires alerts.
+        """Long-running async task — polls REST API and fires alerts.
 
+        Polls Finnhub REST every 2 minutes during US market hours.
+        10 tickers x every 2 min = 5 calls/min (within 60/min free cap).
         Exits cleanly when ``self._running`` is set to ``False``.
         """
         self._running = True
-        LOG.info("Telegram alert engine started")
+        LOG.info(
+            "Telegram alert engine started "
+            "(REST polling, %ds interval, max %d tickers)",
+            POLL_INTERVAL_SEC,
+            MAX_POLL_TICKERS,
+        )
 
         # Initial setup load
         try:
             self.load_setups()
-            self._subscribe_tickers()
         except Exception as exc:
             LOG.error("Alert engine initial setup failed: %s", exc)
 
@@ -393,7 +481,9 @@ class AlertEngine:
                 _ensure_telegram_alerts_table(conn)
                 conn.close()
             except Exception as exc:
-                LOG.warning("Failed to init telegram_alerts schema: %s", exc)
+                LOG.warning(
+                    "Failed to init telegram_alerts schema: %s", exc
+                )
 
         last_refresh_ts = dt.datetime.now(dt.timezone.utc).timestamp()
 
@@ -409,48 +499,29 @@ class AlertEngine:
                 now_ts = now_utc.timestamp()
                 if now_ts - last_refresh_ts >= SETUP_REFRESH_INTERVAL_SEC:
                     try:
-                        self.refresh_setups()
+                        self.load_setups()
                         last_refresh_ts = now_ts
                     except Exception as exc:
                         LOG.warning("Setup refresh failed: %s", exc)
 
-                # Poll latest prices from the equity feed
-                from trader_koo.streaming.service import get_equity_prices
+                # Poll Finnhub REST API for current prices
+                prices = await self._poll_all_tickers()
 
-                prices = get_equity_prices()
-                with self._lock:
-                    watched = set(self._watchlist.keys())
-
-                for symbol, data in prices.items():
-                    if symbol not in watched:
-                        continue
-                    price = data.get("price")
-                    if price is None:
-                        continue
-                    self._check_tick(symbol, float(price))
+                for ticker, price in prices.items():
+                    self._check_tick(ticker, price)
 
             except asyncio.CancelledError:
                 LOG.info("Alert engine task cancelled")
                 break
             except Exception as exc:
-                LOG.error("Alert engine tick error: %s", exc)
-                await asyncio.sleep(5.0)
+                LOG.error("Alert engine poll error: %s", exc)
+                await asyncio.sleep(10.0)
 
         LOG.info("Telegram alert engine stopped")
 
     def stop(self) -> None:
         """Signal the run loop to exit."""
         self._running = False
-
-    def refresh_setups(self) -> int:
-        """Reload setups from the latest report and re-subscribe.
-
-        Call this after a nightly pipeline run to pick up new tickers.
-        Returns the number of levels now being watched.
-        """
-        total = self.load_setups()
-        self._subscribe_tickers()
-        return total
 
     # ------------------------------------------------------------------
     # Query
@@ -494,6 +565,8 @@ class AlertEngine:
             "running": self._running,
             "tickers": len(tickers),
             "levels": total_levels,
+            "max_tickers": MAX_POLL_TICKERS,
+            "poll_interval_sec": POLL_INTERVAL_SEC,
             "cooldown_sec": self._cooldown_sec,
             "proximity_pct": self._proximity_pct,
             "ticker_list": sorted(tickers),

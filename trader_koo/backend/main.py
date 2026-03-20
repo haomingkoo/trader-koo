@@ -355,6 +355,7 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=_prefetch_sentiment, daemon=True, name="sentiment-prefetch").start()
 
     # Start Telegram price alert engine (optional — requires credentials)
+    # Uses Finnhub REST polling (not WebSocket) to preserve WS slots for dashboard
     _alert_task: asyncio.Task | None = None  # type: ignore[type-arg]
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     telegram_chat = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -363,10 +364,14 @@ async def lifespan(_app: FastAPI):
             from trader_koo.notifications.alert_engine import AlertEngine
 
             report_dir = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
-            alert_engine = AlertEngine(db_path=DB_PATH, report_dir=report_dir)
+            alert_engine = AlertEngine(
+                db_path=DB_PATH,
+                report_dir=report_dir,
+                finnhub_api_key=finnhub_api_key,
+            )
             _app.state.alert_engine = alert_engine
             _alert_task = asyncio.create_task(alert_engine.run())
-            LOG.info("Telegram alert engine started")
+            LOG.info("Telegram alert engine started (REST polling, top 10 setups)")
         except Exception as exc:
             LOG.warning("Failed to start Telegram alert engine: %s — continuing without it", exc)
     else:
