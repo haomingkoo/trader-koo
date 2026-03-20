@@ -1,5 +1,5 @@
 """System health, routes, LLM health/usage, data-source health, report stability,
-usage/feedback summaries, setup evaluation."""
+usage/feedback summaries, setup evaluation, WebSocket health."""
 from __future__ import annotations
 
 import datetime as dt
@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, Request
 
 from trader_koo.backend.services.database import get_conn, table_exists
 from trader_koo.backend.services.report_loader import latest_daily_report_json
+from trader_koo.crypto.service import get_crypto_ws_health
 from trader_koo.db.sources import get_data_source_manager
 from trader_koo.llm_health import (
     llm_alert_cooldown_min,
@@ -23,6 +24,7 @@ from trader_koo.middleware.auth import (
     get_admin_endpoint_registry,
     require_admin_auth,
 )
+from trader_koo.streaming.service import get_equity_ws_health
 
 from trader_koo.backend.routers.admin._shared import (
     ANALYTICS_ENABLED,
@@ -730,3 +732,13 @@ def admin_setup_eval_calls(
         }
     finally:
         conn.close()
+
+
+@router.get("/api/admin/ws-health")
+@require_admin_auth
+def admin_ws_health() -> dict[str, Any]:
+    """Return health status for all WebSocket feed connections."""
+    return {
+        "crypto_ws": get_crypto_ws_health(),
+        "equity_ws": get_equity_ws_health(),
+    }

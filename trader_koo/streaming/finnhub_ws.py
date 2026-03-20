@@ -59,6 +59,9 @@ class FinnhubWSClient:
         # Previous price for change tracking
         self._prev_prices: dict[str, float] = {}
 
+        # Staleness tracking
+        self._last_message_at: float = 0.0
+
     # ------------------------------------------------------------------
     # Public API (thread-safe)
     # ------------------------------------------------------------------
@@ -67,6 +70,12 @@ class FinnhubWSClient:
     def connected(self) -> bool:
         with self._lock:
             return self._connected
+
+    @property
+    def last_message_at(self) -> float:
+        """Monotonic timestamp of the last WS message received (0 if none)."""
+        with self._lock:
+            return self._last_message_at
 
     def subscribe(self, symbol: str) -> bool:
         """Subscribe to a symbol. Returns False if at 50 limit."""
@@ -228,6 +237,8 @@ class FinnhubWSClient:
         )
 
     def _on_message(self, _ws: websocket.WebSocketApp, raw: str) -> None:
+        with self._lock:
+            self._last_message_at = time.monotonic()
         try:
             msg = json.loads(raw)
             self._handle_trades(msg)

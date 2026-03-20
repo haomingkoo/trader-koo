@@ -47,6 +47,12 @@ _flush_thread: threading.Thread | None = None
 _flush_running = False
 _backfill_lock = threading.Lock()
 _warm_backfill_thread: threading.Thread | None = None
+_staleness_thread: threading.Thread | None = None
+_staleness_running = False
+
+# Staleness thresholds
+_STALENESS_CHECK_INTERVAL_SEC = 60
+_STALENESS_THRESHOLD_SEC = 300  # 5 minutes
 
 
 @dataclass
@@ -537,13 +543,57 @@ def _on_binance_candle_close(bar: CryptoBar) -> None:
         _aggregator.on_candle_close(bar.symbol, bar)
 
 
+def _staleness_loop() -> None:
+    """Background thread: check WS staleness every 60 seconds."""
+    while _staleness_running:
+        time.sleep(_STALENESS_CHECK_INTERVAL_SEC)
+        if not _staleness_running or _client is None:
+            break
+        last_msg = _client.last_message_at
+        if last_msg == 0:
+            continue
+        age = time.monotonic() - last_msg
+        if age > _STALENESS_THRESHOLD_SEC:
+            LOG.warning(
+                "Crypto WS stale: no message for %.0f seconds — forcing reconnect",
+                age,
+            )
+            try:
+                ws = _client._ws
+                if ws is not None:
+                    ws.close()
+            except Exception as exc:
+                LOG.debug("Staleness reconnect close error: %s", exc)
+
+
+def get_crypto_ws_health() -> dict[str, Any]:
+    """Return health status for the crypto WebSocket connection."""
+    if _client is None:
+        return {
+            "connected": False,
+            "last_message_ago_sec": None,
+            "symbols": 0,
+        }
+    last_msg = _client.last_message_at
+    if last_msg == 0:
+        ago: float | None = None
+    else:
+        ago = round(time.monotonic() - last_msg, 1)
+    return {
+        "connected": _client.connected,
+        "last_message_ago_sec": ago,
+        "symbols": _client.symbol_count,
+    }
+
+
 def start_crypto_feed(db_path_str: str | None = None) -> None:
     """Start the Binance WebSocket feed in a background daemon thread.
 
     If *db_path_str* is provided, bars are persisted to that SQLite DB
     and history is pre-loaded on startup.
     """
-    global _client, _aggregator, _db_path_str, _flush_thread, _flush_running, _warm_backfill_thread
+    global _client, _aggregator, _db_path_str, _flush_thread, _flush_running
+    global _warm_backfill_thread, _staleness_thread, _staleness_running
     if _client is not None:
         LOG.warning("Crypto feed already started — ignoring duplicate call")
         return
@@ -587,13 +637,25 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
         _flush_thread.start()
         LOG.info("Crypto DB flush thread started (interval=%ds)", FLUSH_INTERVAL_SEC)
 
+    # Start staleness monitor
+    _staleness_running = True
+    _staleness_thread = threading.Thread(
+        target=_staleness_loop,
+        name="crypto-ws-staleness",
+        daemon=True,
+    )
+    _staleness_thread.start()
+    LOG.info("Crypto WS staleness monitor started")
+
     LOG.info("Crypto feed started")
 
 
 def stop_crypto_feed() -> None:
     """Gracefully stop the WebSocket feed and flush remaining bars."""
     global _client, _aggregator, _flush_running, _flush_thread
+    global _staleness_running, _staleness_thread
     _flush_running = False
+    _staleness_running = False
 
     # Final flush before shutdown
     _flush_bars_to_db()
@@ -604,6 +666,7 @@ def stop_crypto_feed() -> None:
     _client = None
     _aggregator = None
     _flush_thread = None
+    _staleness_thread = None
     LOG.info("Crypto feed stopped")
 
 
