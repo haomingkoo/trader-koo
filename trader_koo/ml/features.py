@@ -797,8 +797,6 @@ def extract_features_for_universe(
                 )
             else:
                 feat_df["fred_hy_oas_change_21d"] = np.nan
-        else:
-            feat_df["fred_hy_oas_change_21d"] = np.nan
     except (KeyError, ValueError, urllib.error.URLError) as exc:
         LOG.warning("FRED feature extraction failed: %s", exc)
     except ImportError:
