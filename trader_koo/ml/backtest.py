@@ -346,7 +346,7 @@ def run_backtest(
                 conn,
                 start_date=train_start,
                 end_date=train_end_date,
-                sample_frequency=5,
+                sample_frequency=10,  # must match trainer.py to avoid label overlap
             )
             if len(dataset) < 50:
                 equity_curve.append({"date": rebalance_date, "portfolio": round(portfolio_value, 2),

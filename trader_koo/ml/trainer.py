@@ -360,25 +360,35 @@ def train_walk_forward(
         train_mask = (dataset["entry_date_ts"] >= fold_start) & (dataset["entry_date_ts"] <= train_end)
         test_mask = (dataset["entry_date_ts"] >= test_start) & (dataset["entry_date_ts"] <= min(test_end, max_date))
 
-        X_train = dataset.loc[train_mask, feature_cols].copy()
-        y_train = dataset.loc[train_mask, "target"].copy()
+        X_train_full = dataset.loc[train_mask, feature_cols].copy()
+        y_train_full = dataset.loc[train_mask, "target"].copy()
         X_test = dataset.loc[test_mask, feature_cols].copy()
         y_test = dataset.loc[test_mask, "target"].copy()
 
-        if len(X_train) < 50 or len(X_test) < 10:
+        if len(X_train_full) < 50 or len(X_test) < 10:
             fold_start += pd.Timedelta(days=step_days)
             continue
+
+        # Split training into train (80%) + validation (20%) for early stopping.
+        # Validation is the LAST 20% of training data (temporal, not random)
+        # so we don't use the test set for model selection (that would be leakage).
+        val_split = int(len(X_train_full) * 0.8)
+        X_train = X_train_full.iloc[:val_split]
+        y_train = y_train_full.iloc[:val_split]
+        X_val = X_train_full.iloc[val_split:]
+        y_val = y_train_full.iloc[val_split:]
 
         # Handle NaN — save training medians for consistent imputation at scoring
         train_medians = X_train.median()
         X_train = X_train.fillna(train_medians)
+        X_val = X_val.fillna(train_medians)
         X_test = X_test.fillna(train_medians)
 
-        # Train with early stopping against OOS validation set
+        # Train with early stopping on VALIDATION set (not test set — no leakage)
         model = lgb.LGBMClassifier(**LGBM_PARAMS)
         model.fit(
             X_train, y_train,
-            eval_set=[(X_test, y_test)],
+            eval_set=[(X_val, y_val)],
             callbacks=[
                 lgb.early_stopping(50, verbose=False),
                 lgb.log_evaluation(0),
