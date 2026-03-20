@@ -45,7 +45,6 @@ try:
 except ImportError:
     FEATURE_COLUMNS_RANKED = FEATURE_COLUMNS
 
-from trader_koo.ml.labels import generate_labels
 from trader_koo.ml.trainer import _apply_target_mode, build_dataset
 
 FEATURE_SETS = {
