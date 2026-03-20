@@ -143,11 +143,11 @@ function Chevron({ open, className = "" }: ChevronProps) {
 
 interface SubMarketRowProps {
   market: SubMarket;
-  eventType: "simple" | "timeline" | "multi_outcome";
+  eventType?: "simple" | "timeline" | "multi_outcome";
   muted?: boolean;
 }
 
-function SubMarketRow({ market, eventType, muted = false }: SubMarketRowProps) {
+function SubMarketRow({ market, muted = false }: SubMarketRowProps) {
   const pct = leadingProb(market);
   const label = shortLabel(market);
   const date = dateBadge(market);
