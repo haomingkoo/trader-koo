@@ -7,7 +7,8 @@ import type {
 } from "../../api/types";
 import Badge from "../ui/Badge";
 import Table from "../ui/Table";
-import { formatReportNumber, GlassCard } from "./reportShared";
+import GlassCard from "../ui/GlassCard";
+import { formatReportNumber } from "./reportShared";
 
 function ImprovementAction({ action }: { action: SetupEvalAction }) {
   const priorityVariant =

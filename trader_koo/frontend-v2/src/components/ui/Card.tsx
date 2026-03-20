@@ -1,3 +1,5 @@
+import { GLASS_BASE } from "./GlassCard";
+
 interface CardProps {
   label?: string;
   value?: string | number;
@@ -6,10 +8,10 @@ interface CardProps {
   glass?: boolean;
 }
 
+const SOLID_BASE = "rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4";
+
 export default function Card({ label, value, children, className = "", glass = false }: CardProps) {
-  const base = glass
-    ? "rounded-xl backdrop-blur-sm bg-[var(--panel)]/80 border border-[var(--line)] p-4"
-    : "rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4";
+  const base = glass ? GLASS_BASE : SOLID_BASE;
   return (
     <div
       className={`${base} ${className}`}

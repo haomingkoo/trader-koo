@@ -6,10 +6,10 @@ import type {
   YoloBlock,
 } from "../../api/types";
 import Badge from "../ui/Badge";
+import GlassCard from "../ui/GlassCard";
 import {
   formatReportNumber,
   formatReportTimestamp,
-  GlassCard,
   severityVariant,
 } from "./reportShared";
 

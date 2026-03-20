@@ -3,11 +3,11 @@ import type {
   CryptoMarketStructurePayload,
   CryptoStructurePayload,
 } from "../../api/types";
+import GlassCard from "../ui/GlassCard";
 import {
   formatLevelContext,
   formatPct,
   formatPrice,
-  GlassCard,
 } from "./CryptoCardPrimitives";
 
 export function StructureCard({

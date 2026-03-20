@@ -1,5 +1,6 @@
 import type { CryptoIndicators } from "../../api/types";
-import { formatPrice, GlassCard } from "./CryptoCardPrimitives";
+import GlassCard from "../ui/GlassCard";
+import { formatPrice } from "./CryptoCardPrimitives";
 
 export function RsiGauge({ value }: { value: number | null }) {
   if (value === null) {

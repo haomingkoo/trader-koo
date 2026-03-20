@@ -236,8 +236,8 @@ export default function GuidePage() {
                   <Card label="Usage Notes">
                     <div className="space-y-2 text-xs leading-relaxed text-[var(--muted)]">
                       <p>
-                        v2 is the long-term interface and will eventually
-                        replace the legacy v1 surface.
+                        This is the current production interface for Trader
+                        Koo.
                       </p>
                       <p>
                         Pipeline internals and rerun controls are intentionally
