@@ -213,13 +213,31 @@ export default function EarningsPage() {
 
   return (
     <div className="space-y-6">
+      {/* ── Header ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-bold tracking-tight">
           Earnings Calendar
         </h2>
         <div className="flex items-center gap-3">
+          {/* View toggle */}
+          <div className="flex gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-0.5">
+            {(["calendar", "table"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`rounded-md px-3 py-1 text-xs font-bold transition-colors ${
+                  viewMode === mode
+                    ? "bg-[var(--accent)] text-white"
+                    : "text-[var(--muted)] hover:text-[var(--text)]"
+                }`}
+              >
+                {mode === "calendar" ? "Grid" : "Table"}
+              </button>
+            ))}
+          </div>
+          {/* Data window (only relevant context for table) */}
           <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-            <label htmlFor="earningsDays">Data window (days):</label>
+            <label htmlFor="earningsDays">Window:</label>
             <input
               id="earningsDays"
               type="number"
@@ -231,45 +249,38 @@ export default function EarningsPage() {
                   Math.max(7, Math.min(90, Number(e.target.value) || 30)),
                 )
               }
-              className="w-16 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-[var(--text)]"
+              className="w-14 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-center text-[var(--text)]"
             />
-          </div>
-          <div className="flex gap-1">
-            {(["calendar", "table"] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setViewMode(mode)}
-                className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                  viewMode === mode
-                    ? "bg-[var(--blue)] text-white"
-                    : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
-                }`}
-              >
-                {mode.charAt(0).toUpperCase() + mode.slice(1)}
-              </button>
-            ))}
+            <span>days</span>
           </div>
         </div>
       </div>
 
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="muted">{data?.provider ?? "Provider unknown"}</Badge>
-          <Badge variant="muted">{data?.count ?? 0} tracked events</Badge>
-          <Badge variant="muted">{summary.setup_ready} setup-ready</Badge>
-          <Badge variant="muted">{summary.watch} watch</Badge>
-          {data?.market_date ? <Badge variant="muted">Market date {data.market_date}</Badge> : null}
-        </div>
-        <p className="mt-3 text-xs text-[var(--muted)]">
-          Full-market earnings calendar powered by Finnhub. Tracked tickers are highlighted.
-        </p>
+      {/* ── Summary bar ── */}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--panel)] px-4 py-3">
+        <Badge variant="blue">{data?.provider ?? "Provider unknown"}</Badge>
+        <Badge variant="muted">{data?.count ?? 0} events</Badge>
+        {summary.setup_ready > 0 && (
+          <Badge variant="green">{summary.setup_ready} setup-ready</Badge>
+        )}
+        {summary.watch > 0 && (
+          <Badge variant="amber">{summary.watch} watch</Badge>
+        )}
+        {summary.high_risk > 0 && (
+          <Badge variant="red">{summary.high_risk} high-risk</Badge>
+        )}
+        {data?.market_date && (
+          <span className="ml-auto text-[10px] text-[var(--muted)]">
+            Market date: {data.market_date}
+          </span>
+        )}
       </div>
 
       {data?.detail && (
         <div className="text-xs text-[var(--muted)]">{String(data.detail)}</div>
       )}
 
-      {/* View toggle */}
+      {/* ── Content ── */}
       {viewMode === "calendar" ? (
         <WeekGridCalendar rows={rows} />
       ) : (
