@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import sqlite3
+import urllib.error
 from typing import Any
 
 import numpy as np
@@ -411,10 +412,18 @@ def extract_features_for_universe(
     as_of_date: str,
     lookback_days: int = 300,
     tickers: list[str] | None = None,
+    strict: bool = False,
 ) -> pd.DataFrame:
     """Extract feature matrix for all tickers as of a specific date.
 
     All computations use only data on or before *as_of_date*.
+
+    Parameters
+    ----------
+    strict : bool
+        When True (training), unexpected errors propagate so broken
+        features are caught early. When False (live scoring), broad
+        exception handling prevents API crashes.
     """
     cutoff_start = pd.Timestamp(as_of_date) - pd.Timedelta(days=lookback_days)
     ticker_clause = ""
@@ -604,7 +613,13 @@ def extract_features_for_universe(
             macro_col = f"macro_{col_name}"
             if macro_col in FEATURE_COLUMNS:
                 feat_df[macro_col] = macro.get(col_name, np.nan)
+    except (sqlite3.OperationalError, KeyError, ValueError) as exc:
+        LOG.warning("Macro feature extraction failed: %s", exc)
+    except ImportError:
+        LOG.warning("macro_features module not available; skipping macro features")
     except Exception as exc:
+        if strict:
+            raise
         LOG.warning("Macro feature extraction failed (non-fatal): %s", exc)
 
     # FRED macro data (yield curve, credit stress, rates)
@@ -626,7 +641,13 @@ def extract_features_for_universe(
                     value = r["value"]
                     break
             feat_df[col_name] = value
+    except (KeyError, ValueError, urllib.error.URLError) as exc:
+        LOG.warning("FRED feature extraction failed: %s", exc)
+    except ImportError:
+        LOG.warning("external_data module not available; skipping FRED features")
     except Exception as exc:
+        if strict:
+            raise
         LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
 
     # Sector rotation features (cached — one DB query per date, not per ticker)
@@ -652,7 +673,13 @@ def extract_features_for_universe(
         feat_df["sector_rank"] = sector_ranks
         feat_df["sector_momentum_5d"] = sector_mom_5d
         feat_df["sector_momentum_21d"] = sector_mom_21d
+    except (sqlite3.OperationalError, KeyError, ValueError) as exc:
+        LOG.warning("Sector feature extraction failed: %s", exc)
+    except ImportError:
+        LOG.warning("sector_rotation module not available; skipping sector features")
     except Exception as exc:
+        if strict:
+            raise
         LOG.warning("Sector feature extraction failed (non-fatal): %s", exc)
 
     # News sentiment per ticker (Finnhub company-news + lexicon scoring)
@@ -667,7 +694,11 @@ def extract_features_for_universe(
             )
         else:
             feat_df["news_sentiment_score"] = np.nan
+    except (KeyError, ValueError, urllib.error.URLError) as exc:
+        LOG.warning("News sentiment feature extraction failed: %s", exc)
     except Exception as exc:
+        if strict:
+            raise
         LOG.warning("News sentiment feature extraction failed (non-fatal): %s", exc)
 
     # Polymarket prediction market probabilities (date-level, same for all tickers)
@@ -694,7 +725,13 @@ def extract_features_for_universe(
                 "polymarket_macro_sentiment",
             ]:
                 feat_df[col_name] = np.nan
+    except (KeyError, ValueError, urllib.error.URLError) as exc:
+        LOG.warning("Polymarket feature extraction failed: %s", exc)
+    except ImportError:
+        LOG.warning("external_data module not available; skipping Polymarket features")
     except Exception as exc:
+        if strict:
+            raise
         LOG.warning("Polymarket feature extraction failed (non-fatal): %s", exc)
 
     # Ensure all expected columns exist
@@ -702,4 +739,31 @@ def extract_features_for_universe(
         if col not in feat_df.columns:
             feat_df[col] = np.nan
 
-    return feat_df.set_index("ticker")[FEATURE_COLUMNS].copy()
+    result_df = feat_df.set_index("ticker")[FEATURE_COLUMNS].copy()
+
+    # --- Feature completeness check ---
+    total_features = len(FEATURE_COLUMNS)
+    for ticker_idx in result_df.index:
+        row = result_df.loc[ticker_idx]
+        nan_count = int(row.isna().sum())
+        nan_pct = nan_count / total_features * 100
+        if nan_pct > 30:
+            missing = [c for c in FEATURE_COLUMNS if pd.isna(row[c])]
+            LOG.warning(
+                "Feature completeness: %s on %s has %.0f%% NaN "
+                "(%d/%d missing: %s)",
+                ticker_idx, as_of_date, nan_pct, nan_count,
+                total_features, ", ".join(missing[:10]),
+            )
+    if strict:
+        overall_nan_pct = result_df.isna().sum().sum() / (
+            len(result_df) * total_features
+        ) * 100
+        if overall_nan_pct > 50:
+            raise ValueError(
+                f"Feature matrix for {as_of_date} has {overall_nan_pct:.0f}% NaN "
+                f"({result_df.isna().sum().sum()}/{len(result_df) * total_features} "
+                f"values) — likely systemic data issue"
+            )
+
+    return result_df
