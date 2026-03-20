@@ -129,9 +129,11 @@ def run_benchmark(
     # Build dataset ONCE (labels + features are the same for all models)
     print("\n[1/3] Building dataset...")
     sys.stdout.flush()
+    end_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     dataset = build_dataset(
         conn,
         start_date=start_date,
+        end_date=end_date,
         sample_frequency=sample_frequency,
     )
     print(f"  Dataset: {len(dataset)} samples, {dataset['entry_date'].nunique()} dates")
