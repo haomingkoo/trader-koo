@@ -35,7 +35,7 @@ interface MethodologyStats {
 }
 
 interface PipelineStep {
-  icon: string;
+  icon: React.ComponentType<{ className?: string }>;
   label: string;
   description: string;
 }
@@ -184,11 +184,11 @@ function SectionHeading({
 type PipelineNodeState = "idle" | "active" | "done";
 
 function PipelineNode({
-  icon,
+  icon: Icon,
   label,
   state,
 }: {
-  icon: string;
+  icon: React.ComponentType<{ className?: string }>;
   label: string;
   state: PipelineNodeState;
 }) {
@@ -201,7 +201,7 @@ function PipelineNode({
       }`}
     >
       <div
-        className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl border-2 transition-all duration-[400ms] ${
+        className={`w-14 h-14 rounded-2xl flex items-center justify-center border-2 transition-all duration-[400ms] ${
           state === "active"
             ? "border-[var(--accent)] shadow-[0_0_20px_rgba(74,158,255,0.25)]"
             : state === "done"
@@ -214,7 +214,15 @@ function PipelineNode({
             : undefined
         }
       >
-        {icon}
+        <Icon
+          className={`h-6 w-6 ${
+            state === "active"
+              ? "text-[var(--accent)]"
+              : state === "done"
+                ? "text-[var(--green)]"
+                : "text-[var(--muted)]"
+          }`}
+        />
       </div>
       <span className="text-[11px] font-medium text-center max-w-[80px] leading-tight">
         {label}
@@ -398,37 +406,37 @@ function TimelineStep({
 
 const PIPELINE_STEPS: PipelineStep[] = [
   {
-    icon: "\uD83D\uDCCA",
+    icon: Database,
     label: "Data Ingest",
     description:
       "yfinance OHLCV, Finviz fundamentals, FRED macro, Finnhub news, Binance crypto, and Polymarket odds are collected and normalized.",
   },
   {
-    icon: "\uD83D\uDD0D",
+    icon: Eye,
     label: "Pattern Scan",
     description:
       "5-layer detection: rule-based geometry, candlestick patterns, hybrid scoring, CV proxy consensus, and YOLOv8 AI on chart images.",
   },
   {
-    icon: "\uD83E\uDDE0",
+    icon: Brain,
     label: "ML Filter",
     description:
       "LightGBM meta-labeling classifier scores each pattern detection. Low-confidence setups are vetoed before debate.",
   },
   {
-    icon: "\uD83D\uDDE3\uFE0F",
+    icon: MessageSquare,
     label: "Debate Engine",
     description:
       "5 specialist analysts (trend, momentum, valuation, pattern, risk) evaluate each setup. Arbiter synthesizes consensus.",
   },
   {
-    icon: "\uD83D\uDEE1\uFE0F",
+    icon: ShieldCheck,
     label: "Risk Gate",
     description:
       "VIX regime, Fear/Greed composite, ATR position sizing, and drawdown breaker must all pass before trade entry.",
   },
   {
-    icon: "\u2705",
+    icon: Target,
     label: "Paper Trade",
     description:
       "Setup opens a simulated trade with triple-barrier exit (2x ATR profit, 2x ATR stop, 10-day time). Full audit trail recorded.",
