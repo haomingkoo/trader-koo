@@ -1,24 +1,318 @@
-import { useEffect, useState, useRef, useCallback } from "react";
-import {
-  Database,
-  Eye,
-  Brain,
-  MessageSquare,
-  ShieldCheck,
-  PlayCircle,
-  Clock,
-  TrendingUp,
-  BarChart3,
-  Activity,
-  Layers,
-  Zap,
-  Target,
-  AlertTriangle,
-} from "lucide-react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
-/* ------------------------------------------------------------------ */
-/* Types                                                               */
-/* ------------------------------------------------------------------ */
+/* ══════════════════════════════════════════════════════════════════════
+   HOOKS
+   ══════════════════════════════════════════════════════════════════════ */
+
+function useInView(threshold = 0.15) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [inView, setInView] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting) setInView(true);
+      },
+      { threshold },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [threshold]);
+
+  return { ref, inView };
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ANIMATED COUNTER
+   ══════════════════════════════════════════════════════════════════════ */
+
+function AnimatedCounter({
+  value,
+  suffix = "",
+  decimals = 0,
+}: {
+  value: number;
+  suffix?: string;
+  decimals?: number;
+}) {
+  const [display, setDisplay] = useState(0);
+  const { ref, inView } = useInView(0.3);
+
+  useEffect(() => {
+    if (!inView) return;
+    let frame: number;
+    const duration = 1400;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const elapsed = now - start;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setDisplay(
+        decimals > 0
+          ? parseFloat((eased * value).toFixed(decimals))
+          : Math.round(eased * value),
+      );
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [inView, value, decimals]);
+
+  return (
+    <span ref={ref} className="tabular-nums">
+      {decimals > 0 ? display.toFixed(decimals) : display.toLocaleString()}
+      {suffix}
+    </span>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FULL-VIEWPORT SECTION WITH FADE-IN
+   ══════════════════════════════════════════════════════════════════════ */
+
+function Section({
+  children,
+  className = "",
+  id,
+  full = true,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  id?: string;
+  full?: boolean;
+}) {
+  const { ref, inView } = useInView(0.08);
+  return (
+    <section
+      ref={ref}
+      id={id}
+      className={`relative flex items-center justify-center px-6 py-24 transition-all duration-[1200ms] ease-out ${
+        full ? "min-h-screen" : ""
+      } ${
+        inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-16"
+      } ${className}`}
+    >
+      {children}
+    </section>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STAGGER-ANIMATED ELEMENT
+   ══════════════════════════════════════════════════════════════════════ */
+
+function Stagger({
+  children,
+  delay = 0,
+  className = "",
+}: {
+  children: React.ReactNode;
+  delay?: number;
+  className?: string;
+}) {
+  const { ref, inView } = useInView(0.15);
+  return (
+    <div
+      ref={ref}
+      className={`transition-all duration-700 ease-out ${
+        inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
+      } ${className}`}
+      style={{ transitionDelay: `${delay}ms` }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STICKY SECTION LABEL
+   ══════════════════════════════════════════════════════════════════════ */
+
+function StickyLabel({ text }: { text: string }) {
+  return (
+    <div className="sticky top-0 z-10 mb-16 backdrop-blur-sm bg-transparent pt-6 pb-2">
+      <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--accent)]/80">
+        {text}
+      </span>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FLOW STEP + ARROW (horizontal pipeline)
+   ══════════════════════════════════════════════════════════════════════ */
+
+function FlowStep({
+  label,
+  sublabel,
+  delay = 0,
+}: {
+  label: string;
+  sublabel: string;
+  delay?: number;
+}) {
+  const { ref, inView } = useInView(0.2);
+  return (
+    <div
+      ref={ref}
+      className={`flex flex-col items-center rounded-2xl border border-[var(--line)] bg-[var(--panel)] px-6 py-5 text-center transition-all duration-700 ease-out min-w-[130px] ${
+        inView ? "opacity-100 scale-100" : "opacity-0 scale-90"
+      }`}
+      style={{ transitionDelay: `${delay}ms` }}
+    >
+      <span className="text-sm font-bold text-[var(--text)]">{label}</span>
+      <span className="mt-1.5 text-[11px] text-[var(--muted)]">{sublabel}</span>
+    </div>
+  );
+}
+
+function FlowArrow() {
+  return (
+    <div className="hidden items-center text-[var(--accent)]/30 lg:flex">
+      <div className="h-px w-10 bg-gradient-to-r from-[var(--accent)]/20 to-[var(--accent)]/40" />
+      <svg width="10" height="10" viewBox="0 0 10 10" className="text-[var(--accent)]/50">
+        <path d="M1 1L8 5L1 9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </svg>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STAT CARD (big number)
+   ══════════════════════════════════════════════════════════════════════ */
+
+function StatCard({
+  value,
+  label,
+  delay = 0,
+  suffix = "",
+  decimals = 0,
+}: {
+  value: number;
+  label: string;
+  delay?: number;
+  suffix?: string;
+  decimals?: number;
+}) {
+  return (
+    <Stagger
+      delay={delay}
+      className="flex flex-col items-center rounded-2xl border border-[var(--line)] bg-[var(--panel)] px-8 py-10"
+    >
+      <div className="text-5xl font-bold tracking-tight text-[var(--accent)]">
+        <AnimatedCounter value={value} suffix={suffix} decimals={decimals} />
+      </div>
+      <div className="mt-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
+        {label}
+      </div>
+    </Stagger>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PIPELINE NODE (vertical stepper)
+   ══════════════════════════════════════════════════════════════════════ */
+
+function PipelineNode({
+  step,
+  title,
+  description,
+  highlight,
+  isLast = false,
+  delay = 0,
+}: {
+  step: number;
+  title: string;
+  description: string;
+  highlight?: string;
+  isLast?: boolean;
+  delay?: number;
+}) {
+  const { ref, inView } = useInView(0.15);
+  return (
+    <div
+      ref={ref}
+      className={`relative flex gap-8 transition-all duration-800 ease-out ${
+        inView ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-10"
+      }`}
+      style={{ transitionDelay: `${delay}ms` }}
+    >
+      <div className="flex flex-col items-center">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 border-[var(--accent)] bg-[var(--accent)]/10 text-base font-bold text-[var(--accent)]">
+          {step}
+        </div>
+        {!isLast && (
+          <div className="w-px flex-1 bg-gradient-to-b from-[var(--accent)]/40 to-[var(--accent)]/10" />
+        )}
+      </div>
+      <div className="pb-16">
+        <h4 className="text-xl font-semibold text-[var(--text)]">{title}</h4>
+        <p className="mt-2 max-w-lg text-sm leading-relaxed text-[var(--muted)]">
+          {description}
+        </p>
+        {highlight && (
+          <p className="mt-4 max-w-lg rounded-xl border border-[var(--accent)]/20 bg-[var(--accent)]/5 px-5 py-3 text-xs leading-relaxed text-[var(--muted)] italic">
+            {highlight}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   GATE STEP (risk gating)
+   ══════════════════════════════════════════════════════════════════════ */
+
+function GateStep({
+  gate,
+  description,
+  isLast = false,
+  delay = 0,
+}: {
+  gate: string;
+  description: string;
+  isLast?: boolean;
+  delay?: number;
+}) {
+  const { ref, inView } = useInView(0.15);
+  return (
+    <div
+      ref={ref}
+      className={`flex items-start gap-6 transition-all duration-700 ease-out ${
+        inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+      }`}
+      style={{ transitionDelay: `${delay}ms` }}
+    >
+      <div className="flex flex-col items-center">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--green)]/40 bg-[var(--green)]/10">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M3 8.5L6.5 12L13 4"
+              stroke="var(--green)"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </div>
+        {!isLast && <div className="h-10 w-px bg-[var(--green)]/15" />}
+      </div>
+      <div className={isLast ? "pb-0" : "pb-4"}>
+        <h4 className="text-base font-semibold text-[var(--text)]">{gate}</h4>
+        <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">
+          {description}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   LIVE STATS HOOK
+   ══════════════════════════════════════════════════════════════════════ */
 
 interface MethodologyStats {
   ok: boolean;
@@ -32,213 +326,7 @@ interface MethodologyStats {
   data_sources: number;
 }
 
-interface SectionProps {
-  children: React.ReactNode;
-  className?: string;
-}
-
-interface DataSourceCardProps {
-  emoji: string;
-  name: string;
-  provides: string;
-  frequency: string;
-}
-
-interface AnalystCardProps {
-  name: string;
-  focus: string;
-  outputs: string;
-  color: string;
-}
-
-interface TimelineStepProps {
-  time: string;
-  label: string;
-  detail: string;
-  isLast?: boolean;
-}
-
-/* ------------------------------------------------------------------ */
-/* Animated section wrapper (fade-in on scroll)                        */
-/* ------------------------------------------------------------------ */
-
-function AnimatedSection({ children, className = "" }: SectionProps) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          observer.unobserve(el);
-        }
-      },
-      { threshold: 0.08 },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  return (
-    <div
-      ref={ref}
-      className={`transition-all duration-700 ${visible ? "translate-y-0 opacity-100" : "translate-y-6 opacity-0"} ${className}`}
-    >
-      {children}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Section heading                                                     */
-/* ------------------------------------------------------------------ */
-
-function SectionHeading({
-  step,
-  icon: Icon,
-  title,
-  subtitle,
-}: {
-  step: number;
-  icon: React.ElementType;
-  title: string;
-  subtitle: string;
-}) {
-  return (
-    <div className="mb-6 flex items-start gap-4">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)]/15 text-[var(--accent)]">
-        <Icon size={20} strokeWidth={1.75} />
-      </div>
-      <div>
-        <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--accent)]">
-          Step {step}
-        </div>
-        <h2 className="text-lg font-bold text-[var(--text)]">{title}</h2>
-        <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">
-          {subtitle}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Reusable cards                                                      */
-/* ------------------------------------------------------------------ */
-
-function GlassCard({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={`rounded-xl border border-[var(--line)] bg-[var(--panel)]/80 p-4 backdrop-blur-sm ${className}`}
-    >
-      {children}
-    </div>
-  );
-}
-
-function DataSourceCard({ emoji, name, provides, frequency }: DataSourceCardProps) {
-  return (
-    <GlassCard className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <span className="text-lg" aria-hidden="true">
-          {emoji}
-        </span>
-        <span className="text-sm font-semibold text-[var(--text)]">{name}</span>
-      </div>
-      <p className="text-xs leading-relaxed text-[var(--muted)]">{provides}</p>
-      <span className="mt-auto text-[11px] font-medium text-[var(--accent)]">
-        {frequency}
-      </span>
-    </GlassCard>
-  );
-}
-
-function AnalystCard({ name, focus, outputs, color }: AnalystCardProps) {
-  return (
-    <GlassCard className="flex flex-col gap-2">
-      <div
-        className="text-xs font-bold uppercase tracking-[0.12em]"
-        style={{ color }}
-      >
-        {name}
-      </div>
-      <p className="text-xs leading-relaxed text-[var(--muted)]">{focus}</p>
-      <p className="mt-auto text-[11px] text-[var(--text)]">{outputs}</p>
-    </GlassCard>
-  );
-}
-
-function TimelineStep({ time, label, detail, isLast = false }: TimelineStepProps) {
-  return (
-    <div className="flex gap-4">
-      <div className="flex flex-col items-center">
-        <div className="h-3 w-3 rounded-full border-2 border-[var(--accent)] bg-[var(--bg)]" />
-        {!isLast && <div className="w-px flex-1 bg-[var(--line)]" />}
-      </div>
-      <div className={`pb-6 ${isLast ? "pb-0" : ""}`}>
-        <span className="text-xs font-semibold tabular-nums text-[var(--accent)]">
-          {time}
-        </span>
-        <div className="text-sm font-medium text-[var(--text)]">{label}</div>
-        <p className="text-xs leading-relaxed text-[var(--muted)]">{detail}</p>
-      </div>
-    </div>
-  );
-}
-
-function StatBadge({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/50 px-3 py-2 text-center">
-      <div className="text-lg font-bold tabular-nums text-[var(--accent)]">
-        {value}
-      </div>
-      <div className="text-[11px] text-[var(--muted)]">{label}</div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Layer card for pattern detection                                    */
-/* ------------------------------------------------------------------ */
-
-function LayerCard({
-  layer,
-  title,
-  description,
-}: {
-  layer: number;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="flex gap-3 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)]/10 text-xs font-bold text-[var(--accent)]">
-        {layer}
-      </div>
-      <div>
-        <div className="text-sm font-semibold text-[var(--text)]">{title}</div>
-        <p className="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Main page component                                                 */
-/* ------------------------------------------------------------------ */
-
-export default function MethodologyPage() {
+function useMethodologyStats() {
   const [stats, setStats] = useState<MethodologyStats | null>(null);
 
   const fetchStats = useCallback(async () => {
@@ -249,511 +337,579 @@ export default function MethodologyPage() {
         if (data.ok) setStats(data);
       }
     } catch {
-      /* non-critical — page works without live stats */
+      /* non-critical */
     }
   }, []);
 
   useEffect(() => {
-    document.title = "Methodology \u2014 Trader Koo";
     fetchStats();
   }, [fetchStats]);
 
+  return stats;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   DATA
+   ══════════════════════════════════════════════════════════════════════ */
+
+const DATA_SOURCES = [
+  { name: "yfinance", provides: "OHLCV price history, splits, dividends for 500+ S&P tickers", frequency: "Daily" },
+  { name: "Finviz", provides: "Fundamentals, P/E, PEG, market cap, analyst targets, sector data", frequency: "Daily" },
+  { name: "Finnhub", provides: "Real-time WebSocket quotes, company news, earnings calendar", frequency: "Real-time" },
+  { name: "FRED", provides: "Treasury yields, unemployment, fed funds rate, macro indicators", frequency: "Daily" },
+  { name: "Binance", provides: "BTC/ETH WebSocket feed, 1-minute candles, 24h volume", frequency: "Real-time" },
+  { name: "Polymarket", provides: "Prediction market odds for Fed cuts, recession, geopolitical events", frequency: "On-demand" },
+  { name: "Alpha Vantage", provides: "News sentiment scoring and topic-level market sentiment", frequency: "On-demand" },
+];
+
+const PATTERN_LAYERS = [
+  {
+    title: "Rule-Based Screening",
+    description: "Support/resistance levels, gap zones, trendline channels, and moving average crossovers computed from raw price data. Detects flags, wedges, channels, and triangles using slope regression on swing highs and lows.",
+  },
+  {
+    title: "Candlestick Pattern Recognition",
+    description: "Identifies reversal and continuation signals across 1-3 bar windows: hammer, morning star, engulfing, doji clusters, and more. Each pattern is weighted by historical reliability.",
+  },
+  {
+    title: "Hybrid Scoring",
+    description: "Combines all rule-based signals into a weighted composite: 50% geometry + 20% candlestick + 15% volume confirmation + 15% breakout proximity. An independent scorer re-evaluates with different parameters for consensus.",
+  },
+  {
+    title: "LLM Debate Analysis",
+    description: "Multi-angle commentary from five synthetic analysts. Gemini-powered narrative generation with structured schema validation. Sanitized output ensures reliable downstream consumption.",
+  },
+  {
+    title: "YOLOv8 Visual Pattern Detection",
+    description: "Render candlestick chart to image. Run object detection model to find head-and-shoulders, double tops, wedges, flags, and more. Map bounding boxes back to price coordinates for actionable levels.",
+    highlight: "Uses foduucom/stockmarket-pattern-detection-yolov8 fine-tuned on chart pattern datasets. Dual-timeframe scan: daily (180d) and weekly (730d). Runs nightly on the full universe.",
+  },
+];
+
+const ML_FEATURES = [
+  { category: "Price", items: ["Multi-horizon returns", "Volatility ratios", "Distance from SMA", "Bollinger %B"] },
+  { category: "Volume", items: ["Volume z-score", "OBV slope", "Volume-price divergence"] },
+  { category: "Technical", items: ["RSI", "MACD signal", "ATR ratio", "Trend position"] },
+  { category: "Macro", items: ["VIX level", "VIX term structure", "Yield curve slope"] },
+  { category: "Pattern", items: ["YOLO detection count", "Pattern confidence", "Cross-sectional rank"] },
+];
+
+const ANALYSTS = [
+  { name: "Trend / Structure", role: "Price trend, S/R levels, market structure, MA positioning", color: "var(--accent)" },
+  { name: "Momentum", role: "RSI, MACD, volume trends, breadth confirmation, divergences", color: "var(--green)" },
+  { name: "Valuation", role: "P/E, PEG, discount-to-target, sector comparisons, fair value", color: "var(--blue)" },
+  { name: "Pattern / YOLO", role: "5-layer detection results, AI confidence, pattern reliability", color: "var(--amber)" },
+  { name: "Risk Manager", role: "VIX regime, earnings proximity, sector risk, correlation", color: "var(--red)" },
+];
+
+const RISK_GATES = [
+  { gate: "VIX Regime Check", description: "3-state HMM classifies low-vol, normal, and high-vol. High-vol regimes raise conviction thresholds and reduce position sizes." },
+  { gate: "Fear & Greed Filter", description: "Weighted composite: VIX 30% + breadth 25% + momentum 25% + market strength 15% + put/call 5%. Extreme readings adjust risk tolerance." },
+  { gate: "Correlation Guard", description: "Limits exposure to correlated positions. No portfolio concentration in a single sector or factor." },
+  { gate: "ATR Position Sizing", description: "Each position is calibrated to the stock's 14-day ATR. No single trade risks more than a fixed percentage of the portfolio." },
+  { gate: "Drawdown Breaker", description: "Halts new entries when portfolio drawdown exceeds threshold. Existing positions managed to expiry but no new risk is added." },
+];
+
+const PIPELINE_STEPS = [
+  { time: "22:00", label: "Market Data Ingest", detail: "yfinance OHLCV + Finviz fundamentals for 500+ tickers" },
+  { time: "22:03", label: "YOLO Pattern Detection", detail: "Render charts, run YOLOv8, map detections to price levels" },
+  { time: "22:10", label: "Report Generation", detail: "LLM debate, ML scoring, setup quality ranking, risk filters" },
+  { time: "22:14", label: "Paper Trade MTM", detail: "Mark-to-market all open positions, check exit rules" },
+  { time: "22:15", label: "Telegram Alerts", detail: "Push key changes, new setups, and exit notifications" },
+];
+
+/* ══════════════════════════════════════════════════════════════════════
+   MAIN PAGE
+   ══════════════════════════════════════════════════════════════════════ */
+
+export default function MethodologyPage() {
+  const stats = useMethodologyStats();
+
+  useEffect(() => {
+    document.title = "Methodology \u2014 Trader Koo";
+  }, []);
+
   return (
-    <div className="mx-auto max-w-4xl space-y-12 pb-16">
-      {/* ============================================================ */}
-      {/* Hero                                                          */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <div className="space-y-4 pt-2">
-          <h1 className="text-3xl font-bold tracking-tight text-[var(--text)]">
-            How Trader Koo Works
+    <div className="scrollbar-none -mx-4 -mt-3 -mb-4 overflow-y-auto overflow-x-hidden">
+
+      {/* ────────────────────────────────────────────────────────────────
+          HERO — full viewport, centered, cinematic
+          ──────────────────────────────────────────────────────────────── */}
+      <section className="relative flex min-h-screen flex-col items-center justify-center px-6 py-24 bg-gradient-to-b from-[#060a12] via-[#0b0f16] to-[#0d1220]">
+        <div className="text-center max-w-4xl">
+          <h1 className="text-5xl font-bold tracking-tight text-[var(--text)] sm:text-6xl lg:text-7xl leading-[1.08]">
+            How Trader Koo
+            <br />
+            <span className="bg-gradient-to-r from-[var(--accent)] to-[var(--blue)] bg-clip-text text-transparent">
+              Works
+            </span>
           </h1>
-          <p className="max-w-2xl text-sm leading-relaxed text-[var(--muted)]">
-            A multi-layered decision pipeline for swing trade analysis &mdash;
-            from data ingestion to paper trade execution.
+          <p className="mx-auto mt-8 max-w-xl text-lg leading-relaxed text-[var(--muted)] sm:text-xl">
+            A multi-layered decision pipeline
+            <br className="hidden sm:block" />
+            for swing trade analysis.
           </p>
-          <div className="rounded-xl border-2 border-[var(--amber)]/40 bg-[rgba(248,194,78,0.08)] px-4 py-3">
-            <div className="flex items-start gap-2.5">
-              <AlertTriangle
-                size={16}
-                className="mt-0.5 shrink-0 text-[var(--amber)]"
-              />
-              <p className="text-xs leading-relaxed text-[var(--muted)]">
-                For informational and educational purposes only. Not financial
-                advice. Past performance does not guarantee future results.
-              </p>
-            </div>
+
+          {/* Horizontal pipeline summary */}
+          <div className="mx-auto mt-20 flex flex-wrap items-center justify-center gap-3 lg:gap-0">
+            <FlowStep label="7 Sources" sublabel="Market data" delay={300} />
+            <FlowArrow />
+            <FlowStep label="5 Layers" sublabel="Pattern detection" delay={500} />
+            <FlowArrow />
+            <FlowStep label="51 Features" sublabel="ML pipeline" delay={700} />
+            <FlowArrow />
+            <FlowStep label="5 Analysts" sublabel="Debate engine" delay={900} />
+            <FlowArrow />
+            <FlowStep label="Paper Trades" sublabel="Risk-gated" delay={1100} />
+          </div>
+        </div>
+
+        {/* Scroll indicator */}
+        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 animate-bounce text-[var(--muted)]/60">
+          <div className="flex flex-col items-center gap-2">
+            <span className="text-[10px] uppercase tracking-[0.25em]">Scroll to explore</span>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path d="M9 3V15M9 15L4 10M9 15L14 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </div>
+      </section>
+
+      {/* ────────────────────────────────────────────────────────────────
+          DATA FOUNDATION
+          ──────────────────────────────────────────────────────────────── */}
+      <Section className="bg-gradient-to-b from-[#0d1220] to-[var(--bg)]" id="data">
+        <div className="w-full max-w-5xl">
+          <StickyLabel text="01 / Data Foundation" />
+
+          <div className="text-center mb-20">
+            <h2 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl lg:text-5xl">
+              Seven data sources.
+              <br />
+              <span className="text-[var(--muted)]">One unified view.</span>
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[var(--muted)]">
+              Price history, fundamentals, real-time quotes, macro indicators,
+              crypto feeds, prediction markets, and news sentiment converge
+              into a single analytical surface.
+            </p>
           </div>
 
-          {/* Live stats ribbon */}
-          {stats && (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatBadge
-                label="Tickers Tracked"
-                value={stats.tickers_tracked.toLocaleString()}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {DATA_SOURCES.map((src, i) => (
+              <Stagger
+                key={src.name}
+                delay={i * 80}
+                className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6 transition-colors hover:border-[var(--accent)]/30"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <h4 className="text-sm font-bold text-[var(--text)]">{src.name}</h4>
+                  <span
+                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                      src.frequency === "Real-time"
+                        ? "bg-[var(--green)]/12 text-[var(--green)]"
+                        : src.frequency === "Daily"
+                          ? "bg-[var(--blue)]/12 text-[var(--blue)]"
+                          : "bg-[var(--amber)]/12 text-[var(--amber)]"
+                    }`}
+                  >
+                    {src.frequency}
+                  </span>
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-[var(--muted)]">
+                  {src.provides}
+                </p>
+              </Stagger>
+            ))}
+          </div>
+        </div>
+      </Section>
+
+      {/* ────────────────────────────────────────────────────────────────
+          PATTERN DETECTION
+          ──────────────────────────────────────────────────────────────── */}
+      <Section className="bg-gradient-to-b from-[var(--bg)] to-[#0a0e18]" id="patterns">
+        <div className="w-full max-w-4xl">
+          <StickyLabel text="02 / Pattern Detection" />
+
+          <div className="text-center mb-20">
+            <h2 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl lg:text-5xl">
+              Five layers of detection.
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[var(--muted)]">
+              From simple moving-average crossovers to computer-vision pattern
+              recognition. Each layer adds signal. No single layer decides.
+            </p>
+          </div>
+
+          <div className="mt-8">
+            {PATTERN_LAYERS.map((layer, i) => (
+              <PipelineNode
+                key={layer.title}
+                step={i + 1}
+                title={layer.title}
+                description={layer.description}
+                highlight={layer.highlight}
+                isLast={i === PATTERN_LAYERS.length - 1}
+                delay={i * 150}
               />
-              <StatBadge
-                label="Patterns Today"
-                value={stats.patterns_detected_today.toLocaleString()}
+            ))}
+          </div>
+        </div>
+      </Section>
+
+      {/* ────────────────────────────────────────────────────────────────
+          ML PIPELINE
+          ──────────────────────────────────────────────────────────────── */}
+      <Section className="bg-gradient-to-b from-[#0a0e18] to-[#0d1220]" id="ml">
+        <div className="w-full max-w-5xl">
+          <StickyLabel text="03 / ML Pipeline" />
+
+          <div className="text-center mb-20">
+            <h2 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl lg:text-5xl">
+              Machine learning
+              <br />
+              <span className="text-[var(--muted)]">as a filter, not a signal.</span>
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[var(--muted)]">
+              LightGBM walk-forward classifier trained on real market data.
+              Honest about its edge: useful for filtering weak setups, never
+              for generating trades.
+            </p>
+          </div>
+
+          {/* Big stat callouts */}
+          <div className="mx-auto grid max-w-4xl gap-4 sm:grid-cols-3">
+            <StatCard value={stats?.ml_features ?? 51} label="Engineered Features" delay={0} />
+            <StatCard value={93} label="Walk-Forward Folds" delay={200} />
+            <StatCard value={22697} label="Training Samples" delay={400} />
+          </div>
+
+          {/* Horizontal flow */}
+          <div className="mx-auto mt-16 flex flex-wrap items-center justify-center gap-3 lg:gap-0">
+            <FlowStep label="Features" sublabel="51 engineered" delay={100} />
+            <FlowArrow />
+            <FlowStep label="Labels" sublabel="Triple-barrier" delay={300} />
+            <FlowArrow />
+            <FlowStep label="Training" sublabel="Walk-forward CV" delay={500} />
+            <FlowArrow />
+            <FlowStep label="Scoring" sublabel="Probability filter" delay={700} />
+          </div>
+
+          {/* Feature categories */}
+          <Stagger delay={200} className="mx-auto mt-16 max-w-4xl">
+            <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-8">
+              <h4 className="mb-6 text-[11px] font-bold uppercase tracking-[0.2em] text-[var(--muted)]">
+                Feature Categories
+              </h4>
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {ML_FEATURES.map((cat) => (
+                  <div key={cat.category}>
+                    <span className="inline-block rounded-full bg-[var(--accent)]/10 px-3.5 py-1.5 text-xs font-bold text-[var(--accent)]">
+                      {cat.category}
+                    </span>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {cat.items.map((f) => (
+                        <span
+                          key={f}
+                          className="rounded-md border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1 text-[10px] text-[var(--muted)]"
+                        >
+                          {f}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Stagger>
+
+          {/* Honest AUC callout */}
+          <Stagger delay={400} className="mx-auto mt-10 max-w-xl text-center">
+            <div className="rounded-2xl border border-[var(--amber)]/25 bg-[var(--amber)]/5 px-8 py-8">
+              <div className="text-4xl font-bold tracking-tight text-[var(--amber)]">
+                <AnimatedCounter value={stats?.ml_auc ?? 0.5235} decimals={4} />
+              </div>
+              <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--amber)]/70">
+                AUC Score
+              </div>
+              <p className="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                Honest evaluation. Slight edge over random. Used as a probability
+                filter to downweight weak setups &mdash; never as the primary signal.
+              </p>
+            </div>
+          </Stagger>
+        </div>
+      </Section>
+
+      {/* ────────────────────────────────────────────────────────────────
+          DEBATE ENGINE
+          ──────────────────────────────────────────────────────────────── */}
+      <Section className="bg-gradient-to-b from-[#0d1220] to-[var(--bg)]" id="debate">
+        <div className="w-full max-w-5xl">
+          <StickyLabel text="04 / Debate Engine" />
+
+          <div className="text-center mb-20">
+            <h2 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl lg:text-5xl">
+              Five analysts.
+              <br />
+              <span className="text-[var(--muted)]">One verdict.</span>
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[var(--muted)]">
+              Every ticker is evaluated from five perspectives. An arbiter
+              synthesizes the debate into a conviction-weighted recommendation.
+              High disagreement automatically downgrades conviction.
+            </p>
+          </div>
+
+          {/* Analyst cards */}
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
+            {ANALYSTS.map((analyst, i) => (
+              <Stagger
+                key={analyst.name}
+                delay={i * 120}
+                className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center transition-colors hover:border-[var(--accent)]/20"
+              >
+                <div
+                  className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full text-xl font-bold"
+                  style={{
+                    backgroundColor: `color-mix(in srgb, ${analyst.color} 12%, transparent)`,
+                    color: analyst.color,
+                  }}
+                >
+                  {analyst.name.charAt(0)}
+                </div>
+                <h4 className="text-sm font-bold text-[var(--text)]">
+                  {analyst.name}
+                </h4>
+                <p className="mt-3 text-[11px] leading-relaxed text-[var(--muted)]">
+                  {analyst.role}
+                </p>
+              </Stagger>
+            ))}
+          </div>
+
+          {/* Arbiter */}
+          <Stagger delay={700} className="mx-auto mt-10 max-w-lg">
+            <div className="rounded-2xl border-2 border-[var(--accent)]/25 bg-[var(--accent)]/5 p-8 text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--accent)]/12 text-2xl font-bold text-[var(--accent)]">
+                A
+              </div>
+              <h4 className="text-lg font-bold text-[var(--text)]">Arbiter</h4>
+              <p className="mt-3 text-sm leading-relaxed text-[var(--muted)]">
+                Synthesizes all five perspectives. Weights by relevance. Assigns
+                final conviction score and directional bias. Disagreement between
+                analysts automatically caps the conviction ceiling.
+              </p>
+            </div>
+          </Stagger>
+        </div>
+      </Section>
+
+      {/* ────────────────────────────────────────────────────────────────
+          RISK GATING
+          ──────────────────────────────────────────────────────────────── */}
+      <Section className="bg-gradient-to-b from-[var(--bg)] to-[#0a0e18]" id="risk">
+        <div className="w-full max-w-3xl">
+          <StickyLabel text="05 / Risk Gating" />
+
+          <div className="text-center mb-20">
+            <h2 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl lg:text-5xl">
+              Five gates.
+              <br />
+              <span className="text-[var(--muted)]">Every trade must pass.</span>
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[var(--muted)]">
+              No setup reaches execution without clearing each risk gate in
+              sequence. One failure is enough to reject.
+            </p>
+          </div>
+
+          <div className="space-y-0">
+            {RISK_GATES.map((gate, i) => (
+              <GateStep
+                key={gate.gate}
+                gate={gate.gate}
+                description={gate.description}
+                isLast={i === RISK_GATES.length - 1}
+                delay={i * 150}
               />
-              <StatBadge
-                label="ML Features"
-                value={String(stats.ml_features)}
+            ))}
+          </div>
+        </div>
+      </Section>
+
+      {/* ────────────────────────────────────────────────────────────────
+          EXECUTION & TRACKING
+          ──────────────────────────────────────────────────────────────── */}
+      <Section className="bg-gradient-to-b from-[#0a0e18] to-[#0d1220]" id="execution">
+        <div className="w-full max-w-5xl">
+          <StickyLabel text="06 / Execution & Tracking" />
+
+          <div className="text-center mb-20">
+            <h2 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl lg:text-5xl">
+              Paper trade lifecycle.
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[var(--muted)]">
+              Every position is tracked from entry signal through daily
+              mark-to-market to final exit. Full P&L attribution, R-multiples,
+              and equity curve.
+            </p>
+          </div>
+
+          {/* Lifecycle flow */}
+          <div className="mx-auto flex flex-wrap items-center justify-center gap-3 lg:gap-0">
+            <FlowStep label="Entry Signal" sublabel="All gates pass" delay={0} />
+            <FlowArrow />
+            <FlowStep label="Position Open" sublabel="Paper entry logged" delay={200} />
+            <FlowArrow />
+            <FlowStep label="Daily MTM" sublabel="Mark-to-market" delay={400} />
+            <FlowArrow />
+            <FlowStep label="Exit" sublabel="Profit / Stop / Time" delay={600} />
+          </div>
+
+          {/* Tracking metrics */}
+          <div className="mx-auto mt-16 grid max-w-4xl gap-4 sm:grid-cols-4">
+            {[
+              { label: "Win Rate", detail: "Per-trade outcome tracking" },
+              { label: "R-Multiple", detail: "Risk-adjusted return per trade" },
+              { label: "Sharpe Ratio", detail: "Portfolio risk-adjusted edge" },
+              { label: "Equity Curve", detail: "Cumulative NAV over time" },
+            ].map((metric, i) => (
+              <Stagger
+                key={metric.label}
+                delay={i * 120}
+                className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center"
+              >
+                <div className="text-base font-bold text-[var(--accent)]">
+                  {metric.label}
+                </div>
+                <div className="mt-2 text-[11px] leading-relaxed text-[var(--muted)]">
+                  {metric.detail}
+                </div>
+              </Stagger>
+            ))}
+          </div>
+
+          {/* Live paper trade stats */}
+          {stats && stats.paper_trades_total > 0 && (
+            <div className="mx-auto mt-12 grid max-w-3xl gap-4 sm:grid-cols-3">
+              <StatCard
+                value={stats.paper_trades_total}
+                label="Total Trades"
+                delay={0}
               />
-              <StatBadge
-                label="Data Sources"
-                value={String(stats.data_sources)}
+              <StatCard
+                value={stats.paper_trades_open}
+                label="Open Now"
+                delay={150}
               />
+              {stats.win_rate !== null && (
+                <StatCard
+                  value={Math.round(stats.win_rate * 100)}
+                  label="Win Rate"
+                  delay={300}
+                  suffix="%"
+                />
+              )}
             </div>
           )}
         </div>
-      </AnimatedSection>
+      </Section>
 
-      {/* ============================================================ */}
-      {/* Section 1: Data Foundation                                    */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <GlassCard>
-          <SectionHeading
-            step={1}
-            icon={Database}
-            title="Data Foundation"
-            subtitle="Seven integrated data sources refresh on schedule to build a comprehensive market picture."
-          />
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <DataSourceCard
-              emoji="📈"
-              name="yfinance"
-              provides="OHLCV price history for 500+ S&P tickers, splits, dividends"
-              frequency="Daily at 22:00 UTC"
-            />
-            <DataSourceCard
-              emoji="📊"
-              name="Finviz"
-              provides="Fundamentals: P/E, PEG, market cap, sector, analyst targets"
-              frequency="Daily at 22:00 UTC"
-            />
-            <DataSourceCard
-              emoji="🔔"
-              name="Finnhub"
-              provides="Real-time WebSocket quotes, company news feed"
-              frequency="Real-time (market hours)"
-            />
-            <DataSourceCard
-              emoji="₿"
-              name="Binance"
-              provides="BTC/ETH live prices, 1-min candles, 24h volume"
-              frequency="Real-time WebSocket"
-            />
-            <DataSourceCard
-              emoji="🏛️"
-              name="FRED"
-              provides="Yield curve, high-yield OAS, fed funds rate, M2"
-              frequency="Daily (macro snapshot)"
-            />
-            <DataSourceCard
-              emoji="🎯"
-              name="Polymarket"
-              provides="Prediction market odds: Fed cuts, recession, geopolitical"
-              frequency="On-demand (page load)"
-            />
-            <DataSourceCard
-              emoji="📰"
-              name="Alpha Vantage"
-              provides="News sentiment scores, topic-level market sentiment"
-              frequency="Daily (optional provider)"
-            />
-          </div>
-        </GlassCard>
-      </AnimatedSection>
+      {/* ────────────────────────────────────────────────────────────────
+          DAILY PIPELINE
+          ──────────────────────────────────────────────────────────────── */}
+      <Section className="bg-gradient-to-b from-[#0d1220] to-[var(--bg)]" id="pipeline">
+        <div className="w-full max-w-4xl">
+          <StickyLabel text="07 / Daily Pipeline" />
 
-      {/* ============================================================ */}
-      {/* Section 2: Pattern Detection                                  */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <GlassCard>
-          <SectionHeading
-            step={2}
-            icon={Eye}
-            title="Pattern Detection (5 Layers)"
-            subtitle="Patterns are scored through multiple independent detection systems that vote together."
-          />
-          <div className="space-y-3">
-            <LayerCard
-              layer={1}
-              title="Rule-Based Geometric"
-              description="Detects flags, wedges, channels, and triangles using slope regression on swing highs/lows with configurable tolerances."
-            />
-            <LayerCard
-              layer={2}
-              title="Candlestick Patterns"
-              description="Identifies reversal and continuation signals: hammer, morning star, engulfing, doji clusters, and more across 1-3 bar windows."
-            />
-            <LayerCard
-              layer={3}
-              title="Hybrid Scoring"
-              description="Combines all signals into a weighted composite: 50% rule-based geometry + 20% candlestick + 15% volume confirmation + 15% breakout proximity."
-            />
-            <LayerCard
-              layer={4}
-              title="CV Proxy (Consensus)"
-              description="An independent geometry scorer re-evaluates the same price data with different parameters, providing a second opinion for consensus validation."
-            />
-            <LayerCard
-              layer={5}
-              title="YOLOv8 AI Detection"
-              description="Pre-computed dual-timeframe scan (daily 180d + weekly 730d). Price charts are rendered as images, run through a fine-tuned YOLOv8 model, and bounding-box coordinates are mapped back to price/date levels."
-            />
-          </div>
-        </GlassCard>
-      </AnimatedSection>
-
-      {/* ============================================================ */}
-      {/* Section 3: ML Pipeline                                        */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <GlassCard>
-          <SectionHeading
-            step={3}
-            icon={Brain}
-            title="ML Pipeline"
-            subtitle="A LightGBM classifier trained with walk-forward validation filters false positives from pattern detection."
-          />
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-                <div className="mb-1 text-xs font-semibold text-[var(--accent)]">
-                  Feature Engineering
-                </div>
-                <p className="text-xs leading-relaxed text-[var(--muted)]">
-                  {stats ? stats.ml_features : 51} features across momentum
-                  (multi-horizon returns), volatility (ATR, Bollinger width),
-                  volume, trend position, VIX regime, cross-sectional ranks,
-                  macro indicators, sector rotation, and news sentiment.
-                </p>
-              </div>
-              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-                <div className="mb-1 text-xs font-semibold text-[var(--accent)]">
-                  Labeling Strategy
-                </div>
-                <p className="text-xs leading-relaxed text-[var(--muted)]">
-                  Triple-barrier method: 2x ATR profit target, 2x ATR stop loss,
-                  10-day time barrier. A trade is labeled as a win only if the
-                  profit target is hit before the stop or time expiry.
-                </p>
-              </div>
-              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-                <div className="mb-1 text-xs font-semibold text-[var(--accent)]">
-                  Training Process
-                </div>
-                <p className="text-xs leading-relaxed text-[var(--muted)]">
-                  LightGBM walk-forward with purged validation windows (no
-                  data leakage). The model is retrained periodically on
-                  expanding windows. SHAP values provide feature importance for
-                  interpretability.
-                </p>
-              </div>
-              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-                <div className="mb-1 text-xs font-semibold text-[var(--accent)]">
-                  Meta-Labeling Filter
-                </div>
-                <p className="text-xs leading-relaxed text-[var(--muted)]">
-                  A secondary model acts as a filter on pattern detections,
-                  adjusting position size or vetoing setups that the primary
-                  model flags as low-probability.
-                </p>
-              </div>
-            </div>
-            <div className="rounded-lg border border-[var(--amber)]/30 bg-[rgba(248,194,78,0.05)] p-3">
-              <p className="text-xs leading-relaxed text-[var(--muted)]">
-                <span className="font-semibold text-[var(--amber)]">
-                  Current AUC: {stats ? stats.ml_auc : 0.5235}
-                </span>{" "}
-                &mdash; The model is deliberately used as a filter (reject
-                low-confidence setups) rather than a standalone signal generator.
-                A slight edge in filtering compounds over many trades.
-              </p>
-            </div>
-          </div>
-        </GlassCard>
-      </AnimatedSection>
-
-      {/* ============================================================ */}
-      {/* Section 4: Multi-Angle Debate Engine                          */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <GlassCard>
-          <SectionHeading
-            step={4}
-            icon={MessageSquare}
-            title="Multi-Angle Debate Engine"
-            subtitle="Five specialist analysts evaluate each setup from different perspectives, then an arbiter synthesizes a consensus."
-          />
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <AnalystCard
-              name="Trend / Structure"
-              focus="Evaluates price trend, support/resistance levels, market structure (higher highs/lows), and relative position to key moving averages."
-              outputs="Stance, confidence, S/R levels"
-              color="var(--accent)"
-            />
-            <AnalystCard
-              name="Momentum / Participation"
-              focus="Checks RSI, MACD, volume trends, breadth confirmation, and whether momentum supports the setup direction."
-              outputs="Momentum score, divergence flags"
-              color="var(--green)"
-            />
-            <AnalystCard
-              name="Valuation"
-              focus="Assesses P/E, PEG, discount-to-target, sector comparisons, and whether price has room to move."
-              outputs="Fair value estimate, upside %"
-              color="var(--blue, var(--accent))"
-            />
-            <AnalystCard
-              name="Pattern / YOLO"
-              focus="Integrates the 5-layer pattern detection results, YOLO AI confidence, and historical pattern reliability statistics."
-              outputs="Pattern quality, timeframe alignment"
-              color="var(--amber)"
-            />
-            <AnalystCard
-              name="Risk Manager"
-              focus="Evaluates VIX regime, earnings proximity, sector risk, correlation clustering, and portfolio-level exposure."
-              outputs="Risk flags, position size cap"
-              color="var(--red)"
-            />
-          </div>
-          <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-            <div className="mb-1 text-xs font-semibold text-[var(--accent)]">
-              Arbiter: Deterministic Consensus
-            </div>
-            <p className="text-xs leading-relaxed text-[var(--muted)]">
-              The arbiter computes an agreement score across all five analysts.
-              Primary disagreements are surfaced explicitly. When disagreement
-              is high, conviction is automatically downgraded regardless of
-              individual analyst confidence.
+          <div className="text-center mb-20">
+            <h2 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl lg:text-5xl">
+              Automated.
+              <br />
+              <span className="text-[var(--muted)]">Every night at 22:00 UTC.</span>
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[var(--muted)]">
+              The full pipeline executes every trading day. No manual
+              intervention. Weekends run YOLO seed passes on weekly timeframes.
             </p>
           </div>
-        </GlassCard>
-      </AnimatedSection>
 
-      {/* ============================================================ */}
-      {/* Section 5: Risk Gating                                        */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <GlassCard>
-          <SectionHeading
-            step={5}
-            icon={ShieldCheck}
-            title="Risk Gating"
-            subtitle="Multiple risk filters must pass before a setup can open a paper trade."
-          />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="flex gap-3 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-              <Activity
-                size={18}
-                className="mt-0.5 shrink-0 text-[var(--accent)]"
-              />
-              <div>
-                <div className="text-sm font-semibold text-[var(--text)]">
-                  VIX Regime (3-State HMM)
+          {/* Timeline */}
+          <div className="space-y-0">
+            {PIPELINE_STEPS.map((item, i) => (
+              <Stagger key={item.label} delay={i * 150}>
+                <div className="flex items-start gap-6">
+                  <div className="flex flex-col items-center">
+                    <div className="flex h-11 w-24 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--panel)] text-[11px] font-mono font-bold text-[var(--accent)]">
+                      {item.time}
+                    </div>
+                    {i < PIPELINE_STEPS.length - 1 && (
+                      <div className="h-10 w-px bg-[var(--line)]/50" />
+                    )}
+                  </div>
+                  <div className={i < PIPELINE_STEPS.length - 1 ? "pb-5" : ""}>
+                    <h4 className="text-base font-semibold text-[var(--text)]">
+                      {item.label}
+                    </h4>
+                    <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">
+                      {item.detail}
+                    </p>
+                  </div>
                 </div>
-                <p className="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
-                  Hidden Markov Model classifies the market into low-vol, normal,
-                  and high-vol regimes. High-vol regimes reduce position sizes
-                  and raise conviction thresholds.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-3 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-              <BarChart3
-                size={18}
-                className="mt-0.5 shrink-0 text-[var(--accent)]"
-              />
-              <div>
-                <div className="text-sm font-semibold text-[var(--text)]">
-                  Fear/Greed Composite
-                </div>
-                <p className="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
-                  Weighted blend: VIX 30% + breadth 25% + momentum 25% + market
-                  strength 15% + put/call 5%. Extreme fear or greed adjusts
-                  risk tolerance.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-3 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-              <Layers
-                size={18}
-                className="mt-0.5 shrink-0 text-[var(--accent)]"
-              />
-              <div>
-                <div className="text-sm font-semibold text-[var(--text)]">
-                  ATR-Based Position Sizing
-                </div>
-                <p className="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
-                  Position size is calibrated to each stock&apos;s volatility using
-                  14-day ATR. No single trade risks more than a fixed percentage
-                  of the portfolio.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-3 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-              <Zap
-                size={18}
-                className="mt-0.5 shrink-0 text-[var(--accent)]"
-              />
-              <div>
-                <div className="text-sm font-semibold text-[var(--text)]">
-                  Drawdown Breaker
-                </div>
-                <p className="mt-0.5 text-xs leading-relaxed text-[var(--muted)]">
-                  Stops opening new trades if the portfolio drawdown exceeds a
-                  threshold. Existing positions are managed to expiry but no new
-                  risk is added.
-                </p>
-              </div>
-            </div>
+              </Stagger>
+            ))}
           </div>
-        </GlassCard>
-      </AnimatedSection>
 
-      {/* ============================================================ */}
-      {/* Section 6: Paper Trade Execution                              */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <GlassCard>
-          <SectionHeading
-            step={6}
-            icon={PlayCircle}
-            title="Paper Trade Execution"
-            subtitle="Setups that pass all gates open simulated trades with full lifecycle tracking."
-          />
-          <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-                <div className="mb-1 flex items-center gap-2">
-                  <Target
-                    size={14}
-                    className="text-[var(--green)]"
-                  />
-                  <span className="text-sm font-semibold text-[var(--text)]">
-                    Entry
-                  </span>
-                </div>
-                <p className="text-xs leading-relaxed text-[var(--muted)]">
-                  Setup passes all gates (pattern + ML filter + debate consensus
-                  + risk checks) and a paper trade is opened at the next
-                  available price.
-                </p>
-              </div>
-              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-                <div className="mb-1 flex items-center gap-2">
-                  <TrendingUp
-                    size={14}
-                    className="text-[var(--red)]"
-                  />
-                  <span className="text-sm font-semibold text-[var(--text)]">
-                    Exit (Triple-Barrier)
-                  </span>
-                </div>
-                <p className="text-xs leading-relaxed text-[var(--muted)]">
-                  Profit target hit, stop loss hit, or time expiry at 10 days
-                  &mdash; whichever comes first. All exit reasons are tracked.
-                </p>
-              </div>
-            </div>
-            <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 p-3">
-              <div className="mb-1 text-xs font-semibold text-[var(--accent)]">
-                Tracking &amp; Audit
-              </div>
-              <p className="text-xs leading-relaxed text-[var(--muted)]">
-                Daily mark-to-market updates equity curve, unrealized P&amp;L,
-                R-multiple, and Sharpe ratio. Every trade records the full
-                decision audit trail: which analysts voted, debate consensus
-                score, risk gate results, and portfolio context at entry.
+          {/* Weekend note */}
+          <Stagger delay={600} className="mt-12">
+            <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6">
+              <h4 className="text-[11px] font-bold uppercase tracking-[0.2em] text-[var(--muted)]">
+                Weekend Schedule
+              </h4>
+              <p className="mt-3 text-sm leading-relaxed text-[var(--muted)]">
+                Saturday 00:30 UTC: full YOLO seed run on both daily and weekly
+                timeframes across the entire universe. No market data ingest or
+                report generation on weekends.
               </p>
             </div>
-            {/* Live paper trade stats */}
-            {stats && stats.paper_trades_total > 0 && (
-              <div className="grid grid-cols-3 gap-3">
-                <StatBadge
-                  label="Total Trades"
-                  value={String(stats.paper_trades_total)}
-                />
-                <StatBadge
-                  label="Open Now"
-                  value={String(stats.paper_trades_open)}
-                />
-                <StatBadge
-                  label="Win Rate"
-                  value={
-                    stats.win_rate !== null
-                      ? `${(stats.win_rate * 100).toFixed(1)}%`
-                      : "\u2014"
-                  }
-                />
-              </div>
-            )}
-          </div>
-        </GlassCard>
-      </AnimatedSection>
+          </Stagger>
+        </div>
+      </Section>
 
-      {/* ============================================================ */}
-      {/* Section 7: Daily Pipeline                                     */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <GlassCard>
-          <SectionHeading
-            step={7}
-            icon={Clock}
-            title="Daily Pipeline"
-            subtitle="Automated nightly orchestration runs Monday through Friday."
-          />
-          <div className="ml-1">
-            <TimelineStep
-              time="22:00 UTC"
-              label="Market Data Ingestion"
-              detail="yfinance OHLCV + Finviz fundamentals for all tracked tickers. Earnings calendar refresh, options IV snapshot."
-            />
-            <TimelineStep
-              time="22:05 UTC"
-              label="YOLO Pattern Detection"
-              detail="Dual-timeframe batch scan: daily (180-day window) and weekly (730-day window) chart images through YOLOv8."
-            />
-            <TimelineStep
-              time="22:10 UTC"
-              label="Report Generation"
-              detail="Setup rankings, risk filters, macro context, multi-angle debate for top setups. ML scoring and meta-label filtering."
-            />
-            <TimelineStep
-              time="22:15 UTC"
-              label="Email Delivery"
-              detail="HTML report emailed with top setups, risk summary, VIX regime, and paper trade performance."
-            />
-            <TimelineStep
-              time="Market Hours"
-              label="Real-Time Monitoring"
-              detail="Finnhub WebSocket for live quotes. Telegram alerts when tracked setups approach entry zones."
-              isLast
-            />
-          </div>
-        </GlassCard>
-      </AnimatedSection>
-
-      {/* ============================================================ */}
-      {/* Footer                                                        */}
-      {/* ============================================================ */}
-      <AnimatedSection>
-        <div className="border-t border-[var(--line)] pt-6 text-center">
-          <p className="text-xs text-[var(--muted)]">
-            Built by Koo &middot; Not Financial Advice &middot;{" "}
+      {/* ────────────────────────────────────────────────────────────────
+          FOOTER
+          ──────────────────────────────────────────────────────────────── */}
+      <section className="flex flex-col items-center justify-center px-6 py-32 bg-gradient-to-b from-[var(--bg)] to-[#060a12]">
+        <div className="text-center">
+          <p className="text-lg font-medium text-[var(--muted)]">
+            Built with conviction, not certainty.
+          </p>
+          <p className="mt-2 text-sm text-[var(--muted)]/50">
+            Not financial advice. Research tool only.
+          </p>
+          <div className="mt-10 flex items-center justify-center gap-8">
             <a
               href="https://trader.kooexperience.com"
-              className="text-[var(--accent)] transition-colors hover:text-[var(--text)]"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-medium text-[var(--accent)] transition-colors hover:text-[var(--text)]"
             >
               trader.kooexperience.com
             </a>
-          </p>
+            <span className="text-[var(--line)]">|</span>
+            <a
+              href="https://github.com/haomingkoo/trader-koo"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-medium text-[var(--accent)] transition-colors hover:text-[var(--text)]"
+            >
+              GitHub
+            </a>
+          </div>
         </div>
-      </AnimatedSection>
+      </section>
     </div>
   );
 }
