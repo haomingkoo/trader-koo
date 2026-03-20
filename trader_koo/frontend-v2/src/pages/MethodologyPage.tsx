@@ -421,7 +421,7 @@ const PIPELINE_STEPS: PipelineStep[] = [
     icon: Brain,
     label: "ML Filter",
     description:
-      "LightGBM meta-labeling classifier scores each pattern detection. Low-confidence setups are vetoed before debate.",
+      "LightGBM meta-labeling classifier with early stopping, 3 target modes (return sign, barrier, cross-sectional rank), and slim feature sets (7\u201315 features). Used as observation filter, not signal generator (AUC 0.52\u20130.53).",
   },
   {
     icon: MessageSquare,
@@ -814,10 +814,11 @@ export default function MethodologyPage() {
                 Feature Engineering
               </div>
               <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-                {stats ? stats.ml_features : 51} features across momentum
-                (multi-horizon returns), volatility (ATR, Bollinger width),
-                volume, trend position, VIX regime, cross-sectional ranks, macro
-                indicators, sector rotation, and news sentiment.
+                Slim default set of 7&ndash;15 cross-sectionally ranked features
+                (full 51-feature set available). Includes volume-confirmed
+                momentum, ATR expansion, gap percentage, multi-horizon returns,
+                volatility, VIX regime, macro indicators, and sector rotation.
+                All per-ticker features use cross-sectional rank normalization.
               </p>
             </VizPanel>
           </Reveal>
@@ -828,8 +829,9 @@ export default function MethodologyPage() {
               </div>
               <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
                 Triple-barrier method: 2x ATR profit target, 2x ATR stop loss,
-                10-day time barrier. A trade is labeled as a win only if the
-                profit target is hit before the stop or time expiry.
+                10-day time barrier. Labels check intraday high/low for barrier
+                touches (not just close). Three target modes: return sign,
+                barrier hit, and cross-sectional rank.
               </p>
             </VizPanel>
           </Reveal>
@@ -840,7 +842,8 @@ export default function MethodologyPage() {
               </div>
               <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
                 LightGBM walk-forward with purged validation windows (no data
-                leakage). The model is retrained periodically on expanding
+                leakage) and early stopping (50 rounds, lr=0.01, 15 leaves,
+                depth 3). The model is retrained periodically on expanding
                 windows. SHAP values provide feature importance for
                 interpretability.
               </p>
@@ -864,11 +867,12 @@ export default function MethodologyPage() {
           <div className="mt-6 rounded-xl border border-[var(--amber)]/30 bg-[rgba(248,194,78,0.04)] p-5">
             <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
               <span className="font-bold font-mono text-[var(--amber)]">
-                AUC: {stats ? stats.ml_auc : 0.5235}
+                AUC: {stats ? stats.ml_auc : "0.52\u20130.53"}
               </span>{" "}
-              &mdash; The model is deliberately used as a filter (reject
-              low-confidence setups) rather than a standalone signal generator. A
-              slight edge in filtering compounds over many trades.
+              &mdash; The model is deliberately used as an observation filter
+              (reject low-confidence setups) rather than a standalone signal
+              generator. Honest assessment: the edge is marginal, but even
+              slight filtering accuracy compounds over many trades.
             </p>
           </div>
         </Reveal>
