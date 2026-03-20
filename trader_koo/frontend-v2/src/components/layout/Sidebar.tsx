@@ -25,16 +25,21 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  // Overview
   { to: "/", label: "Guide", Icon: BookOpen },
   { to: "/report", label: "Report", Icon: FileText },
+  { to: "/alerts", label: "Alerts", Icon: Bell },
+  // Analysis
+  { to: "/chart", label: "Chart", Icon: TrendingUp },
   { to: "/vix", label: "VIX Analysis", Icon: Thermometer },
   { to: "/earnings", label: "Earnings", Icon: Calendar },
-  { to: "/chart", label: "Chart", Icon: TrendingUp },
-  { to: "/crypto", label: "Crypto", Icon: Bitcoin },
   { to: "/opportunities", label: "Opportunities", Icon: Search },
-  { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
+  // Markets
+  { to: "/crypto", label: "Crypto", Icon: Bitcoin },
   { to: "/markets", label: "Pred Markets", Icon: BarChart3 },
-  { to: "/alerts", label: "Alerts", Icon: Bell },
+  // Trading
+  { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
+  // Info
   { to: "/methodology", label: "Methodology", Icon: Layers },
 ];
 
