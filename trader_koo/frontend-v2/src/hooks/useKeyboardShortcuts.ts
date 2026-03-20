@@ -98,7 +98,7 @@ export function useKeyboardShortcuts({
       // "R" — refresh current page data
       if (e.key === "r" || e.key === "R") {
         e.preventDefault();
-        const path = location.pathname.replace(/^\/v2/, "").replace(/\/$/, "") || "";
+        const path = location.pathname.replace(/\/$/, "") || "";
         const normalised = path.startsWith("/") ? path : `/${path}`;
         const keys = ROUTE_QUERY_KEYS[normalised] ?? ROUTE_QUERY_KEYS[path];
         if (keys) {

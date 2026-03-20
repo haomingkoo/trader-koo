@@ -14,7 +14,7 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter basename={window.location.pathname.startsWith("/v2") ? "/v2" : ""}>
+      <BrowserRouter>
         <App />
       </BrowserRouter>
     </QueryClientProvider>

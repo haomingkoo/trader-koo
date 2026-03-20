@@ -4,7 +4,7 @@ All endpoint logic lives in ``trader_koo.backend.routers.*``.
 This module is responsible for:
   - FastAPI app creation and lifespan
   - Middleware registration (CORS, auth, audit, rate limiting, error sanitisation)
-  - Static file serving for v1 frontend (``GET /``) and v2 mount point (``/v2``)
+  - Static file serving for React frontend at ``/``
   - Router inclusion
   - Scheduler setup
 """
@@ -97,7 +97,6 @@ from trader_koo.backend.routers.usage import (
 # ---------------------------------------------------------------------------
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-FRONTEND_INDEX = (PROJECT_DIR / "frontend" / "index.html").resolve()
 DIST_V2 = (PROJECT_DIR / ".." / "dist-v2").resolve()
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")
 ADMIN_USER = str(os.getenv("TRADER_KOO_ADMIN_USERNAME", "admin") or "admin").strip() or "admin"
