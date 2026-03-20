@@ -195,6 +195,7 @@ def detect_polymarket_spikes(
                 direction = "up" if change > 0 else "down"
                 spikes.append({
                     "event_title": title,
+                    "event_slug": slug,
                     "question": question,
                     "old_prob": round(old_prob, 1),
                     "new_prob": round(new_prob, 1),
@@ -429,16 +430,17 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
         poly_spikes = detect_polymarket_spikes(db_path)
         for spike in poly_spikes:
             arrow = "\u2B06\uFE0F" if spike.get("change_pct", 0) > 0 else "\u2B07\uFE0F"
-            title = spike.get("event_title", "?")[:50]
+            # Use full question (the specific bet) not the truncated event title
+            question = spike.get("question", spike.get("event_title", "?"))
             old_p = spike.get("old_prob", 0)
             new_p = spike.get("new_prob", 0)
             change = spike.get("change_pct", 0)
             vol = _format_volume(spike.get("volume", 0))
             slug = spike.get("event_slug", "")
             poly_link = f"https://polymarket.com/event/{slug}" if slug else ""
-            link_text = f"\n   [Polymarket]({poly_link}) | [Dashboard](https://trader.kooexperience.com/markets)" if slug else ""
+            link_text = f"\n   [View on Polymarket]({poly_link})" if slug else ""
             all_lines.append(
-                f"{arrow} *{title}*\n"
+                f"{arrow} *{question}*\n"
                 f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | {vol}"
                 f"{link_text}"
             )
