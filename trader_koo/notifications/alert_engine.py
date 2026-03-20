@@ -39,8 +39,17 @@ POLL_INTERVAL_SEC = 120
 # How often the engine reloads setups from the daily report (seconds)
 SETUP_REFRESH_INTERVAL_SEC = 6 * 3600  # every 6 hours
 
-# Maximum number of setup tickers to monitor via REST polling
-MAX_POLL_TICKERS = 10
+# Maximum number of REPORT setup tickers to monitor via REST polling
+MAX_REPORT_TICKERS = 10
+
+# Tickers that are ALWAYS monitored regardless of nightly report setups.
+# Levels come from the database (same support/resistance as chart page).
+ALWAYS_WATCH: list[str] = [
+    # Mag 7
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
+    # Indices + Volatility
+    "SPY", "QQQ", "^VIX",
+]
 
 # Finnhub REST API
 FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
@@ -141,50 +150,56 @@ class AlertEngine:
     # ------------------------------------------------------------------
 
     def load_setups(self) -> int:
-        """Load top 10 active setups from the latest daily report.
+        """Load ALWAYS_WATCH + top 10 setups from the nightly report.
 
-        Returns the number of ticker-level pairs now being watched.
+        Final watchlist = set(ALWAYS_WATCH) | set(top_report_setups),
+        deduplicated.  Returns the number of ticker-level pairs watched.
         """
         from trader_koo.backend.services.report_loader import (
             latest_daily_report_json,
         )
 
+        # --- Step 1: parse report setups ---
+        report_tickers: dict[str, dict[str, str]] = {}
         _, payload = latest_daily_report_json(self._report_dir)
-        if not isinstance(payload, dict):
-            LOG.warning("No daily report found — alert engine has no setups")
-            return 0
+        if isinstance(payload, dict):
+            signals = payload.get("signals")
+            if isinstance(signals, dict):
+                setup_rows: list[dict[str, Any]] = signals.get(
+                    "setup_quality_top", []
+                )
+                if not isinstance(setup_rows, list):
+                    setup_rows = []
+                for row in setup_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    ticker = str(row.get("ticker") or "").strip().upper()
+                    if not ticker:
+                        continue
+                    if len(report_tickers) >= MAX_REPORT_TICKERS:
+                        break
+                    report_tickers[ticker] = {
+                        "tier": str(row.get("setup_tier") or "D").strip().upper(),
+                        "bias": str(row.get("signal_bias") or "neutral").strip().lower(),
+                    }
+        else:
+            LOG.warning("No daily report found — using ALWAYS_WATCH only")
 
-        signals = payload.get("signals")
-        if not isinstance(signals, dict):
-            return 0
+        # --- Step 2: merge ALWAYS_WATCH + report (deduplicated) ---
+        combined: dict[str, dict[str, str]] = {}
+        for ticker in ALWAYS_WATCH:
+            combined[ticker] = report_tickers.get(
+                ticker, {"tier": "-", "bias": "neutral"}
+            )
+        for ticker, meta in report_tickers.items():
+            if ticker not in combined:
+                combined[ticker] = meta
 
-        setup_rows: list[dict[str, Any]] = signals.get(
-            "setup_quality_top", []
-        )
-        if not isinstance(setup_rows, list):
-            setup_rows = []
-
+        # --- Step 3: build watchlist with DB levels ---
         new_watchlist: dict[str, list[dict[str, Any]]] = {}
         total_levels = 0
 
-        for row in setup_rows:
-            if not isinstance(row, dict):
-                continue
-            ticker = str(row.get("ticker") or "").strip().upper()
-            if not ticker or ticker.startswith("^"):
-                continue
-
-            # Cap at top 10 tickers for REST polling budget
-            if len(new_watchlist) >= MAX_POLL_TICKERS:
-                break
-
-            tier = str(
-                row.get("setup_tier") or "D"
-            ).strip().upper()
-            bias = str(
-                row.get("signal_bias") or "neutral"
-            ).strip().lower()
-
+        for ticker, meta in combined.items():
             levels = self._extract_levels_for_ticker(ticker)
             entries: list[dict[str, Any]] = []
             for lvl in levels:
@@ -192,8 +207,8 @@ class AlertEngine:
                     {
                         "level": float(lvl["level"]),
                         "level_type": str(lvl["type"]),
-                        "setup_tier": tier,
-                        "bias": bias,
+                        "setup_tier": meta["tier"],
+                        "bias": meta["bias"],
                     }
                 )
                 total_levels += 1
