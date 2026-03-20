@@ -13,7 +13,7 @@ interface State {
   error: Error | null;
 }
 
-const CHUNK_RELOAD_KEY = "trader_koo_v2_chunk_reload_at";
+const CHUNK_RELOAD_KEY = "trader_koo_chunk_reload_at";
 const CHUNK_RELOAD_WINDOW_MS = 30_000;
 
 function isChunkLoadError(error: Error | null): boolean {

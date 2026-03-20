@@ -97,7 +97,7 @@ from trader_koo.backend.routers.usage import (
 # ---------------------------------------------------------------------------
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-DIST_V2 = (PROJECT_DIR / ".." / "dist-v2").resolve()
+DIST_DIR = (PROJECT_DIR / ".." / "dist-v2").resolve()
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")
 ADMIN_USER = str(os.getenv("TRADER_KOO_ADMIN_USERNAME", "admin") or "admin").strip() or "admin"
 ADMIN_STRICT_API_KEY = str(os.getenv("ADMIN_STRICT_API_KEY", "1")).strip().lower() in {
@@ -522,16 +522,16 @@ async def api_key_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
-# Root: serve v2 React app at / (promoted from /v2)
+# Root: serve React app at /
 # ---------------------------------------------------------------------------
 
 
 @app.get("/", include_in_schema=False)
 def root() -> Any:
-    """Serve v2 React dashboard at root. v1 is retired."""
-    v2_index = DIST_V2 / "index.html" if DIST_V2.exists() else None
-    if v2_index and v2_index.is_file():
-        return FileResponse(str(v2_index), headers={
+    """Serve React dashboard at root."""
+    index = DIST_DIR / "index.html" if DIST_DIR.exists() else None
+    if index and index.is_file():
+        return FileResponse(str(index), headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
             "Expires": "0",
@@ -556,10 +556,10 @@ app.include_router(crypto_router)
 app.include_router(streaming_router)
 
 # ---------------------------------------------------------------------------
-# v2 React frontend (served from dist-v2/)
+# React frontend (served from dist-v2/)
 # ---------------------------------------------------------------------------
 
-# SPA routes at root level (v2 promoted to /)
+# SPA routes at root level
 _SPA_ROUTES = {
     "report", "vix", "earnings", "chart", "crypto",
     "opportunities", "paper-trades", "markets",
@@ -571,31 +571,31 @@ mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 
-LOG.info("DIST_V2 path: %s exists=%s", DIST_V2, DIST_V2.exists())
-if DIST_V2.exists() and DIST_V2.is_dir():
-    _root_v2_index = DIST_V2 / "index.html"
-    _root_v2_assets = DIST_V2 / "assets"
-    LOG.info("DIST_V2 assets dir: %s exists=%s", _root_v2_assets, _root_v2_assets.is_dir())
+LOG.info("DIST_DIR path: %s exists=%s", DIST_DIR, DIST_DIR.exists())
+if DIST_DIR.exists() and DIST_DIR.is_dir():
+    _root_index = DIST_DIR / "index.html"
+    _root_assets = DIST_DIR / "assets"
+    LOG.info("DIST_DIR assets dir: %s exists=%s", _root_assets, _root_assets.is_dir())
     _root_shell_headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
         "Expires": "0",
     }
 
-    if _root_v2_assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(_root_v2_assets)), name="root-assets")
+    if _root_assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_root_assets)), name="root-assets")
 
-    if _root_v2_index.is_file():
+    if _root_index.is_file():
         # Only intercept KNOWN SPA routes at root level.
         # Do NOT use a wildcard catch-all — it breaks /assets, /api, etc.
         for _route in _SPA_ROUTES:
             def _make_handler(_r: str = _route):
                 def _handler() -> Any:
-                    return FileResponse(str(_root_v2_index), headers=_root_shell_headers)
+                    return FileResponse(str(_root_index), headers=_root_shell_headers)
                 _handler.__name__ = f"spa_{_r.replace('-', '_')}"
                 return _handler
             app.get(f"/{_route}", include_in_schema=False)(_make_handler())
             app.get(f"/{_route}/{{rest:path}}", include_in_schema=False)(_make_handler())
 
 
-    # v2 routes removed — v2 is now the root. No redirects needed.
+    # Legacy /v2 routes removed — React app is now served at root.

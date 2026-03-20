@@ -1,4 +1,4 @@
-import GlassCard from "./GlassCard";
+import GlassCard from "../ui/GlassCard";
 
 interface FundamentalsData {
   price: number | null;

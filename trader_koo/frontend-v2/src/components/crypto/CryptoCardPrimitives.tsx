@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 export function formatPrice(price: number): string {
   if (price >= 1000) {
     return price.toLocaleString("en-US", {
@@ -38,25 +36,3 @@ export function formatLevelContext(value: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-export function GlassCard({
-  label,
-  children,
-  className = "",
-}: {
-  label?: string;
-  children?: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={`rounded-xl backdrop-blur-sm bg-[var(--panel)]/80 border border-[var(--line)] p-4 ${className}`}
-    >
-      {label && (
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
-          {label}
-        </div>
-      )}
-      {children}
-    </div>
-  );
-}

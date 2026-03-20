@@ -55,29 +55,40 @@ class TestAppFactory:
 
         assert "/" in routes
 
-    def test_v2_shell_routes_disable_caching(self):
+    def test_root_shell_route_disables_caching(self):
         routes_by_path = {
             getattr(route, "path", ""): route
             for route in self.app.routes
         }
 
-        v2_route = routes_by_path["/v2"]
-        v2_response = v2_route.endpoint()
+        root_route = routes_by_path["/"]
+        root_response = root_route.endpoint()
 
-        assert isinstance(v2_response, FileResponse)
-        assert v2_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
-        assert v2_response.headers["pragma"] == "no-cache"
-        assert v2_response.headers["expires"] == "0"
-        assert Path(v2_response.path).name == "index.html"
+        if not isinstance(root_response, FileResponse):
+            pytest.skip("dist-v2 not built; root returns JSON fallback")
 
-        v2_fallback = routes_by_path["/v2/{rest_of_path:path}"]
-        fallback_response = v2_fallback.endpoint("chart")
+        assert root_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+        assert root_response.headers["pragma"] == "no-cache"
+        assert root_response.headers["expires"] == "0"
+        assert Path(root_response.path).name == "index.html"
 
-        assert isinstance(fallback_response, FileResponse)
-        assert fallback_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
-        assert fallback_response.headers["pragma"] == "no-cache"
-        assert fallback_response.headers["expires"] == "0"
-        assert Path(fallback_response.path).name == "index.html"
+    def test_spa_route_disables_caching(self):
+        routes_by_path = {
+            getattr(route, "path", ""): route
+            for route in self.app.routes
+        }
+
+        spa_route = routes_by_path.get("/report")
+        if spa_route is None:
+            pytest.skip("SPA routes not registered (dist-v2 not built)")
+
+        spa_response = spa_route.endpoint()
+
+        assert isinstance(spa_response, FileResponse)
+        assert spa_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+        assert spa_response.headers["pragma"] == "no-cache"
+        assert spa_response.headers["expires"] == "0"
+        assert Path(spa_response.path).name == "index.html"
 
     def test_has_middleware(self):
         """The app should register middleware even before the first request."""

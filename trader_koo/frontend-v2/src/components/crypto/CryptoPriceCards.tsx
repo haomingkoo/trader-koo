@@ -1,5 +1,6 @@
 import type { CryptoPrice } from "../../api/types";
-import { formatPrice, formatVolume, GlassCard } from "./CryptoCardPrimitives";
+import GlassCard from "../ui/GlassCard";
+import { formatPrice, formatVolume } from "./CryptoCardPrimitives";
 
 export function CryptoPriceCard({
   tick,
