@@ -332,6 +332,40 @@ def _run_morning_summary() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Market monitor (Polymarket snapshots + spike alerts)
+# ---------------------------------------------------------------------------
+
+def _run_polymarket_snapshot() -> None:
+    """Hourly job: archive current Polymarket probabilities."""
+    from trader_koo.notifications.market_monitor import snapshot_polymarket
+
+    _append_run_log("MARKET_MONITOR", "Polymarket snapshot job started")
+    LOG.info("Scheduler: starting Polymarket snapshot")
+    try:
+        count = snapshot_polymarket(DB_PATH)
+        _append_run_log("MARKET_MONITOR", f"Polymarket snapshot saved {count} rows")
+        LOG.info("Scheduler: Polymarket snapshot saved %d rows", count)
+    except Exception as exc:
+        _append_run_log("MARKET_MONITOR", f"Polymarket snapshot failed: {exc}")
+        LOG.error("Scheduler: Polymarket snapshot failed: %s", exc)
+
+
+def _run_spike_alerts() -> None:
+    """Periodic job: detect spikes and send Telegram alerts."""
+    from trader_koo.notifications.market_monitor import send_spike_alerts
+
+    _append_run_log("MARKET_MONITOR", "Spike alert check started")
+    LOG.info("Scheduler: starting spike alert check")
+    try:
+        alerts_sent = send_spike_alerts(DB_PATH, REPORT_DIR)
+        _append_run_log("MARKET_MONITOR", f"Spike alerts: {alerts_sent} sent")
+        LOG.info("Scheduler: spike alerts sent: %d", alerts_sent)
+    except Exception as exc:
+        _append_run_log("MARKET_MONITOR", f"Spike alert check failed: {exc}")
+        LOG.error("Scheduler: spike alert check failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
 
@@ -342,6 +376,7 @@ def create_scheduler() -> BackgroundScheduler:
     """
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
 
     scheduler = BackgroundScheduler(
         timezone="UTC",
@@ -371,7 +406,8 @@ def create_scheduler() -> BackgroundScheduler:
     )
 
     # Morning summary — only register if Telegram is configured
-    if os.getenv("TELEGRAM_BOT_TOKEN", ""):
+    telegram_configured = bool(os.getenv("TELEGRAM_BOT_TOKEN", ""))
+    if telegram_configured:
         scheduler.add_job(
             _run_morning_summary,
             CronTrigger(hour=0, minute=0, day_of_week="mon-fri", timezone="UTC"),
@@ -381,5 +417,26 @@ def create_scheduler() -> BackgroundScheduler:
         LOG.info("Morning summary job registered: daily 00:00 UTC (08:00 SGT) Mon-Fri")
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — morning summary job not registered")
+
+    # Polymarket snapshot — every hour, 24/7
+    scheduler.add_job(
+        _run_polymarket_snapshot,
+        IntervalTrigger(hours=1),
+        id="polymarket_snapshot",
+        replace_existing=True,
+    )
+    LOG.info("Polymarket snapshot job registered: every 1h (24/7)")
+
+    # Spike detection + alerts — every 2 hours (only sends if Telegram configured)
+    if telegram_configured:
+        scheduler.add_job(
+            _run_spike_alerts,
+            IntervalTrigger(hours=2),
+            id="spike_alerts",
+            replace_existing=True,
+        )
+        LOG.info("Spike alert job registered: every 2h")
+    else:
+        LOG.info("TELEGRAM_BOT_TOKEN not set — spike alert job not registered")
 
     return scheduler
