@@ -12,6 +12,7 @@ const OpportunitiesPage = lazy(() => import("./pages/OpportunitiesPage"));
 const PaperTradePage = lazy(() => import("./pages/PaperTradePage"));
 const CryptoPage = lazy(() => import("./pages/CryptoPage"));
 const PolymarketPage = lazy(() => import("./pages/PolymarketPage"));
+const MethodologyPage = lazy(() => import("./pages/MethodologyPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 function routeElement(
@@ -100,6 +101,14 @@ export default function App() {
             <CryptoPage />,
             "Loading crypto dashboard",
             "Streaming price cards, indicators, and intraday bar history.",
+          )}
+        />
+        <Route
+          path="methodology"
+          element={routeElement(
+            <MethodologyPage />,
+            "Loading methodology",
+            "Preparing the trading pipeline walkthrough.",
           )}
         />
         <Route

@@ -70,3 +70,9 @@ body {
 /* Hidden scrollbar utility */
 .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
 .scrollbar-none::-webkit-scrollbar { display: none; }
+
+/* Bobbing scroll-hint animation (WMSS pattern) */
+@keyframes bobDown {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(6px); }
+}
