@@ -591,8 +591,13 @@ def _build_chart_commentary_payload(
         "candle_confidence": candle.get("candle_confidence"),
     }
     row.update(tech)
-    row.update(_report_score_setup_from_confluence(row))
-    row.update(_report_describe_setup(row))
+    # Only recompute tier/narrative from scratch if there's NO report snapshot.
+    # When a snapshot exists, the report's tier is authoritative (computed at
+    # 22:00 UTC with full market data).  Recomputing live with partial/stale
+    # data causes tier mismatches (e.g., report says A, live says C).
+    if not (isinstance(setup_override, dict) and setup_override):
+        row.update(_report_score_setup_from_confluence(row))
+        row.update(_report_describe_setup(row))
     baseline_narrative = {
         "observation": row.get("observation"),
         "action": row.get("action"),
