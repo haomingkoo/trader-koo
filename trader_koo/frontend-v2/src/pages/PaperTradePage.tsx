@@ -7,6 +7,7 @@ import {
   PaperTradePortfolioHero,
   PaperTradeOpenPositions,
   PaperTradeEquityCurve,
+  PaperTradeBenchmarkComparison,
   PaperTradePerformanceAttribution,
   PaperTradeMLCalibration,
   PaperTradeFilters,
@@ -99,6 +100,11 @@ export default function PaperTradePage() {
       <PaperTradeOpenPositions trades={trades} />
 
       <PaperTradeEquityCurve equityCurve={equityCurve} />
+
+      <PaperTradeBenchmarkComparison
+        overall={overall}
+        benchmarks={summary?.benchmarks}
+      />
 
       {summary && (
         <PaperTradePerformanceAttribution summary={summary} />
