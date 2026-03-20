@@ -806,6 +806,49 @@ def _build_chart_commentary_payload(
 
 
 # ---------------------------------------------------------------------------
+# Data freshness
+# ---------------------------------------------------------------------------
+
+_STALE_THRESHOLD_HOURS = 36  # accounts for weekends + buffer
+
+
+def _compute_data_freshness(
+    conn: sqlite3.Connection,
+    ticker: str,
+) -> dict[str, Any]:
+    """Return freshness metadata for the latest price_daily row."""
+    row = conn.execute(
+        "SELECT MAX(date) FROM price_daily WHERE ticker = ?",
+        (ticker,),
+    ).fetchone()
+    latest_date_str = row[0] if row else None
+    if not latest_date_str:
+        return {
+            "latest_price_date": None,
+            "age_hours": None,
+            "is_stale": True,
+        }
+    try:
+        latest_date = dt.date.fromisoformat(str(latest_date_str)[:10])
+    except ValueError:
+        LOG.warning("Failed to parse latest price date=%s for %s", latest_date_str, ticker)
+        return {
+            "latest_price_date": str(latest_date_str),
+            "age_hours": None,
+            "is_stale": True,
+        }
+    # Combine with end-of-day (16:00 ET / 21:00 UTC) for age calculation
+    latest_dt = dt.datetime.combine(latest_date, dt.time(21, 0), tzinfo=dt.timezone.utc)
+    now = dt.datetime.now(dt.timezone.utc)
+    age_hours = round((now - latest_dt).total_seconds() / 3600.0, 1)
+    return {
+        "latest_price_date": latest_date.isoformat(),
+        "age_hours": age_hours,
+        "is_stale": age_hours > _STALE_THRESHOLD_HOURS,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main dashboard builder
 # ---------------------------------------------------------------------------
 
@@ -930,6 +973,9 @@ def build_dashboard_payload(
     except Exception as exc:
         LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
 
+    # Data freshness indicator
+    data_freshness = _compute_data_freshness(conn, ticker)
+
     return {
         "ticker": ticker,
         "asof": chart_rows["date"].iloc[-1],
@@ -952,6 +998,7 @@ def build_dashboard_payload(
         "earnings_markers": earnings_markers,
         "report_generated_ts": report_generated_ts,
         "data_sources": get_data_sources(conn, ticker),
+        "data_freshness": data_freshness,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
             "config": {

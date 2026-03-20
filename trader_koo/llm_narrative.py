@@ -134,7 +134,7 @@ def _safe_note_failure(
             details=details,
         )
     except Exception:
-        LOG.debug("Failed to persist llm failure state", exc_info=True)
+        LOG.warning("Failed to persist llm failure state", exc_info=True)
 
 
 def _safe_note_success(
@@ -150,7 +150,7 @@ def _safe_note_success(
             ticker=ticker,
         )
     except Exception:
-        LOG.debug("Failed to persist llm success state", exc_info=True)
+        LOG.warning("Failed to persist llm success state", exc_info=True)
 
 
 def _safe_note_token_usage(
@@ -178,7 +178,7 @@ def _safe_note_token_usage(
             },
         )
     except Exception:
-        LOG.debug("Failed to persist llm token usage", exc_info=True)
+        LOG.warning("Failed to persist llm token usage", exc_info=True)
 
 
 def _gemini_cfg() -> dict[str, Any]:

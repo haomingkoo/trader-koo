@@ -89,6 +89,7 @@ def _cache_load(conn: sqlite3.Connection, cache_key: str) -> dict[str, Any] | No
     try:
         payload = json.loads(str(row[3] or "[]"))
     except Exception:
+        LOG.warning("Failed to parse cached payload JSON for key=%s", cache_key)
         payload = []
     fetched_ts = _parse_iso_utc(str(row[1] or ""))
     expires_ts = _parse_iso_utc(str(row[2] or ""))
@@ -288,6 +289,7 @@ def _load_fundamentals_snapshot_map(
                 if isinstance(parsed, dict):
                     raw_obj = parsed
             except Exception:
+                LOG.warning("Failed to parse raw_json for ticker=%s in fundamentals snapshot", ticker)
                 raw_obj = {}
         earnings_raw = extract_earnings_value(raw_obj)
         parsed_earnings = parse_earnings_value(earnings_raw, market_date) if earnings_raw else {}
@@ -509,6 +511,7 @@ def _load_latest_yolo_map(conn: sqlite3.Connection, tickers: set[str] | None = N
     try:
         asof_date = dt.date.fromisoformat(str(latest_asof))
     except Exception:
+        LOG.warning("Failed to parse YOLO as_of_date=%s as ISO date", latest_asof)
         asof_date = None
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -524,6 +527,7 @@ def _load_latest_yolo_map(conn: sqlite3.Connection, tickers: set[str] | None = N
             try:
                 age_days = max(0, (asof_date - dt.date.fromisoformat(str(x1_date)[:10])).days)
             except Exception:
+                LOG.warning("Failed to compute YOLO age_days for ticker=%s x1_date=%s", ticker, x1_date)
                 age_days = None
         candidate = {
             "timeframe": row[1],
