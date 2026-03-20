@@ -11,6 +11,7 @@ import {
   Wallet,
   BarChart3,
   Layers,
+  Bell,
   ChevronLeft,
   ChevronRight,
   X,
@@ -33,6 +34,7 @@ const navItems: NavItem[] = [
   { to: "/opportunities", label: "Opportunities", Icon: Search },
   { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
   { to: "/markets", label: "Pred Markets", Icon: BarChart3 },
+  { to: "/alerts", label: "Alerts", Icon: Bell },
   { to: "/methodology", label: "Methodology", Icon: Layers },
 ];
 

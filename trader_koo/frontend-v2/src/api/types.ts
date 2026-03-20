@@ -1218,3 +1218,20 @@ export interface FearGreedPayload {
   components: FearGreedComponent[];
   error?: string;
 }
+
+/* -- Alerts -- */
+export interface AlertItem {
+  id: string;
+  type: "market_spike" | "price_alert" | "crypto_spike";
+  title: string;
+  message: string;
+  severity: "high" | "medium" | "low";
+  timestamp: string;
+  time_ago: string;
+  read: boolean;
+}
+
+export interface AlertsPayload {
+  alerts: AlertItem[];
+  unread_count: number;
+}
