@@ -237,7 +237,10 @@ def create_paper_trades_from_report(
             )
             continue
 
-        # ML score check — reject if predicted win probability too low
+        # ML score — OBSERVATION MODE: score trades but never reject.
+        # The model's AUC (0.5235) is too low to gate trades reliably.
+        # Scores are recorded on the trade for post-hoc analysis so we
+        # can evaluate when the model improves enough to re-enable filtering.
         ml_prediction: dict[str, Any] = {}
         if config.ml_enabled:
             try:
@@ -250,16 +253,14 @@ def create_paper_trades_from_report(
                     ml_score.get("model_available")
                     and ml_score.get("predicted_win_prob") is not None
                 ):
-                    if ml_score["predicted_win_prob"] < config.ml_min_win_prob:
-                        LOG.info(
-                            "Paper trade skipped: %s %s ML win prob %.2f < %.2f threshold",
-                            direction.upper(),
-                            ticker,
-                            ml_score["predicted_win_prob"],
-                            config.ml_min_win_prob,
-                        )
-                        continue
                     ml_prediction = ml_score
+                    LOG.info(
+                        "ML observation: %s %s win_prob=%.2f (threshold %.2f, NOT filtering)",
+                        direction.upper(),
+                        ticker,
+                        ml_score["predicted_win_prob"],
+                        config.ml_min_win_prob,
+                    )
                 else:
                     LOG.debug(
                         "ML scoring unavailable for %s: %s",

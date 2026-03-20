@@ -129,15 +129,17 @@ def build_dataset(
 
     feat_df = pd.concat(all_features, ignore_index=True)
 
-    # Generate labels with asymmetric barriers (easier to hit profit target)
+    # Symmetric barriers: both profit and stop at 2× daily vol.
+    # Previously profit_mult=1.5 / stop_mult=2.0 created label imbalance
+    # (profit target hit too easily → inflated positive rate → poor AUC).
     unique_dates = sorted(feat_df["entry_date"].unique())
     unique_tickers = sorted(feat_df["ticker"].unique())
     labels_df = generate_triple_barrier_labels(
         conn,
         entry_dates=unique_dates,
         tickers=unique_tickers,
-        profit_mult=1.5,  # easier to hit (was 2.0)
-        stop_mult=2.0,    # wider stop (let trades breathe)
+        profit_mult=2.0,
+        stop_mult=2.0,
         max_holding_days=10,
     )
 
@@ -196,10 +198,14 @@ def train_walk_forward(
         end_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
     LOG.info("Building full dataset from %s to %s", start_date, end_date)
-    # Sample every 5 trading days (weekly) to get independent samples.
-    # With 10-day holding period, frequency=2 creates 80% label overlap (bad).
-    # frequency=5 gives ~50% overlap which is acceptable for LightGBM.
-    dataset = build_dataset(conn, start_date=start_date, end_date=end_date, sample_frequency=5)
+    # Sample frequency must be >= max_holding_days (10) to avoid label overlap.
+    # Previously frequency=5 with 10-day holding meant consecutive samples
+    # shared 50% of their outcome window, leaking label information.
+    max_holding_days = 10
+    dataset = build_dataset(
+        conn, start_date=start_date, end_date=end_date,
+        sample_frequency=max_holding_days,
+    )
     if dataset.empty or len(dataset) < 100:
         return {
             "ok": False,
