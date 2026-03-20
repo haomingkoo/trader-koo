@@ -43,16 +43,23 @@ export default function Sidebar({
   mobileOpen: boolean;
   onMobileClose: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    // Auto-collapse on landscape mobile (short viewport or narrow width)
+    return window.innerHeight < 500 || window.innerWidth < 1024;
+  });
 
   useEffect(() => {
-    if (mobileOpen) {
-      const handleResize = () => {
-        if (window.innerWidth >= 768) onMobileClose();
-      };
-      window.addEventListener("resize", handleResize);
-      return () => window.removeEventListener("resize", handleResize);
-    }
+    const handleResize = () => {
+      // Close mobile overlay when hitting desktop breakpoint
+      if (mobileOpen && window.innerWidth >= 768) onMobileClose();
+      // Auto-collapse sidebar in landscape mobile or small screens
+      if (window.innerHeight < 500 || window.innerWidth < 1024) {
+        setCollapsed(true);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, [mobileOpen, onMobileClose]);
 
   const sidebarContent = (

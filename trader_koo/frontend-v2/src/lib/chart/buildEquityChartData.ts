@@ -195,10 +195,20 @@ function defaultThreeMonthRange(dates: string[]): [string, string] | undefined {
   const start = new Date(end);
   start.setMonth(start.getMonth() - 3);
   const earliest = new Date(dates[0]);
-  if (!Number.isNaN(earliest.getTime()) && start < earliest) {
-    return [dates[0], dates[dates.length - 1]];
+
+  // Add ~3 trading days of padding on each side so edge candles aren't clipped
+  const PAD_DAYS = 3;
+  const padStart = new Date(start);
+  padStart.setDate(padStart.getDate() - PAD_DAYS);
+  const padEnd = new Date(end);
+  padEnd.setDate(padEnd.getDate() + PAD_DAYS);
+
+  if (!Number.isNaN(earliest.getTime()) && padStart < earliest) {
+    const clampedStart = new Date(earliest);
+    clampedStart.setDate(clampedStart.getDate() - PAD_DAYS);
+    return [clampedStart.toISOString(), padEnd.toISOString()];
   }
-  return [start.toISOString(), end.toISOString()];
+  return [padStart.toISOString(), padEnd.toISOString()];
 }
 
 function isoDateOnly(value: string): string | null {
@@ -724,13 +734,39 @@ export function buildChartData(
       line: { color, width, dash },
     });
     const tierLabel = tier.toUpperCase();
-    if (!compactMode) {
+    const shortTierLabel =
+      tierLabel === "PRIMARY"
+        ? "P"
+        : tierLabel === "SECONDARY"
+          ? "S"
+          : tierLabel === "FALLBACK"
+            ? "FB"
+            : tierLabel;
+    const typeLabel = r.type === "support" ? "SUP" : "RES";
+    if (compactMode) {
       annotations.push({
         xref: "paper",
         yref: "y",
         x: 1.0,
         y: lvl,
-        text: `${tierLabel} ${r.type === "support" ? "SUP" : "RES"} ${formatChartNumber(lvl)} (${r.touches ?? "-"})`,
+        text: `${shortTierLabel} ${typeLabel} ${formatChartNumber(lvl)}`,
+        showarrow: false,
+        xanchor: "left",
+        yanchor: "middle",
+        align: "left",
+        xshift: 2,
+        borderpad: 1,
+        bgcolor: "rgba(18,25,39,0.9)",
+        bordercolor: color,
+        font: { color, size: 9 },
+      });
+    } else {
+      annotations.push({
+        xref: "paper",
+        yref: "y",
+        x: 1.0,
+        y: lvl,
+        text: `${tierLabel} ${typeLabel} ${formatChartNumber(lvl)} (${r.touches ?? "-"})`,
         showarrow: false,
         xanchor: "left",
         yanchor: "middle",
@@ -1036,7 +1072,7 @@ export function buildChartData(
     plot_bgcolor: "transparent",
     uirevision: `${ticker}-${isWeekly ? "weekly" : "daily"}`,
     font: { color: "#8ea0bd", size: 11 },
-    margin: compactMode ? { t: 18, r: 18, b: 44, l: 52 } : { t: 40, r: 200, b: 50, l: 60 },
+    margin: compactMode ? { t: 18, r: 100, b: 44, l: 52 } : { t: 40, r: 200, b: 50, l: 60 },
     dragmode: "zoom" as const,
     legend: { orientation: "h" as const, y: -0.04, x: 0, xanchor: "left" as const },
     xaxis: {

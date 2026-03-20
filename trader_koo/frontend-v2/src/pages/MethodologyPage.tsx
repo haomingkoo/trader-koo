@@ -493,12 +493,13 @@ export default function MethodologyPage() {
         return;
       }
 
-      setPipelineStates((prev) => {
-        const next = [...prev];
-        if (step > 0) next[step - 1] = "done";
-        next[step] = "active";
-        return next;
-      });
+      setPipelineStates(() =>
+        PIPELINE_STEPS.map((_, i) => {
+          if (i < step) return "done";
+          if (i === step) return "active";
+          return "idle";
+        }),
+      );
       setPipelineDesc(PIPELINE_STEPS[step].description);
       step++;
     }, 1800);
