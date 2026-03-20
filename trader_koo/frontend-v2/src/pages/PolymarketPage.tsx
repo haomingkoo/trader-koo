@@ -394,12 +394,11 @@ function EventCard({ event }: EventCardProps) {
   const eventType = event.event_type ?? "simple";
 
   return (
-    <article className="flex max-h-80 flex-col rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 transition-colors hover:border-[var(--accent)]/40">
+    <article className="flex flex-col rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 transition-colors hover:border-[var(--accent)]/40">
       <EventHeader event={event} />
 
-      {/* Content area — scrollable if it overflows */}
-      <div className="relative mt-2 min-h-0 flex-1 overflow-hidden">
-        <div className="h-full overflow-y-auto scrollbar-none">
+      {/* Content area */}
+      <div className="mt-2">
           {eventType === "simple" && event.top_market ? (
             <SimpleYesNo market={event.top_market} />
           ) : (
@@ -410,13 +409,6 @@ function EventCard({ event }: EventCardProps) {
           )}
 
           <ResolvedToggle markets={resolvedMarkets} eventType={eventType} />
-        </div>
-
-        {/* Gradient fade when content is clipped */}
-        <div
-          className="pointer-events-none absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-[var(--panel)] to-transparent"
-          aria-hidden="true"
-        />
       </div>
     </article>
   );
@@ -474,7 +466,7 @@ export default function PolymarketPage() {
           No finance-relevant prediction markets found. Check back later.
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {events.map((event, i) => (
             <EventCard key={event.slug || i} event={event} />
           ))}
