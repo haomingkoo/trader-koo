@@ -113,7 +113,9 @@ export default function Sidebar({
             }
           >
             <item.Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-            {!collapsed && <span>{item.label}</span>}
+            {/* Mobile overlay always shows labels; desktop respects collapsed state */}
+            {mobileOpen && <span>{item.label}</span>}
+            {!mobileOpen && !collapsed && <span>{item.label}</span>}
           </NavLink>
         ))}
       </nav>
