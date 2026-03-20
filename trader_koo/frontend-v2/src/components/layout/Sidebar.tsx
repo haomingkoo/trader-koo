@@ -32,7 +32,7 @@ const navItems: NavItem[] = [
   { to: "/crypto", label: "Crypto", Icon: Bitcoin },
   { to: "/opportunities", label: "Opportunities", Icon: Search },
   { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
-  { to: "/markets", label: "Markets", Icon: BarChart3 },
+  { to: "/markets", label: "Pred Markets", Icon: BarChart3 },
   { to: "/methodology", label: "Methodology", Icon: Layers },
 ];
 
