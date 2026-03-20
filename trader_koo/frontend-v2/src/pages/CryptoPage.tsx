@@ -415,7 +415,7 @@ export default function CryptoPage() {
         const oiTheme = getPlotlyColors();
         return (
           <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-sm font-semibold text-[var(--text)]">
                 Open Interest ({selectedSymbol})
               </h3>
