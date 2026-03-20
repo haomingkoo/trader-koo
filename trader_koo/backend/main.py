@@ -279,6 +279,9 @@ async def lifespan(_app: FastAPI):
             LOG.info("Paper trade schema initialized")
             ensure_crypto_schema(conn)
             LOG.info("Crypto bars schema initialized")
+            from trader_koo.notifications.market_monitor import ensure_polymarket_schema
+            ensure_polymarket_schema(conn)
+            LOG.info("Polymarket snapshots schema initialized")
         finally:
             conn.close()
     else:

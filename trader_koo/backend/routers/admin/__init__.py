@@ -15,6 +15,9 @@ from trader_koo.backend.routers.admin.data import router as data_router
 from trader_koo.backend.routers.admin.email_admin import (
     router as email_router,
 )
+from trader_koo.backend.routers.admin.market_monitor import (
+    router as market_monitor_router,
+)
 from trader_koo.backend.routers.admin.ml import router as ml_router
 from trader_koo.backend.routers.admin.pipeline import (
     router as pipeline_router,
@@ -33,5 +36,6 @@ router.include_router(email_router)
 router.include_router(system_router)
 router.include_router(telegram_router)
 router.include_router(backups_router)
+router.include_router(market_monitor_router)
 
 __all__ = ["router"]
