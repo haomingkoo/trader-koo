@@ -7,24 +7,30 @@ Live at: trader.kooexperience.com
 
 ## Stack
 - **Backend**: FastAPI + APScheduler, SQLite at `/data/trader_koo.db` (Railway persistent volume)
-- **Frontend v1**: `trader_koo/frontend/index.html` — legacy vanilla JS dashboard at `/`
-- **Frontend v2**: `trader_koo/frontend-v2/` — React 19 + Vite 8 + TypeScript served at `/v2`
+- **Frontend**: `trader_koo/frontend-v2/` — React 19 + Vite 8 + TypeScript served at `/` (root)
+- **Frontend (legacy)**: `trader_koo/frontend/index.html` — vanilla JS, no longer served
+- **ML**: LightGBM walk-forward classifier (51 features, AUC 0.5235)
 - **AI**: YOLOv8 (`foduucom/stockmarket-pattern-detection-yolov8`) batch-run nightly
-- **Data**: yfinance (primary) + Finviz (fundamentals) + optional Alpha Vantage
+- **Data**: yfinance + Finviz + Finnhub WS + Binance WS + FRED + Polymarket + optional Alpha Vantage
 - **Deploy**: Railway asia-southeast1, nixpacks build, persistent `/data` volume
 
 ## Key Files
 | File | Purpose |
 |------|---------|
-| `trader_koo/backend/main.py` | Slim app factory + middleware + static mounts (~550 lines) |
-| `trader_koo/frontend/index.html` | Legacy v1 frontend |
-| `trader_koo/frontend-v2/src/App.tsx` | v2 route definitions + safe lazy loading |
+| `trader_koo/backend/main.py` | Slim app factory + middleware + static mounts (~600 lines) |
+| `trader_koo/backend/routers/` | 11 API routers (82 endpoints total) |
+| `trader_koo/frontend-v2/src/App.tsx` | Route definitions + safe lazy loading (10 pages) |
 | `trader_koo/frontend-v2/src/components/PlotlyWrapper.tsx` | Safe `react-plotly.js` interop wrapper |
+| `trader_koo/ml/features.py` | ML feature engineering (51 features) |
+| `trader_koo/ml/trainer.py` | LightGBM walk-forward trainer |
+| `trader_koo/ml/backtest.py` | Walk-forward backtester vs SPY |
+| `trader_koo/crypto/service.py` | Binance WebSocket + candle aggregation |
 | `trader_koo/scripts/daily_update.sh` | Nightly orchestrator: ingest → YOLO → report |
 | `trader_koo/scripts/run_yolo_patterns.py` | YOLOv8 batch detection |
 | `trader_koo/scripts/update_market_db.py` | yfinance + Finviz ingestion |
 | `trader_koo/scripts/generate_daily_report.py` | Daily report generation |
 | `trader_koo/structure/fear_greed.py` | Internal market sentiment composite + optional external news blend |
+| `trader_koo/paper_trades.py` | Paper trade lifecycle + MTM + equity curve |
 
 ## Coding Rules
 
@@ -70,8 +76,13 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - LLM validation failures: fixed — sanitize before validate in `llm_narrative.py`
 - HMM regime fitting is now clipped/stabilized locally and the previous sklearn warnings no longer reproduce in the current pytest baseline
 - Market Sentiment widget now supports optional Alpha Vantage news sentiment, but it still does not use Twitter/Reddit social scraping
+- FRED features need bulk-fetch architecture (per-date API calls too slow for ML training)
+- Polymarket page shows aggregated YES/NO only — needs timeline sub-markets with individual date milestones
+- ML model AUC 0.5235 — useful as filter, not signal generator
+- Frontend has zero test coverage
+- `test_v2_shell_routes_disable_caching` references deleted `/v2` routes (broken test)
 
 ## Testing
 Run tests with: `python -m pytest tests/ -v`
-Current baseline: `550 passed` locally.
+Current baseline: `578 passed` locally.
 All tests must pass locally before pushing. Test files live in `tests/`.
