@@ -464,7 +464,8 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
     if all_lines:
         header = f"\U0001F6A8 *Market Spikes ({len(all_lines)} events)*\n"
         body = "\n\n".join(all_lines)
-        msg = f"{header}\n{body}"
+        footer = "\n\n[View all on Dashboard](https://trader.kooexperience.com/markets)"
+        msg = f"{header}\n{body}{footer}"
         if send_message(msg):
             alerts_sent = len(all_lines)
         else:
