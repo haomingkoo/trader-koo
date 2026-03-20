@@ -353,6 +353,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_fund_ticker_snap ON finviz_fundamentals(ticker, snapshot_ts);
         CREATE INDEX IF NOT EXISTS idx_price_ticker_date ON price_daily(ticker, date);
+        CREATE INDEX IF NOT EXISTS idx_price_daily_ticker ON price_daily(ticker);
         CREATE INDEX IF NOT EXISTS idx_options_ticker_snap ON options_iv(ticker, snapshot_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_runs_started ON ingest_runs(started_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_ticker_status_run ON ingest_ticker_status(run_id, status);
