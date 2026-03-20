@@ -421,15 +421,27 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
 
     alerts_sent = 0
 
+    # Collect all spikes first, then send ONE compiled message
+    all_lines: list[str] = []
+
     # Polymarket spikes
     try:
         poly_spikes = detect_polymarket_spikes(db_path)
         for spike in poly_spikes:
-            msg = _format_polymarket_alert(spike)
-            if send_message(msg):
-                alerts_sent += 1
-            else:
-                LOG.warning("Failed to send Polymarket spike alert for: %s", spike.get("event_title"))
+            arrow = "\u2B06\uFE0F" if spike.get("change_pct", 0) > 0 else "\u2B07\uFE0F"
+            title = spike.get("event_title", "?")[:50]
+            old_p = spike.get("old_prob", 0)
+            new_p = spike.get("new_prob", 0)
+            change = spike.get("change_pct", 0)
+            vol = _format_volume(spike.get("volume", 0))
+            slug = spike.get("event_slug", "")
+            poly_link = f"https://polymarket.com/event/{slug}" if slug else ""
+            link_text = f"\n   [Polymarket]({poly_link}) | [Dashboard](https://trader.kooexperience.com/markets)" if slug else ""
+            all_lines.append(
+                f"{arrow} *{title}*\n"
+                f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | {vol}"
+                f"{link_text}"
+            )
     except Exception as exc:
         LOG.error("Polymarket spike alerting failed: %s", exc)
 
@@ -437,15 +449,26 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
     try:
         crypto_spikes = detect_crypto_spikes(db_path)
         for spike in crypto_spikes:
-            msg = _format_crypto_alert(spike)
-            if send_message(msg):
-                alerts_sent += 1
-            else:
-                LOG.warning("Failed to send crypto spike alert for: %s", spike.get("symbol"))
+            arrow = "\U0001F4C8" if spike.get("change_pct", 0) > 0 else "\U0001F4C9"
+            sym = spike.get("symbol", "?")
+            change = spike.get("change_pct", 0)
+            all_lines.append(
+                f"{arrow} {sym}: {change:+.1f}%"
+            )
     except Exception as exc:
         LOG.error("Crypto spike alerting failed: %s", exc)
 
-    LOG.info("Spike alerts: %d sent", alerts_sent)
+    # Send ONE compiled message if there are any spikes
+    if all_lines:
+        header = f"\U0001F6A8 *Market Spikes ({len(all_lines)} events)*\n"
+        body = "\n\n".join(all_lines)
+        msg = f"{header}\n{body}"
+        if send_message(msg):
+            alerts_sent = len(all_lines)
+        else:
+            LOG.warning("Failed to send compiled spike alert")
+
+    LOG.info("Spike alerts: %d events in %d messages", alerts_sent, 1 if all_lines else 0)
     return alerts_sent
 
 
