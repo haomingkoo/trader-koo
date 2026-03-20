@@ -333,7 +333,7 @@ async def lifespan(_app: FastAPI):
         )
 
     _scheduler.start()
-    LOG.info("Scheduler started -- daily_update: 22:00 UTC Mon-Fri | weekly_yolo: 00:30 UTC Sat")
+    LOG.info("Scheduler started -- daily_update: 22:00 UTC Mon-Fri | weekly_yolo: 00:30 UTC Sat | weekly_backup: 02:00 UTC Sat")
     LOG.info("Application startup complete - ready to serve requests")
 
     # Prefetch sentiment data in background so first user request is fast

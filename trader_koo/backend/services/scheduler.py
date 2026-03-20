@@ -193,6 +193,44 @@ def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
 # Weekly YOLO
 # ---------------------------------------------------------------------------
 
+def _run_weekly_backup() -> None:
+    """Saturday job: compress SQLite DB to a timestamped .gz backup."""
+    if not DB_PATH.exists():
+        LOG.warning("Scheduler: skipping weekly backup — DB not found at %s", DB_PATH)
+        _append_run_log("BACKUP", f"Skipped — DB not found at {DB_PATH}")
+        return
+
+    started = dt.datetime.now(dt.timezone.utc)
+    _append_run_log("BACKUP", "Starting weekly SQLite backup")
+    LOG.info("Scheduler: starting weekly SQLite backup (db=%s)", DB_PATH)
+
+    try:
+        from trader_koo.scripts.backup_db import backup_database
+
+        result = backup_database(DB_PATH)
+        elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+        _append_run_log(
+            "BACKUP",
+            (
+                f"Backup completed: {result['backup_name']} "
+                f"src={result['src_size_bytes']}B dest={result['dest_size_bytes']}B "
+                f"ratio={result['compression_ratio_pct']}% "
+                f"pruned={result['pruned_count']} sec={elapsed:.1f}"
+            ),
+        )
+        LOG.info(
+            "Scheduler: weekly backup completed OK (%s, %.1f MB -> %.1f MB, %.1fs)",
+            result["backup_name"],
+            result["src_size_bytes"] / 1_048_576,
+            result["dest_size_bytes"] / 1_048_576,
+            elapsed,
+        )
+    except Exception as exc:
+        elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+        _append_run_log("BACKUP", f"Backup failed: {exc} sec={elapsed:.1f}")
+        LOG.error("Scheduler: weekly backup failed (sec=%.1f): %s", elapsed, exc)
+
+
 def _run_weekly_yolo() -> None:
     """Saturday job: run YOLO weekly pass + regenerate report."""
     script_yolo = SCRIPTS_DIR / "run_yolo_patterns.py"
@@ -300,6 +338,12 @@ def create_scheduler() -> BackgroundScheduler:
         _run_weekly_yolo,
         CronTrigger(hour=0, minute=30, day_of_week="sat", timezone="UTC"),
         id="weekly_yolo",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_weekly_backup,
+        CronTrigger(hour=2, minute=0, day_of_week="sat", timezone="UTC"),
+        id="weekly_backup",
         replace_existing=True,
     )
     return scheduler
