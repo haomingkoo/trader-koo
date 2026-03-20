@@ -222,6 +222,59 @@ _EXCLUDE_KEYWORDS = frozenset({
 })
 
 
+def _parse_single_market(m: dict[str, Any]) -> dict[str, Any]:
+    """Parse a single Gamma API market object into a clean dict."""
+    raw_outcomes = m.get("outcomes") or []
+    if isinstance(raw_outcomes, str):
+        try:
+            raw_outcomes = json.loads(raw_outcomes)
+        except Exception:
+            raw_outcomes = [raw_outcomes]
+    outcomes = list(raw_outcomes) if isinstance(raw_outcomes, (list, tuple)) else []
+
+    raw_prices = m.get("outcomePrices") or []
+    if isinstance(raw_prices, str):
+        try:
+            raw_prices = json.loads(raw_prices)
+        except Exception:
+            raw_prices = []
+    prices_raw = list(raw_prices) if isinstance(raw_prices, (list, tuple)) else []
+    prices: list[float | None] = []
+    for p in prices_raw:
+        try:
+            prices.append(round(float(p) * 100, 1))
+        except (TypeError, ValueError):
+            prices.append(None)
+
+    return {
+        "question": str(m.get("question", "")).strip(),
+        "outcomes": outcomes,
+        "prices_pct": prices,
+        "volume": round(float(m.get("volume", 0) or 0), 2),
+        "end_date": m.get("endDate"),
+    }
+
+
+def _parse_event_markets(
+    raw_markets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Parse and sort all sub-markets for an event.
+
+    Sort priority: end_date ascending (earliest first), then volume
+    descending as tiebreaker. Markets without an end_date go last.
+    """
+    parsed = [_parse_single_market(m) for m in raw_markets]
+
+    def _sort_key(mkt: dict[str, Any]) -> tuple[int, str, float]:
+        end = mkt.get("end_date")
+        if end:
+            return (0, str(end), -mkt["volume"])
+        return (1, "", -mkt["volume"])
+
+    parsed.sort(key=_sort_key)
+    return parsed
+
+
 def fetch_polymarket_events(
     *,
     limit: int = 15,
@@ -265,41 +318,15 @@ def fetch_polymarket_events(
             raw_markets = ev.get("markets") or []
             total_volume = sum(float(m.get("volume", 0) or 0) for m in raw_markets)
 
-            # Parse the top market for this event (highest volume)
-            top_market = None
-            if raw_markets:
-                sorted_mkts = sorted(raw_markets, key=lambda m: float(m.get("volume", 0) or 0), reverse=True)
-                m = sorted_mkts[0]
-                raw_outcomes = m.get("outcomes") or []
-                # Polymarket sometimes returns outcomes as a JSON string, not a list
-                if isinstance(raw_outcomes, str):
-                    try:
-                        import json as _json
-                        raw_outcomes = _json.loads(raw_outcomes)
-                    except Exception:
-                        raw_outcomes = [raw_outcomes]
-                outcomes = list(raw_outcomes) if isinstance(raw_outcomes, (list, tuple)) else []
+            # Parse all sub-markets for this event
+            parsed_markets = _parse_event_markets(raw_markets)
 
-                raw_prices = m.get("outcomePrices") or []
-                if isinstance(raw_prices, str):
-                    try:
-                        import json as _json
-                        raw_prices = _json.loads(raw_prices)
-                    except Exception:
-                        raw_prices = []
-                prices_raw = list(raw_prices) if isinstance(raw_prices, (list, tuple)) else []
-                prices = []
-                for p in prices_raw:
-                    try:
-                        prices.append(round(float(p) * 100, 1))
-                    except (TypeError, ValueError):
-                        prices.append(None)
-                top_market = {
-                    "question": str(m.get("question", "")).strip(),
-                    "outcomes": outcomes,
-                    "prices_pct": prices,
-                    "volume": round(float(m.get("volume", 0) or 0), 2),
-                }
+            # Top market = highest volume across all sub-markets
+            top_market = (
+                max(parsed_markets, key=lambda m: m["volume"])
+                if parsed_markets
+                else None
+            )
 
             relevant.append({
                 "title": str(ev.get("title", "")).strip(),
@@ -310,6 +337,7 @@ def fetch_polymarket_events(
                 "image": ev.get("image"),
                 "url": f"https://polymarket.com/event/{ev.get('slug', '')}",
                 "top_market": top_market,
+                "markets": parsed_markets,
             })
 
         # Sort by volume, return top N

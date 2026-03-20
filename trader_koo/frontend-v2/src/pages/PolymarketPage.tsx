@@ -1,13 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Spinner from "../components/ui/Spinner";
 import { apiFetch } from "../api/client";
 
-interface TopMarket {
+interface SubMarket {
   question: string;
   outcomes: string[];
   prices_pct: (number | null)[];
   volume: number;
+  end_date: string | null;
 }
 
 interface PolyEvent {
@@ -17,7 +18,8 @@ interface PolyEvent {
   total_volume: number;
   end_date: string | null;
   url: string;
-  top_market: TopMarket | null;
+  top_market: SubMarket | null;
+  markets: SubMarket[];
 }
 
 interface PolyResponse {
@@ -40,7 +42,20 @@ function formatVolume(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
-function PriceBar({ label, pct }: { label: string; pct: number | null }) {
+function formatEndDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+interface PriceBarProps {
+  label: string;
+  pct: number | null;
+}
+
+function PriceBar({ label, pct }: PriceBarProps) {
   const value = pct ?? 0;
   const isYes = label.toLowerCase() === "yes";
   const color = isYes
@@ -65,36 +80,108 @@ function PriceBar({ label, pct }: { label: string; pct: number | null }) {
   );
 }
 
-function EventCard({ event }: { event: PolyEvent }) {
-  const top = event.top_market;
+interface SubMarketRowProps {
+  market: SubMarket;
+}
+
+function SubMarketRow({ market }: SubMarketRowProps) {
+  const outcomes = market.outcomes ?? [];
+  const prices = market.prices_pct ?? [];
 
   return (
-    <a
-      href={event.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 transition-colors hover:border-[var(--accent)]/40"
-    >
-      <h3 className="text-sm font-semibold text-[var(--text)] leading-snug">
-        {event.title}
-      </h3>
-
-      {top && Array.isArray(top.outcomes) && top.outcomes.length > 0 && (
-        <div className="mt-2 space-y-1">
-          {top.outcomes.map((outcome, i) => (
-            <PriceBar key={outcome} label={String(outcome)} pct={Array.isArray(top.prices_pct) ? top.prices_pct[i] : null} />
+    <div className="rounded-lg border border-[var(--line)]/50 bg-[var(--bg)] px-3 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[11px] font-medium text-[var(--text)] leading-snug">
+          {market.question}
+        </p>
+        {market.end_date && (
+          <span className="shrink-0 text-[9px] text-[var(--muted)] tabular-nums">
+            {formatEndDate(market.end_date)}
+          </span>
+        )}
+      </div>
+      {outcomes.length > 0 && (
+        <div className="mt-1.5 space-y-0.5">
+          {outcomes.map((outcome, i) => (
+            <PriceBar key={outcome} label={String(outcome)} pct={prices[i] ?? null} />
           ))}
         </div>
       )}
-
-      <div className="mt-2 flex items-center gap-3 text-[10px] text-[var(--muted)]">
-        <span>Vol: <strong className="text-[var(--text)]">{formatVolume(event.total_volume)}</strong></span>
-        <span>{event.market_count} market{event.market_count !== 1 ? "s" : ""}</span>
-        {event.end_date && (
-          <span>Ends <strong className="text-[var(--text)]">{new Date(event.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</strong></span>
-        )}
+      <div className="mt-1 text-[9px] text-[var(--muted)]">
+        Vol: <strong className="text-[var(--text)]">{formatVolume(market.volume)}</strong>
       </div>
-    </a>
+    </div>
+  );
+}
+
+interface EventCardProps {
+  event: PolyEvent;
+}
+
+function EventCard({ event }: EventCardProps) {
+  const [expanded, setExpanded] = useState(false);
+  const top = event.top_market;
+  const subMarkets = event.markets ?? [];
+  const hasMultipleMarkets = subMarkets.length > 1;
+
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 transition-colors hover:border-[var(--accent)]/40">
+      <a
+        href={event.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block"
+      >
+        <h3 className="text-sm font-semibold text-[var(--text)] leading-snug">
+          {event.title}
+        </h3>
+
+        {top && Array.isArray(top.outcomes) && top.outcomes.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {top.outcomes.map((outcome, i) => (
+              <PriceBar key={outcome} label={String(outcome)} pct={Array.isArray(top.prices_pct) ? top.prices_pct[i] : null} />
+            ))}
+          </div>
+        )}
+
+        <div className="mt-2 flex items-center gap-3 text-[10px] text-[var(--muted)]">
+          <span>Vol: <strong className="text-[var(--text)]">{formatVolume(event.total_volume)}</strong></span>
+          <span>{event.market_count} market{event.market_count !== 1 ? "s" : ""}</span>
+          {event.end_date && (
+            <span>Ends <strong className="text-[var(--text)]">{formatEndDate(event.end_date)}</strong></span>
+          )}
+        </div>
+      </a>
+
+      {hasMultipleMarkets && (
+        <div className="mt-3 border-t border-[var(--line)]/50 pt-2">
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+          >
+            <span>{subMarkets.length} sub-markets</span>
+            <svg
+              className={`h-3 w-3 transition-transform ${expanded ? "rotate-180" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {expanded && (
+            <div className="mt-2 space-y-2">
+              {subMarkets.map((mkt, i) => (
+                <SubMarketRow key={`${mkt.question}-${i}`} market={mkt} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
