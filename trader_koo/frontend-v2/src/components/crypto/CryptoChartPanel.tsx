@@ -1,5 +1,13 @@
+import { useMemo } from "react";
 import PlotlyWrapper from "../PlotlyWrapper";
 import Spinner from "../ui/Spinner";
+
+function useIsMobile(): boolean {
+  return useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 640;
+  }, []);
+}
 
 interface CryptoChartPanelProps {
   historyLoading: boolean;
@@ -18,23 +26,25 @@ export default function CryptoChartPanel({
   chartLayout,
   onRelayout,
 }: CryptoChartPanelProps) {
+  const isMobile = useIsMobile();
+
   if (historyLoading) {
     return <Spinner className="mt-8" />;
   }
 
   if (hasChart && chartData && chartLayout) {
     return (
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-2">
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-1 sm:p-2">
         <PlotlyWrapper
           data={chartData}
           layout={chartLayout}
           config={{
             responsive: true,
-            displayModeBar: true,
-            scrollZoom: true,
+            displayModeBar: !isMobile,
+            scrollZoom: !isMobile,
           }}
           onRelayout={onRelayout}
-          style={{ width: "100%", height: 500 }}
+          style={{ width: "100%", height: isMobile ? 350 : 500 }}
         />
       </div>
     );
