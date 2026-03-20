@@ -50,7 +50,6 @@ from trader_koo.security.logging_filter import install_secret_redaction_filter
 from trader_koo.security.error_middleware import ErrorSanitizationMiddleware
 from trader_koo.audit import AuditLogger, ensure_audit_schema
 from trader_koo.audit.middleware import AuditMiddleware, log_auth_attempt
-from trader_koo.audit.export import schedule_daily_export
 from trader_koo.email_subscribers import ensure_subscriber_schema
 from trader_koo.paper_trades import ensure_paper_trade_schema
 from trader_koo.ratelimit.integration import initialize_rate_limiting

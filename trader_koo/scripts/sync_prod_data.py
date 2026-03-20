@@ -50,7 +50,7 @@ def _headers() -> dict[str, str]:
     return {"X-API-Key": API_KEY}
 
 
-def _api_get(path: str, stream: bool = False) -> urllib.request.Request:
+def _api_get(path: str) -> urllib.request.Request:
     """Build an authenticated GET request."""
     url = f"{PROD_URL}{path}"
     req = urllib.request.Request(url, headers=_headers())

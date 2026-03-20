@@ -19,7 +19,10 @@ REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 
 
 @router.get("/api/tickers")
-def tickers(limit: int = Query(default=200, ge=1, le=2000)) -> dict[str, Any]:
+def tickers(
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -27,12 +30,12 @@ def tickers(limit: int = Query(default=200, ge=1, le=2000)) -> dict[str, Any]:
             SELECT DISTINCT ticker
             FROM price_daily
             ORDER BY ticker
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (limit,),
+            (limit, offset),
         ).fetchall()
         out = [r["ticker"] for r in rows]
-        return {"count": len(out), "tickers": out}
+        return {"count": len(out), "tickers": out, "offset": offset}
     finally:
         conn.close()
 
