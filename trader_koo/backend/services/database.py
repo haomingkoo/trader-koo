@@ -265,13 +265,21 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
         }
         for row in history_rows
     ]
+
+    # Pre-group history by (timeframe, pattern) for O(n) lookups instead of
+    # scanning the full history list for every active row.
     asof_dates_desc: dict[str, list[str]] = {"daily": [], "weekly": []}
+    history_by_tf_pat: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for hist in history_payload:
+        tf = str(hist.get("timeframe") or "").strip().lower()
+        pat = str(hist.get("pattern") or "")
+        history_by_tf_pat.setdefault((tf, pat), []).append(hist)
     for timeframe_key in ("daily", "weekly"):
         dates = {
-            str(row.get("as_of_date") or "")
-            for row in history_payload
-            if str(row.get("timeframe") or "").strip().lower() == timeframe_key
-            and str(row.get("as_of_date") or "").strip()
+            str(hist.get("as_of_date") or "").strip()
+            for hist in history_payload
+            if str(hist.get("timeframe") or "").strip().lower() == timeframe_key
+            and str(hist.get("as_of_date") or "").strip()
         }
         asof_dates_desc[timeframe_key] = sorted(dates, reverse=True)
 
@@ -310,7 +318,9 @@ def get_yolo_patterns(conn: sqlite3.Connection, ticker: str) -> list[dict[str, A
         item["age_days"] = age_days
         seen_asofs: set[str] = set()
         timeframe_key = str(item.get("timeframe") or "").strip().lower()
-        for hist in history_payload:
+        # Only scan history entries with same (timeframe, pattern) bucket.
+        bucket_key = (timeframe_key, str(item.get("pattern") or ""))
+        for hist in history_by_tf_pat.get(bucket_key, []):
             if _yolo_snapshot_matches(item, hist):
                 hist_asof = str(hist.get("as_of_date") or "").strip()
                 if hist_asof:
@@ -398,28 +408,36 @@ def get_yolo_audit(
         asof_dates_desc[timeframe_key] = ordered_dates
         latest_asof_by_timeframe[timeframe_key] = ordered_dates[0] if ordered_dates else None
 
-    groups: list[dict[str, Any]] = []
+    # Pre-group rows by (timeframe, pattern), then cluster within each
+    # bucket using tolerance-based matching. Avoids O(n^2) scan over all
+    # groups for every row.
+    rows_by_tf_pat: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in history_payload:
-        matched = None
-        for group in groups:
-            if str(group.get("timeframe") or "") != str(row.get("timeframe") or ""):
-                continue
-            if str(group.get("pattern") or "") != str(row.get("pattern") or ""):
-                continue
-            if _yolo_snapshot_matches(group["anchor"], row):
-                matched = group
-                break
-        if matched is None:
-            groups.append(
-                {
-                    "timeframe": str(row.get("timeframe") or ""),
-                    "pattern": str(row.get("pattern") or ""),
-                    "anchor": row,
-                    "rows": [row],
-                }
-            )
-        else:
-            matched["rows"].append(row)
+        tf = str(row.get("timeframe") or "").strip().lower()
+        pat = str(row.get("pattern") or "")
+        rows_by_tf_pat.setdefault((tf, pat), []).append(row)
+
+    groups: list[dict[str, Any]] = []
+    for (tf, pat), bucket in rows_by_tf_pat.items():
+        bucket_groups: list[dict[str, Any]] = []
+        for row in bucket:
+            matched = None
+            for grp in bucket_groups:
+                if _yolo_snapshot_matches(grp["anchor"], row):
+                    matched = grp
+                    break
+            if matched is None:
+                bucket_groups.append(
+                    {
+                        "timeframe": str(row.get("timeframe") or ""),
+                        "pattern": pat,
+                        "anchor": row,
+                        "rows": [row],
+                    }
+                )
+            else:
+                matched["rows"].append(row)
+        groups.extend(bucket_groups)
 
     audit_rows: list[dict[str, Any]] = []
     for group in groups:
