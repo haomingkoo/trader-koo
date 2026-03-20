@@ -610,16 +610,24 @@ def extract_features_for_universe(
     # FRED macro data (yield curve, credit stress, rates)
     # NOTE: FRED data is fetched as of as_of_date to prevent data leakage.
     # During training, as_of_date is in the past, so we must NOT use today's values.
+    # Tries bulk-prefetched data first (fast O(1) lookup); falls back to per-date
+    # API call only if bulk data isn't available.
     try:
-        from trader_koo.ml.external_data import fetch_fred_series
+        from trader_koo.ml.external_data import fetch_fred_series, lookup_fred_value
 
         for series_id, col_name in [
             ("T10Y2Y", "fred_yield_curve_10y2y"),
             ("BAMLH0A0HYM2", "fred_high_yield_oas"),
             ("DFF", "fred_fed_funds_rate"),
         ]:
+            # Fast path: lookup from bulk-prefetched data
+            bulk_value = lookup_fred_value(series_id, as_of_date)
+            if bulk_value is not None:
+                feat_df[col_name] = bulk_value
+                continue
+
+            # Slow path: per-date API call (fallback for non-training use)
             rows = fetch_fred_series(series_id, lookback_days=90, as_of_date=as_of_date)
-            # Find the value on or before as_of_date (no future data)
             value = np.nan
             for r in reversed(rows):
                 if r["date"] <= as_of_date:

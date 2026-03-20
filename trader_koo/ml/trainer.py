@@ -195,6 +195,20 @@ def train_walk_forward(
     if end_date is None:
         end_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
+    # Bulk-prefetch FRED series for the full training date range.
+    # These 3 series (DFF, T10Y2Y, BAMLH0A0HYM2) are never revised, so
+    # fetching full history in 3 API calls replaces 100s of per-date calls.
+    try:
+        from trader_koo.ml.external_data import prefetch_fred_series_bulk
+
+        prefetch_fred_series_bulk(
+            ["DFF", "T10Y2Y", "BAMLH0A0HYM2"],
+            start_date,
+            end_date,
+        )
+    except Exception as exc:
+        LOG.warning("FRED bulk prefetch failed (will fall back to per-date): %s", exc)
+
     LOG.info("Building full dataset from %s to %s", start_date, end_date)
     # Sample every 5 trading days (weekly) to get independent samples.
     # With 10-day holding period, frequency=2 creates 80% label overlap (bad).
