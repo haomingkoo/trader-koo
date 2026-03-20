@@ -394,36 +394,41 @@ def _parse_event_markets(
 def _classify_event_type(markets: list[dict[str, Any]]) -> str:
     """Classify an event as 'simple', 'timeline', or 'multi_outcome'.
 
-    - simple: single sub-market with YES/NO outcomes
-    - timeline: sub-markets have different end_dates (date-based milestones)
-    - multi_outcome: multiple sub-markets sharing end_date or >3 non-YES/NO outcomes
+    - simple: 1 active sub-market with YES/NO outcomes
+    - timeline: active sub-markets have different end_dates
+    - multi_outcome: multiple active sub-markets or >3 non-YES/NO outcomes
     """
-    if len(markets) <= 1:
-        # Single market — check if it's YES/NO
-        if markets:
-            outcomes = [str(o).lower() for o in (markets[0].get("outcomes") or [])]
+    # Classify based on ACTIVE markets only — resolved ones don't affect display
+    active = [m for m in markets if m.get("active", True)]
+
+    if len(active) <= 1:
+        if active:
+            outcomes = [str(o).lower() for o in (active[0].get("outcomes") or [])]
             if set(outcomes) <= {"yes", "no"}:
                 return "simple"
             return "multi_outcome"
         return "simple"
 
-    # Multiple sub-markets — check if end_dates differ (timeline)
-    end_dates = {m.get("end_date") for m in markets if m.get("end_date")}
+    # Multiple active sub-markets — check if end_dates differ (timeline)
+    end_dates = {m.get("end_date") for m in active if m.get("end_date")}
     if len(end_dates) > 1:
         return "timeline"
 
-    # Check if outcomes are non-YES/NO across sub-markets
-    non_yesno_count = 0
-    for m in markets:
-        outcomes = [str(o).lower() for o in (m.get("outcomes") or [])]
-        if not (set(outcomes) <= {"yes", "no"}):
-            non_yesno_count += 1
+    # Check if outcomes are non-YES/NO across active sub-markets
+    non_yesno_count = sum(
+        1 for m in active
+        if not (set(str(o).lower() for o in (m.get("outcomes") or [])) <= {"yes", "no"})
+    )
 
     if non_yesno_count > 3:
         return "multi_outcome"
 
-    # Multiple markets with same end_date
-    return "multi_outcome"
+    # Multiple active markets with same end_date and YES/NO outcomes
+    # These are timeline-style (e.g., "by March 31?" and "by June 30?")
+    if len(active) > 1:
+        return "timeline"
+
+    return "simple"
 
 
 def fetch_polymarket_events(
