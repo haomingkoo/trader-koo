@@ -190,6 +190,48 @@ def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
 
 
 # ---------------------------------------------------------------------------
+# Weekly backup
+# ---------------------------------------------------------------------------
+
+def _run_weekly_backup() -> None:
+    """Saturday job: compress SQLite DB to a timestamped .gz backup."""
+    if not DB_PATH.exists():
+        LOG.warning("Scheduler: skipping weekly backup — DB not found at %s", DB_PATH)
+        _append_run_log("BACKUP", f"Skipped — DB not found at {DB_PATH}")
+        return
+
+    started = dt.datetime.now(dt.timezone.utc)
+    _append_run_log("BACKUP", "Starting weekly SQLite backup")
+    LOG.info("Scheduler: starting weekly SQLite backup (db=%s)", DB_PATH)
+
+    try:
+        from trader_koo.scripts.backup_db import backup_database
+
+        result = backup_database(DB_PATH)
+        elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+        _append_run_log(
+            "BACKUP",
+            (
+                f"Backup completed: {result['backup_name']} "
+                f"src={result['src_size_bytes']}B dest={result['dest_size_bytes']}B "
+                f"ratio={result['compression_ratio_pct']}% "
+                f"pruned={result['pruned_count']} sec={elapsed:.1f}"
+            ),
+        )
+        LOG.info(
+            "Scheduler: weekly backup completed OK (%s, %.1f MB -> %.1f MB, %.1fs)",
+            result["backup_name"],
+            result["src_size_bytes"] / 1_048_576,
+            result["dest_size_bytes"] / 1_048_576,
+            elapsed,
+        )
+    except Exception as exc:
+        elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+        _append_run_log("BACKUP", f"Backup failed: {exc} sec={elapsed:.1f}")
+        LOG.error("Scheduler: weekly backup failed (sec=%.1f): %s", elapsed, exc)
+
+
+# ---------------------------------------------------------------------------
 # Weekly YOLO
 # ---------------------------------------------------------------------------
 
@@ -271,6 +313,25 @@ def _run_weekly_yolo() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Morning summary (Telegram push at 00:00 UTC = 08:00 SGT)
+# ---------------------------------------------------------------------------
+
+def _run_morning_summary() -> None:
+    """Send the daily morning briefing to Telegram (Mon-Fri)."""
+    from trader_koo.notifications.morning_summary import send_morning_summary
+
+    _append_run_log("MORNING", "Morning summary job started")
+    LOG.info("Scheduler: starting morning summary push")
+    ok = send_morning_summary(DB_PATH, REPORT_DIR)
+    if ok:
+        _append_run_log("MORNING", "Morning summary sent OK")
+        LOG.info("Scheduler: morning summary sent to Telegram")
+    else:
+        _append_run_log("MORNING", "Morning summary failed or skipped")
+        LOG.warning("Scheduler: morning summary failed or was skipped (Telegram not configured?)")
+
+
+# ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
 
@@ -302,4 +363,23 @@ def create_scheduler() -> BackgroundScheduler:
         id="weekly_yolo",
         replace_existing=True,
     )
+    scheduler.add_job(
+        _run_weekly_backup,
+        CronTrigger(hour=2, minute=0, day_of_week="sat", timezone="UTC"),
+        id="weekly_backup",
+        replace_existing=True,
+    )
+
+    # Morning summary — only register if Telegram is configured
+    if os.getenv("TELEGRAM_BOT_TOKEN", ""):
+        scheduler.add_job(
+            _run_morning_summary,
+            CronTrigger(hour=0, minute=0, day_of_week="mon-fri", timezone="UTC"),
+            id="morning_summary",
+            replace_existing=True,
+        )
+        LOG.info("Morning summary job registered: daily 00:00 UTC (08:00 SGT) Mon-Fri")
+    else:
+        LOG.info("TELEGRAM_BOT_TOKEN not set — morning summary job not registered")
+
     return scheduler

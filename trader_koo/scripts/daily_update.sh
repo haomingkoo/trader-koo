@@ -121,6 +121,27 @@ if [ "$INGEST_RC" -ne 0 ]; then
     exit "$INGEST_RC"
 fi
 
+# ── 1b. Cache news sentiment for today's date ────────────────────────────────
+#        Runs after price ingestion so all active tickers are known.
+#        Populates news_sentiment_cache table for ML feature extraction.
+#        Non-fatal: if it fails, features.py falls back to NaN.
+if [ "$RUN_INGEST" -eq 1 ]; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [SENTIMENT] Caching news sentiment for today..." >> "$RUN_LOG"
+    SENTIMENT_T0=$(date +%s)
+    if "$PYTHON" -m trader_koo.ml.sentiment_cache \
+        --db-path "$DB_PATH" \
+        >> "$RUN_LOG" 2>&1; then
+        SENTIMENT_RC=0
+    else
+        SENTIMENT_RC=$?
+        echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [SENTIMENT] Failed rc=${SENTIMENT_RC} (non-fatal)" >> "$RUN_LOG"
+    fi
+    SENTIMENT_T1=$(date +%s)
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [SENTIMENT] done rc=${SENTIMENT_RC} sec=$((SENTIMENT_T1-SENTIMENT_T0))" >> "$RUN_LOG"
+else
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [SENTIMENT] skipped mode=${UPDATE_MODE}" >> "$RUN_LOG"
+fi
+
 # ── 2. YOLO pattern detection — daily pass only (Mon–Fri) ────────────────────
 #      Weekly pass runs separately on Saturday via the scheduler in main.py.
 YOLO_LOOKBACK_DAYS="${TRADER_KOO_YOLO_LOOKBACK_DAYS:-180}"
