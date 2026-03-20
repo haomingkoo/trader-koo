@@ -673,6 +673,11 @@ def _build_chart_commentary_payload(
             if key in override and override.get(key) is not None:
                 row[key] = override.get(key)
         row["narrative_source"] = "report_snapshot"
+        # Re-generate narrative text AFTER applying overrides so the
+        # observation/action/risk reflect the snapshot tier, not the
+        # independently recomputed tier.  This is the single-source-of-truth
+        # fix: badges AND narrative now agree with the report.
+        row.update(_report_describe_setup(row))
     else:
         llm_overrides = maybe_rewrite_setup_copy(row, source="chart_commentary")
         if llm_overrides:
