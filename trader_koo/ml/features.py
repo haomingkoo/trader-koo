@@ -135,32 +135,59 @@ def _get_news_sentiment_scores(
     tickers: list[str],
     as_of_date: str,
     lookback_days: int = 3,
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, float]:
-    """Fetch per-ticker news sentiment scores using Finnhub company-news + lexicon.
+    """Fetch per-ticker news sentiment scores, using DB cache when available.
+
+    Priority:
+    1. DB cache (news_sentiment_cache table) -- instant, no API calls
+    2. Live Finnhub API -- only for cache misses during live scoring
 
     Returns a dict mapping ticker -> raw sentiment score in [-1, 1].
     Uses only news published on or before *as_of_date* (backward-looking).
     Returns NaN for tickers with no scoreable headlines or on API failure.
     """
+    scores: dict[str, float] = {}
+    uncached_tickers: list[str] = list(tickers)
+
+    # --- Step 1: Try DB cache first ---
+    if conn is not None:
+        try:
+            from trader_koo.ml.sentiment_cache import lookup_cached_sentiment_batch
+
+            cached = lookup_cached_sentiment_batch(conn, tickers, as_of_date)
+            if cached:
+                scores.update(cached)
+                uncached_tickers = [t for t in tickers if t not in cached]
+                LOG.debug(
+                    "Sentiment cache hit: %d/%d tickers for %s",
+                    len(cached), len(tickers), as_of_date,
+                )
+        except Exception as exc:
+            LOG.debug("Sentiment cache lookup failed (non-fatal): %s", exc)
+
+    if not uncached_tickers:
+        return scores
+
+    # --- Step 2: Fall back to live Finnhub API for cache misses ---
     try:
         from trader_koo.news_sentiment import _finnhub_get, _finnhub_key
         from trader_koo.rss_news import _score_headline
     except ImportError:
         LOG.warning("News sentiment modules not available; skipping news features")
-        return {}
+        return scores
 
     api_key = _finnhub_key()
     if not api_key:
-        LOG.debug("FINNHUB_API_KEY not set; news_sentiment_score will be NaN")
-        return {}
+        LOG.debug("FINNHUB_API_KEY not set; news_sentiment_score will be NaN for uncached tickers")
+        return scores
 
     date_to = as_of_date
     date_from = (
         pd.Timestamp(as_of_date) - pd.Timedelta(days=lookback_days)
     ).strftime("%Y-%m-%d")
 
-    scores: dict[str, float] = {}
-    for ticker in tickers:
+    for ticker in uncached_tickers:
         try:
             articles = _finnhub_get(
                 "company-news",
@@ -660,7 +687,7 @@ def extract_features_for_universe(
     # Falls back to NaN when FINNHUB_API_KEY is not set or API is unreachable.
     try:
         ticker_list = feat_df["ticker"].tolist() if "ticker" in feat_df.columns else []
-        sentiment_scores = _get_news_sentiment_scores(ticker_list, as_of_date)
+        sentiment_scores = _get_news_sentiment_scores(ticker_list, as_of_date, conn=conn)
         if sentiment_scores:
             feat_df["news_sentiment_score"] = feat_df["ticker"].map(
                 lambda t: sentiment_scores.get(t, np.nan)

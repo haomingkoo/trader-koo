@@ -178,6 +178,7 @@ def train_walk_forward(
     test_days: int = 60,
     step_days: int = 30,
     embargo_days: int = 15,  # Must be >= max_holding_days (10) + buffer
+    backfill_sentiment: bool = False,
 ) -> dict[str, Any]:
     """Train LightGBM with walk-forward validation.
 
@@ -190,10 +191,41 @@ def train_walk_forward(
 
     The LAST fold's model is saved as the production model.
 
+    Parameters
+    ----------
+    backfill_sentiment : bool
+        If True, pre-warm the news_sentiment_cache for all tickers and
+        sampled training dates before building the dataset.  Slow (one-time)
+        but avoids per-ticker API calls during feature extraction.
+
     Returns training report with per-fold metrics.
     """
     if end_date is None:
         end_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+
+    # Optionally backfill sentiment cache before training
+    if backfill_sentiment:
+        try:
+            from trader_koo.ml.sentiment_cache import backfill_sentiment_cache
+
+            # Get all active tickers from the universe
+            ticker_rows = conn.execute(
+                "SELECT DISTINCT ticker FROM price_daily "
+                "WHERE date >= ? AND date <= ? "
+                "AND ticker NOT LIKE '^%%'",
+                (start_date, end_date),
+            ).fetchall()
+            all_tickers = sorted(str(r[0]) for r in ticker_rows)
+            LOG.info(
+                "Backfilling sentiment cache: %d tickers, %s to %s",
+                len(all_tickers), start_date, end_date,
+            )
+            backfill_sentiment_cache(
+                conn, all_tickers, start_date, end_date,
+                sample_frequency=5,
+            )
+        except Exception as exc:
+            LOG.warning("Sentiment backfill failed (non-fatal): %s", exc)
 
     LOG.info("Building full dataset from %s to %s", start_date, end_date)
     # Sample every 5 trading days (weekly) to get independent samples.
