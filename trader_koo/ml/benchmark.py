@@ -143,8 +143,8 @@ def run_benchmark(
     all_results: list[dict[str, Any]] = []
 
     # Walk-forward fold boundaries (compute once, reuse for all combos)
-    min_date = dataset["entry_date_ts"].min()
-    max_date = dataset["entry_date_ts"].max()
+    min_date = dataset["entry_date"].min()
+    max_date = dataset["entry_date"].max()
 
     folds: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]] = []
     fold_start = min_date
@@ -188,8 +188,8 @@ def run_benchmark(
                 fold_accs: list[float] = []
 
                 for fold_start_ts, train_end_ts, test_start_ts, test_end_ts in folds:
-                    train_mask = (ds["entry_date_ts"] >= fold_start_ts) & (ds["entry_date_ts"] <= train_end_ts)
-                    test_mask = (ds["entry_date_ts"] >= test_start_ts) & (ds["entry_date_ts"] <= test_end_ts)
+                    train_mask = (ds["entry_date"] >= fold_start_ts) & (ds["entry_date"] <= train_end_ts)
+                    test_mask = (ds["entry_date"] >= test_start_ts) & (ds["entry_date"] <= test_end_ts)
 
                     X_train = ds.loc[train_mask, available_cols].copy()
                     y_train = ds.loc[train_mask, "target"].copy()
