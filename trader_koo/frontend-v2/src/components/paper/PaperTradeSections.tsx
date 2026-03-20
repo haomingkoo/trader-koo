@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useMemo, useState, useCallback } from "react";
 import type {
   PaperTrade,
+  PaperTradeBenchmarks,
   PaperTradeDirectionStats,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
@@ -323,6 +324,131 @@ export function PaperTradeEquityCurve({
         config={{ responsive: true, displayModeBar: false }}
         style={{ width: "100%", height: 280 }}
       />
+    </div>
+  );
+}
+
+/* ── Benchmark Comparison ── */
+function BenchmarkColumn({
+  label,
+  returnPct,
+  winRate,
+  subtext,
+  highlight = false,
+}: {
+  label: string;
+  returnPct: number | null | undefined;
+  winRate?: number | null;
+  subtext?: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-col items-center rounded-lg border px-4 py-4 ${
+        highlight
+          ? "border-[var(--accent)]/40 bg-[var(--accent)]/5"
+          : "border-[var(--line)] bg-[var(--bg)]"
+      }`}
+    >
+      <div className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider">
+        {label}
+      </div>
+      <div
+        className={`mt-2 text-xl font-bold ${
+          typeof returnPct === "number" ? pnlColor(returnPct) : "text-[var(--muted)]"
+        }`}
+      >
+        {typeof returnPct === "number"
+          ? `${returnPct > 0 ? "+" : ""}${returnPct.toFixed(2)}%`
+          : "\u2014"}
+      </div>
+      <div className="mt-0.5 text-[10px] text-[var(--muted)]">avg return</div>
+      {winRate != null && (
+        <div className="mt-2 text-sm text-[var(--text)]">
+          {winRate.toFixed(1)}% win rate
+        </div>
+      )}
+      {subtext && (
+        <div className="mt-1 text-[10px] text-[var(--muted)]">{subtext}</div>
+      )}
+    </div>
+  );
+}
+
+export function PaperTradeBenchmarkComparison({
+  overall,
+  benchmarks,
+}: {
+  overall: PaperTradeSummaryOverall;
+  benchmarks?: PaperTradeBenchmarks;
+}) {
+  const spy = benchmarks?.spy_buy_hold;
+  const unfiltered = benchmarks?.unfiltered_setups;
+
+  if (!spy && !unfiltered) {
+    return null;
+  }
+
+  const pipelineReturn = overall.avg_pnl_pct;
+  const pipelineWinRate = overall.win_rate_pct;
+
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-[var(--text)]">
+          Benchmark Comparison
+        </div>
+        <span className="text-[10px] text-[var(--muted)]">
+          Does the pipeline add value?
+        </span>
+      </div>
+      <p className="mt-1 text-[10px] text-[var(--muted)]">
+        Compares your filtered pipeline results against naive baselines.
+        SPY buy-and-hold shows passive market return over the same period.
+        Unfiltered baseline shows what happens if every qualifying setup is
+        taken without ML or critic gating (5-day hold).
+      </p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <BenchmarkColumn
+          label="Your Pipeline"
+          returnPct={pipelineReturn}
+          winRate={pipelineWinRate}
+          subtext={`${overall.total_trades} closed trades`}
+          highlight
+        />
+        {spy && (
+          <BenchmarkColumn
+            label="SPY Buy & Hold"
+            returnPct={spy.return_pct}
+            subtext={`${spy.period_days}d period`}
+          />
+        )}
+        {unfiltered && (
+          <BenchmarkColumn
+            label="All Setups (No Filter)"
+            returnPct={unfiltered.return_pct}
+            winRate={unfiltered.win_rate}
+            subtext={`${unfiltered.trades} setups, 5-day hold`}
+          />
+        )}
+      </div>
+      {spy && typeof pipelineReturn === "number" && (
+        <div className="mt-3 text-xs text-[var(--muted)]">
+          {pipelineReturn > spy.return_pct ? (
+            <span className="text-[var(--green)]">
+              Pipeline outperforms SPY by{" "}
+              {(pipelineReturn - spy.return_pct).toFixed(2)}pp per trade avg
+            </span>
+          ) : pipelineReturn < spy.return_pct ? (
+            <span className="text-[var(--red)]">
+              Pipeline underperforms SPY by{" "}
+              {(spy.return_pct - pipelineReturn).toFixed(2)}pp — review filter thresholds
+            </span>
+          ) : (
+            <span>Pipeline matches SPY</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

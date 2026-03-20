@@ -819,6 +819,26 @@ export interface EquityCurvePoint {
   equity_index: number;
 }
 
+export interface SpyBuyHoldBenchmark {
+  return_pct: number;
+  period_days: number;
+  start_price: number;
+  end_price: number;
+}
+
+export interface UnfilteredSetupsBenchmark {
+  trades: number;
+  win_rate: number;
+  return_pct: number;
+  total_return_pct: number;
+  sharpe: number | null;
+}
+
+export interface PaperTradeBenchmarks {
+  spy_buy_hold?: SpyBuyHoldBenchmark;
+  unfiltered_setups?: UnfilteredSetupsBenchmark;
+}
+
 export interface PaperTradeSummary {
   ok: boolean;
   overall: PaperTradeSummaryOverall;
@@ -833,6 +853,7 @@ export interface PaperTradeSummary {
   family_edges?: PaperTradeFamilyEdgeRow[];
   regime_edges?: PaperTradeRegimeEdgeRow[];
   vix_bucket_edges?: PaperTradeVixBucketEdgeRow[];
+  benchmarks?: PaperTradeBenchmarks;
 }
 
 /* ── Crypto ── */
