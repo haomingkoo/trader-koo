@@ -17,6 +17,9 @@ from trader_koo.backend.routers.admin.pipeline import (
     router as pipeline_router,
 )
 from trader_koo.backend.routers.admin.system import router as system_router
+from trader_koo.backend.routers.admin.telegram import (
+    router as telegram_router,
+)
 
 router = APIRouter()
 
@@ -25,5 +28,6 @@ router.include_router(ml_router)
 router.include_router(data_router)
 router.include_router(email_router)
 router.include_router(system_router)
+router.include_router(telegram_router)
 
 __all__ = ["router"]
