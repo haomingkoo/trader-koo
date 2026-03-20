@@ -17,11 +17,11 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        manualChunks: {
-          plotly: ["plotly.js"],
-          react: ["react", "react-dom"],
-          router: ["react-router-dom"],
-          query: ["@tanstack/react-query"],
+        manualChunks(id: string) {
+          if (id.includes("plotly")) return "plotly";
+          if (id.includes("react-dom") || id.includes("/react/")) return "react";
+          if (id.includes("react-router")) return "router";
+          if (id.includes("@tanstack/react-query")) return "query";
         },
       },
     },
