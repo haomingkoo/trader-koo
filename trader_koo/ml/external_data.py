@@ -334,6 +334,98 @@ _EXCLUDE_KEYWORDS = frozenset({
 })
 
 
+def _parse_single_market(m: dict[str, Any]) -> dict[str, Any]:
+    """Parse a single Gamma API market object into a clean dict."""
+    raw_outcomes = m.get("outcomes") or []
+    if isinstance(raw_outcomes, str):
+        try:
+            raw_outcomes = json.loads(raw_outcomes)
+        except Exception:
+            raw_outcomes = [raw_outcomes]
+    outcomes = list(raw_outcomes) if isinstance(raw_outcomes, (list, tuple)) else []
+
+    raw_prices = m.get("outcomePrices") or []
+    if isinstance(raw_prices, str):
+        try:
+            raw_prices = json.loads(raw_prices)
+        except Exception:
+            raw_prices = []
+    prices_raw = list(raw_prices) if isinstance(raw_prices, (list, tuple)) else []
+    prices: list[float | None] = []
+    for p in prices_raw:
+        try:
+            prices.append(round(float(p) * 100, 1))
+        except (TypeError, ValueError):
+            prices.append(None)
+
+    is_resolved = bool(m.get("closed") or m.get("resolved"))
+
+    return {
+        "question": str(m.get("question", "")).strip(),
+        "outcomes": outcomes,
+        "prices_pct": prices,
+        "volume": round(float(m.get("volume", 0) or 0), 2),
+        "end_date": m.get("endDate"),
+        "resolved": is_resolved,
+        "active": not is_resolved,
+    }
+
+
+def _parse_event_markets(
+    raw_markets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Parse and sort all sub-markets for an event.
+
+    Sort priority: end_date ascending (earliest first), then volume
+    descending as tiebreaker. Markets without an end_date go last.
+    """
+    parsed = [_parse_single_market(m) for m in raw_markets]
+
+    def _sort_key(mkt: dict[str, Any]) -> tuple[int, str, float]:
+        end = mkt.get("end_date")
+        if end:
+            return (0, str(end), -mkt["volume"])
+        return (1, "", -mkt["volume"])
+
+    parsed.sort(key=_sort_key)
+    return parsed
+
+
+def _classify_event_type(markets: list[dict[str, Any]]) -> str:
+    """Classify an event as 'simple', 'timeline', or 'multi_outcome'.
+
+    - simple: single sub-market with YES/NO outcomes
+    - timeline: sub-markets have different end_dates (date-based milestones)
+    - multi_outcome: multiple sub-markets sharing end_date or >3 non-YES/NO outcomes
+    """
+    if len(markets) <= 1:
+        # Single market — check if it's YES/NO
+        if markets:
+            outcomes = [str(o).lower() for o in (markets[0].get("outcomes") or [])]
+            if set(outcomes) <= {"yes", "no"}:
+                return "simple"
+            return "multi_outcome"
+        return "simple"
+
+    # Multiple sub-markets — check if end_dates differ (timeline)
+    end_dates = {m.get("end_date") for m in markets if m.get("end_date")}
+    if len(end_dates) > 1:
+        return "timeline"
+
+    # Check if outcomes are non-YES/NO across sub-markets
+    non_yesno_count = 0
+    for m in markets:
+        outcomes = [str(o).lower() for o in (m.get("outcomes") or [])]
+        if not (set(outcomes) <= {"yes", "no"}):
+            non_yesno_count += 1
+
+    if non_yesno_count > 3:
+        return "multi_outcome"
+
+    # Multiple markets with same end_date
+    return "multi_outcome"
+
+
 def fetch_polymarket_events(
     *,
     limit: int = 15,
@@ -377,41 +469,22 @@ def fetch_polymarket_events(
             raw_markets = ev.get("markets") or []
             total_volume = sum(float(m.get("volume", 0) or 0) for m in raw_markets)
 
-            # Parse the top market for this event (highest volume)
-            top_market = None
-            if raw_markets:
-                sorted_mkts = sorted(raw_markets, key=lambda m: float(m.get("volume", 0) or 0), reverse=True)
-                m = sorted_mkts[0]
-                raw_outcomes = m.get("outcomes") or []
-                # Polymarket sometimes returns outcomes as a JSON string, not a list
-                if isinstance(raw_outcomes, str):
-                    try:
-                        import json as _json
-                        raw_outcomes = _json.loads(raw_outcomes)
-                    except Exception:
-                        raw_outcomes = [raw_outcomes]
-                outcomes = list(raw_outcomes) if isinstance(raw_outcomes, (list, tuple)) else []
+            # Parse all sub-markets for this event
+            parsed_markets = _parse_event_markets(raw_markets)
 
-                raw_prices = m.get("outcomePrices") or []
-                if isinstance(raw_prices, str):
-                    try:
-                        import json as _json
-                        raw_prices = _json.loads(raw_prices)
-                    except Exception:
-                        raw_prices = []
-                prices_raw = list(raw_prices) if isinstance(raw_prices, (list, tuple)) else []
-                prices = []
-                for p in prices_raw:
-                    try:
-                        prices.append(round(float(p) * 100, 1))
-                    except (TypeError, ValueError):
-                        prices.append(None)
-                top_market = {
-                    "question": str(m.get("question", "")).strip(),
-                    "outcomes": outcomes,
-                    "prices_pct": prices,
-                    "volume": round(float(m.get("volume", 0) or 0), 2),
-                }
+            # Top market = highest volume across all sub-markets
+            top_market = (
+                max(parsed_markets, key=lambda m: m["volume"])
+                if parsed_markets
+                else None
+            )
+
+            # Count active vs resolved sub-markets
+            active_count = sum(1 for m in parsed_markets if m.get("active"))
+            resolved_count = sum(1 for m in parsed_markets if m.get("resolved"))
+
+            # Classify event type
+            event_type = _classify_event_type(parsed_markets)
 
             relevant.append({
                 "title": str(ev.get("title", "")).strip(),
@@ -422,6 +495,10 @@ def fetch_polymarket_events(
                 "image": ev.get("image"),
                 "url": f"https://polymarket.com/event/{ev.get('slug', '')}",
                 "top_market": top_market,
+                "markets": parsed_markets,
+                "active_count": active_count,
+                "resolved_count": resolved_count,
+                "event_type": event_type,
             })
 
         # Sort by volume, return top N
