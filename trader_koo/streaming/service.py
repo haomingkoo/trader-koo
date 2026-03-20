@@ -13,6 +13,7 @@ import asyncio
 import datetime as dt
 import logging
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -33,6 +34,12 @@ _subscribers: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
 # Maximum concurrent browser WebSocket subscribers
 MAX_WS_SUBSCRIBERS = 50
+
+# Staleness monitoring
+_staleness_thread: threading.Thread | None = None
+_staleness_running = False
+_STALENESS_CHECK_INTERVAL_SEC = 60
+_STALENESS_THRESHOLD_SEC = 300  # 5 minutes
 
 
 def subscribe_equity_ticks(queue: asyncio.Queue[dict[str, Any]]) -> str | None:
@@ -105,9 +112,52 @@ def _broadcast_tick(tick: dict) -> None:
             LOG.warning("Dropped slow equity subscriber: %s", sub_id)
 
 
+def _staleness_loop() -> None:
+    """Background thread: check equity WS staleness every 60 seconds."""
+    while _staleness_running:
+        time.sleep(_STALENESS_CHECK_INTERVAL_SEC)
+        if not _staleness_running or _client is None:
+            break
+        last_msg = _client.last_message_at
+        if last_msg == 0:
+            continue
+        age = time.monotonic() - last_msg
+        if age > _STALENESS_THRESHOLD_SEC:
+            LOG.warning(
+                "Equity WS stale: no message for %.0f seconds — forcing reconnect",
+                age,
+            )
+            try:
+                ws = _client._ws
+                if ws is not None:
+                    ws.close()
+            except Exception as exc:
+                LOG.debug("Staleness reconnect close error: %s", exc)
+
+
+def get_equity_ws_health() -> dict[str, Any]:
+    """Return health status for the equity WebSocket connection."""
+    if _client is None:
+        return {
+            "connected": False,
+            "last_message_ago_sec": None,
+            "symbols": 0,
+        }
+    last_msg = _client.last_message_at
+    if last_msg == 0:
+        ago: float | None = None
+    else:
+        ago = round(time.monotonic() - last_msg, 1)
+    return {
+        "connected": _client.connected,
+        "last_message_ago_sec": ago,
+        "symbols": _client.get_subscription_count(),
+    }
+
+
 def start_equity_feed(api_key: str) -> None:
     """Start the Finnhub WebSocket feed in a background daemon thread."""
-    global _client
+    global _client, _staleness_thread, _staleness_running
     if _client is not None:
         LOG.warning("Equity feed already started — ignoring duplicate call")
         return
@@ -118,16 +168,27 @@ def start_equity_feed(api_key: str) -> None:
         on_tick=_broadcast_tick,
     )
     _client.start()
+
+    # Start staleness monitor
+    _staleness_running = True
+    _staleness_thread = threading.Thread(
+        target=_staleness_loop,
+        name="equity-ws-staleness",
+        daemon=True,
+    )
+    _staleness_thread.start()
     LOG.info("Equity feed started (Finnhub WS for SPY/QQQ + on-demand)")
 
 
 def stop_equity_feed() -> None:
     """Gracefully stop the Finnhub WebSocket feed."""
-    global _client
+    global _client, _staleness_running, _staleness_thread
+    _staleness_running = False
     if _client is None:
         return
     _client.stop()
     _client = None
+    _staleness_thread = None
     LOG.info("Equity feed stopped")
 
 

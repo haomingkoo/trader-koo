@@ -91,6 +91,9 @@ class BinanceWSClient:
         self._pending_bars: list[CryptoBar] = []
         self._last_flush_ts: float = 0.0
 
+        # Staleness tracking
+        self._last_message_at: float = 0.0
+
     # ------------------------------------------------------------------
     # Public API (thread-safe)
     # ------------------------------------------------------------------
@@ -99,6 +102,17 @@ class BinanceWSClient:
     def connected(self) -> bool:
         with self._lock:
             return self._connected
+
+    @property
+    def last_message_at(self) -> float:
+        """Epoch timestamp of the last WS message received (0 if none)."""
+        with self._lock:
+            return self._last_message_at
+
+    @property
+    def symbol_count(self) -> int:
+        """Number of symbols being tracked."""
+        return len(SYMBOL_MAP)
 
     def get_latest_ticks(self) -> dict[str, CryptoTick]:
         with self._lock:
@@ -246,6 +260,8 @@ class BinanceWSClient:
         LOG.info("Binance WS connected — subscribed to %s", KLINE_STREAMS)
 
     def _on_message(self, _ws: websocket.WebSocketApp, raw: str) -> None:
+        with self._lock:
+            self._last_message_at = time.monotonic()
         try:
             msg = json.loads(raw)
             self._handle_kline(msg)
