@@ -10,6 +10,7 @@ This module is responsible for:
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 import os
@@ -353,7 +354,74 @@ async def lifespan(_app: FastAPI):
 
     threading.Thread(target=_prefetch_sentiment, daemon=True, name="sentiment-prefetch").start()
 
+    # Start Telegram price alert engine (optional — requires credentials)
+    # Uses Finnhub REST polling (not WebSocket) to preserve WS slots for dashboard
+    _alert_task: asyncio.Task | None = None  # type: ignore[type-arg]
+    _bot_task: asyncio.Task | None = None  # type: ignore[type-arg]
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    telegram_chat = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if telegram_token and telegram_chat:
+        report_dir = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
+
+        # Alert engine (outbound price alerts)
+        try:
+            from trader_koo.notifications.alert_engine import AlertEngine
+
+            alert_engine = AlertEngine(
+                db_path=DB_PATH,
+                report_dir=report_dir,
+                finnhub_api_key=finnhub_api_key,
+            )
+            _app.state.alert_engine = alert_engine
+            _alert_task = asyncio.create_task(alert_engine.run())
+            LOG.info("Telegram alert engine started (REST polling, top 10 setups)")
+        except Exception as exc:
+            LOG.warning("Failed to start Telegram alert engine: %s — continuing without it", exc)
+            alert_engine = None  # type: ignore[assignment]
+
+        # Bot command handler (inbound commands from Telegram)
+        try:
+            from trader_koo.notifications.bot_commands import TelegramCommandHandler
+
+            bot_handler = TelegramCommandHandler(
+                bot_token=telegram_token,
+                chat_id=telegram_chat,
+                db_path=DB_PATH,
+                report_dir=report_dir,
+                finnhub_api_key=finnhub_api_key,
+                alert_engine=getattr(_app.state, "alert_engine", None),
+            )
+            _app.state.bot_handler = bot_handler
+            _bot_task = asyncio.create_task(bot_handler.run())
+            LOG.info("Telegram bot command handler started (polling getUpdates)")
+        except Exception as exc:
+            LOG.warning("Failed to start Telegram bot handler: %s — continuing without it", exc)
+    else:
+        LOG.info(
+            "Telegram credentials not set — alert engine and bot handler disabled. "
+            "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable."
+        )
+
     yield
+
+    # Shutdown Telegram tasks
+    if _alert_task is not None:
+        try:
+            alert_engine = getattr(_app.state, "alert_engine", None)
+            if alert_engine is not None:
+                alert_engine.stop()
+            _alert_task.cancel()
+        except Exception as exc:
+            LOG.debug("Alert engine shutdown: %s", exc)
+    if _bot_task is not None:
+        try:
+            bot_handler = getattr(_app.state, "bot_handler", None)
+            if bot_handler is not None:
+                bot_handler.stop()
+            _bot_task.cancel()
+        except Exception as exc:
+            LOG.debug("Bot handler shutdown: %s", exc)
+
     stop_equity_feed()
     stop_crypto_feed()
     _scheduler.shutdown(wait=False)
