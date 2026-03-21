@@ -139,6 +139,10 @@ if not ROOT_LOGGER.handlers:
 
 install_secret_redaction_filter()
 
+# Suppress HTTP client loggers — they log full URLs including API tokens
+for _http_logger_name in ("httpx", "httpcore", "urllib3", "requests"):
+    logging.getLogger(_http_logger_name).setLevel(logging.WARNING)
+
 if not any(
     isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")) == API_LOG_PATH
     for h in ROOT_LOGGER.handlers
