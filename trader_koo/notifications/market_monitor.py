@@ -422,28 +422,73 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
 
     alerts_sent = 0
 
-    # Collect all spikes first, then send ONE compiled message
+    # Collect all spikes, filter out already-alerted ones, send ONE message
     all_lines: list[str] = []
+
+    # Cooldown: track which events we already alerted (by slug+direction)
+    # Only re-alert if direction CHANGES or probability moves another 5+ pts
+    conn_cd = sqlite3.connect(str(db_path))
+    try:
+        conn_cd.execute("""
+            CREATE TABLE IF NOT EXISTS spike_alert_cooldown (
+                event_key TEXT PRIMARY KEY,
+                direction TEXT,
+                last_prob REAL,
+                alerted_at TEXT
+            )
+        """)
+        conn_cd.commit()
+    except Exception:
+        pass
+
+    def _should_alert(key: str, direction: str, new_prob: float) -> bool:
+        """Only alert if direction changed or prob moved 5+ pts since last alert."""
+        row = conn_cd.execute(
+            "SELECT direction, last_prob FROM spike_alert_cooldown WHERE event_key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return True  # never alerted
+        old_dir, old_prob = row
+        if old_dir != direction:
+            return True  # direction reversed
+        if abs(new_prob - (old_prob or 0)) >= 5.0:
+            return True  # moved another 5+ pts
+        return False  # same direction, small move — skip
+
+    def _mark_alerted(key: str, direction: str, prob: float) -> None:
+        now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+        conn_cd.execute(
+            "INSERT OR REPLACE INTO spike_alert_cooldown VALUES (?, ?, ?, ?)",
+            (key, direction, prob, now_iso),
+        )
+        conn_cd.commit()
 
     # Polymarket spikes
     try:
         poly_spikes = detect_polymarket_spikes(db_path)
         for spike in poly_spikes:
-            arrow = "\u2B06\uFE0F" if spike.get("change_pct", 0) > 0 else "\u2B07\uFE0F"
-            # Use full question (the specific bet) not the truncated event title
+            slug = spike.get("event_slug", "")
             question = spike.get("question", spike.get("event_title", "?"))
-            old_p = spike.get("old_prob", 0)
+            direction = spike.get("direction", "up")
             new_p = spike.get("new_prob", 0)
+            key = f"{slug}:{question[:60]}"
+
+            if not _should_alert(key, direction, new_p):
+                continue  # already alerted, same direction, small move
+
+            arrow = "\u2B06\uFE0F" if direction == "up" else "\u2B07\uFE0F"
+            old_p = spike.get("old_prob", 0)
             change = spike.get("change_pct", 0)
             vol = _format_volume(spike.get("volume", 0))
-            slug = spike.get("event_slug", "")
             poly_link = f"https://polymarket.com/event/{slug}" if slug else ""
-            link_text = f"\n   [View on Polymarket]({poly_link})" if slug else ""
+            link_html = f'\n   <a href="{poly_link}">View on Polymarket</a>' if slug else ""
             all_lines.append(
-                f"{arrow} *{question}*\n"
+                f"{arrow} <b>{question}</b>\n"
                 f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | {vol}"
-                f"{link_text}"
+                f"{link_html}"
             )
+            _mark_alerted(key, direction, new_p)
     except Exception as exc:
         LOG.error("Polymarket spike alerting failed: %s", exc)
 
@@ -451,22 +496,30 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
     try:
         crypto_spikes = detect_crypto_spikes(db_path)
         for spike in crypto_spikes:
-            arrow = "\U0001F4C8" if spike.get("change_pct", 0) > 0 else "\U0001F4C9"
             sym = spike.get("symbol", "?")
+            direction = "up" if spike.get("change_pct", 0) > 0 else "down"
+            new_price = spike.get("new_price", 0)
+            key = f"crypto:{sym}"
+
+            if not _should_alert(key, direction, new_price):
+                continue
+
+            arrow = "\U0001F4C8" if direction == "up" else "\U0001F4C9"
             change = spike.get("change_pct", 0)
-            all_lines.append(
-                f"{arrow} {sym}: {change:+.1f}%"
-            )
+            all_lines.append(f"{arrow} {sym}: {change:+.1f}%")
+            _mark_alerted(key, direction, new_price)
     except Exception as exc:
         LOG.error("Crypto spike alerting failed: %s", exc)
 
-    # Send ONE compiled message if there are any spikes
+    conn_cd.close()
+
+    # Send ONE compiled message (HTML for clickable links)
     if all_lines:
-        header = f"\U0001F6A8 *Market Spikes ({len(all_lines)} events)*\n"
+        header = f"\U0001F6A8 <b>Market Spikes ({len(all_lines)} events)</b>\n"
         body = "\n\n".join(all_lines)
-        footer = "\n\n[View all on Dashboard](https://trader.kooexperience.com/markets)"
+        footer = '\n\n<a href="https://trader.kooexperience.com/markets">View all on Dashboard</a>'
         msg = f"{header}\n{body}{footer}"
-        if send_message(msg):
+        if send_message(msg, parse_mode="HTML"):
             alerts_sent = len(all_lines)
         else:
             LOG.warning("Failed to send compiled spike alert")
