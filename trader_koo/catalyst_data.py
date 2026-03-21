@@ -939,6 +939,15 @@ def get_ticker_earnings_markers(
     symbol = str(ticker or "").strip().upper()
     if not symbol:
         return []
+    # ETFs and indices don't have earnings — skip to avoid false markers
+    _NO_EARNINGS = {
+        "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV", "USO", "UNG", "TLT",
+        "HYG", "IEF", "EEM", "FXI", "UUP", "XLK", "XLF", "XLV", "XLE",
+        "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE", "XLC", "IGV", "SVIX",
+        "^VIX", "^GSPC", "^DJI", "^TNX", "^IRX", "^TYX", "^NDX",
+    }
+    if symbol in _NO_EARNINGS or symbol.startswith("^"):
+        return []
     payload = build_earnings_calendar_payload(
         conn,
         market_date=market_date,
