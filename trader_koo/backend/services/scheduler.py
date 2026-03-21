@@ -385,6 +385,22 @@ def _run_macro_alert() -> None:
         LOG.error("Scheduler: macro alert check failed: %s", exc)
 
 
+def _run_storage_cleanup() -> None:
+    """Daily job: prune old rows from ephemeral tables and reclaim space."""
+    from trader_koo.scripts.cleanup_storage import run_cleanup
+
+    _append_run_log("CLEANUP", "Storage cleanup started")
+    LOG.info("Scheduler: starting storage cleanup")
+    try:
+        results = run_cleanup(DB_PATH, dry_run=False)
+        total = sum(results.values())
+        _append_run_log("CLEANUP", f"Storage cleanup done: {total} rows deleted")
+        LOG.info("Scheduler: storage cleanup done: %d rows deleted", total)
+    except Exception as exc:
+        _append_run_log("CLEANUP", f"Storage cleanup failed: {exc}")
+        LOG.error("Scheduler: storage cleanup failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
@@ -446,6 +462,15 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     LOG.info("Polymarket snapshot job registered: every 15min (24/7)")
+
+    # Storage cleanup — daily at 04:00 UTC (after pipeline completes)
+    scheduler.add_job(
+        _run_storage_cleanup,
+        CronTrigger(hour=4, minute=0, timezone="UTC"),
+        id="storage_cleanup",
+        replace_existing=True,
+    )
+    LOG.info("Storage cleanup job registered: daily 04:00 UTC")
 
     # Spike alerts — every 15 min (only sends if Telegram configured)
     if telegram_configured:
