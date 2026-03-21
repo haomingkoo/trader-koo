@@ -248,9 +248,13 @@ else
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] skipped mode=${UPDATE_MODE}" >> "$RUN_LOG"
 fi
 
+# ── 4. Cache company logos ─────────────────────────────────────────────────────
+echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [LOGOS] Caching company logos..." >> "$RUN_LOG"
+"$PYTHON" -m trader_koo.scripts.cache_logos --db-path "$DB_PATH" >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [LOGOS] Logo caching failed (non-fatal)" >> "$RUN_LOG"
+
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh mode=${UPDATE_MODE}" >> "$RUN_LOG"
 
-# ── 4. Housekeeping — keep last 30 report archives, cap log size ──────────────
+# ── 5. Housekeeping — keep last 30 report archives, cap log size ──────────────
 # Keep only the 30 most recent timestamped report files (latest.* are always kept)
 ls -t "$REPORT_DIR"/daily_report_2*.json 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
 ls -t "$REPORT_DIR"/daily_report_2*.md   2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true

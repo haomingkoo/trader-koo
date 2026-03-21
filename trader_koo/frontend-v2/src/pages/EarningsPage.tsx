@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useEarnings } from "../api/hooks";
 import type { EarningsRow } from "../api/types";
 import Badge, { tierVariant } from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
 import Table from "../components/ui/Table";
+import TickerLogo from "../components/earnings/TickerLogo";
 import WeekGridCalendar from "../components/earnings/WeekGridCalendar";
 
 type ViewMode = "calendar" | "table";
@@ -52,8 +53,9 @@ const earningsColumns = [
       return (
         <Link
           to={`/chart?t=${ticker}`}
-          className="font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
+          className="flex items-center gap-1.5 font-mono font-bold text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
         >
+          <TickerLogo ticker={ticker} size={24} />
           {ticker}
         </Link>
       );
@@ -186,7 +188,16 @@ export default function EarningsPage() {
 
   const [days, setDays] = useState(30);
   const [viewMode, setViewMode] = useState<ViewMode>("calendar");
-  const { data, isLoading, error } = useEarnings(days);
+  const [sp500Only, setSp500Only] = useState(true);
+  const [search, setSearch] = useState("");
+  const { data, isLoading, error } = useEarnings(days, undefined, sp500Only);
+
+  const filteredRows = useMemo(() => {
+    const allRows = data?.rows ?? [];
+    const query = search.trim().toUpperCase();
+    if (!query) return allRows;
+    return allRows.filter((r) => r.ticker.toUpperCase().includes(query));
+  }, [data?.rows, search]);
 
   if (isLoading) return <Spinner className="mt-12" />;
   if (error) {
@@ -197,7 +208,6 @@ export default function EarningsPage() {
     );
   }
 
-  const rows = data?.rows ?? [];
   const summary = data?.summary ?? {
     window_days: days,
     total_events: 0,
@@ -218,7 +228,38 @@ export default function EarningsPage() {
         <h2 className="text-xl font-bold tracking-tight">
           Earnings Calendar
         </h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Search box */}
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search ticker..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-36 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-1.5 pl-8 text-xs text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none"
+            />
+            <svg
+              className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--muted)]"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              viewBox="0 0 24 24"
+            >
+              <circle cx={11} cy={11} r={8} />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+          </div>
+          {/* S&P 500 toggle */}
+          <button
+            onClick={() => setSp500Only((prev) => !prev)}
+            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
+              sp500Only
+                ? "border-[var(--accent)] bg-[rgba(74,158,255,0.1)] text-[var(--accent)]"
+                : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
+            }`}
+          >
+            {sp500Only ? "S&P 500" : "All Companies"}
+          </button>
           {/* View toggle */}
           <div className="flex gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-0.5">
             {(["calendar", "table"] as const).map((mode) => (
@@ -235,7 +276,7 @@ export default function EarningsPage() {
               </button>
             ))}
           </div>
-          {/* Data window (only relevant context for table) */}
+          {/* Data window */}
           <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
             <label htmlFor="earningsDays">Window:</label>
             <input
@@ -259,7 +300,7 @@ export default function EarningsPage() {
       {/* ── Summary bar ── */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--panel)] px-4 py-3">
         <Badge variant="blue">{data?.provider ?? "Provider unknown"}</Badge>
-        <Badge variant="muted">{data?.count ?? 0} events</Badge>
+        <Badge variant="muted">{filteredRows.length} events</Badge>
         {summary.setup_ready > 0 && (
           <Badge variant="green">{summary.setup_ready} setup-ready</Badge>
         )}
@@ -282,11 +323,11 @@ export default function EarningsPage() {
 
       {/* ── Content ── */}
       {viewMode === "calendar" ? (
-        <WeekGridCalendar rows={rows} />
+        <WeekGridCalendar rows={filteredRows} />
       ) : (
         <Table
           columns={earningsColumns}
-          data={rows}
+          data={filteredRows}
           sortable
         />
       )}

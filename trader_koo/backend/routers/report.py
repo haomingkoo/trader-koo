@@ -64,6 +64,7 @@ def earnings_calendar(
     days: int = Query(default=21, ge=1, le=90),
     limit: int = Query(default=200, ge=1, le=1000),
     tickers: str | None = Query(default=None),
+    sp500_only: bool = Query(default=True),
 ) -> dict[str, Any]:
     conn = get_conn()
     try:
@@ -85,6 +86,15 @@ def earnings_calendar(
         setup_lookup: dict[str, Any] = {}
         if isinstance(latest_report, dict):
             setup_lookup = ((latest_report.get("signals") or {}).get("setup_quality_lookup")) or {}
+
+        # Load S&P 500 ticker universe from price_daily for optional filtering
+        sp500_tickers: set[str] | None = None
+        if sp500_only and not requested:
+            rows_sp = conn.execute("SELECT DISTINCT ticker FROM price_daily").fetchall()
+            sp500_tickers = {
+                str(r[0]).upper().strip() for r in rows_sp if str(r[0] or "").strip()
+            }
+
         payload = build_earnings_calendar_payload(
             conn,
             market_date=market_date,
@@ -93,6 +103,43 @@ def earnings_calendar(
             tickers=requested,
             setup_map=setup_lookup,
         )
+
+        # Post-filter to S&P 500 tickers when requested
+        if sp500_tickers is not None:
+            payload["rows"] = [
+                r for r in payload["rows"]
+                if str(r.get("ticker") or "").upper() in sp500_tickers
+            ]
+            payload["groups"] = [
+                {
+                    **g,
+                    "sessions": [
+                        {
+                            **s,
+                            "rows": [
+                                r for r in s["rows"]
+                                if str(r.get("ticker") or "").upper() in sp500_tickers
+                            ],
+                        }
+                        for s in g.get("sessions", [])
+                    ],
+                    "count": sum(
+                        len([
+                            r for r in s["rows"]
+                            if str(r.get("ticker") or "").upper() in sp500_tickers
+                        ])
+                        for s in g.get("sessions", [])
+                    ),
+                }
+                for g in payload.get("groups", [])
+            ]
+            # Remove empty groups
+            payload["groups"] = [g for g in payload["groups"] if g["count"] > 0]
+            payload["count"] = len(payload["rows"])
+            payload["sp500_filtered"] = True
+        else:
+            payload["sp500_filtered"] = False
+
         payload["report_generated_ts"] = (
             (latest_report or {}).get("generated_ts") if isinstance(latest_report, dict) else None
         )

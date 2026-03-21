@@ -109,11 +109,11 @@ export function useOpportunities(params: {
   });
 }
 
-export function useEarnings(days: number = 21, tickers?: string) {
-  const qs = new URLSearchParams({ days: String(days), limit: "1000" });
+export function useEarnings(days: number = 21, tickers?: string, sp500Only: boolean = true) {
+  const qs = new URLSearchParams({ days: String(days), limit: "1000", sp500_only: String(sp500Only) });
   if (tickers) qs.set("tickers", tickers);
   return useQuery({
-    queryKey: ["earnings", days, tickers],
+    queryKey: ["earnings", days, tickers, sp500Only],
     queryFn: () => apiFetch<EarningsPayload>(`/api/earnings-calendar?${qs.toString()}`),
     staleTime: 2 * 60 * 1000,
   });

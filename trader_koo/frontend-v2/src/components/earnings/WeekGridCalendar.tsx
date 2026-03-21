@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { EarningsRow } from "../../api/types";
 import Badge from "../ui/Badge";
+import TickerLogo from "./TickerLogo";
 
 /* ── Types ── */
 
@@ -155,6 +156,7 @@ function TickerTile({ row }: { row: EarningsRow }) {
         .filter(Boolean)
         .join(" \u2022 ")}
     >
+      <TickerLogo ticker={row.ticker} size={20} />
       {row.setup_tier && (
         <span
           className={`text-[9px] font-black leading-none ${tierTextColor(row.setup_tier)}`}

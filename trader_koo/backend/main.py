@@ -631,6 +631,15 @@ app.include_router(streaming_router)
 app.include_router(alerts_router)
 
 # ---------------------------------------------------------------------------
+# Logos static mount — serve cached company logos from /data/logos
+# ---------------------------------------------------------------------------
+
+_LOGOS_DIR = Path(os.getenv("TRADER_KOO_LOGOS_DIR", "/data/logos"))
+_LOGOS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/logos", StaticFiles(directory=str(_LOGOS_DIR)), name="logos")
+LOG.info("Logos static mount: %s", _LOGOS_DIR)
+
+# ---------------------------------------------------------------------------
 # React frontend (served from dist-v2/)
 # ---------------------------------------------------------------------------
 
