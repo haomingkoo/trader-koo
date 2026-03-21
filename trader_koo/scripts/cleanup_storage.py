@@ -20,7 +20,7 @@ from pathlib import Path
 LOG = logging.getLogger("trader_koo.cleanup")
 
 RETENTION_DAYS = {
-    "polymarket_snapshots": 30,
+    "polymarket_snapshots": 7,
     "external_data_cache": 0,  # delete all expired rows
     "ingest_runs": 90,
     "ingest_ticker_status": 90,
@@ -175,11 +175,17 @@ def run_cleanup(db_path: Path, *, dry_run: bool = False) -> dict[str, int]:
         # 7. WAL checkpoint + VACUUM (only in live mode)
         if not dry_run:
             LOG.info("[CLEANUP] Running WAL checkpoint...")
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception as exc:
+                LOG.warning("[CLEANUP] WAL checkpoint failed: %s", exc)
             LOG.info("[CLEANUP] Running VACUUM (this may take a minute)...")
-            conn.execute("VACUUM")
-            new_size_mb = db_path.stat().st_size / (1024 * 1024)
-            LOG.info("[CLEANUP] DB size after VACUUM: %.1f MB (was %.1f MB)", new_size_mb, db_size_mb)
+            try:
+                conn.execute("VACUUM")
+                new_size_mb = db_path.stat().st_size / (1024 * 1024)
+                LOG.info("[CLEANUP] DB size after VACUUM: %.1f MB (was %.1f MB)", new_size_mb, db_size_mb)
+            except Exception as exc:
+                LOG.warning("[CLEANUP] VACUUM failed (disk may be too full): %s", exc)
 
         total = sum(results.values())
         LOG.info("[CLEANUP] %s complete: %d total rows %s", mode, total, "would be deleted" if dry_run else "deleted")
