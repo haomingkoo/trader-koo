@@ -163,9 +163,39 @@ class TestEarningsMarkerCrossValidation:
         finnhub_dates = [m["date"] for m in markers if m.get("source") != "fundamentals_snapshot"]
         assert "2026-04-28" not in finnhub_dates
 
-    def test_etfs_still_skipped(self) -> None:
+    def test_indices_still_skipped(self) -> None:
+        """Indices (^VIX etc.) skipped by prefix check."""
         conn = sqlite3.connect(":memory:")
         _setup_db(conn)
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="^VIX", market_date=dt.date(2026, 3, 21),
+        )
+
+        assert markers == []
+
+    def test_etfs_skipped_via_cross_validation(self) -> None:
+        """ETFs like SPY have no Finviz earnings date → Finnhub markers skipped."""
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS price_daily "
+            "(ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume INTEGER)"
+        )
+        conn.execute("INSERT INTO price_daily VALUES ('SPY','2026-03-20',500,510,499,505,5000000)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS finviz_fundamentals "
+            "(ticker TEXT, snapshot_ts TEXT, price REAL, discount_pct REAL, peg REAL, raw_json TEXT)"
+        )
+        # SPY has no earnings date in Finviz
+        conn.execute(
+            "INSERT INTO finviz_fundamentals VALUES (?, ?, ?, ?, ?, ?)",
+            ("SPY", "2026-03-20T22:00:00Z", 505.0, None, None, json.dumps({})),
+        )
+        ensure_external_data_cache_table(conn)
+        conn.commit()
+        _seed_finnhub_cache(conn, [
+            {"symbol": "SPY", "date": "2026-03-25", "hour": "bmo"},
+        ])
 
         markers = get_ticker_earnings_markers(
             conn, ticker="SPY", market_date=dt.date(2026, 3, 21),
