@@ -686,4 +686,15 @@ if DIST_DIR.exists() and DIST_DIR.is_dir():
             app.get(f"/{_route}/{{rest:path}}", include_in_schema=False)(_make_handler())
 
 
+    # Serve favicon and other root-level static files from dist-v2/
+    for _static_file in ("favicon.svg", "favicon.ico", "robots.txt"):
+        _static_path = DIST_DIR / _static_file
+        if _static_path.is_file():
+            def _make_static_handler(_p: str = str(_static_path)):
+                def _handler() -> Any:
+                    return FileResponse(_p)
+                _handler.__name__ = f"static_{_static_file.replace('.', '_')}"
+                return _handler
+            app.get(f"/{_static_file}", include_in_schema=False)(_make_static_handler())
+
     # Legacy /v2 routes removed — React app is now served at root.
