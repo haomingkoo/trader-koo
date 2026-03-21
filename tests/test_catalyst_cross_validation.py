@@ -101,8 +101,8 @@ class TestEarningsMarkerCrossValidation:
 
         assert markers == []
 
-    def test_drops_finnhub_keeps_finviz_when_contradicted(self) -> None:
-        """Finnhub says Mar 25, Finviz says Apr 24 → Finnhub row dropped, Finviz row kept."""
+    def test_drops_finnhub_when_contradicts_finviz(self) -> None:
+        """Finnhub says Mar 25, Finviz says Apr 24 → Mar 25 dropped."""
         conn = sqlite3.connect(":memory:")
         _setup_db(conn, finviz_earnings="Apr 24 BMO")
         _seed_finnhub_cache(conn, [
@@ -113,9 +113,22 @@ class TestEarningsMarkerCrossValidation:
             conn, ticker="AAPL", market_date=dt.date(2026, 3, 21),
         )
 
-        assert len(markers) == 1
-        assert markers[0]["date"] == "2026-04-24"
-        assert markers[0]["source"] == "fundamentals_snapshot"
+        assert all(m["date"] != "2026-03-25" for m in markers)
+
+    def test_skips_all_when_finviz_date_is_past(self) -> None:
+        """Finviz shows past earnings (Jan 29 AMC) → no markers at all."""
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings="Jan 29 AMC")
+        _seed_finnhub_cache(conn, [
+            {"symbol": "AAPL", "date": "2026-03-25", "hour": "bmo"},
+            {"symbol": "AAPL", "date": "2026-03-31", "hour": "bmo"},
+        ])
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="AAPL", market_date=dt.date(2026, 3, 21),
+        )
+
+        assert markers == []
 
     def test_shows_marker_when_both_sources_agree(self) -> None:
         """Finnhub says Apr 24, Finviz says Apr 24 BMO → show marker."""

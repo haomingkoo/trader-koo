@@ -1008,27 +1008,29 @@ def get_ticker_earnings_markers(
             continue
 
         source = str(row.get("source") or "")
-        corroborated = False
 
-        if source == "fundamentals_snapshot":
-            # Finviz-sourced — trusted
-            corroborated = True
-        elif finviz_date is not None:
-            # Finnhub/Alpha Vantage date: only show if Finviz agrees (±tolerance)
-            delta = abs((row_date - finviz_date).days)
-            corroborated = delta <= _CROSS_VALIDATION_TOLERANCE_DAYS
-        else:
-            # No Finviz data to validate against — skip to avoid false markers
+        # Always cross-validate against Finviz — source labels are unreliable
+        # after the calendar merge logic
+        if finviz_date is None:
             LOG.info(
-                "Skipping unverified earnings marker for %s on %s (source=%s, no Finviz corroboration)",
+                "Skipping earnings marker for %s on %s (source=%s, no Finviz earnings date)",
                 symbol, row_date_str, source,
             )
             continue
 
-        if not corroborated:
+        # Finviz date must be in the future to be relevant
+        if finviz_date <= market_date:
+            LOG.info(
+                "Skipping earnings marker for %s on %s — Finviz date %s is in the past",
+                symbol, row_date_str, finviz_date,
+            )
+            continue
+
+        delta = abs((row_date - finviz_date).days)
+        if delta > _CROSS_VALIDATION_TOLERANCE_DAYS:
             LOG.info(
                 "Skipping earnings marker for %s on %s — Finviz says %s (delta=%dd, source=%s)",
-                symbol, row_date_str, finviz_date, abs((row_date - finviz_date).days), source,
+                symbol, row_date_str, finviz_date, delta, source,
             )
             continue
 
