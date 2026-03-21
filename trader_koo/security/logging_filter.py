@@ -9,7 +9,7 @@ Requirements: 6.2, 6.3
 import logging
 from typing import Any
 
-from trader_koo.security.redaction import redact_secrets
+from trader_koo.security.redaction import redact_secrets, redact_url_tokens
 
 
 class SecretRedactionFilter(logging.Filter):
@@ -38,12 +38,8 @@ class SecretRedactionFilter(logging.Filter):
         """
         # Redact secrets from the message
         if hasattr(record, 'msg') and record.msg:
-            # Handle string messages
             if isinstance(record.msg, str):
-                # For string messages, we can't easily detect secrets
-                # without parsing, so we leave them as-is
-                # The main protection comes from redacting structured data
-                pass
+                record.msg = redact_url_tokens(record.msg)
             else:
                 # For non-string messages (e.g., dicts), redact secrets
                 record.msg = redact_secrets(record.msg)

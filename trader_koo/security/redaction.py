@@ -164,6 +164,21 @@ def sanitize_error_response(error_data: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
+_URL_TOKEN_RE = re.compile(
+    r'([?&])(api_key|token|key|secret|apikey)=([^&\s"\']+)',
+    re.IGNORECASE,
+)
+# Telegram bot tokens: /bot<id>:<secret>/
+_TELEGRAM_BOT_RE = re.compile(r'/bot(\d+):([A-Za-z0-9_-]+)/')
+
+
+def redact_url_tokens(text: str) -> str:
+    """Redact API tokens and keys from URLs embedded in a string."""
+    result = _URL_TOKEN_RE.sub(r'\1\2=' + REDACTED_VALUE, text)
+    result = _TELEGRAM_BOT_RE.sub(r'/bot\1:' + REDACTED_VALUE + '/', result)
+    return result
+
+
 def sanitize_stack_trace(stack_trace: str) -> str:
     """Sanitize a stack trace to remove sensitive information.
     

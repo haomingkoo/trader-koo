@@ -139,6 +139,10 @@ if not ROOT_LOGGER.handlers:
 
 install_secret_redaction_filter()
 
+# Suppress httpx verbose request logging (logs full URLs including API tokens)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 if not any(
     isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")) == API_LOG_PATH
     for h in ROOT_LOGGER.handlers
