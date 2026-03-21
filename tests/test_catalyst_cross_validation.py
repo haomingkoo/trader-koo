@@ -1,0 +1,159 @@
+"""Tests for earnings marker cross-validation in catalyst_data."""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import sqlite3
+
+import pytest
+
+from trader_koo.catalyst_data import (
+    _finviz_earnings_date,
+    get_ticker_earnings_markers,
+    ensure_external_data_cache_table,
+)
+
+
+def _setup_db(conn: sqlite3.Connection, *, finviz_earnings: str | None = None) -> None:
+    """Seed minimal schema for catalyst cross-validation tests."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS price_daily (
+            ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume INTEGER
+        )
+        """
+    )
+    conn.execute("INSERT INTO price_daily VALUES ('AAPL','2026-03-20',245,250,244,248,1000000)")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS finviz_fundamentals (
+            ticker TEXT, snapshot_ts TEXT, price REAL, discount_pct REAL, peg REAL, raw_json TEXT
+        )
+        """
+    )
+    raw_obj: dict = {}
+    if finviz_earnings:
+        raw_obj["Earnings Date"] = finviz_earnings
+    conn.execute(
+        "INSERT INTO finviz_fundamentals VALUES (?, ?, ?, ?, ?, ?)",
+        ("AAPL", "2026-03-20T22:00:00Z", 248.0, 17.0, 2.37, json.dumps(raw_obj)),
+    )
+    ensure_external_data_cache_table(conn)
+    conn.commit()
+
+
+def _seed_finnhub_cache(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    """Seed a Finnhub earnings cache entry."""
+    today = dt.date.today()
+    cache_key = f"finnhub:earnings_calendar:{today.isoformat()}:{(today + dt.timedelta(days=120)).isoformat()}"
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO external_data_cache(cache_key, provider, fetched_ts, expires_ts, payload_json)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            cache_key,
+            "finnhub",
+            "2026-03-21T00:00:00Z",
+            "2026-03-22T00:00:00Z",
+            json.dumps(rows),
+        ),
+    )
+    conn.commit()
+
+
+class TestFinvizEarningsDate:
+    def test_returns_date_when_present(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings="Apr 24 BMO")
+        result = _finviz_earnings_date(conn, "AAPL", dt.date(2026, 3, 21))
+
+        assert result == dt.date(2026, 4, 24)
+
+    def test_returns_none_when_no_earnings(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings=None)
+        result = _finviz_earnings_date(conn, "AAPL", dt.date(2026, 3, 21))
+
+        assert result is None
+
+    def test_returns_none_for_unknown_ticker(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn)
+        result = _finviz_earnings_date(conn, "ZZZZ", dt.date(2026, 3, 21))
+
+        assert result is None
+
+
+class TestEarningsMarkerCrossValidation:
+    def test_skips_marker_when_finnhub_has_no_finviz_corroboration(self) -> None:
+        """Finnhub says AAPL earnings on Mar 25, but Finviz has no date → skip."""
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings=None)
+        _seed_finnhub_cache(conn, [
+            {"symbol": "AAPL", "date": "2026-03-25", "hour": "bmo"},
+        ])
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="AAPL", market_date=dt.date(2026, 3, 21),
+        )
+
+        assert markers == []
+
+    def test_drops_finnhub_keeps_finviz_when_contradicted(self) -> None:
+        """Finnhub says Mar 25, Finviz says Apr 24 → Finnhub row dropped, Finviz row kept."""
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings="Apr 24 BMO")
+        _seed_finnhub_cache(conn, [
+            {"symbol": "AAPL", "date": "2026-03-25", "hour": "bmo"},
+        ])
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="AAPL", market_date=dt.date(2026, 3, 21),
+        )
+
+        assert len(markers) == 1
+        assert markers[0]["date"] == "2026-04-24"
+        assert markers[0]["source"] == "fundamentals_snapshot"
+
+    def test_shows_marker_when_both_sources_agree(self) -> None:
+        """Finnhub says Apr 24, Finviz says Apr 24 BMO → show marker."""
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings="Apr 24 BMO")
+        _seed_finnhub_cache(conn, [
+            {"symbol": "AAPL", "date": "2026-04-24", "hour": "bmo"},
+        ])
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="AAPL", market_date=dt.date(2026, 3, 21),
+        )
+
+        assert len(markers) == 1
+        assert markers[0]["ticker"] == "AAPL"
+        assert markers[0]["date"] == "2026-04-24"
+        assert markers[0]["session"] == "BMO"
+
+    def test_shows_marker_within_tolerance(self) -> None:
+        """Finnhub says Apr 23, Finviz says Apr 24 → delta=1, within tolerance."""
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings="Apr 24 BMO")
+        _seed_finnhub_cache(conn, [
+            {"symbol": "AAPL", "date": "2026-04-23", "hour": "bmo"},
+        ])
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="AAPL", market_date=dt.date(2026, 3, 21),
+        )
+
+        assert len(markers) == 1
+
+    def test_etfs_still_skipped(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn)
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="SPY", market_date=dt.date(2026, 3, 21),
+        )
+
+        assert markers == []

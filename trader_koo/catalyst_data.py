@@ -928,6 +928,49 @@ def _build_group(day: dt.date, rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+_CROSS_VALIDATION_TOLERANCE_DAYS = 3
+
+
+def _finviz_earnings_date(
+    conn: sqlite3.Connection,
+    symbol: str,
+    market_date: dt.date,
+) -> dt.date | None:
+    """Look up the earnings date for *symbol* from the latest Finviz snapshot."""
+    row = conn.execute(
+        """
+        SELECT raw_json
+        FROM finviz_fundamentals
+        WHERE ticker = ?
+        ORDER BY snapshot_ts DESC
+        LIMIT 1
+        """,
+        (symbol,),
+    ).fetchone()
+    if row is None:
+        return None
+    raw_json = row[0]
+    if not raw_json:
+        return None
+    try:
+        raw_obj = json.loads(str(raw_json))
+    except Exception:
+        return None
+    if not isinstance(raw_obj, dict):
+        return None
+    earnings_raw = extract_earnings_value(raw_obj)
+    if not earnings_raw:
+        return None
+    parsed = parse_earnings_value(earnings_raw, market_date)
+    date_str = parsed.get("earnings_date")
+    if not date_str:
+        return None
+    try:
+        return dt.date.fromisoformat(str(date_str)[:10])
+    except ValueError:
+        return None
+
+
 def get_ticker_earnings_markers(
     conn: sqlite3.Connection,
     *,
@@ -948,6 +991,10 @@ def get_ticker_earnings_markers(
     }
     if symbol in _NO_EARNINGS or symbol.startswith("^"):
         return []
+
+    # Cross-validate: get Finviz earnings date as ground truth
+    finviz_date = _finviz_earnings_date(conn, symbol, market_date)
+
     payload = build_earnings_calendar_payload(
         conn,
         market_date=market_date,
@@ -958,6 +1005,39 @@ def get_ticker_earnings_markers(
     )
     markers: list[dict[str, Any]] = []
     for row in payload.get("rows", [])[:max_markers]:
+        row_date_str = str(row.get("earnings_date") or "").strip()
+        if not row_date_str:
+            continue
+        try:
+            row_date = dt.date.fromisoformat(row_date_str[:10])
+        except ValueError:
+            continue
+
+        source = str(row.get("source") or "")
+        corroborated = False
+
+        if source == "fundamentals_snapshot":
+            # Finviz-sourced — trusted
+            corroborated = True
+        elif finviz_date is not None:
+            # Finnhub/Alpha Vantage date: only show if Finviz agrees (±tolerance)
+            delta = abs((row_date - finviz_date).days)
+            corroborated = delta <= _CROSS_VALIDATION_TOLERANCE_DAYS
+        else:
+            # No Finviz data to validate against — skip to avoid false markers
+            LOG.info(
+                "Skipping unverified earnings marker for %s on %s (source=%s, no Finviz corroboration)",
+                symbol, row_date_str, source,
+            )
+            continue
+
+        if not corroborated:
+            LOG.info(
+                "Skipping earnings marker for %s on %s — Finviz says %s (delta=%dd, source=%s)",
+                symbol, row_date_str, finviz_date, abs((row_date - finviz_date).days), source,
+            )
+            continue
+
         session = _normalize_session(row.get("earnings_session"))
         markers.append(
             {
