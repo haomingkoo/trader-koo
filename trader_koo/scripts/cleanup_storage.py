@@ -158,7 +158,7 @@ def run_cleanup(db_path: Path, *, dry_run: bool = False) -> dict[str, int]:
         LOG.info("[CLEANUP] ingest_runs: %d rows to delete (keep %dd)", n, RETENTION_DAYS["ingest_runs"])
 
         # 4. Old ingest ticker status
-        n = _prune_by_ts_column(conn, "ingest_ticker_status", "updated_ts", RETENTION_DAYS["ingest_ticker_status"], dry_run=dry_run)
+        n = _prune_by_ts_column(conn, "ingest_ticker_status", "started_ts", RETENTION_DAYS["ingest_ticker_status"], dry_run=dry_run)
         results["ingest_ticker_status"] = n
         LOG.info("[CLEANUP] ingest_ticker_status: %d rows to delete (keep %dd)", n, RETENTION_DAYS["ingest_ticker_status"])
 
