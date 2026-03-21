@@ -22,6 +22,14 @@ SESSION_LABELS = {
     "AMC": "After Hours",
 }
 CACHE_PROVIDER = "finnhub"
+
+# ETFs and indices that never have earnings — skip to avoid false markers
+_NO_EARNINGS = frozenset({
+    "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV", "USO", "UNG", "TLT",
+    "HYG", "IEF", "EEM", "FXI", "UUP", "XLK", "XLF", "XLV", "XLE",
+    "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE", "XLC", "IGV", "SVIX",
+    "^VIX", "^GSPC", "^DJI", "^TNX", "^IRX", "^TYX", "^NDX",
+})
 CACHE_TTL_HOURS = max(1, int(os.getenv("TRADER_KOO_EARNINGS_CACHE_HOURS", "6")))
 ALPHA_VANTAGE_TIMEOUT_SEC = max(5, int(os.getenv("TRADER_KOO_ALPHA_VANTAGE_TIMEOUT_SEC", "20")))
 
@@ -982,13 +990,6 @@ def get_ticker_earnings_markers(
     symbol = str(ticker or "").strip().upper()
     if not symbol:
         return []
-    # ETFs and indices don't have earnings — skip to avoid false markers
-    _NO_EARNINGS = {
-        "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV", "USO", "UNG", "TLT",
-        "HYG", "IEF", "EEM", "FXI", "UUP", "XLK", "XLF", "XLV", "XLE",
-        "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE", "XLC", "IGV", "SVIX",
-        "^VIX", "^GSPC", "^DJI", "^TNX", "^IRX", "^TYX", "^NDX",
-    }
     if symbol in _NO_EARNINGS or symbol.startswith("^"):
         return []
 

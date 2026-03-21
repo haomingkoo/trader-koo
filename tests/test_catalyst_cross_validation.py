@@ -148,6 +148,21 @@ class TestEarningsMarkerCrossValidation:
 
         assert len(markers) == 1
 
+    def test_rejects_marker_outside_tolerance(self) -> None:
+        """Finnhub says Apr 28, Finviz says Apr 24 → delta=4, outside ±3 tolerance."""
+        conn = sqlite3.connect(":memory:")
+        _setup_db(conn, finviz_earnings="Apr 24 BMO")
+        _seed_finnhub_cache(conn, [
+            {"symbol": "AAPL", "date": "2026-04-28", "hour": "bmo"},
+        ])
+
+        markers = get_ticker_earnings_markers(
+            conn, ticker="AAPL", market_date=dt.date(2026, 3, 21),
+        )
+
+        finnhub_dates = [m["date"] for m in markers if m.get("source") != "fundamentals_snapshot"]
+        assert "2026-04-28" not in finnhub_dates
+
     def test_etfs_still_skipped(self) -> None:
         conn = sqlite3.connect(":memory:")
         _setup_db(conn)
