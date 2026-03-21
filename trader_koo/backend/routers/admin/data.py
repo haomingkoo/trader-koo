@@ -1,4 +1,4 @@
-"""Ticker seeding, database diagnostics, audit logs."""
+"""Ticker seeding, database diagnostics, audit logs, storage cleanup."""
 from __future__ import annotations
 
 import datetime as dt
@@ -27,7 +27,24 @@ from trader_koo.backend.routers.admin._shared import (
     get_audit_logger,
 )
 
+from trader_koo.scripts.cleanup_storage import run_cleanup
+
 router = APIRouter(tags=["admin", "admin-data"])
+
+
+@router.post("/api/admin/cleanup-storage")
+@require_admin_auth
+def cleanup_storage(
+    dry_run: bool = Query(default=True),
+) -> dict[str, Any]:
+    """Run storage cleanup. Use dry_run=true to preview, dry_run=false to execute."""
+    results = run_cleanup(DB_PATH, dry_run=dry_run)
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "deleted": results,
+        "total_rows_affected": sum(results.values()),
+    }
 
 
 @router.post("/api/admin/seed-ticker-history")
