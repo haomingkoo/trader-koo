@@ -983,7 +983,7 @@ export function buildChartData(
       showlegend: false,
       line: { color: "#38d39f", width: 0.5 },
       fill: "tozeroy",
-      fillcolor: "rgba(56,211,159,0.08)",
+      fillcolor: "rgba(56,211,159,0.25)",
       xaxis: "x",
       yaxis: "y3",
       hoverinfo: "text+x",
@@ -1000,7 +1000,7 @@ export function buildChartData(
       showlegend: false,
       line: { color: "#f8c24e", width: 0.5 },
       fill: "tonexty",
-      fillcolor: "rgba(248,194,78,0.08)",
+      fillcolor: "rgba(248,194,78,0.25)",
       xaxis: "x",
       yaxis: "y3",
       hoverinfo: "text+x",
@@ -1016,7 +1016,7 @@ export function buildChartData(
       showlegend: false,
       line: { color: "#ff6b6b", width: 0.5 },
       fill: "tonexty",
-      fillcolor: "rgba(255,107,107,0.08)",
+      fillcolor: "rgba(255,107,107,0.25)",
       xaxis: "x",
       yaxis: "y3",
       hoverinfo: "text+x",
@@ -1042,10 +1042,10 @@ export function buildChartData(
     });
   }
 
-  const priceDomain: [number, number] = showHmm ? [0.36, 1] : [0.28, 1];
-  const volumeDomain: [number, number] = showHmm ? [0.18, 0.30] : [0, 0.22];
-  const regimeDomain: [number, number] = [0, 0.14];
-  const chartHeight = compactMode ? 460 : showHmm ? 660 : 580;
+  const priceDomain: [number, number] = showHmm ? [0.38, 1] : [0.28, 1];
+  const volumeDomain: [number, number] = showHmm ? [0.20, 0.33] : [0, 0.22];
+  const regimeDomain: [number, number] = [0, 0.15];
+  const chartHeight = compactMode ? 460 : showHmm ? 700 : 580;
   const missingTradingDays = tradingDayRangeBreaks(x);
   const rangeBreaks = isWeekly
     ? []
@@ -1077,7 +1077,18 @@ export function buildChartData(
     font: { color: "#8ea0bd", size: 11 },
     margin: compactMode ? { t: 18, r: 100, b: 44, l: 52 } : { t: 40, r: 200, b: 50, l: 60 },
     dragmode: "zoom" as const,
-    legend: { orientation: "h" as const, y: -0.04, x: 0, xanchor: "left" as const },
+    legend: {
+      orientation: "h" as const,
+      y: 1.02,
+      x: 1,
+      xanchor: "right" as const,
+      yanchor: "bottom" as const,
+      bgcolor: "rgba(11,15,22,0.6)",
+      bordercolor: "rgba(255,255,255,0.08)",
+      borderwidth: 1,
+      font: { size: 10 },
+      traceorder: "normal" as const,
+    },
     xaxis: {
       gridcolor: "rgba(255,255,255,0.04)",
       rangeslider: { visible: false },
