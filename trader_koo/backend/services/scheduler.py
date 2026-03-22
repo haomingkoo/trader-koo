@@ -401,6 +401,80 @@ def _run_storage_cleanup() -> None:
         LOG.error("Scheduler: storage cleanup failed: %s", exc)
 
 
+_CRYPTO_HEALTH_ALERT_COOLDOWN_SEC = 7200  # 2 hours between alerts
+_last_crypto_health_alert_ts: float = 0.0
+
+
+def _run_crypto_health_check() -> None:
+    """Every 30 min: verify crypto data freshness, alert if stale."""
+    global _last_crypto_health_alert_ts
+    import sqlite3
+    import time as _time
+
+    _append_run_log("CRYPTO_HEALTH", "Crypto health check started")
+    try:
+        from trader_koo.crypto.service import get_crypto_ws_health
+        from trader_koo.crypto.storage import get_crypto_data_status
+        from trader_koo.crypto.binance_ws import SYMBOL_MAP
+
+        ws_health = get_crypto_ws_health()
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            status = get_crypto_data_status(conn)
+        finally:
+            conn.close()
+
+        one_m_symbols = {e["symbol"] for e in status if e["interval"] == "1m"}
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        stale_threshold = dt.timedelta(minutes=10)
+
+        missing = [s for s in SYMBOL_MAP.values() if s not in one_m_symbols]
+        stale = []
+        for entry in status:
+            if entry["interval"] != "1m":
+                continue
+            try:
+                latest = dt.datetime.fromisoformat(str(entry["latest_ts"]))
+                if latest.tzinfo is None:
+                    latest = latest.replace(tzinfo=dt.timezone.utc)
+                if now_utc - latest > stale_threshold:
+                    stale.append(entry["symbol"])
+            except Exception:
+                pass
+
+        if missing or stale or not ws_health.get("connected"):
+            LOG.warning("Crypto health: ws=%s missing=%s stale=%s", ws_health.get("connected"), missing, stale)
+            _append_run_log("CRYPTO_HEALTH", f"Issues: missing={missing} stale={stale} ws={ws_health.get('connected')}")
+
+            # Telegram alert with cooldown
+            now_mono = _time.monotonic()
+            if now_mono - _last_crypto_health_alert_ts > _CRYPTO_HEALTH_ALERT_COOLDOWN_SEC:
+                try:
+                    from trader_koo.notifications.telegram import send_message, is_configured
+                    if is_configured():
+                        problems = []
+                        if not ws_health.get("connected"):
+                            problems.append("WebSocket disconnected")
+                        if missing:
+                            problems.append(f"No 1m data: {', '.join(missing)}")
+                        if stale:
+                            problems.append(f"Stale >10min: {', '.join(stale)}")
+                        text = (
+                            "\u26a0\ufe0f *Crypto Data Health Alert*\n\n"
+                            + "\n".join(f"\u2022 {p}" for p in problems)
+                            + "\n\nUse `POST /api/admin/crypto/backfill` to retry."
+                        )
+                        send_message(text)
+                        _last_crypto_health_alert_ts = now_mono
+                except Exception as exc:
+                    LOG.warning("Failed to send crypto health alert: %s", exc)
+        else:
+            _append_run_log("CRYPTO_HEALTH", "All symbols healthy")
+    except Exception as exc:
+        _append_run_log("CRYPTO_HEALTH", f"Health check failed: {exc}")
+        LOG.error("Crypto health check failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
@@ -471,6 +545,15 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     LOG.info("Storage cleanup job registered: daily 04:00 UTC")
+
+    # Crypto health check — every 30 min
+    scheduler.add_job(
+        _run_crypto_health_check,
+        IntervalTrigger(minutes=30),
+        id="crypto_health_check",
+        replace_existing=True,
+    )
+    LOG.info("Crypto health check job registered: every 30min")
 
     # Spike alerts — every 15 min (only sends if Telegram configured)
     if telegram_configured:

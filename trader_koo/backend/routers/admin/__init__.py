@@ -11,6 +11,9 @@ from fastapi import APIRouter
 from trader_koo.backend.routers.admin.backups import (
     router as backups_router,
 )
+from trader_koo.backend.routers.admin.crypto import (
+    router as crypto_router,
+)
 from trader_koo.backend.routers.admin.data import router as data_router
 from trader_koo.backend.routers.admin.email_admin import (
     router as email_router,
@@ -37,5 +40,6 @@ router.include_router(system_router)
 router.include_router(telegram_router)
 router.include_router(backups_router)
 router.include_router(market_monitor_router)
+router.include_router(crypto_router)
 
 __all__ = ["router"]
