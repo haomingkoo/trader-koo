@@ -130,6 +130,12 @@ export interface CandlePatternRow {
   confidence: number;
 }
 
+export interface DirectionalRegimePoint {
+  date: string;
+  label: string;
+  color: string;
+}
+
 export function buildCandlestickChart(
   bars: CryptoBar[],
   symbol: string,
@@ -138,6 +144,7 @@ export function buildCandlestickChart(
   formingCandle?: FormingCandleData | null,
   uirevisionKey?: string,
   candlestickPatterns?: CandlePatternRow[],
+  directionalRegimes?: DirectionalRegimePoint[],
 ): { traces: Record<string, unknown>[]; layout: Record<string, unknown> } {
   const timestamps = bars.map((bar) => bar.timestamp);
   const open = bars.map((bar) => bar.open);
@@ -434,6 +441,34 @@ export function buildCandlestickChart(
           xaxis: "x",
           yaxis: "y",
         });
+      }
+    }
+  }
+
+  // Directional HMM background coloring (bullish=green, bearish=red, chop=purple)
+  if (directionalRegimes && directionalRegimes.length > 1) {
+    const dirColors: Record<string, string> = {
+      bullish: "rgba(56,211,159,0.06)",
+      bearish: "rgba(255,107,107,0.06)",
+      chop: "rgba(168,85,247,0.06)",
+    };
+    let spanStart = 0;
+    for (let i = 1; i <= directionalRegimes.length; i++) {
+      if (i === directionalRegimes.length || directionalRegimes[i].label !== directionalRegimes[spanStart].label) {
+        const fillcolor = dirColors[directionalRegimes[spanStart].label] ?? "rgba(128,128,128,0.04)";
+        shapes.push({
+          type: "rect",
+          xref: "x",
+          yref: "y",
+          x0: directionalRegimes[spanStart].date,
+          x1: directionalRegimes[Math.min(i, directionalRegimes.length - 1)].date,
+          y0: Math.min(...low.filter((v) => v > 0)) * 0.99,
+          y1: Math.max(...high) * 1.01,
+          fillcolor,
+          line: { width: 0 },
+          layer: "below",
+        });
+        spanStart = i;
       }
     }
   }

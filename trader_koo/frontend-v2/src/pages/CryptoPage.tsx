@@ -271,6 +271,8 @@ export default function CryptoPage() {
   const chartResult = useMemo(() => {
     if (effectiveBars.length === 0)
       return null;
+    // Extract directional HMM regimes for background coloring
+    const dirRegimes = (structureData as Record<string, unknown> | undefined)?.hmm_directional as { regimes?: Array<{ date: string; label: string; color: string }> } | undefined;
     return buildCandlestickChart(
       effectiveBars,
       selectedSymbol,
@@ -279,6 +281,7 @@ export default function CryptoPage() {
       effectiveFormingCandle,
       `${selectedSymbol}-${selectedInterval}`,
       historyData?.candlestick_patterns,
+      dirRegimes?.regimes,
     );
   }, [effectiveBars, selectedSymbol, selectedInterval, structureData, overlays, effectiveFormingCandle, historyData?.candlestick_patterns]);
 
