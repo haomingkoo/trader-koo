@@ -29,7 +29,7 @@ export function StructureCard({
   const regime = structure.hmm_regime;
   const regimeLabel = regime?.current_state?.replaceAll("_", " ") ?? "unavailable";
   const transitionRisk = regime?.transition_risk_pct ?? null;
-  const directional = (structure as Record<string, unknown>).hmm_directional as { current_state?: string; days_in_current?: number; transition_risk_pct?: number } | null | undefined;
+  const directional = (structure as unknown as Record<string, unknown>).hmm_directional as { current_state?: string; days_in_current?: number; transition_risk_pct?: number } | null | undefined;
   const dirLabel = directional?.current_state?.replaceAll("_", " ") ?? null;
   const dirColors: Record<string, string> = { bullish: "var(--green)", bearish: "var(--red)", chop: "#a855f7" };
 
