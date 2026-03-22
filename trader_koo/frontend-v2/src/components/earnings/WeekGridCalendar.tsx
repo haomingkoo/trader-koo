@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import type { EarningsRow } from "../../api/types";
+import type { EarningsRow, EconomicEvent } from "../../api/types";
 import Badge from "../ui/Badge";
 import TickerLogo from "./TickerLogo";
 
@@ -8,15 +8,6 @@ import TickerLogo from "./TickerLogo";
 
 type SessionKey = "pre" | "tbd" | "amc";
 type RangePreset = "5d" | "7d" | "14d";
-
-interface EconomicEvent {
-  date: string;
-  event: string;
-  impact: string;
-  estimate?: number;
-  actual?: number;
-  previous?: number;
-}
 
 interface WeekGridCalendarProps {
   rows: EarningsRow[];

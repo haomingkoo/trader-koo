@@ -692,6 +692,19 @@ export interface EarningsSummary {
   scored_rows: number;
 }
 
+export interface EconomicEvent {
+  date: string;
+  time: string;
+  event: string;
+  country: string;
+  impact: string;
+  estimate?: number | null;
+  actual?: number | null;
+  previous?: number | null;
+  unit?: string | null;
+  type: string;
+}
+
 export interface EarningsPayload {
   ok: boolean;
   rows: EarningsRow[];
@@ -704,6 +717,7 @@ export interface EarningsPayload {
   provider: string;
   snapshot_ts: string | null;
   universe_count: number | null;
+  economic_events?: EconomicEvent[];
 }
 
 /* ── Paper Trades ── */

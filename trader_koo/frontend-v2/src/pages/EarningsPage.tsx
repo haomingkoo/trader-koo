@@ -310,9 +310,9 @@ export default function EarningsPage() {
         {summary.high_risk > 0 && (
           <Badge variant="red">{summary.high_risk} high-risk</Badge>
         )}
-        {(data as Record<string, unknown>)?.economic_events && (
+        {data?.economic_events && data.economic_events.length > 0 && (
           <Badge variant="blue">
-            {((data as Record<string, unknown>).economic_events as unknown[]).length} macro events
+            {data.economic_events.length} macro events
           </Badge>
         )}
         {data?.market_date && (
@@ -330,7 +330,7 @@ export default function EarningsPage() {
       {viewMode === "calendar" ? (
         <WeekGridCalendar
           rows={filteredRows}
-          economicEvents={((data as Record<string, unknown>)?.economic_events as Array<{date: string; event: string; impact: string; estimate?: number; actual?: number; previous?: number}>) ?? []}
+          economicEvents={data?.economic_events ?? []}
         />
       ) : (
         <Table

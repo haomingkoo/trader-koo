@@ -81,8 +81,20 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - ML model AUC 0.5235 pre-fix. Bug fixes applied: early stopping, barrier alignment, intraday barrier touches, cross-sectional ranking. Retraining pending.
 - Frontend has zero test coverage
 - `test_v2_shell_routes_disable_caching` references deleted `/v2` routes (broken test)
+- VIX metrics caching: `regime_context` shape differs from `compute_vix_metrics()` return. Need to align fields or compute vix_metrics in nightly report.
+- Sentiment NLP: scores are too coarse (0/50/100). StockTwits rule-based scoring misclassifies sarcasm/neutral posts.
+- Pre-existing test failures: `test_alert_engine.py` (MAX_POLL_TICKERS import), `test_admin_auth.py` + `test_app.py` (/data read-only on macOS)
+
+## Recent Changes (2026-03-22)
+- Earnings markers: cross-validated against Finviz (no more false E BMO)
+- Security: API token redaction in logs, HTTP logger suppression
+- Performance: HMM cached in report, commentary fast-path, 24hr cache TTL
+- Ops: storage cleanup job, crypto resilience (retry + health check + admin endpoints)
+- Calendar: renamed to Market Calendar, added economic events (CPI, PPI, FOMC, etc.)
+- Crypto: candlestick pattern detection (TA-Lib, 15m+ intervals)
+- Chart: removed HMM bg rectangles, reduced YOLO opacity, legend at top-right
 
 ## Testing
 Run tests with: `python -m pytest tests/ -v`
-Current baseline: `578 passed` locally.
+Current baseline: `603 passed` locally (up from 578, new cross-validation tests added).
 All tests must pass locally before pushing. Test files live in `tests/`.
