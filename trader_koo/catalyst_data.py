@@ -1122,7 +1122,8 @@ def get_ticker_earnings_markers(
         setup_map=None,
     )
     markers: list[dict[str, Any]] = []
-    for row in payload.get("rows", [])[:max_markers]:
+    seen_dates: set[str] = set()
+    for row in payload.get("rows", [])[:max_markers * 2]:
         row_date_str = str(row.get("earnings_date") or "").strip()
         if not row_date_str:
             continue
@@ -1158,6 +1159,11 @@ def get_ticker_earnings_markers(
             )
             continue
 
+        # Deduplicate: one marker per date
+        if row_date_str in seen_dates:
+            continue
+        seen_dates.add(row_date_str)
+
         session = _normalize_session(row.get("earnings_session"))
         markers.append(
             {
@@ -1171,6 +1177,8 @@ def get_ticker_earnings_markers(
                 "source": row.get("source"),
             }
         )
+        if len(markers) >= max_markers:
+            break
     return markers
 
 

@@ -279,21 +279,22 @@ export function BtcSpyCorrelationCard({
       {history.length >= 3 && (
         <div className="mt-3">
           <div className="text-[9px] uppercase tracking-wide text-[var(--muted)] mb-1">Rebased Performance (last {history.length} sessions)</div>
-          <svg viewBox={`0 0 ${history.length * 10} 60`} className="w-full h-[60px]" preserveAspectRatio="none">
-            {/* BTC line (green) */}
-            <polyline
-              fill="none"
-              stroke="#38d39f"
-              strokeWidth="1.5"
-              points={history.map((h, i) => `${i * 10},${60 - ((h.asset_rebased - 90) / 20) * 60}`).join(" ")}
-            />
-            {/* Benchmark line (amber) */}
-            <polyline
-              fill="none"
-              stroke="#f59e0b"
-              strokeWidth="1.5"
-              points={history.map((h, i) => `${i * 10},${60 - ((h.benchmark_rebased - 90) / 20) * 60}`).join(" ")}
-            />
+          <svg viewBox={`0 0 ${history.length * 10} 70`} className="w-full h-[70px]" preserveAspectRatio="none">
+            {(() => {
+              const allVals = history.flatMap((h) => [h.asset_rebased, h.benchmark_rebased]);
+              const minVal = Math.min(...allVals) - 1;
+              const maxVal = Math.max(...allVals) + 1;
+              const range = maxVal - minVal || 1;
+              const scaleY = (v: number) => 65 - ((v - minVal) / range) * 60;
+              return (
+                <>
+                  <polyline fill="none" stroke="#38d39f" strokeWidth="1.5"
+                    points={history.map((h, i) => `${i * 10},${scaleY(h.asset_rebased)}`).join(" ")} />
+                  <polyline fill="none" stroke="#f59e0b" strokeWidth="1.5"
+                    points={history.map((h, i) => `${i * 10},${scaleY(h.benchmark_rebased)}`).join(" ")} />
+                </>
+              );
+            })()}
           </svg>
           <div className="flex justify-between text-[9px] text-[var(--muted)] mt-0.5">
             <span><span style={{color:"#38d39f"}}>--</span> BTC</span>
