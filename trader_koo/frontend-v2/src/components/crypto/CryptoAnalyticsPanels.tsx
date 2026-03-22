@@ -33,6 +33,20 @@ export default function CryptoAnalyticsPanels({
 }: CryptoAnalyticsPanelsProps) {
   return (
     <>
+      {/* Indicators right below chart */}
+      {indicators && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <RsiGauge value={indicators.rsi_14} />
+          <MacdCard macd={indicators.macd} />
+          <BollingerCard bollinger={indicators.bollinger} />
+          <VwapSmaCard
+            vwap={indicators.vwap}
+            sma20={indicators.sma_20}
+            sma50={indicators.sma_50}
+          />
+        </div>
+      )}
+
       <StructureCard structure={structure} />
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -45,19 +59,6 @@ export default function CryptoAnalyticsPanels({
         <div className="grid gap-4 xl:grid-cols-2">
           {btcGoldCorrelation && <BtcSpyCorrelationCard correlation={btcGoldCorrelation} />}
           {btcDxyCorrelation && <BtcSpyCorrelationCard correlation={btcDxyCorrelation} />}
-        </div>
-      )}
-
-      {indicators && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <RsiGauge value={indicators.rsi_14} />
-          <MacdCard macd={indicators.macd} />
-          <BollingerCard bollinger={indicators.bollinger} />
-          <VwapSmaCard
-            vwap={indicators.vwap}
-            sma20={indicators.sma_20}
-            sma50={indicators.sma_50}
-          />
         </div>
       )}
     </>
