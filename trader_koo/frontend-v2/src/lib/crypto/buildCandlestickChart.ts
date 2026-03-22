@@ -437,7 +437,63 @@ export function buildCandlestickChart(
     }
   }
 
+  // Compute RSI-14 time series for subplot
+  const rsiValues: (number | null)[] = [];
+  const rsiPeriod = 14;
+  if (close.length >= rsiPeriod + 1) {
+    // Seed
+    const deltas = close.map((c, i) => i === 0 ? 0 : c - close[i - 1]);
+    let avgGain = 0;
+    let avgLoss = 0;
+    for (let i = 1; i <= rsiPeriod; i++) {
+      if (deltas[i] > 0) avgGain += deltas[i];
+      else avgLoss += Math.abs(deltas[i]);
+      rsiValues.push(null);
+    }
+    avgGain /= rsiPeriod;
+    avgLoss /= rsiPeriod;
+    // First RSI value
+    rsiValues.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+    // Wilder smoothing
+    for (let i = rsiPeriod + 1; i < close.length; i++) {
+      const d = deltas[i];
+      avgGain = (avgGain * (rsiPeriod - 1) + Math.max(d, 0)) / rsiPeriod;
+      avgLoss = (avgLoss * (rsiPeriod - 1) + Math.abs(Math.min(d, 0))) / rsiPeriod;
+      rsiValues.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+    }
+  }
+
+  const hasRsi = rsiValues.some((v) => v !== null);
+
+  if (hasRsi) {
+    // RSI line
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: timestamps,
+      y: rsiValues,
+      name: "RSI 14",
+      line: { color: "#a855f7", width: 1.5 },
+      xaxis: "x",
+      yaxis: "y3",
+      showlegend: false,
+      hovertemplate: "RSI: %{y:.1f}<extra></extra>",
+    });
+
+    // Overbought/oversold horizontal lines (as shapes)
+    shapes.push(
+      { type: "line", xref: "paper", yref: "y3", x0: 0, x1: 1, y0: 70, y1: 70, line: { color: "rgba(255,107,107,0.4)", width: 1, dash: "dot" } },
+      { type: "line", xref: "paper", yref: "y3", x0: 0, x1: 1, y0: 30, y1: 30, line: { color: "rgba(56,211,159,0.4)", width: 1, dash: "dot" } },
+      { type: "line", xref: "paper", yref: "y3", x0: 0, x1: 1, y0: 50, y1: 50, line: { color: "rgba(142,160,189,0.2)", width: 1, dash: "dot" } },
+    );
+  }
+
   const theme = getPlotlyColors();
+
+  // Adjust domains for 3 panels: Price, Volume, RSI
+  const priceDomain: [number, number] = hasRsi ? [0.38, 1] : [0.28, 1];
+  const volumeDomain: [number, number] = hasRsi ? [0.20, 0.33] : [0, 0.22];
+  const rsiDomain: [number, number] = [0, 0.16];
 
   const layout: Record<string, unknown> = {
     paper_bgcolor: theme.bg,
@@ -448,9 +504,14 @@ export function buildCandlestickChart(
     dragmode: "zoom",
     legend: {
       orientation: "h",
-      y: -0.04,
-      x: 0,
-      xanchor: "left",
+      y: 1.02,
+      x: 1,
+      xanchor: "right",
+      yanchor: "bottom",
+      bgcolor: "rgba(11,15,22,0.6)",
+      bordercolor: "rgba(255,255,255,0.08)",
+      borderwidth: 1,
+      font: { size: 10 },
     },
     xaxis: {
       gridcolor: theme.grid,
@@ -458,7 +519,7 @@ export function buildCandlestickChart(
     },
     yaxis: {
       gridcolor: theme.grid,
-      domain: [0.28, 1],
+      domain: priceDomain,
       title: "Price",
       autorange: true,
       fixedrange: false,
@@ -466,13 +527,24 @@ export function buildCandlestickChart(
     },
     yaxis2: {
       gridcolor: theme.grid,
-      domain: [0, 0.22],
+      domain: volumeDomain,
       title: "Volume",
     },
     shapes,
     annotations,
-    height: 500,
+    height: hasRsi ? 650 : 500,
   };
+
+  if (hasRsi) {
+    (layout as Record<string, unknown>).yaxis3 = {
+      gridcolor: theme.grid,
+      domain: rsiDomain,
+      title: "RSI",
+      range: [0, 100],
+      tickvals: [30, 50, 70],
+      ticktext: ["30", "50", "70"],
+    };
+  }
 
   return { traces, layout };
 }
