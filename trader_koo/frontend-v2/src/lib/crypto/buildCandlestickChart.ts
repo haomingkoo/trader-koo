@@ -488,9 +488,9 @@ export function buildCandlestickChart(
   const theme = getPlotlyColors();
 
   // Adjust domains for 3 panels: Price (top), Volume (mid), RSI (bottom)
-  const priceDomain: [number, number] = hasRsi ? [0.35, 1] : [0.28, 1];
-  const volumeDomain: [number, number] = hasRsi ? [0.20, 0.30] : [0, 0.22];
-  const rsiDomain: [number, number] = [0, 0.15];
+  const priceDomain: [number, number] = hasRsi ? [0.40, 1] : [0.28, 1];
+  const volumeDomain: [number, number] = hasRsi ? [0.22, 0.36] : [0, 0.22];
+  const rsiDomain: [number, number] = [0, 0.18];
 
   const layout: Record<string, unknown> = {
     paper_bgcolor: theme.bg,
@@ -529,7 +529,7 @@ export function buildCandlestickChart(
     },
     shapes,
     annotations,
-    height: hasRsi ? 700 : 500,
+    height: hasRsi ? 750 : 500,
   };
 
   if (hasRsi) {
