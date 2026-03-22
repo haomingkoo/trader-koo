@@ -46,7 +46,7 @@ export default function CryptoChartPanel({
             scrollZoom: !isMobile,
           }}
           onRelayout={onRelayout}
-          style={{ width: "100%", height: isMobile ? 500 : ((chartLayout as Record<string, unknown>)?.height as number) ?? 700 }}
+          style={{ width: "100%", height: isMobile ? 600 : 700 }}
         />
       </div>
     );
