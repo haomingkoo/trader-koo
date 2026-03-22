@@ -378,54 +378,68 @@ MAJOR_ECONOMIC_EVENTS = {
 }
 
 
+_FRED_API_KEY_ENV = "FRED_API_KEY"
+
+# FRED release IDs for major US economic indicators
+_FRED_MAJOR_RELEASES: dict[int, tuple[str, str]] = {
+    10: ("CPI", "high"),
+    46: ("PPI", "high"),
+    50: ("Employment Situation (NFP)", "high"),
+    101: ("FOMC Press Release", "high"),
+    53: ("GDP", "high"),
+    54: ("PCE / Personal Income", "high"),
+    21: ("M2 Money Stock", "medium"),
+    92: ("Retail Sales", "high"),
+    378: ("Federal Funds Rate", "medium"),
+}
+
+
 def fetch_economic_calendar(
     from_date: str,
     to_date: str,
-    country: str = "US",
 ) -> list[dict[str, Any]]:
-    """Fetch upcoming economic events from Finnhub."""
-    api_key = _finnhub_api_key()
+    """Fetch upcoming major US economic release dates from FRED."""
+    api_key = str(os.getenv(_FRED_API_KEY_ENV, "") or "").strip()
     if not api_key:
+        LOG.info("FRED_API_KEY not set, economic calendar unavailable")
         return []
-    qs = urllib.parse.urlencode({
-        "from": from_date,
-        "to": to_date,
-        "token": api_key,
-    })
-    url = f"https://finnhub.io/api/v1/calendar/economic?{qs}"
-    req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:
-        LOG.warning("Economic calendar fetch failed: %s", exc)
-        return []
-    raw_events = data.get("economicCalendar") or []
+
     out: list[dict[str, Any]] = []
-    for evt in raw_events:
-        if str(evt.get("country") or "").upper() != country.upper():
-            continue
-        event_name = str(evt.get("event") or "").strip()
-        if not event_name:
-            continue
-        # Filter to major events only
-        is_major = any(kw.lower() in event_name.lower() for kw in MAJOR_ECONOMIC_EVENTS)
-        impact = str(evt.get("impact") or "").lower()
-        if not is_major and impact != "high":
-            continue
-        out.append({
-            "date": str(evt.get("time") or "")[:10],
-            "time": str(evt.get("time") or ""),
-            "event": event_name,
-            "country": country,
-            "impact": impact or "medium",
-            "estimate": evt.get("estimate"),
-            "actual": evt.get("actual"),
-            "previous": evt.get("prev"),
-            "unit": evt.get("unit"),
-            "type": "economic",
+    for release_id, (name, impact) in _FRED_MAJOR_RELEASES.items():
+        qs = urllib.parse.urlencode({
+            "release_id": release_id,
+            "api_key": api_key,
+            "file_type": "json",
+            "include_release_dates_with_no_data": "true",
         })
-    LOG.info("Economic calendar: %d major US events from %s to %s", len(out), from_date, to_date)
+        url = f"https://api.stlouisfed.org/fred/release/dates?{qs}"
+        req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            LOG.debug("FRED release/%d dates fetch failed: %s", release_id, exc)
+            continue
+
+        for rd in data.get("release_dates", []):
+            date_str = str(rd.get("date") or "")[:10]
+            if not date_str or date_str < from_date or date_str > to_date:
+                continue
+            out.append({
+                "date": date_str,
+                "time": date_str,
+                "event": name,
+                "country": "US",
+                "impact": impact,
+                "estimate": None,
+                "actual": None,
+                "previous": None,
+                "unit": None,
+                "type": "economic",
+            })
+
+    out.sort(key=lambda x: x["date"])
+    LOG.info("FRED economic calendar: %d major US events from %s to %s", len(out), from_date, to_date)
     return out
 
 

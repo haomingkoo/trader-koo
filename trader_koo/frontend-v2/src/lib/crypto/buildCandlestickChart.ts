@@ -387,41 +387,53 @@ export function buildCandlestickChart(
 
   // Candlestick pattern markers (bullish/bearish triangles)
   if (candlestickPatterns && candlestickPatterns.length > 0) {
+    // Build date lookup: pattern dates are "YYYY-MM-DD HH:MM", timestamps are ISO
+    const tsDateMap = new Map<string, number>();
+    timestamps.forEach((ts, i) => {
+      tsDateMap.set(ts.slice(0, 10), i);  // match by date portion
+      tsDateMap.set(ts.slice(0, 16).replace("T", " "), i);  // match with time
+      tsDateMap.set(ts, i);  // exact match
+    });
+
+    const findIdx = (date: string): number => {
+      return tsDateMap.get(date) ?? tsDateMap.get(date.slice(0, 10)) ?? -1;
+    };
+
     const bullish = candlestickPatterns.filter((p) => p.bias === "bullish");
     const bearish = candlestickPatterns.filter((p) => p.bias === "bearish");
     if (bullish.length > 0) {
-      traces.push({
-        type: "scatter",
-        mode: "markers",
-        x: bullish.map((p) => p.date),
-        y: bullish.map((p) => {
-          const idx = timestamps.indexOf(p.date);
-          return idx >= 0 ? low[idx] * 0.997 : null;
-        }),
-        name: "Bullish Signal",
-        marker: { symbol: "triangle-up", size: 9, color: "#38d39f" },
-        hovertext: bullish.map((p) => `${p.pattern.replace(/_/g, " ")} (${(p.confidence * 100).toFixed(0)}%)`),
-        hoverinfo: "text+x",
-        xaxis: "x",
-        yaxis: "y",
-      });
+      const validBullish = bullish.filter((p) => findIdx(p.date) >= 0);
+      if (validBullish.length > 0) {
+        traces.push({
+          type: "scatter",
+          mode: "markers",
+          x: validBullish.map((p) => timestamps[findIdx(p.date)]),
+          y: validBullish.map((p) => low[findIdx(p.date)] * 0.995),
+          name: "Bullish Signal",
+          marker: { symbol: "triangle-up", size: 11, color: "#38d39f" },
+          hovertext: validBullish.map((p) => `${p.pattern.replace(/_/g, " ")} (${(p.confidence * 100).toFixed(0)}%)`),
+          hoverinfo: "text+x",
+          xaxis: "x",
+          yaxis: "y",
+        });
+      }
     }
     if (bearish.length > 0) {
-      traces.push({
-        type: "scatter",
-        mode: "markers",
-        x: bearish.map((p) => p.date),
-        y: bearish.map((p) => {
-          const idx = timestamps.indexOf(p.date);
-          return idx >= 0 ? high[idx] * 1.003 : null;
-        }),
-        name: "Bearish Signal",
-        marker: { symbol: "triangle-down", size: 9, color: "#ff6b6b" },
-        hovertext: bearish.map((p) => `${p.pattern.replace(/_/g, " ")} (${(p.confidence * 100).toFixed(0)}%)`),
-        hoverinfo: "text+x",
-        xaxis: "x",
-        yaxis: "y",
-      });
+      const validBearish = bearish.filter((p) => findIdx(p.date) >= 0);
+      if (validBearish.length > 0) {
+        traces.push({
+          type: "scatter",
+          mode: "markers",
+          x: validBearish.map((p) => timestamps[findIdx(p.date)]),
+          y: validBearish.map((p) => high[findIdx(p.date)] * 1.005),
+          name: "Bearish Signal",
+          marker: { symbol: "triangle-down", size: 11, color: "#ff6b6b" },
+          hovertext: validBearish.map((p) => `${p.pattern.replace(/_/g, " ")} (${(p.confidence * 100).toFixed(0)}%)`),
+          hoverinfo: "text+x",
+          xaxis: "x",
+          yaxis: "y",
+        });
+      }
     }
   }
 
@@ -432,7 +444,7 @@ export function buildCandlestickChart(
     plot_bgcolor: theme.bg,
     uirevision: uirevisionKey ?? symbol,
     font: { color: theme.font, size: 11 },
-    margin: { t: 30, r: 60, b: 50, l: 60 },
+    margin: { t: 30, r: 90, b: 50, l: 60 },
     dragmode: "zoom",
     legend: {
       orientation: "h",
