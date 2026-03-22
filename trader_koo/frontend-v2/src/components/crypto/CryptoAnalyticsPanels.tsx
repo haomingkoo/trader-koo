@@ -35,7 +35,7 @@ export default function CryptoAnalyticsPanels({
     <>
       {/* Indicators below chart */}
       {indicators && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 min-h-[120px]">
           <RsiGauge value={indicators.rsi_14} />
           <MacdCard macd={indicators.macd} />
           <BollingerCard bollinger={indicators.bollinger} />
@@ -49,14 +49,14 @@ export default function CryptoAnalyticsPanels({
 
       <StructureCard structure={structure} />
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-2 min-h-[200px]">
         <BtcSpyCorrelationCard correlation={btcSpyCorrelation} />
         <CryptoBreadthCard market={cryptoMarketStructure} />
       </div>
 
       {/* Cross-asset correlations: Gold & Dollar */}
       {(btcGoldCorrelation || btcDxyCorrelation) && (
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4 xl:grid-cols-2 min-h-[200px]">
           {btcGoldCorrelation && <BtcSpyCorrelationCard correlation={btcGoldCorrelation} />}
           {btcDxyCorrelation && <BtcSpyCorrelationCard correlation={btcDxyCorrelation} />}
         </div>
