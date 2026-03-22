@@ -139,16 +139,27 @@ export function StructureCard({
   );
 }
 
+const BENCHMARK_NAMES: Record<string, string> = {
+  SPY: "S&P 500",
+  GLD: "Gold",
+  UUP: "Dollar",
+  TLT: "Bonds",
+  QQQ: "Nasdaq",
+};
+
 export function BtcSpyCorrelationCard({
   correlation,
 }: {
   correlation: CryptoCorrelationPayload | null | undefined;
 }) {
+  const benchmark = correlation?.benchmark ?? "SPY";
+  const benchmarkLabel = BENCHMARK_NAMES[benchmark] ?? benchmark;
+
   if (!correlation) {
     return (
-      <GlassCard label="BTC vs SPY">
+      <GlassCard label={`BTC vs ${benchmarkLabel}`}>
         <div className="text-sm text-[var(--muted)]">
-          Waiting for aligned daily BTC and SPY closes.
+          Waiting for aligned daily closes.
         </div>
       </GlassCard>
     );
@@ -158,8 +169,11 @@ export function BtcSpyCorrelationCard({
     ([left], [right]) => Number.parseInt(left, 10) - Number.parseInt(right, 10),
   );
 
+  // Build rebased mini sparkline from aligned history
+  const history = correlation.aligned_history ?? [];
+
   return (
-    <GlassCard label="BTC vs SPY Cross-Asset">
+    <GlassCard label={`BTC vs ${benchmarkLabel} Cross-Asset`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-lg font-bold text-[var(--text)]">
@@ -188,7 +202,7 @@ export function BtcSpyCorrelationCard({
             </div>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">SPY</div>
+            <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{benchmark}</div>
             <div className="font-semibold tabular-nums text-[var(--text)]">
               ${correlation.latest.benchmark_close !== null ? formatPrice(correlation.latest.benchmark_close) : "--"}
             </div>
@@ -245,7 +259,32 @@ export function BtcSpyCorrelationCard({
         ))}
       </div>
 
-      <div className="mt-3 text-xs text-[var(--muted)]">{correlation.note}</div>
+      {/* Rebased price overlay sparkline */}
+      {history.length >= 3 && (
+        <div className="mt-3">
+          <div className="text-[9px] uppercase tracking-wide text-[var(--muted)] mb-1">Rebased Performance (last {history.length} sessions)</div>
+          <svg viewBox={`0 0 ${history.length * 10} 60`} className="w-full h-[60px]" preserveAspectRatio="none">
+            {/* BTC line (green) */}
+            <polyline
+              fill="none"
+              stroke="#38d39f"
+              strokeWidth="1.5"
+              points={history.map((h, i) => `${i * 10},${60 - ((h.asset_rebased - 90) / 20) * 60}`).join(" ")}
+            />
+            {/* Benchmark line (amber) */}
+            <polyline
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth="1.5"
+              points={history.map((h, i) => `${i * 10},${60 - ((h.benchmark_rebased - 90) / 20) * 60}`).join(" ")}
+            />
+          </svg>
+          <div className="flex justify-between text-[9px] text-[var(--muted)] mt-0.5">
+            <span><span style={{color:"#38d39f"}}>--</span> BTC</span>
+            <span><span style={{color:"#f59e0b"}}>--</span> {benchmarkLabel}</span>
+          </div>
+        </div>
+      )}
     </GlassCard>
   );
 }
