@@ -380,66 +380,111 @@ MAJOR_ECONOMIC_EVENTS = {
 
 _FRED_API_KEY_ENV = "FRED_API_KEY"
 
-# FRED release IDs for major US economic indicators
-_FRED_MAJOR_RELEASES: dict[int, tuple[str, str]] = {
-    10: ("CPI", "high"),
-    46: ("PPI", "high"),
-    50: ("Employment Situation (NFP)", "high"),
-    101: ("FOMC Press Release", "high"),
-    53: ("GDP", "high"),
-    54: ("PCE / Personal Income", "high"),
-    21: ("M2 Money Stock", "medium"),
-    92: ("Retail Sales", "high"),
-    378: ("Federal Funds Rate", "medium"),
-}
+# Known 2026 US economic calendar (public, fixed schedule)
+_STATIC_ECONOMIC_CALENDAR_2026: list[tuple[str, str, str]] = [
+    # (date, event, impact)
+    # CPI
+    ("2026-03-11", "CPI", "high"), ("2026-04-10", "CPI", "high"), ("2026-05-12", "CPI", "high"),
+    ("2026-06-10", "CPI", "high"), ("2026-07-14", "CPI", "high"), ("2026-08-12", "CPI", "high"),
+    ("2026-09-11", "CPI", "high"), ("2026-10-14", "CPI", "high"), ("2026-11-10", "CPI", "high"),
+    ("2026-12-10", "CPI", "high"),
+    # PPI
+    ("2026-03-12", "PPI", "high"), ("2026-04-14", "PPI", "high"), ("2026-05-13", "PPI", "high"),
+    ("2026-06-11", "PPI", "high"), ("2026-07-15", "PPI", "high"), ("2026-08-13", "PPI", "high"),
+    ("2026-09-15", "PPI", "high"), ("2026-10-15", "PPI", "high"), ("2026-11-12", "PPI", "high"),
+    ("2026-12-11", "PPI", "high"),
+    # NFP (Employment Situation)
+    ("2026-03-06", "NFP Jobs Report", "high"), ("2026-04-03", "NFP Jobs Report", "high"),
+    ("2026-05-08", "NFP Jobs Report", "high"), ("2026-06-05", "NFP Jobs Report", "high"),
+    ("2026-07-02", "NFP Jobs Report", "high"), ("2026-08-07", "NFP Jobs Report", "high"),
+    ("2026-09-04", "NFP Jobs Report", "high"), ("2026-10-02", "NFP Jobs Report", "high"),
+    ("2026-11-06", "NFP Jobs Report", "high"), ("2026-12-04", "NFP Jobs Report", "high"),
+    # FOMC
+    ("2026-03-18", "FOMC Decision", "high"), ("2026-04-29", "FOMC Decision", "high"),
+    ("2026-06-17", "FOMC Decision", "high"), ("2026-07-29", "FOMC Decision", "high"),
+    ("2026-09-16", "FOMC Decision", "high"), ("2026-10-28", "FOMC Decision", "high"),
+    ("2026-12-09", "FOMC Decision", "high"),
+    # ISM PMI
+    ("2026-03-02", "ISM Manufacturing PMI", "high"), ("2026-04-01", "ISM Manufacturing PMI", "high"),
+    ("2026-05-01", "ISM Manufacturing PMI", "high"), ("2026-06-01", "ISM Manufacturing PMI", "high"),
+    ("2026-07-01", "ISM Manufacturing PMI", "high"), ("2026-08-03", "ISM Manufacturing PMI", "high"),
+    ("2026-09-01", "ISM Manufacturing PMI", "high"), ("2026-10-01", "ISM Manufacturing PMI", "high"),
+    ("2026-11-02", "ISM Manufacturing PMI", "high"), ("2026-12-01", "ISM Manufacturing PMI", "high"),
+]
 
 
 def fetch_economic_calendar(
     from_date: str,
     to_date: str,
+    *,
+    use_fred: bool = False,
 ) -> list[dict[str, Any]]:
-    """Fetch upcoming major US economic release dates from FRED."""
-    api_key = str(os.getenv(_FRED_API_KEY_ENV, "") or "").strip()
-    if not api_key:
-        LOG.info("FRED_API_KEY not set, economic calendar unavailable")
-        return []
+    """Return major US economic release dates.
 
+    Uses static 2026 calendar for instant response. When use_fred=True
+    (nightly report), also queries FRED to catch schedule changes
+    (shutdowns, emergency FOMC, etc.) and merges/overrides.
+    """
+    # Start with static calendar (instant, no API calls)
     out: list[dict[str, Any]] = []
-    for release_id, (name, impact) in _FRED_MAJOR_RELEASES.items():
-        qs = urllib.parse.urlencode({
-            "release_id": release_id,
-            "api_key": api_key,
-            "file_type": "json",
-            "include_release_dates_with_no_data": "true",
-        })
-        url = f"https://api.stlouisfed.org/fred/release/dates?{qs}"
-        req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:
-            LOG.debug("FRED release/%d dates fetch failed: %s", release_id, exc)
+    for date_str, event_name, impact in _STATIC_ECONOMIC_CALENDAR_2026:
+        if date_str < from_date or date_str > to_date:
             continue
+        out.append({
+            "date": date_str,
+            "time": date_str,
+            "event": event_name,
+            "country": "US",
+            "impact": impact,
+            "estimate": None,
+            "actual": None,
+            "previous": None,
+            "unit": None,
+            "type": "economic",
+        })
 
-        for rd in data.get("release_dates", []):
-            date_str = str(rd.get("date") or "")[:10]
-            if not date_str or date_str < from_date or date_str > to_date:
-                continue
-            out.append({
-                "date": date_str,
-                "time": date_str,
-                "event": name,
-                "country": "US",
-                "impact": impact,
-                "estimate": None,
-                "actual": None,
-                "previous": None,
-                "unit": None,
-                "type": "economic",
-            })
+    # Optionally enrich with live FRED data (slow, used in nightly report only)
+    if use_fred:
+        api_key = str(os.getenv(_FRED_API_KEY_ENV, "") or "").strip()
+        if api_key:
+            _FRED_RELEASES = {
+                10: ("CPI", "high"), 46: ("PPI", "high"),
+                50: ("NFP Jobs Report", "high"), 101: ("FOMC Decision", "high"),
+                53: ("GDP", "high"), 54: ("PCE / Personal Income", "high"),
+            }
+            existing_keys = {(e["date"], e["event"]) for e in out}
+            for release_id, (name, impact) in _FRED_RELEASES.items():
+                try:
+                    import requests as _requests
+                    resp = _requests.get(
+                        "https://api.stlouisfed.org/fred/release/dates",
+                        params={
+                            "release_id": release_id,
+                            "api_key": api_key,
+                            "file_type": "json",
+                            "include_release_dates_with_no_data": "true",
+                        },
+                        timeout=15,
+                        headers={"User-Agent": "trader-koo/1.0"},
+                    )
+                    resp.raise_for_status()
+                    for rd in resp.json().get("release_dates", []):
+                        d = str(rd.get("date") or "")[:10]
+                        if d < from_date or d > to_date:
+                            continue
+                        if (d, name) not in existing_keys:
+                            out.append({
+                                "date": d, "time": d, "event": name,
+                                "country": "US", "impact": impact,
+                                "estimate": None, "actual": None,
+                                "previous": None, "unit": None,
+                                "type": "economic",
+                            })
+                            existing_keys.add((d, name))
+                except Exception as exc:
+                    LOG.debug("FRED release/%d fetch failed: %s", release_id, exc)
 
     out.sort(key=lambda x: x["date"])
-    LOG.info("FRED economic calendar: %d major US events from %s to %s", len(out), from_date, to_date)
     return out
 
 

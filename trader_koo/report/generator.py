@@ -1024,6 +1024,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         econ_events = fetch_economic_calendar(
             today.isoformat(),
             (today + dt.timedelta(days=90)).isoformat(),
+            use_fred=True,
         )
         signals["economic_events"] = econ_events
         LOG.info("Economic calendar cached: %d events over 90 days", len(econ_events))
