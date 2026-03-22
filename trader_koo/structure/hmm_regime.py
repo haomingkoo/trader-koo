@@ -20,6 +20,9 @@ LOG = logging.getLogger(__name__)
 REGIME_LABELS = {0: "low_vol", 1: "normal", 2: "high_vol"}
 REGIME_COLORS = {"low_vol": "#38d39f", "normal": "#f8c24e", "high_vol": "#ff6b6b"}
 
+DIRECTIONAL_LABELS = {0: "bearish", 1: "chop", 2: "bullish"}
+DIRECTIONAL_COLORS = {"bearish": "#ff6b6b", "chop": "#a855f7", "bullish": "#38d39f"}
+
 # Simple per-ticker model cache: {ticker: (model, scaler, state_order, ts)}
 _MODEL_CACHE: dict[str, tuple[GaussianHMM, StandardScaler, np.ndarray, float]] = {}
 _CACHE_TTL_SEC = 86400  # 24 hours — regimes use daily data, no intraday change
@@ -339,4 +342,151 @@ def predict_regimes(
             [round(float(v), 4) for v in row] for row in sorted_transmat
         ],
         "days_in_current": days_in_current,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Directional HMM (bullish / chop / bearish)
+# ---------------------------------------------------------------------------
+
+_DIR_MODEL_CACHE: dict[str, tuple[GaussianHMM, StandardScaler, np.ndarray, float]] = {}
+
+
+def _extract_directional_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Extract momentum/trend features for directional regime detection."""
+    close = pd.to_numeric(df["close"], errors="coerce")
+
+    # Momentum: 10-period rate of change
+    roc_10 = (close / close.shift(10) - 1.0).clip(-0.5, 0.5)
+
+    # Trend: price position relative to 20-period SMA (-1 to +1 normalized)
+    sma_20 = close.rolling(20).mean()
+    price_vs_sma = ((close - sma_20) / sma_20.replace(0, np.nan)).clip(-0.3, 0.3)
+
+    # MA slope: 20-period SMA slope (normalized)
+    sma_slope = (sma_20 / sma_20.shift(5) - 1.0).clip(-0.2, 0.2)
+
+    # Smoothed returns (5-day average return)
+    log_return = np.log(close / close.shift(1))
+    smooth_return = log_return.rolling(5).mean().clip(-0.1, 0.1)
+
+    features = pd.DataFrame({
+        "roc_10": roc_10,
+        "price_vs_sma": price_vs_sma,
+        "sma_slope": sma_slope,
+        "smooth_return": smooth_return,
+    }, index=df.index)
+    features = features.replace([np.inf, -np.inf], np.nan)
+    return features.dropna()
+
+
+def _sort_states_by_momentum(
+    model: GaussianHMM,
+    momentum_feature_idx: int = 0,
+) -> np.ndarray:
+    """Sort states by mean momentum: 0=bearish, 1=chop, 2=bullish."""
+    means = model.means_[:, momentum_feature_idx]
+    return np.argsort(means)
+
+
+def predict_directional_regimes(
+    df: pd.DataFrame,
+    lookback_days: int = 504,
+    ticker: str | None = None,
+) -> dict[str, Any] | None:
+    """Predict directional regime (bullish/chop/bearish) using HMM."""
+    t0 = time.monotonic()
+
+    if df is None or df.empty:
+        return None
+    if len(df) < 140:
+        return None
+
+    features = _extract_directional_features(df.tail(lookback_days))
+    if len(features) < 40:
+        return None
+
+    feature_matrix = features.values
+    if not np.isfinite(feature_matrix).all():
+        feature_matrix = np.nan_to_num(feature_matrix, nan=0.0, posinf=0.0, neginf=0.0)
+
+    cache_key = f"DIR:{ticker or 'unknown'}"
+
+    # Check cache
+    cached = _DIR_MODEL_CACHE.get(cache_key)
+    if cached is not None:
+        model, scaler, state_order, cached_ts = cached
+        if (time.monotonic() - cached_ts) < _CACHE_TTL_SEC:
+            LOG.debug("Directional HMM: using cached model for %s", cache_key)
+        else:
+            model, scaler, state_order = _fit_hmm(feature_matrix, n_states=3)
+            _DIR_MODEL_CACHE[cache_key] = (model, scaler, state_order, time.monotonic())
+    else:
+        model, scaler, state_order = _fit_hmm(feature_matrix, n_states=3)
+        state_order = _sort_states_by_momentum(model, momentum_feature_idx=0)
+        _DIR_MODEL_CACHE[cache_key] = (model, scaler, state_order, time.monotonic())
+
+    scaled = scaler.transform(feature_matrix)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        raw_states = model.predict(scaled)
+        raw_probs = model.predict_proba(scaled)
+
+    sorted_states = np.array([np.searchsorted(state_order, s) for s in raw_states])
+    sorted_probs = np.zeros_like(raw_probs)
+    for i in range(3):
+        sorted_probs[:, i] = raw_probs[:, state_order[i]]
+
+    date_col = features.index if features.index.dtype == "datetime64[ns]" else range(len(features))
+    if "date" in df.columns:
+        date_values = pd.to_datetime(df.loc[features.index, "date"], errors="coerce")
+    else:
+        date_values = pd.to_datetime(features.index, errors="coerce")
+
+    regimes = []
+    for i in range(len(sorted_states)):
+        state_int = int(sorted_states[i])
+        label = DIRECTIONAL_LABELS.get(state_int, "chop")
+        d = date_values.iloc[i] if i < len(date_values) else None
+        regimes.append({
+            "date": pd.Timestamp(d).strftime("%Y-%m-%d") if pd.notna(d) else None,
+            "state": state_int,
+            "label": label,
+            "color": DIRECTIONAL_COLORS.get(label, "#a855f7"),
+            "prob_bearish": round(float(sorted_probs[i, 0]), 4),
+            "prob_chop": round(float(sorted_probs[i, 1]), 4),
+            "prob_bullish": round(float(sorted_probs[i, 2]), 4),
+        })
+
+    current_state_int = int(sorted_states[-1])
+    current_label = DIRECTIONAL_LABELS.get(current_state_int, "chop")
+
+    sorted_transmat = model.transmat_[state_order][:, state_order]
+    self_transition_prob = float(sorted_transmat[current_state_int, current_state_int])
+    transition_risk = round((1.0 - self_transition_prob) * 100, 1)
+
+    days_in_current = 1
+    for i in range(len(sorted_states) - 2, -1, -1):
+        if int(sorted_states[i]) == current_state_int:
+            days_in_current += 1
+        else:
+            break
+
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    LOG.info(
+        "Directional HMM: %s -> %s (%.1f%% shift risk, %d days, %.0fms)",
+        cache_key, current_label, transition_risk, days_in_current, elapsed_ms,
+    )
+
+    return {
+        "regimes": regimes,
+        "current_state": current_label,
+        "current_probs": {
+            "bearish": round(float(sorted_probs[-1, 0]), 4),
+            "chop": round(float(sorted_probs[-1, 1]), 4),
+            "bullish": round(float(sorted_probs[-1, 2]), 4),
+        },
+        "transition_risk_pct": transition_risk,
+        "days_in_current": days_in_current,
+        "model_type": "directional",
     }

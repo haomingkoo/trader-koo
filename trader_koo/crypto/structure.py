@@ -8,7 +8,7 @@ import pandas as pd
 
 from trader_koo.crypto.models import CryptoBar
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
-from trader_koo.structure.hmm_regime import predict_regimes
+from trader_koo.structure.hmm_regime import predict_regimes, predict_directional_regimes
 from trader_koo.structure.levels import (
     LevelConfig,
     add_fallback_levels,
@@ -195,6 +195,7 @@ def build_crypto_structure(
             "levels": [],
             "trendlines": [],
             "hmm_regime": None,
+            "hmm_directional": None,
             "context": {
                 "latest_close": None,
                 "support_level": None,
@@ -228,6 +229,7 @@ def build_crypto_structure(
     trendlines = detect_trendlines(model, last_close=last_close, cfg=TREND_CFG)
 
     hmm_regime = None
+    hmm_directional = None
     if include_hmm:
         hmm_input = prices[["date", "open", "high", "low", "close", "volume"]].copy()
         hmm_regime = predict_regimes(
@@ -235,6 +237,14 @@ def build_crypto_structure(
             lookback_days=min(len(hmm_input), 720),
             ticker=f"crypto:{symbol}:{interval}",
         )
+        try:
+            hmm_directional = predict_directional_regimes(
+                hmm_input,
+                lookback_days=min(len(hmm_input), 720),
+                ticker=f"crypto:{symbol}:{interval}",
+            )
+        except Exception as exc:
+            LOG.debug("Directional HMM failed for %s: %s", symbol, exc)
 
     return {
         "symbol": symbol,
@@ -243,5 +253,6 @@ def build_crypto_structure(
         "levels": _serialize_df(levels),
         "trendlines": _serialize_df(trendlines),
         "hmm_regime": hmm_regime,
+        "hmm_directional": hmm_directional,
         "context": _build_context(model, levels),
     }
