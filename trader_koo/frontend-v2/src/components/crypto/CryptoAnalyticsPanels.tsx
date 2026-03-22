@@ -17,6 +17,8 @@ import {
 interface CryptoAnalyticsPanelsProps {
   structure: CryptoStructurePayload | undefined;
   btcSpyCorrelation: CryptoCorrelationPayload | undefined;
+  btcGoldCorrelation?: CryptoCorrelationPayload | undefined;
+  btcDxyCorrelation?: CryptoCorrelationPayload | undefined;
   cryptoMarketStructure: CryptoMarketStructurePayload | undefined;
   indicators: CryptoIndicators | null;
 }
@@ -24,6 +26,8 @@ interface CryptoAnalyticsPanelsProps {
 export default function CryptoAnalyticsPanels({
   structure,
   btcSpyCorrelation,
+  btcGoldCorrelation,
+  btcDxyCorrelation,
   cryptoMarketStructure,
   indicators,
 }: CryptoAnalyticsPanelsProps) {
@@ -35,6 +39,14 @@ export default function CryptoAnalyticsPanels({
         <BtcSpyCorrelationCard correlation={btcSpyCorrelation} />
         <CryptoBreadthCard market={cryptoMarketStructure} />
       </div>
+
+      {/* Cross-asset correlations: Gold & Dollar */}
+      {(btcGoldCorrelation || btcDxyCorrelation) && (
+        <div className="grid gap-4 xl:grid-cols-2">
+          {btcGoldCorrelation && <BtcSpyCorrelationCard correlation={btcGoldCorrelation} />}
+          {btcDxyCorrelation && <BtcSpyCorrelationCard correlation={btcDxyCorrelation} />}
+        </div>
+      )}
 
       {indicators && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

@@ -219,6 +219,8 @@ export default function CryptoPage() {
     interval.limit,
   );
   const { data: btcSpyCorrelation } = useCryptoCorrelation("BTC-USD", "SPY", 40);
+  const { data: btcGoldCorrelation } = useCryptoCorrelation("BTC-USD", "GLD", 40);
+  const { data: btcDxyCorrelation } = useCryptoCorrelation("BTC-USD", "UUP", 40);
   const { data: cryptoMarketStructure } = useCryptoMarketStructure("1h", 168);
   const { data: openInterestData } = useCryptoOpenInterest(selectedSymbol, "1h", 100);
 
@@ -413,6 +415,8 @@ export default function CryptoPage() {
       <CryptoAnalyticsPanels
         structure={structureData}
         btcSpyCorrelation={btcSpyCorrelation}
+        btcGoldCorrelation={btcGoldCorrelation}
+        btcDxyCorrelation={btcDxyCorrelation}
         cryptoMarketStructure={cryptoMarketStructure}
         indicators={indicators}
       />
