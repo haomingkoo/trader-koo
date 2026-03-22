@@ -439,28 +439,24 @@ export function buildCandlestickChart(
   }
 
   // Compute RSI time series for subplot
-  const rsiValues: (number | null)[] = [];
   const rsiPeriod = overlays.rsiPeriod || 14;
-  if (close.length >= rsiPeriod + 1) {
-    // Seed
+  const rsiValues: (number | null)[] = new Array(close.length).fill(null);
+  if (rsiPeriod > 0 && close.length >= rsiPeriod + 1) {
     const deltas = close.map((c, i) => i === 0 ? 0 : c - close[i - 1]);
     let avgGain = 0;
     let avgLoss = 0;
     for (let i = 1; i <= rsiPeriod; i++) {
       if (deltas[i] > 0) avgGain += deltas[i];
       else avgLoss += Math.abs(deltas[i]);
-      rsiValues.push(null);
     }
     avgGain /= rsiPeriod;
     avgLoss /= rsiPeriod;
-    // First RSI value
-    rsiValues.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
-    // Wilder smoothing
+    rsiValues[rsiPeriod] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
     for (let i = rsiPeriod + 1; i < close.length; i++) {
       const d = deltas[i];
       avgGain = (avgGain * (rsiPeriod - 1) + Math.max(d, 0)) / rsiPeriod;
       avgLoss = (avgLoss * (rsiPeriod - 1) + Math.abs(Math.min(d, 0))) / rsiPeriod;
-      rsiValues.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+      rsiValues[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
     }
   }
 
