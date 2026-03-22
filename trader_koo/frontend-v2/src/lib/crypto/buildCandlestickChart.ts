@@ -448,26 +448,54 @@ export function buildCandlestickChart(
   // Directional HMM background coloring (bullish=green, bearish=red, chop=purple)
   if (directionalRegimes && directionalRegimes.length > 1) {
     const dirColors: Record<string, string> = {
-      bullish: "rgba(56,211,159,0.06)",
-      bearish: "rgba(255,107,107,0.06)",
-      chop: "rgba(168,85,247,0.06)",
+      bullish: "rgba(56,211,159,0.08)",
+      bearish: "rgba(255,107,107,0.08)",
+      chop: "rgba(168,85,247,0.08)",
+    };
+    const dirTextColors: Record<string, string> = {
+      bullish: "#38d39f",
+      bearish: "#ff6b6b",
+      chop: "#a855f7",
+    };
+    const dirLabels: Record<string, string> = {
+      bullish: "BULL",
+      bearish: "BEAR",
+      chop: "CHOP",
     };
     let spanStart = 0;
     for (let i = 1; i <= directionalRegimes.length; i++) {
       if (i === directionalRegimes.length || directionalRegimes[i].label !== directionalRegimes[spanStart].label) {
-        const fillcolor = dirColors[directionalRegimes[spanStart].label] ?? "rgba(128,128,128,0.04)";
+        const label = directionalRegimes[spanStart].label;
+        const fillcolor = dirColors[label] ?? "rgba(128,128,128,0.04)";
+        const startDate = directionalRegimes[spanStart].date;
+        const endDate = directionalRegimes[Math.min(i, directionalRegimes.length - 1)].date;
         shapes.push({
           type: "rect",
           xref: "x",
           yref: "y",
-          x0: directionalRegimes[spanStart].date,
-          x1: directionalRegimes[Math.min(i, directionalRegimes.length - 1)].date,
+          x0: startDate,
+          x1: endDate,
           y0: Math.min(...low.filter((v) => v > 0)) * 0.99,
           y1: Math.max(...high) * 1.01,
           fillcolor,
           line: { width: 0 },
           layer: "below",
         });
+        // Label at top of each regime span
+        const spanDays = i - spanStart;
+        if (spanDays >= 5) {
+          annotations.push({
+            xref: "x",
+            yref: "paper",
+            x: startDate,
+            y: 0.98,
+            text: dirLabels[label] ?? label,
+            showarrow: false,
+            font: { color: dirTextColors[label] ?? "#8ea0bd", size: 9 },
+            opacity: 0.6,
+            xanchor: "left",
+          });
+        }
         spanStart = i;
       }
     }
