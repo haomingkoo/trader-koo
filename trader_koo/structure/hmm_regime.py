@@ -22,7 +22,7 @@ REGIME_COLORS = {"low_vol": "#38d39f", "normal": "#f8c24e", "high_vol": "#ff6b6b
 
 # Simple per-ticker model cache: {ticker: (model, scaler, state_order, ts)}
 _MODEL_CACHE: dict[str, tuple[GaussianHMM, StandardScaler, np.ndarray, float]] = {}
-_CACHE_TTL_SEC = 3600  # 1 hour
+_CACHE_TTL_SEC = 86400  # 24 hours — regimes use daily data, no intraday change
 
 
 def _clip_feature_series(series: pd.Series, *, lower: float, upper: float) -> pd.Series:

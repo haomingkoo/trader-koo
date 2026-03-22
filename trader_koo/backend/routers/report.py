@@ -14,6 +14,7 @@ from trader_koo.backend.services.database import get_conn
 from trader_koo.backend.services.pipeline import pipeline_status_snapshot
 from trader_koo.backend.services.report_loader import (
     daily_report_response,
+    is_report_fresh,
     latest_daily_report_json,
 )
 from trader_koo.catalyst_data import build_earnings_calendar_payload
@@ -158,10 +159,10 @@ def earnings_calendar(
 @router.get("/api/vix-metrics")
 def vix_metrics() -> dict[str, Any]:
     """Enhanced VIX metrics — cached from nightly report, live fallback."""
-    # Try report cache first
+    # Try report cache first (only if fresh)
     _, report = latest_daily_report_json(REPORT_DIR)
-    if isinstance(report, dict):
-        signals = report.get("signals")
+    if is_report_fresh(report):
+        signals = (report or {}).get("signals")
         if isinstance(signals, dict):
             cached = signals.get("regime_context")
             if isinstance(cached, dict) and cached:

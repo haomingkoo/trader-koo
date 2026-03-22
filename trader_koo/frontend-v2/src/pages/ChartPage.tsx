@@ -80,7 +80,7 @@ export default function ChartPage() {
     data: commentaryData,
     isLoading: commentaryLoading,
     refetch: refetchCommentary,
-  } = useChartCommentary(ticker);
+  } = useChartCommentary(ticker, !!quickData);
 
   // Merge quick + commentary into a DashboardPayload-compatible shape
   const data = useMemo((): DashboardPayload | undefined => {

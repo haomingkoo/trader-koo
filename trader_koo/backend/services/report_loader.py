@@ -16,6 +16,31 @@ from trader_koo.backend.services.market_data import parse_iso_utc
 
 LOG = logging.getLogger("trader_koo.services.report_loader")
 
+# Maximum age (hours) before report cache is considered stale.
+# After market close (22:00 UTC pipeline) the report is fresh.
+# By next market close (~26h later) it's stale.
+_REPORT_CACHE_MAX_AGE_HOURS = 26
+
+
+def is_report_fresh(payload: dict[str, Any] | None) -> bool:
+    """Check if the report is recent enough to serve from cache.
+
+    Returns True if report was generated within the last trading day
+    (accounting for weekends — Friday's report is valid until Monday evening).
+    """
+    if not isinstance(payload, dict):
+        return False
+    generated_ts = parse_iso_utc(payload.get("generated_ts"))
+    if generated_ts is None:
+        return False
+    now = dt.datetime.now(dt.timezone.utc)
+    age_hours = (now - generated_ts).total_seconds() / 3600
+    # Friday 22:00 UTC → Monday 22:00 UTC = 72 hours
+    # Allow up to 74 hours to cover weekends + holidays
+    weekday = generated_ts.weekday()  # 0=Mon, 4=Fri
+    max_age = 74 if weekday == 4 else _REPORT_CACHE_MAX_AGE_HOURS
+    return age_hours <= max_age
+
 
 # ---------------------------------------------------------------------------
 # File I/O helpers
@@ -213,11 +238,11 @@ def latest_report_hmm_for_ticker(
     *,
     generated_ts: str | None = None,
 ) -> dict[str, Any] | None:
-    """Load pre-computed HMM regime for *ticker* from the report snapshot."""
+    """Load pre-computed HMM regime for *ticker* from a fresh report snapshot."""
     _, payload = report_json_for_generated_ts(report_dir, generated_ts)
-    target = str(ticker or "").strip().upper()
-    if not isinstance(payload, dict):
+    if not is_report_fresh(payload):
         return None
+    target = str(ticker or "").strip().upper()
     signals = payload.get("signals")
     if not isinstance(signals, dict):
         return None
