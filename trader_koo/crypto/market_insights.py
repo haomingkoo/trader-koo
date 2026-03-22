@@ -1,9 +1,13 @@
 """Cross-asset and market-overview helpers for the crypto dashboard."""
 from __future__ import annotations
 
+import datetime as dt
+import logging
 import math
 import sqlite3
 from typing import Any
+
+LOG = logging.getLogger("trader_koo.crypto.market_insights")
 
 
 _DEFAULT_WINDOWS = (5, 10, 20)
@@ -374,4 +378,97 @@ def build_crypto_market_structure(
         "leaders": symbol_rows[:2],
         "laggards": list(reversed(symbol_rows[-2:])) if symbol_rows else [],
         "symbols": symbol_rows,
+    }
+
+
+# ── Correlation Regime Tracking ─────────────────────────────────────────────
+
+def ensure_correlation_snapshot_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS crypto_correlation_snapshots (
+            snapshot_date TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            benchmark TEXT NOT NULL,
+            corr_5d REAL,
+            corr_10d REAL,
+            corr_20d REAL,
+            beta_20d REAL,
+            relationship_label TEXT,
+            PRIMARY KEY (snapshot_date, asset, benchmark)
+        )
+    """)
+    conn.commit()
+
+
+def save_correlation_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    asset: str,
+    benchmark: str,
+    correlation_data: dict[str, Any],
+) -> None:
+    """Persist today's correlation values for regime change tracking."""
+    ensure_correlation_snapshot_table(conn)
+    today = dt.date.today().isoformat()
+    windows = correlation_data.get("windows", {})
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO crypto_correlation_snapshots
+            (snapshot_date, asset, benchmark, corr_5d, corr_10d, corr_20d, beta_20d, relationship_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            today,
+            asset,
+            benchmark,
+            _safe_float((windows.get("5d") or {}).get("correlation")),
+            _safe_float((windows.get("10d") or {}).get("correlation")),
+            _safe_float((windows.get("20d") or {}).get("correlation")),
+            _safe_float((windows.get("20d") or {}).get("beta")),
+            correlation_data.get("relationship_label"),
+        ),
+    )
+    conn.commit()
+
+
+def detect_correlation_regime_change(
+    conn: sqlite3.Connection,
+    *,
+    asset: str,
+    benchmark: str,
+    current_label: str,
+    current_corr_20d: float | None,
+) -> dict[str, Any] | None:
+    """Check if the correlation regime changed from the previous snapshot."""
+    ensure_correlation_snapshot_table(conn)
+    today = dt.date.today().isoformat()
+    prev = conn.execute(
+        """
+        SELECT snapshot_date, relationship_label, corr_20d
+        FROM crypto_correlation_snapshots
+        WHERE asset = ? AND benchmark = ? AND snapshot_date < ?
+        ORDER BY snapshot_date DESC
+        LIMIT 1
+        """,
+        (asset, benchmark, today),
+    ).fetchone()
+    if prev is None:
+        return None
+    prev_label = str(prev[1] or "")
+    prev_corr = _safe_float(prev[2])
+    if not prev_label or prev_label == current_label:
+        return None
+
+    # Significant correlation shift
+    corr_delta = None
+    if current_corr_20d is not None and prev_corr is not None:
+        corr_delta = round(current_corr_20d - prev_corr, 3)
+
+    return {
+        "changed": True,
+        "from_label": prev_label,
+        "to_label": current_label,
+        "from_date": str(prev[0]),
+        "corr_delta": corr_delta,
+        "signal": f"{asset} vs {benchmark}: regime shifted from '{prev_label}' to '{current_label}'",
     }

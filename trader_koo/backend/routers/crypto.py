@@ -161,19 +161,40 @@ def crypto_correlation(
     benchmark: str = Query("SPY", description="Benchmark equity ticker from price_daily"),
     limit: int = Query(40, ge=10, le=90, description="Max daily crypto bars to align"),
 ) -> dict[str, Any]:
-    """Cross-asset correlation and relative-strength snapshot versus a benchmark."""
+    """Cross-asset correlation with regime change detection."""
     normalised = _normalise_symbol(symbol)
     bars = get_crypto_history(normalised, interval="1d", limit=limit)
     conn = get_conn()
     try:
+        from trader_koo.crypto.market_insights import (
+            save_correlation_snapshot,
+            detect_correlation_regime_change,
+        )
+        benchmark_norm = str(benchmark or "SPY").upper()
+        corr_data = build_btc_spy_correlation(
+            conn,
+            asset_symbol=normalised,
+            benchmark_symbol=benchmark_norm,
+            asset_bars=bars,
+        )
+
+        # Save snapshot and detect regime changes
+        regime_change = None
+        try:
+            save_correlation_snapshot(conn, asset=normalised, benchmark=benchmark_norm, correlation_data=corr_data)
+            current_label = corr_data.get("relationship_label", "")
+            w20 = (corr_data.get("windows") or {}).get("20d") or {}
+            regime_change = detect_correlation_regime_change(
+                conn, asset=normalised, benchmark=benchmark_norm,
+                current_label=current_label, current_corr_20d=w20.get("correlation"),
+            )
+        except Exception:
+            pass
+
         return {
             "ok": True,
-            **build_btc_spy_correlation(
-                conn,
-                asset_symbol=normalised,
-                benchmark_symbol=str(benchmark or "SPY").upper(),
-                asset_bars=bars,
-            ),
+            **corr_data,
+            "regime_change": regime_change,
         }
     finally:
         conn.close()
