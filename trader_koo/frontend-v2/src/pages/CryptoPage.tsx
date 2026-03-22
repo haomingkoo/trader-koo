@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useCryptoSummary,
   useCryptoHistory,
@@ -188,6 +189,7 @@ function readNumericRange(
 /* ── Main page ── */
 
 export default function CryptoPage() {
+  const queryClient = useQueryClient();
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USD");
   const [selectedInterval, setSelectedInterval] = useState<IntervalValue>("1h");
   const [overlays, setOverlays] = useState<OverlayState>(DEFAULT_OVERLAYS);
@@ -401,6 +403,10 @@ export default function CryptoPage() {
         chartData={chartResult ? (chartResult.traces as unknown as Record<string, unknown>[]) : null}
         chartLayout={chartLayout as Record<string, unknown> | null}
         onRelayout={handleChartRelayout}
+        onRetry={() => {
+          queryClient.invalidateQueries({ queryKey: ["crypto-history"] });
+          queryClient.invalidateQueries({ queryKey: ["crypto-summary"] });
+        }}
       />
 
       <CryptoAnalyticsPanels

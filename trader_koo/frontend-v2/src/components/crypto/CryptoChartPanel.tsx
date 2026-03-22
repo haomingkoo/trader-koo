@@ -16,6 +16,7 @@ interface CryptoChartPanelProps {
   chartData: Record<string, unknown>[] | null;
   chartLayout: Record<string, unknown> | null;
   onRelayout: (eventData: Record<string, unknown>) => void;
+  onRetry?: () => void;
 }
 
 export default function CryptoChartPanel({
@@ -25,6 +26,7 @@ export default function CryptoChartPanel({
   chartData,
   chartLayout,
   onRelayout,
+  onRetry,
 }: CryptoChartPanelProps) {
   const isMobile = useIsMobile();
 
@@ -52,15 +54,40 @@ export default function CryptoChartPanel({
 
   if (connected) {
     return (
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--muted)]">
-        No chart data available yet. The app will backfill Binance history for this symbol and timeframe on demand.
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center">
+        <p className="text-sm text-[var(--muted)] mb-3">
+          Chart data is loading. The server is backfilling history from
+          Binance — this typically takes 30–60 seconds after a deploy.
+        </p>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            className="rounded-md border border-[var(--line)] bg-[var(--bg)] px-4 py-1.5 text-xs text-[var(--text)] hover:bg-[var(--panel)] transition-colors"
+          >
+            Retry now
+          </button>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center text-sm text-[var(--red)]">
-      Crypto feed disconnected — no chart data available.
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-12 text-center">
+      <p className="text-sm text-[var(--red)] mb-2">
+        Crypto feed disconnected — no chart data available.
+      </p>
+      <p className="text-xs text-[var(--muted)]">
+        The server may be restarting. Data will appear automatically when
+        the connection is restored.
+      </p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="mt-3 rounded-md border border-[var(--line)] bg-[var(--bg)] px-4 py-1.5 text-xs text-[var(--text)] hover:bg-[var(--panel)] transition-colors"
+        >
+          Retry now
+        </button>
+      )}
     </div>
   );
 }
