@@ -47,6 +47,7 @@ from trader_koo.backend.services.database import (
     get_yolo_audit,
     get_yolo_patterns,
 )
+from trader_koo.backend.services.report_loader import latest_report_hmm_for_ticker
 from trader_koo.structure.hmm_regime import predict_regimes as hmm_predict_regimes
 from trader_koo.backend.services.market_data import get_data_sources
 from trader_koo.backend.services.report_loader import latest_report_setup_for_ticker
@@ -1114,12 +1115,13 @@ def build_commentary_payload(
         setup_override=setup_override,
     )
 
-    # HMM regime detection — fail gracefully, never fake data
-    hmm_regime = None
-    try:
-        hmm_regime = hmm_predict_regimes(prices, ticker=ticker)
-    except Exception as exc:
-        LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
+    # HMM regime — use cached from nightly report, fall back to live compute
+    hmm_regime = latest_report_hmm_for_ticker(report_dir, ticker, generated_ts=report_generated_ts)
+    if hmm_regime is None:
+        try:
+            hmm_regime = hmm_predict_regimes(prices, ticker=ticker)
+        except Exception as exc:
+            LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
 
     return {
         "ticker": ticker,
@@ -1199,12 +1201,13 @@ def build_dashboard_payload(
         setup_override=setup_override,
     )
 
-    # HMM regime detection — fail gracefully, never fake data
-    hmm_regime = None
-    try:
-        hmm_regime = hmm_predict_regimes(prices, ticker=ticker)
-    except Exception as exc:
-        LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
+    # HMM regime — use cached from nightly report, fall back to live compute
+    hmm_regime = latest_report_hmm_for_ticker(report_dir, ticker, generated_ts=report_generated_ts)
+    if hmm_regime is None:
+        try:
+            hmm_regime = hmm_predict_regimes(prices, ticker=ticker)
+        except Exception as exc:
+            LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
 
     # Data freshness indicator
     data_freshness = _compute_data_freshness(conn, ticker)

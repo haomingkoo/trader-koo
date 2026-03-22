@@ -207,6 +207,26 @@ def latest_report_setup_for_ticker(
     return None
 
 
+def latest_report_hmm_for_ticker(
+    report_dir: Path,
+    ticker: str,
+    *,
+    generated_ts: str | None = None,
+) -> dict[str, Any] | None:
+    """Load pre-computed HMM regime for *ticker* from the report snapshot."""
+    _, payload = report_json_for_generated_ts(report_dir, generated_ts)
+    target = str(ticker or "").strip().upper()
+    if not isinstance(payload, dict):
+        return None
+    signals = payload.get("signals")
+    if not isinstance(signals, dict):
+        return None
+    hmm_lookup = signals.get("hmm_regime_by_ticker")
+    if not isinstance(hmm_lookup, dict):
+        return None
+    return hmm_lookup.get(target)
+
+
 # ---------------------------------------------------------------------------
 # Report history
 # ---------------------------------------------------------------------------

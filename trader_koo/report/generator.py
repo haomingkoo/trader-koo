@@ -975,6 +975,48 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         LOG.error("Candle patterns / setup scoring section failed: %s", exc, exc_info=True)
         _report_warnings.append("candle_patterns_section_failed")
 
+    # ── Pre-compute HMM regime for all tracked tickers ────────────────────
+    try:
+        import pandas as pd
+        from trader_koo.structure.hmm_regime import predict_regimes as hmm_predict_regimes
+
+        lookup_tickers = list((signals.get("setup_quality_lookup") or {}).keys())
+        if not lookup_tickers:
+            lookup_tickers = [
+                str(r[0] or "").upper()
+                for r in conn.execute("SELECT DISTINCT ticker FROM price_daily").fetchall()
+                if str(r[0] or "").strip()
+            ]
+        hmm_cache: dict[str, dict[str, Any]] = {}
+        hmm_t0 = dt.datetime.now(dt.timezone.utc)
+        for ticker_sym in lookup_tickers:
+            try:
+                rows = conn.execute(
+                    "SELECT date, open, high, low, close, volume FROM price_daily WHERE ticker = ? ORDER BY date",
+                    (ticker_sym,),
+                ).fetchall()
+                if len(rows) < 140:
+                    continue
+                df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
+                result = hmm_predict_regimes(df, ticker=ticker_sym)
+                if result is not None:
+                    hmm_cache[ticker_sym] = {
+                        "current_state": result.get("current_state"),
+                        "current_probs": result.get("current_probs"),
+                        "transition_risk_pct": result.get("transition_risk_pct"),
+                        "days_in_current": result.get("days_in_current"),
+                        "regimes": result.get("regimes", [])[-120:],
+                    }
+            except Exception:
+                pass
+        hmm_elapsed = (dt.datetime.now(dt.timezone.utc) - hmm_t0).total_seconds()
+        signals["hmm_regime_by_ticker"] = hmm_cache
+        LOG.info("HMM regime pre-computed for %d/%d tickers in %.1fs", len(hmm_cache), len(lookup_tickers), hmm_elapsed)
+    except Exception as exc:
+        LOG.error("HMM regime pre-computation failed: %s", exc, exc_info=True)
+        _report_warnings.append("hmm_regime_precompute_failed")
+        signals["hmm_regime_by_ticker"] = {}
+
     return signals
 
 
