@@ -11,6 +11,7 @@ export interface CryptoOverlayState {
   sma50: boolean;
   sma200: boolean;
   bollinger: boolean;
+  rsiPeriod: number; // 0 = hidden, 7/14/21 = active
 }
 
 function formatPrice(price: number): string {
@@ -437,9 +438,9 @@ export function buildCandlestickChart(
     }
   }
 
-  // Compute RSI-14 time series for subplot
+  // Compute RSI time series for subplot
   const rsiValues: (number | null)[] = [];
-  const rsiPeriod = 14;
+  const rsiPeriod = overlays.rsiPeriod || 14;
   if (close.length >= rsiPeriod + 1) {
     // Seed
     const deltas = close.map((c, i) => i === 0 ? 0 : c - close[i - 1]);
@@ -463,7 +464,7 @@ export function buildCandlestickChart(
     }
   }
 
-  const hasRsi = rsiValues.some((v) => v !== null);
+  const hasRsi = rsiPeriod > 0 && rsiValues.some((v) => v !== null);
 
   if (hasRsi) {
     // RSI line
@@ -472,7 +473,7 @@ export function buildCandlestickChart(
       mode: "lines",
       x: timestamps,
       y: rsiValues,
-      name: "RSI 14",
+      name: `RSI ${rsiPeriod}`,
       line: { color: "#a855f7", width: 1.5 },
       xaxis: "x",
       yaxis: "y3",
@@ -491,9 +492,9 @@ export function buildCandlestickChart(
   const theme = getPlotlyColors();
 
   // Adjust domains for 3 panels: Price, Volume, RSI
-  const priceDomain: [number, number] = hasRsi ? [0.38, 1] : [0.28, 1];
-  const volumeDomain: [number, number] = hasRsi ? [0.20, 0.33] : [0, 0.22];
-  const rsiDomain: [number, number] = [0, 0.16];
+  const priceDomain: [number, number] = hasRsi ? [0.32, 1] : [0.28, 1];
+  const volumeDomain: [number, number] = hasRsi ? [0.17, 0.28] : [0, 0.22];
+  const rsiDomain: [number, number] = [0, 0.13];
 
   const layout: Record<string, unknown> = {
     paper_bgcolor: theme.bg,

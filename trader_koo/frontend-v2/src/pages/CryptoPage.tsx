@@ -84,6 +84,7 @@ const DEFAULT_OVERLAYS: OverlayState = {
   sma50: true,
   sma200: false,
   bollinger: false,
+  rsiPeriod: 14,
 };
 
 const EMPTY_ZOOM_STATE: PersistedZoomState = {

@@ -33,6 +33,7 @@ interface CryptoToolbarProps {
   onSelectSymbol: (symbol: string) => void;
   onSelectInterval: (interval: IntervalValue) => void;
   onToggleOverlay: (overlayKey: OverlayKey) => void;
+  onSetRsiPeriod?: (period: number) => void;
 }
 
 export default function CryptoToolbar({
