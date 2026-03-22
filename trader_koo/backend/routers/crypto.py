@@ -79,7 +79,7 @@ def crypto_prices() -> dict[str, Any]:
 def crypto_history(
     symbol: str,
     interval: str = Query("1m", description="Bar interval: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 1w"),
-    limit: int = Query(100, ge=1, le=500, description="Max bars to return"),
+    limit: int = Query(100, ge=1, le=3000, description="Max bars to return"),
 ) -> dict[str, Any]:
     """Recent OHLCV bars for a crypto symbol."""
     normalised = _normalise_symbol(symbol)

@@ -2,15 +2,15 @@ import type { RegimeContext, VixData, VixMetricsPayload } from "../../api/types"
 import Badge from "../ui/Badge";
 import Card from "../ui/Card";
 
-export const formatVixState = (value: string): string =>
-  value
+export const formatVixState = (value: string | null | undefined): string =>
+  (value ?? "unknown")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
 
 const riskReadBadgeVariant = (
-  read: string,
+  read: string | null | undefined,
 ): "green" | "red" | "amber" | "muted" => {
-  const lower = read.toLowerCase().replace(/_/g, " ");
+  const lower = (read ?? "").toLowerCase().replace(/_/g, " ");
   if (lower.includes("risk off") || lower.includes("elevated") || lower.includes("above")) {
     return "red";
   }
