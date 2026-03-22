@@ -438,8 +438,8 @@ export function buildCandlestickChart(
     }
   }
 
-  // Compute RSI time series for subplot
-  const rsiPeriod = overlays.rsiPeriod || 14;
+  // Compute RSI time series for subplot (always on, period defaults to 14)
+  const rsiPeriod = (typeof overlays.rsiPeriod === "number" && overlays.rsiPeriod > 0) ? overlays.rsiPeriod : 14;
   const rsiValues: (number | null)[] = new Array(close.length).fill(null);
   if (rsiPeriod > 0 && close.length >= rsiPeriod + 1) {
     const deltas = close.map((c, i) => i === 0 ? 0 : c - close[i - 1]);
@@ -487,10 +487,10 @@ export function buildCandlestickChart(
 
   const theme = getPlotlyColors();
 
-  // Adjust domains for 3 panels: Price, Volume, RSI
-  const priceDomain: [number, number] = hasRsi ? [0.32, 1] : [0.28, 1];
-  const volumeDomain: [number, number] = hasRsi ? [0.17, 0.28] : [0, 0.22];
-  const rsiDomain: [number, number] = [0, 0.13];
+  // Adjust domains for 3 panels: Price (top), Volume (mid), RSI (bottom)
+  const priceDomain: [number, number] = hasRsi ? [0.35, 1] : [0.28, 1];
+  const volumeDomain: [number, number] = hasRsi ? [0.20, 0.30] : [0, 0.22];
+  const rsiDomain: [number, number] = [0, 0.15];
 
   const layout: Record<string, unknown> = {
     paper_bgcolor: theme.bg,
@@ -529,7 +529,7 @@ export function buildCandlestickChart(
     },
     shapes,
     annotations,
-    height: hasRsi ? 650 : 500,
+    height: hasRsi ? 700 : 500,
   };
 
   if (hasRsi) {
