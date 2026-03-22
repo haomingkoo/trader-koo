@@ -122,6 +122,13 @@ function computeRollingBollinger(
   return { upper, middle, lower };
 }
 
+export interface CandlePatternRow {
+  date: string;
+  pattern: string;
+  bias: string;
+  confidence: number;
+}
+
 export function buildCandlestickChart(
   bars: CryptoBar[],
   symbol: string,
@@ -129,6 +136,7 @@ export function buildCandlestickChart(
   overlays: CryptoOverlayState,
   formingCandle?: FormingCandleData | null,
   uirevisionKey?: string,
+  candlestickPatterns?: CandlePatternRow[],
 ): { traces: Record<string, unknown>[]; layout: Record<string, unknown> } {
   const timestamps = bars.map((bar) => bar.timestamp);
   const open = bars.map((bar) => bar.open);
@@ -375,6 +383,46 @@ export function buildCandlestickChart(
       borderpad: 2,
       font: { color: "#38d39f", size: 9 },
     });
+  }
+
+  // Candlestick pattern markers (bullish/bearish triangles)
+  if (candlestickPatterns && candlestickPatterns.length > 0) {
+    const bullish = candlestickPatterns.filter((p) => p.bias === "bullish");
+    const bearish = candlestickPatterns.filter((p) => p.bias === "bearish");
+    if (bullish.length > 0) {
+      traces.push({
+        type: "scatter",
+        mode: "markers",
+        x: bullish.map((p) => p.date),
+        y: bullish.map((p) => {
+          const idx = timestamps.indexOf(p.date);
+          return idx >= 0 ? low[idx] * 0.997 : null;
+        }),
+        name: "Bullish Signal",
+        marker: { symbol: "triangle-up", size: 9, color: "#38d39f" },
+        hovertext: bullish.map((p) => `${p.pattern.replace(/_/g, " ")} (${(p.confidence * 100).toFixed(0)}%)`),
+        hoverinfo: "text+x",
+        xaxis: "x",
+        yaxis: "y",
+      });
+    }
+    if (bearish.length > 0) {
+      traces.push({
+        type: "scatter",
+        mode: "markers",
+        x: bearish.map((p) => p.date),
+        y: bearish.map((p) => {
+          const idx = timestamps.indexOf(p.date);
+          return idx >= 0 ? high[idx] * 1.003 : null;
+        }),
+        name: "Bearish Signal",
+        marker: { symbol: "triangle-down", size: 9, color: "#ff6b6b" },
+        hovertext: bearish.map((p) => `${p.pattern.replace(/_/g, " ")} (${(p.confidence * 100).toFixed(0)}%)`),
+        hoverinfo: "text+x",
+        xaxis: "x",
+        yaxis: "y",
+      });
+    }
   }
 
   const theme = getPlotlyColors();

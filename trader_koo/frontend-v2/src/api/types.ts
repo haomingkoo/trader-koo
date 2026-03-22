@@ -916,6 +916,13 @@ export interface CryptoSummary {
   connected: boolean;
 }
 
+export interface CryptoCandlePattern {
+  date: string;
+  pattern: string;
+  bias: string;
+  confidence: number;
+}
+
 export interface CryptoHistoryPayload {
   ok: boolean;
   symbol: string;
@@ -923,6 +930,7 @@ export interface CryptoHistoryPayload {
   count: number;
   bars: CryptoBar[];
   forming_candle?: CryptoBar | null;
+  candlestick_patterns?: CryptoCandlePattern[];
 }
 
 export interface CryptoIndicators {

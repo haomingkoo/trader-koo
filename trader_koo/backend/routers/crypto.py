@@ -85,23 +85,42 @@ def crypto_history(
     normalised = _normalise_symbol(symbol)
 
     bars = get_crypto_history(normalised, interval=interval, limit=limit)
+    bar_dicts = [
+        {
+            "timestamp": bar.timestamp.isoformat(),
+            "open": bar.open,
+            "high": bar.high,
+            "low": bar.low,
+            "close": bar.close,
+            "volume": bar.volume,
+        }
+        for bar in bars
+    ]
     payload: dict[str, Any] = {
         "ok": True,
         "symbol": normalised,
         "interval": interval,
-        "count": len(bars),
-        "bars": [
-            {
-                "timestamp": bar.timestamp.isoformat(),
-                "open": bar.open,
-                "high": bar.high,
-                "low": bar.low,
-                "close": bar.close,
-                "volume": bar.volume,
-            }
-            for bar in bars
-        ],
+        "count": len(bar_dicts),
+        "bars": bar_dicts,
     }
+
+    # Candlestick pattern detection (fast, <10ms)
+    if len(bars) >= 10 and interval not in ("1m", "5m"):
+        try:
+            import pandas as pd
+            from trader_koo.features.candle_patterns import (
+                CandlePatternConfig,
+                detect_candlestick_patterns,
+            )
+            df = pd.DataFrame([
+                {"date": b.timestamp.strftime("%Y-%m-%d %H:%M"), "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume}
+                for b in bars
+            ])
+            candle_df = detect_candlestick_patterns(df, CandlePatternConfig(lookback_bars=min(len(bars), 180), max_rows=20))
+            if not candle_df.empty:
+                payload["candlestick_patterns"] = candle_df.to_dict(orient="records")
+        except Exception:
+            LOG.debug("Candle pattern detection failed for %s [%s]", normalised, interval, exc_info=True)
 
     # Append forming candle for higher timeframes (5m+)
     try:

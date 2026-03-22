@@ -275,8 +275,9 @@ export default function CryptoPage() {
       overlays,
       effectiveFormingCandle,
       `${selectedSymbol}-${selectedInterval}`,
+      historyData?.candlestick_patterns,
     );
-  }, [effectiveBars, selectedSymbol, selectedInterval, structureData, overlays, effectiveFormingCandle]);
+  }, [effectiveBars, selectedSymbol, selectedInterval, structureData, overlays, effectiveFormingCandle, historyData?.candlestick_patterns]);
 
   const chartLayout = useMemo(() => {
     if (!chartResult) {
