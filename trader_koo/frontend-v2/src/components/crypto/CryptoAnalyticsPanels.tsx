@@ -33,9 +33,10 @@ export default function CryptoAnalyticsPanels({
 }: CryptoAnalyticsPanelsProps) {
   return (
     <>
-      {/* Indicators right below chart (RSI is now a chart subplot) */}
+      {/* Indicators below chart */}
       {indicators && (
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <RsiGauge value={indicators.rsi_14} />
           <MacdCard macd={indicators.macd} />
           <BollingerCard bollinger={indicators.bollinger} />
           <VwapSmaCard

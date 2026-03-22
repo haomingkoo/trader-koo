@@ -36,7 +36,7 @@ export default function CryptoChartPanel({
 
   if (hasChart && chartData && chartLayout) {
     return (
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-1 sm:p-2">
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-1 sm:p-2 mb-4">
         <PlotlyWrapper
           data={chartData}
           layout={chartLayout}
