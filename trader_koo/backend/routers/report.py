@@ -47,15 +47,22 @@ def public_daily_report(
         include_internal_paths=False,
         include_admin_log_hints=False,
     )
-    # Inject VIX metrics into the response
-    conn = get_conn()
-    try:
-        payload["vix_metrics"] = compute_vix_metrics(conn)
-    except Exception as exc:
-        LOG.warning("Failed to compute VIX metrics: %s", exc)
-        payload["vix_metrics"] = None
-    finally:
-        conn.close()
+    # Inject VIX metrics — prefer report cache over live computation
+    vix_cached = None
+    report_signals = (payload.get("report") or {}).get("signals") if isinstance(payload.get("report"), dict) else None
+    if isinstance(report_signals, dict):
+        vix_cached = report_signals.get("regime_context")
+    if isinstance(vix_cached, dict) and vix_cached:
+        payload["vix_metrics"] = vix_cached
+    else:
+        conn = get_conn()
+        try:
+            payload["vix_metrics"] = compute_vix_metrics(conn)
+        except Exception as exc:
+            LOG.warning("Failed to compute VIX metrics: %s", exc)
+            payload["vix_metrics"] = None
+        finally:
+            conn.close()
     return payload
 
 
@@ -150,10 +157,19 @@ def earnings_calendar(
 
 @router.get("/api/vix-metrics")
 def vix_metrics() -> dict[str, Any]:
-    """Enhanced VIX metrics for the VIX dashboard."""
+    """Enhanced VIX metrics — cached from nightly report, live fallback."""
+    # Try report cache first
+    _, report = latest_daily_report_json(REPORT_DIR)
+    if isinstance(report, dict):
+        signals = report.get("signals")
+        if isinstance(signals, dict):
+            cached = signals.get("regime_context")
+            if isinstance(cached, dict) and cached:
+                return {"ok": True, "source": "report_cache", **cached}
+    # Fallback to live computation
     conn = get_conn()
     try:
-        return {"ok": True, **compute_vix_metrics(conn)}
+        return {"ok": True, "source": "live", **compute_vix_metrics(conn)}
     except Exception as exc:
         LOG.error("Failed to compute VIX metrics: %s", exc)
         return {"ok": False, "error": "VIX metrics computation failed"}
