@@ -151,8 +151,8 @@ export function useCryptoHistory(symbol: string, interval = "1m", limit = 100) {
       apiFetch<CryptoHistoryPayload>(
         `/api/crypto/history/${symbol}?interval=${interval}&limit=${limit}`,
       ),
-    refetchInterval: 15_000,
-    staleTime: 10_000,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 }
 
