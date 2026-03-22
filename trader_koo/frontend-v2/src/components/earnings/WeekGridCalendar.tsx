@@ -9,8 +9,18 @@ import TickerLogo from "./TickerLogo";
 type SessionKey = "pre" | "tbd" | "amc";
 type RangePreset = "5d" | "7d" | "14d";
 
+interface EconomicEvent {
+  date: string;
+  event: string;
+  impact: string;
+  estimate?: number;
+  actual?: number;
+  previous?: number;
+}
+
 interface WeekGridCalendarProps {
   rows: EarningsRow[];
+  economicEvents?: EconomicEvent[];
 }
 
 interface DayBucket {
@@ -19,6 +29,7 @@ interface DayBucket {
   dayName: string;
   dateLabel: string;
   sessions: Record<SessionKey, EarningsRow[]>;
+  macroEvents: EconomicEvent[];
 }
 
 /* ── Constants ── */
@@ -278,6 +289,27 @@ function MobileDayCard({
         )}
       </div>
 
+      {/* Macro Economic Events */}
+      {day.macroEvents.length > 0 && (
+        <div className="border-t border-[var(--line)] bg-[rgba(59,130,246,0.04)]">
+          {day.macroEvents.map((evt, i) => (
+            <div key={i} className="flex items-center gap-2 px-3 py-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--accent)]">
+                {evt.impact === "high" ? "\u26a0\ufe0f" : "\ud83d\udcc5"}
+              </span>
+              <span className="text-xs font-semibold text-[var(--accent)]">
+                {evt.event}
+              </span>
+              {evt.previous != null && (
+                <span className="ml-auto text-[10px] text-[var(--muted)]">
+                  Prev: {evt.previous}{evt.actual != null ? ` | Act: ${evt.actual}` : ""}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Sessions */}
       {SESSION_ORDER.map((sk) => {
         const sessionRows = day.sessions[sk];
@@ -318,7 +350,7 @@ function MobileDayCard({
 
 /* ── Main Component ── */
 
-export default function WeekGridCalendar({ rows }: WeekGridCalendarProps) {
+export default function WeekGridCalendar({ rows, economicEvents = [] }: WeekGridCalendarProps) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [range, setRange] = useState<RangePreset>("5d");
   const todayKey = useMemo(() => getTodayKey(), []);
@@ -376,6 +408,7 @@ export default function WeekGridCalendar({ rows }: WeekGridCalendarProps) {
         dayName: DAY_NAMES[dayOfWeek] ?? "?",
         dateLabel: `${date.getMonth() + 1}/${date.getDate()}`,
         sessions: { pre: [], tbd: [], amc: [] },
+        macroEvents: [],
       });
       daysAdded++;
     }
@@ -401,8 +434,16 @@ export default function WeekGridCalendar({ rows }: WeekGridCalendarProps) {
       bucket.sessions.amc.sort(tierSort);
     }
 
+    // Merge economic events into buckets
+    for (const evt of economicEvents) {
+      const bucket = bucketMap.get(evt.date);
+      if (bucket) {
+        bucket.macroEvents.push(evt);
+      }
+    }
+
     return buckets;
-  }, [rows, weekOffset, rangeDays]);
+  }, [rows, weekOffset, rangeDays, economicEvents]);
 
   /* Group into weeks (5-day chunks) for multi-week ranges */
   const weeks = useMemo((): DayBucket[][] => {

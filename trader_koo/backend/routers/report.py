@@ -17,7 +17,7 @@ from trader_koo.backend.services.report_loader import (
     is_report_fresh,
     latest_daily_report_json,
 )
-from trader_koo.catalyst_data import build_earnings_calendar_payload
+from trader_koo.catalyst_data import build_earnings_calendar_payload, fetch_economic_calendar
 from trader_koo.scripts.generate_daily_report import (
     _build_regime_context as _report_build_regime_context,
 )
@@ -144,6 +144,17 @@ def earnings_calendar(
         payload["report_generated_ts"] = (
             (latest_report or {}).get("generated_ts") if isinstance(latest_report, dict) else None
         )
+
+        # Merge economic calendar events (CPI, PPI, FOMC, NFP, etc.)
+        try:
+            from_str = market_date.isoformat()
+            to_str = (market_date + dt.timedelta(days=days)).isoformat()
+            econ_events = fetch_economic_calendar(from_str, to_str)
+            payload["economic_events"] = econ_events
+        except Exception as exc:
+            LOG.warning("Economic calendar fetch failed: %s", exc)
+            payload["economic_events"] = []
+
         return payload
     finally:
         conn.close()

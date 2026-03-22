@@ -183,7 +183,7 @@ const earningsColumns = [
 
 export default function EarningsPage() {
   useEffect(() => {
-    document.title = "Earnings \u2014 Trader Koo";
+    document.title = "Market Calendar - Trader Koo";
   }, []);
 
   const [days, setDays] = useState(30);
@@ -226,7 +226,7 @@ export default function EarningsPage() {
       {/* ── Header ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-bold tracking-tight">
-          Earnings Calendar
+          Market Calendar
         </h2>
         <div className="flex flex-wrap items-center gap-3">
           {/* Search box */}
@@ -310,6 +310,11 @@ export default function EarningsPage() {
         {summary.high_risk > 0 && (
           <Badge variant="red">{summary.high_risk} high-risk</Badge>
         )}
+        {(data as Record<string, unknown>)?.economic_events && (
+          <Badge variant="blue">
+            {((data as Record<string, unknown>).economic_events as unknown[]).length} macro events
+          </Badge>
+        )}
         {data?.market_date && (
           <span className="ml-auto text-[10px] text-[var(--muted)]">
             Market date: {data.market_date}
@@ -323,7 +328,10 @@ export default function EarningsPage() {
 
       {/* ── Content ── */}
       {viewMode === "calendar" ? (
-        <WeekGridCalendar rows={filteredRows} />
+        <WeekGridCalendar
+          rows={filteredRows}
+          economicEvents={((data as Record<string, unknown>)?.economic_events as Array<{date: string; event: string; impact: string; estimate?: number; actual?: number; previous?: number}>) ?? []}
+        />
       ) : (
         <Table
           columns={earningsColumns}

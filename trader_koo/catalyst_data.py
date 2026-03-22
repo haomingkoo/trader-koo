@@ -364,6 +364,71 @@ def _fetch_alpha_vantage_calendar_rows(api_key: str, horizon: str) -> list[dict[
     return out
 
 
+MAJOR_ECONOMIC_EVENTS = {
+    "CPI", "Core CPI", "Consumer Price Index",
+    "PPI", "Producer Price Index",
+    "Non Farm Payrolls", "Nonfarm Payrolls", "NFP",
+    "GDP", "Gross Domestic Product",
+    "FOMC", "Fed Interest Rate Decision", "Federal Funds Rate",
+    "Unemployment Rate",
+    "Retail Sales",
+    "PCE", "Core PCE", "Personal Consumption",
+    "ISM Manufacturing", "ISM Services",
+    "Initial Jobless Claims",
+}
+
+
+def fetch_economic_calendar(
+    from_date: str,
+    to_date: str,
+    country: str = "US",
+) -> list[dict[str, Any]]:
+    """Fetch upcoming economic events from Finnhub."""
+    api_key = _finnhub_api_key()
+    if not api_key:
+        return []
+    qs = urllib.parse.urlencode({
+        "from": from_date,
+        "to": to_date,
+        "token": api_key,
+    })
+    url = f"https://finnhub.io/api/v1/calendar/economic?{qs}"
+    req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        LOG.warning("Economic calendar fetch failed: %s", exc)
+        return []
+    raw_events = data.get("economicCalendar") or []
+    out: list[dict[str, Any]] = []
+    for evt in raw_events:
+        if str(evt.get("country") or "").upper() != country.upper():
+            continue
+        event_name = str(evt.get("event") or "").strip()
+        if not event_name:
+            continue
+        # Filter to major events only
+        is_major = any(kw.lower() in event_name.lower() for kw in MAJOR_ECONOMIC_EVENTS)
+        impact = str(evt.get("impact") or "").lower()
+        if not is_major and impact != "high":
+            continue
+        out.append({
+            "date": str(evt.get("time") or "")[:10],
+            "time": str(evt.get("time") or ""),
+            "event": event_name,
+            "country": country,
+            "impact": impact or "medium",
+            "estimate": evt.get("estimate"),
+            "actual": evt.get("actual"),
+            "previous": evt.get("prev"),
+            "unit": evt.get("unit"),
+            "type": "economic",
+        })
+    LOG.info("Economic calendar: %d major US events from %s to %s", len(out), from_date, to_date)
+    return out
+
+
 def _finnhub_api_key() -> str:
     return str(os.getenv("FINNHUB_API_KEY", "")).strip()
 

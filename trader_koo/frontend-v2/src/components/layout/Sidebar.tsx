@@ -32,7 +32,7 @@ const navItems: NavItem[] = [
   // Analysis
   { to: "/chart", label: "Chart", Icon: TrendingUp },
   { to: "/vix", label: "VIX Analysis", Icon: Thermometer },
-  { to: "/earnings", label: "Earnings", Icon: Calendar },
+  { to: "/earnings", label: "Calendar", Icon: Calendar },
   { to: "/opportunities", label: "Opportunities", Icon: Search },
   // Markets
   { to: "/crypto", label: "Crypto", Icon: Bitcoin },
