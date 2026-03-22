@@ -29,10 +29,13 @@ export function StructureCard({
   const regime = structure.hmm_regime;
   const regimeLabel = regime?.current_state?.replaceAll("_", " ") ?? "unavailable";
   const transitionRisk = regime?.transition_risk_pct ?? null;
+  const directional = (structure as Record<string, unknown>).hmm_directional as { current_state?: string; days_in_current?: number; transition_risk_pct?: number } | null | undefined;
+  const dirLabel = directional?.current_state?.replaceAll("_", " ") ?? null;
+  const dirColors: Record<string, string> = { bullish: "var(--green)", bearish: "var(--red)", chop: "#a855f7" };
 
   return (
     <GlassCard label="Structure Engine">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <div>
           <div className="label-xs">
             Level Context
@@ -77,6 +80,19 @@ export function StructureCard({
             {regime?.days_in_current != null
               ? `${regime.days_in_current} bars${transitionRisk != null ? ` · ${transitionRisk.toFixed(1)}% shift risk` : ""}`
               : "Insufficient bars for stable regime fit"}
+          </div>
+        </div>
+        <div>
+          <div className="label-xs">
+            Direction
+          </div>
+          <div className="mt-1 text-lg font-bold" style={{ color: dirLabel ? (dirColors[directional?.current_state ?? ""] ?? "var(--text)") : "var(--muted)" }}>
+            {dirLabel ? formatLevelContext(dirLabel) : "Computing..."}
+          </div>
+          <div className="mt-1 text-[11px] text-[var(--muted)]">
+            {directional?.days_in_current != null
+              ? `${directional.days_in_current} bars${directional.transition_risk_pct != null ? ` · ${directional.transition_risk_pct.toFixed(1)}% shift risk` : ""}`
+              : "Directional HMM"}
           </div>
         </div>
       </div>

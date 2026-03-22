@@ -413,16 +413,7 @@ export default function CryptoPage() {
         }}
       />
 
-      <CryptoAnalyticsPanels
-        structure={structureData}
-        btcSpyCorrelation={btcSpyCorrelation}
-        btcGoldCorrelation={btcGoldCorrelation}
-        btcDxyCorrelation={btcDxyCorrelation}
-        cryptoMarketStructure={cryptoMarketStructure}
-        indicators={indicators}
-      />
-
-      {/* Open Interest Panel */}
+      {/* Open Interest - right after chart */}
       {openInterestData && openInterestData.oi_bars.length > 0 && (() => {
         const oiTheme = getPlotlyColors();
         return (
@@ -447,7 +438,7 @@ export default function CryptoPage() {
                 )}
               </div>
             </div>
-            <div className="h-[180px]">
+            <div className="h-[140px]">
               <PlotlyWrapper
                 data={[
                   {
@@ -465,22 +456,31 @@ export default function CryptoPage() {
                   paper_bgcolor: oiTheme.bg,
                   plot_bgcolor: oiTheme.bg,
                   font: { color: oiTheme.font, size: 10 },
-                  margin: { t: 10, r: 10, b: 30, l: 60 },
+                  margin: { t: 5, r: 10, b: 25, l: 60 },
                   xaxis: { gridcolor: oiTheme.grid },
                   yaxis: {
                     gridcolor: oiTheme.grid,
                     title: { text: "OI Value (USD)", font: { size: 10 } },
                   },
                   showlegend: false,
-                  height: 180,
+                  height: 140,
                 }}
                 config={{ responsive: true, displayModeBar: false }}
-                style={{ width: "100%", height: 180 }}
+                style={{ width: "100%", height: 140 }}
               />
             </div>
           </div>
         );
       })()}
+
+      <CryptoAnalyticsPanels
+        structure={structureData}
+        btcSpyCorrelation={btcSpyCorrelation}
+        btcGoldCorrelation={btcGoldCorrelation}
+        btcDxyCorrelation={btcDxyCorrelation}
+        cryptoMarketStructure={cryptoMarketStructure}
+        indicators={indicators}
+      />
 
       {/* Info footer */}
       <div className="text-xs text-[var(--muted)]">
