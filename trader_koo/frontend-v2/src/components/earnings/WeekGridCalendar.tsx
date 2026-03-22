@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { EarningsRow } from "../../api/types";
 import Badge from "../ui/Badge";
@@ -322,6 +322,34 @@ export default function WeekGridCalendar({ rows }: WeekGridCalendarProps) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [range, setRange] = useState<RangePreset>("5d");
   const todayKey = useMemo(() => getTodayKey(), []);
+  const autoAdvanced = useRef(false);
+
+  // Auto-advance to next week with events if current week is empty
+  useEffect(() => {
+    if (autoAdvanced.current || weekOffset !== 0 || rows.length === 0) return;
+    const thisMonday = getMonday(new Date());
+    const thisFriday = new Date(thisMonday);
+    thisFriday.setDate(thisMonday.getDate() + 4);
+    const thisWeekEnd = toDateKey(thisFriday);
+    const thisWeekStart = toDateKey(thisMonday);
+    const hasThisWeek = rows.some((r) => r.earnings_date >= thisWeekStart && r.earnings_date <= thisWeekEnd);
+    if (!hasThisWeek) {
+      // Find the earliest future event and jump to its week
+      const future = rows
+        .filter((r) => r.earnings_date > thisWeekEnd)
+        .sort((a, b) => a.earnings_date.localeCompare(b.earnings_date));
+      if (future.length > 0) {
+        const targetDate = new Date(future[0].earnings_date + "T00:00:00");
+        const targetMonday = getMonday(targetDate);
+        const diffMs = targetMonday.getTime() - thisMonday.getTime();
+        const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+        if (diffWeeks > 0) {
+          setWeekOffset(diffWeeks);
+          autoAdvanced.current = true;
+        }
+      }
+    }
+  }, [rows, weekOffset]);
 
   const rangeDays = RANGE_OPTIONS.find((o) => o.value === range)?.days ?? 5;
 
