@@ -207,10 +207,14 @@ def crypto_summary() -> dict[str, Any]:
 
 
 @router.get("/api/crypto/indicators/{symbol}")
-def crypto_indicators(symbol: str) -> dict[str, Any]:
-    """Technical indicators computed from buffered 1-min bars."""
+def crypto_indicators(
+    symbol: str,
+    interval: str = Query("1m", description="Interval for indicator computation"),
+) -> dict[str, Any]:
+    """Technical indicators computed from bars at the requested interval."""
     normalised = _normalise_symbol(symbol)
-    bars = get_crypto_history(normalised, interval="1m", limit=1440)
+    limit = {"1m": 1440, "5m": 500, "15m": 300, "30m": 200, "1h": 200, "4h": 200, "12h": 150, "1d": 100, "1w": 60}.get(interval, 200)
+    bars = get_crypto_history(normalised, interval=interval, limit=limit)
     if not bars:
         LOG.info("No bars available for indicators: %s", normalised)
         return {

@@ -204,7 +204,7 @@ export default function CryptoPage() {
   }, []);
 
   const { data: summary } = useCryptoSummary();
-  const { data: indicatorsData } = useCryptoIndicators(selectedSymbol);
+  const { data: indicatorsData } = useCryptoIndicators(selectedSymbol, selectedInterval);
 
   const interval =
     INTERVALS.find((item) => item.value === selectedInterval) ?? INTERVALS[1];

@@ -156,11 +156,11 @@ export function useCryptoHistory(symbol: string, interval = "1m", limit = 100) {
   });
 }
 
-export function useCryptoIndicators(symbol: string) {
+export function useCryptoIndicators(symbol: string, interval: string = "1m") {
   return useQuery({
-    queryKey: ["crypto-indicators", symbol],
+    queryKey: ["crypto-indicators", symbol, interval],
     queryFn: () =>
-      apiFetch<CryptoIndicatorsPayload>(`/api/crypto/indicators/${symbol}`),
+      apiFetch<CryptoIndicatorsPayload>(`/api/crypto/indicators/${symbol}?interval=${interval}`),
     refetchInterval: 15_000,
     staleTime: 10_000,
   });
