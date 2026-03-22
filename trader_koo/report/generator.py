@@ -1017,6 +1017,21 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         _report_warnings.append("hmm_regime_precompute_failed")
         signals["hmm_regime_by_ticker"] = {}
 
+    # ── Pre-fetch FRED economic calendar (90 days forward) ────────────────
+    try:
+        from trader_koo.catalyst_data import fetch_economic_calendar
+        today = dt.datetime.now(dt.timezone.utc).date()
+        econ_events = fetch_economic_calendar(
+            today.isoformat(),
+            (today + dt.timedelta(days=90)).isoformat(),
+        )
+        signals["economic_events"] = econ_events
+        LOG.info("Economic calendar cached: %d events over 90 days", len(econ_events))
+    except Exception as exc:
+        LOG.error("Economic calendar pre-fetch failed: %s", exc)
+        _report_warnings.append("economic_calendar_prefetch_failed")
+        signals["economic_events"] = []
+
     return signals
 
 

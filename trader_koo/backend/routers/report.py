@@ -145,15 +145,29 @@ def earnings_calendar(
             (latest_report or {}).get("generated_ts") if isinstance(latest_report, dict) else None
         )
 
-        # Merge economic calendar events (CPI, PPI, FOMC, NFP, etc.)
-        try:
-            from_str = market_date.isoformat()
-            to_str = (market_date + dt.timedelta(days=days)).isoformat()
-            econ_events = fetch_economic_calendar(from_str, to_str)
-            payload["economic_events"] = econ_events
-        except Exception as exc:
-            LOG.warning("Economic calendar fetch failed: %s", exc)
-            payload["economic_events"] = []
+        # Economic events - use cached from nightly report, fall back to live FRED
+        econ_cached = None
+        if isinstance(latest_report, dict):
+            signals = (latest_report.get("signals") or {})
+            if isinstance(signals, dict):
+                econ_cached = signals.get("economic_events")
+        if isinstance(econ_cached, list) and econ_cached:
+            # Filter to requested date window
+            to_date = (market_date + dt.timedelta(days=days)).isoformat()
+            payload["economic_events"] = [
+                e for e in econ_cached
+                if str(e.get("date", "")) >= market_date.isoformat()
+                and str(e.get("date", "")) <= to_date
+            ]
+        else:
+            try:
+                from_str = market_date.isoformat()
+                to_str = (market_date + dt.timedelta(days=days)).isoformat()
+                econ_events = fetch_economic_calendar(from_str, to_str)
+                payload["economic_events"] = econ_events
+            except Exception as exc:
+                LOG.warning("Economic calendar fetch failed: %s", exc)
+                payload["economic_events"] = []
 
         return payload
     finally:
