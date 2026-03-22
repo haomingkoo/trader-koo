@@ -419,10 +419,10 @@ def predict_directional_regimes(
         if (time.monotonic() - cached_ts) < _CACHE_TTL_SEC:
             LOG.debug("Directional HMM: using cached model for %s", cache_key)
         else:
-            model, scaler, state_order = _fit_hmm(feature_matrix, n_states=3)
+            model, scaler, state_order = fit_hmm(feature_matrix, n_states=3)
             _DIR_MODEL_CACHE[cache_key] = (model, scaler, state_order, time.monotonic())
     else:
-        model, scaler, state_order = _fit_hmm(feature_matrix, n_states=3)
+        model, scaler, state_order = fit_hmm(feature_matrix, n_states=3)
         state_order = _sort_states_by_momentum(model, momentum_feature_idx=0)
         _DIR_MODEL_CACHE[cache_key] = (model, scaler, state_order, time.monotonic())
 
