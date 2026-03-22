@@ -1,7 +1,10 @@
 """Crypto structure analysis: levels, trendlines, and intraday regime context."""
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+LOG = logging.getLogger("trader_koo.crypto.structure")
 
 import numpy as np
 import pandas as pd
