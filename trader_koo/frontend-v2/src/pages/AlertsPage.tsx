@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Bell, TrendingUp, BarChart3, Bitcoin } from "lucide-react";
 import { useAlerts } from "../api/hooks";
 import Badge from "../components/ui/Badge";
@@ -42,28 +43,63 @@ function AlertCard({ alert }: { alert: AlertItem }) {
         ? "border-l-[var(--amber)]"
         : "border-l-[var(--line)]";
 
+  const hasLink = alert.external_url || alert.internal_path;
+
+  const content = (
+    <div className="flex items-start gap-3">
+      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--panel-hover)]">
+        <Icon size={16} className="text-[var(--accent)]" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <h3 className="truncate text-sm font-semibold text-[var(--text)]">
+            {alert.title}
+          </h3>
+          <Badge variant={severityVariant}>{alert.severity}</Badge>
+        </div>
+        <p className="mt-1 text-xs text-[var(--muted)]">{alert.message}</p>
+        <div className="mt-1.5 flex items-center gap-2">
+          <span className="text-[10px] text-[var(--muted)]">
+            {alert.time_ago} &middot;{" "}
+            {new Date(alert.timestamp).toLocaleString()}
+          </span>
+          {alert.external_url && (
+            <a
+              href={alert.external_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-[10px] font-medium text-[var(--accent)] hover:underline"
+            >
+              Polymarket &rarr;
+            </a>
+          )}
+          {alert.internal_path && (
+            <span className="text-[10px] font-medium text-[var(--accent)]">
+              View &rarr;
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  if (alert.internal_path) {
+    return (
+      <Link
+        to={alert.internal_path}
+        className={`block rounded-lg border border-[var(--line)] border-l-4 ${borderColor} bg-[var(--panel)] p-4 transition-colors hover:bg-[var(--panel-hover)] ${hasLink ? "cursor-pointer" : ""}`}
+      >
+        {content}
+      </Link>
+    );
+  }
+
   return (
     <div
       className={`rounded-lg border border-[var(--line)] border-l-4 ${borderColor} bg-[var(--panel)] p-4 transition-colors hover:bg-[var(--panel-hover)]`}
     >
-      <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--panel-hover)]">
-          <Icon size={16} className="text-[var(--accent)]" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h3 className="truncate text-sm font-semibold text-[var(--text)]">
-              {alert.title}
-            </h3>
-            <Badge variant={severityVariant}>{alert.severity}</Badge>
-          </div>
-          <p className="mt-1 text-xs text-[var(--muted)]">{alert.message}</p>
-          <p className="mt-1.5 text-[10px] text-[var(--muted)]">
-            {alert.time_ago} &middot;{" "}
-            {new Date(alert.timestamp).toLocaleString()}
-          </p>
-        </div>
-      </div>
+      {content}
     </div>
   );
 }

@@ -153,6 +153,7 @@ def _fetch_market_spikes(
                 microsecond=0,
             ).isoformat()
 
+            event_slug = spike.get("event_slug", "")
             alerts.append({
                 "id": f"poly-{i}",
                 "type": "market_spike",
@@ -164,6 +165,8 @@ def _fetch_market_spikes(
                 "severity": severity,
                 "timestamp": now_iso,
                 "time_ago": "recent",
+                "external_url": f"https://polymarket.com/event/{event_slug}" if event_slug else None,
+                "internal_path": "/pred-markets",
             })
         return alerts
     except Exception as exc:
@@ -203,6 +206,7 @@ def _fetch_crypto_spikes(
                 "severity": severity,
                 "timestamp": now_iso,
                 "time_ago": "recent",
+                "internal_path": "/crypto",
             })
         return alerts
     except Exception as exc:

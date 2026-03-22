@@ -1288,6 +1288,8 @@ export interface AlertItem {
   timestamp: string;
   time_ago: string;
   read: boolean;
+  external_url?: string | null;
+  internal_path?: string | null;
 }
 
 export interface AlertsPayload {
