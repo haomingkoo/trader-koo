@@ -833,9 +833,9 @@ export function buildChartData(
   });
 
   const yoloColorMap: Record<string, { stroke: string; fill: string }> = {
-    bull: { stroke: "#38d39f", fill: "rgba(56,211,159,0.07)" },
-    bear: { stroke: "#ff6b6b", fill: "rgba(255,107,107,0.07)" },
-    neutral: { stroke: "#f8c24e", fill: "rgba(248,194,78,0.07)" },
+    bull: { stroke: "rgba(56,211,159,0.5)", fill: "rgba(56,211,159,0.03)" },
+    bear: { stroke: "rgba(255,107,107,0.5)", fill: "rgba(255,107,107,0.03)" },
+    neutral: { stroke: "rgba(248,194,78,0.5)", fill: "rgba(248,194,78,0.03)" },
   };
 
   const yoloStyle = (name: string) => {
@@ -945,29 +945,9 @@ export function buildChartData(
 
   if (showHmm) {
     const regimes = hmmRegime.regimes;
-
-    let spanStart = 0;
-    for (let i = 1; i <= regimes.length; i += 1) {
-      if (i === regimes.length || regimes[i].label !== regimes[spanStart].label) {
-        const startDate = regimes[spanStart].date;
-        const endDate = regimes[i - 1].date;
-        const color = regimes[spanStart].color;
-        shapes.push({
-          type: "rect",
-          xref: "x",
-          yref: "paper",
-          x0: startDate,
-          x1: endDate,
-          y0: 0,
-          y1: 1,
-          fillcolor: color.replace(")", ",0.08)").replace("rgb", "rgba").startsWith("rgba")
-            ? color.replace(")", ",0.08)").replace("rgb", "rgba")
-            : `${color}14`,
-          line: { width: 0 },
-        });
-        spanStart = i;
-      }
-    }
+    // HMM regime is shown via the stacked area chart in the y3 panel
+    // and the badge in the commentary sidebar — no background rectangles
+    // needed in the price chart (they add too much visual noise).
 
     const regimeDates = regimes.map((r) => r.date);
     const probLow = regimes.map((r) => r.prob_low);

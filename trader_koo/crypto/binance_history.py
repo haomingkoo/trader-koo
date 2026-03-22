@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from typing import Final
 
 import requests
@@ -14,6 +15,8 @@ LOG = logging.getLogger("trader_koo.crypto.binance_history")
 BINANCE_REST_URL: Final[str] = "https://api.binance.com/api/v3/klines"
 REQUEST_TIMEOUT_SEC: Final[float] = 8.0
 MAX_LIMIT_PER_CALL: Final[int] = 1000
+MAX_RETRIES: Final[int] = 3
+RETRY_BACKOFF_BASE_SEC: Final[float] = 2.0
 SUPPORTED_INTERVALS: Final[set[str]] = {
     "1m",
     "5m",
@@ -69,21 +72,31 @@ def fetch_recent_klines(
         if end_time_ms is not None:
             params["endTime"] = end_time_ms
 
-        try:
-            response = requests.get(
-                BINANCE_REST_URL,
-                params=params,
-                timeout=REQUEST_TIMEOUT_SEC,
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:
-            LOG.warning(
-                "Binance REST history fetch failed for %s %s: %s",
-                symbol,
-                normalised_interval,
-                exc,
-            )
+        payload = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = requests.get(
+                    BINANCE_REST_URL,
+                    params=params,
+                    timeout=REQUEST_TIMEOUT_SEC,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                break
+            except Exception as exc:
+                if attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BACKOFF_BASE_SEC * (2 ** attempt)
+                    LOG.warning(
+                        "Binance REST attempt %d/%d failed for %s %s: %s — retrying in %.1fs",
+                        attempt + 1, MAX_RETRIES, symbol, normalised_interval, exc, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    LOG.warning(
+                        "Binance REST fetch failed for %s %s after %d attempts: %s",
+                        symbol, normalised_interval, MAX_RETRIES, exc,
+                    )
+        if payload is None:
             break
 
         if not isinstance(payload, list) or not payload:

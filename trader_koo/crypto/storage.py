@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import sqlite3
+from typing import Any
 
 from trader_koo.crypto.models import CryptoBar
 
@@ -147,3 +148,26 @@ def prune_old_bars(
             retention_days,
         )
     return deleted
+
+
+def get_crypto_data_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Return row counts and freshness per symbol/interval."""
+    rows = conn.execute(
+        """
+        SELECT symbol, interval, COUNT(*) AS row_count,
+               MAX(timestamp) AS latest_ts, MIN(timestamp) AS oldest_ts
+        FROM crypto_bars
+        GROUP BY symbol, interval
+        ORDER BY symbol, interval
+        """
+    ).fetchall()
+    return [
+        {
+            "symbol": row[0],
+            "interval": row[1],
+            "row_count": row[2],
+            "latest_ts": row[3],
+            "oldest_ts": row[4],
+        }
+        for row in rows
+    ]

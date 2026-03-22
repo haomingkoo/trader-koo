@@ -461,23 +461,61 @@ def _on_ws_gap_detected(disconnect_ts: dt.datetime, reconnect_ts: dt.datetime) -
     LOG.info("Gap-fill complete for %d-minute window", gap_minutes)
 
 
+_WARM_BACKFILL_MAX_RETRIES = 3
+_WARM_BACKFILL_RETRY_DELAY_SEC = 10.0
+
+
+def _notify_backfill_failure(failed_pairs: list[tuple[str, str]]) -> None:
+    """Send Telegram alert when warm backfill fails after all retries."""
+    try:
+        from trader_koo.notifications.telegram import send_message, is_configured
+        if not is_configured():
+            return
+        pairs_str = ", ".join(f"{s} [{i}]" for s, i in failed_pairs[:10])
+        text = (
+            "\u26a0\ufe0f *Crypto Backfill Failed*\n\n"
+            f"Warm backfill failed for {len(failed_pairs)} symbol/interval pair(s) "
+            f"after {_WARM_BACKFILL_MAX_RETRIES} retries each.\n\n"
+            f"Failed: {pairs_str}\n\n"
+            "Crypto charts may show incomplete data. "
+            "Use `POST /api/admin/crypto/backfill` to retry manually."
+        )
+        send_message(text)
+    except Exception as exc:
+        LOG.warning("Failed to send backfill failure notification: %s", exc)
+
+
 def _warm_backfill_history() -> None:
     if _db_path_str is None:
         return
+    failed_pairs: list[tuple[str, str]] = []
     for symbol in SYMBOL_MAP.values():
         for interval, target_limit in (("1h", 2160), ("4h", 1440), ("12h", 1095), ("1d", 1825), ("1w", 260)):
             existing = _load_recent_bars_from_db(symbol, limit=target_limit, interval=interval)
             if len(existing) >= target_limit:
                 continue
-            try:
-                _backfill_history(symbol, interval, target_limit)
-            except Exception as exc:
-                LOG.debug(
-                    "Warm crypto backfill skipped for %s [%s]: %s",
-                    symbol,
-                    interval,
-                    exc,
-                )
+            success = False
+            for attempt in range(_WARM_BACKFILL_MAX_RETRIES):
+                try:
+                    result = _backfill_history(symbol, interval, target_limit)
+                    if result:
+                        success = True
+                        break
+                except Exception as exc:
+                    LOG.warning(
+                        "Warm backfill attempt %d/%d failed for %s [%s]: %s",
+                        attempt + 1, _WARM_BACKFILL_MAX_RETRIES, symbol, interval, exc,
+                    )
+                if attempt < _WARM_BACKFILL_MAX_RETRIES - 1:
+                    import time
+                    time.sleep(_WARM_BACKFILL_RETRY_DELAY_SEC * (attempt + 1))
+            if not success:
+                failed_pairs.append((symbol, interval))
+    if failed_pairs:
+        LOG.warning("Warm backfill failed for %d pairs: %s", len(failed_pairs), failed_pairs)
+        _notify_backfill_failure(failed_pairs)
+    else:
+        LOG.info("Warm backfill completed successfully for all symbols/intervals")
 
 
 def _merge_bars(primary: list[CryptoBar], secondary: list[CryptoBar]) -> list[CryptoBar]:
