@@ -443,7 +443,7 @@ def mark_to_market(
 
         price_row = conn.execute(
             "SELECT CAST(close AS REAL), date, "
-            "CAST(high AS REAL), CAST(low AS REAL) "
+            "CAST(high AS REAL), CAST(low AS REAL), CAST(open AS REAL) "
             "FROM price_daily "
             "WHERE ticker = ? ORDER BY date DESC LIMIT 1",
             (ticker,),
@@ -456,29 +456,48 @@ def mark_to_market(
         price_date = price_row[1]
         day_high = float(price_row[2]) if price_row[2] is not None else current_price
         day_low = float(price_row[3]) if price_row[3] is not None else current_price
+        day_open = float(price_row[4]) if price_row[4] is not None else current_price
         unrealized = round(compute_pnl(direction, entry_price, current_price), 2)
         # Track HWM/LWM using intraday extremes for realistic trailing stops
         new_hwm = max(high_water_mark or day_high, day_high)
         new_lwm = min(low_water_mark or day_low, day_low)
 
-        # Use intraday high/low to check stops/targets (not just close)
+        # --- Stop / target detection using OHLC ---
+        # Priority 1: Check if OPEN itself breaches stop or target (no ambiguity)
+        # Priority 2: Check intraday high/low
+        # Priority 3: If both stop AND target hit intraday, assume stop first (conservative)
         hit_stop = False
-        if stop_loss is not None:
-            if direction == "long" and day_low <= stop_loss:
-                hit_stop = True
-                current_price = stop_loss  # fill at stop level
-            elif direction == "short" and day_high >= stop_loss:
-                hit_stop = True
-                current_price = stop_loss  # fill at stop level
-
         hit_target = False
-        if not hit_stop and target_price is not None:
-            if direction == "long" and day_high >= target_price:
-                hit_target = True
-                current_price = target_price  # fill at target level
-            elif direction == "short" and day_low <= target_price:
-                hit_target = True
-                current_price = target_price  # fill at target level
+
+        if direction == "long":
+            open_hits_stop = stop_loss is not None and day_open <= stop_loss
+            open_hits_target = target_price is not None and day_open >= target_price
+            intraday_hits_stop = stop_loss is not None and day_low <= stop_loss
+            intraday_hits_target = target_price is not None and day_high >= target_price
+        else:  # short
+            open_hits_stop = stop_loss is not None and day_open >= stop_loss
+            open_hits_target = target_price is not None and day_open <= target_price
+            intraday_hits_stop = stop_loss is not None and day_high >= stop_loss
+            intraday_hits_target = target_price is not None and day_low <= target_price
+
+        if open_hits_stop:
+            # Open gapped through stop - no ambiguity
+            hit_stop = True
+            current_price = stop_loss
+        elif open_hits_target:
+            # Open gapped through target - no ambiguity, take profit
+            hit_target = True
+            current_price = target_price
+        elif intraday_hits_stop and intraday_hits_target:
+            # Both hit intraday - conservative: assume stop hit first
+            hit_stop = True
+            current_price = stop_loss
+        elif intraday_hits_stop:
+            hit_stop = True
+            current_price = stop_loss
+        elif intraday_hits_target:
+            hit_target = True
+            current_price = target_price
 
         expired = False
         try:
