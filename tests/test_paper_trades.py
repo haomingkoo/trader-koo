@@ -46,10 +46,16 @@ def _seed_price(
     date: str = "2026-03-14",
     high: float | None = None,
     low: float | None = None,
+    open_: float | None = None,
 ) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO price_daily (ticker, date, close, high, low) VALUES (?, ?, ?, ?, ?)",
-        (ticker, date, close, high if high is not None else close, low if low is not None else close),
+        "INSERT OR REPLACE INTO price_daily (ticker, date, close, high, low, open) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            ticker, date, close,
+            high if high is not None else close,
+            low if low is not None else close,
+            open_ if open_ is not None else close,
+        ),
     )
     conn.commit()
 
@@ -441,9 +447,9 @@ class TestMarkToMarket:
 
     def test_intraday_high_triggers_short_stop(self, conn):
         """Short stop should trigger on intraday high."""
-        self._insert_open_trade(conn, "AAPL", 100.0, direction="short", stop_loss=105.0)
-        # Close is below stop, but intraday high breached it
-        _seed_price(conn, "AAPL", 102.0, high=106.0, low=99.0)
+        self._insert_open_trade(conn, "AAPL", 100.0, direction="short", stop_loss=105.0, target_price=90.0)
+        # Close is below stop, but intraday high breached it. Open is safe (101).
+        _seed_price(conn, "AAPL", 102.0, high=106.0, low=99.0, open_=101.0)
 
         result = mark_to_market(conn)
         conn.commit()
@@ -470,6 +476,54 @@ class TestMarkToMarket:
         ).fetchone()
         assert trade[0] == "target_hit"
         assert trade[1] == 90.0  # filled at target level
+
+    def test_open_gaps_through_target_takes_profit(self, conn):
+        """If open itself is past the target, take profit with no ambiguity."""
+        self._insert_open_trade(conn, "AAPL", 100.0, direction="short", target_price=90.0, stop_loss=105.0)
+        # Open gaps below target - guaranteed profit
+        _seed_price(conn, "AAPL", 92.0, high=93.0, low=87.0, open_=88.0)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "target_hit"
+        assert trade[1] == 90.0  # filled at target level
+
+    def test_open_gaps_through_stop_gets_stopped(self, conn):
+        """If open itself is past the stop, stopped out with no ambiguity."""
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0)
+        # Open gaps below stop - guaranteed stop
+        _seed_price(conn, "AAPL", 96.0, high=97.0, low=91.0, open_=93.0)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "stopped_out"
+        assert trade[1] == 95.0  # filled at stop level
+
+    def test_both_stop_and_target_hit_intraday_takes_stop(self, conn):
+        """If both stop and target hit intraday (not at open), conservative: assume stop."""
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0, target_price=110.0)
+        # Open is safe, but both extremes breach stop and target
+        _seed_price(conn, "AAPL", 102.0, high=112.0, low=93.0, open_=100.0)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "stopped_out"
+        assert trade[1] == 95.0  # conservative: assume stop hit first
 
     def test_triggers_target_hit(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, target_price=110.0)
