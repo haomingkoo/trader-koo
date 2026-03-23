@@ -37,11 +37,11 @@ class PaperTradeConfig:
     ml_min_win_prob: float = 0.55
     max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
     max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this
-    # Realism costs
-    entry_slippage_bps: float = 5.0  # 5 bps entry slippage (0.05%)
-    exit_slippage_bps: float = 5.0  # 5 bps exit slippage (0.05%)
-    commission_per_trade: float = 1.0  # $1 per side (entry + exit = $2 round trip)
-    short_borrow_annual_pct: float = 1.5  # 1.5% annualized borrow cost for shorts
+    # Realism costs (conservative defaults — better to overestimate than underestimate)
+    entry_slippage_bps: float = 10.0  # 10 bps entry slippage (0.10%)
+    exit_slippage_bps: float = 10.0  # 10 bps exit slippage on stop-market orders
+    commission_per_trade: float = 5.0  # $5 per side (IBKR-like for typical position)
+    short_borrow_annual_pct: float = 3.0  # 3% annualized (conservative avg across S&P 500)
     max_adv_pct: float = 15.0  # max 15% of average daily volume per position
 
 

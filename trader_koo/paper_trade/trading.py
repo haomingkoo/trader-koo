@@ -112,7 +112,7 @@ def _close_trade(
     notional = starting_capital * (pos_pct / 100)
     commission_cost_pct = (config.commission_per_trade * 2 / notional) * 100 if notional > 0 else 0
 
-    # 2. Short borrow cost (annualized, pro-rated to holding days)
+    # 2. Short borrow cost (annualized, pro-rated to TRADING days held)
     borrow_cost_pct = 0.0
     if direction == "short":
         entry_date_row = conn.execute(
@@ -120,11 +120,20 @@ def _close_trade(
         ).fetchone()
         if entry_date_row and entry_date_row[0]:
             try:
-                days_held = (
-                    dt.datetime.strptime(exit_date, "%Y-%m-%d")
-                    - dt.datetime.strptime(entry_date_row[0], "%Y-%m-%d")
-                ).days
-                borrow_cost_pct = config.short_borrow_annual_pct * days_held / 365
+                # Count actual trading days (rows in price_daily) between entry and exit
+                trading_days_row = conn.execute(
+                    "SELECT COUNT(*) FROM price_daily "
+                    "WHERE ticker = 'SPY' AND date > ? AND date <= ?",
+                    (entry_date_row[0], exit_date),
+                ).fetchone()
+                trading_days = int(trading_days_row[0]) if trading_days_row and trading_days_row[0] else 0
+                if trading_days == 0:
+                    # Fallback: calendar days if no SPY data
+                    trading_days = max(1, (
+                        dt.datetime.strptime(exit_date, "%Y-%m-%d")
+                        - dt.datetime.strptime(entry_date_row[0], "%Y-%m-%d")
+                    ).days)
+                borrow_cost_pct = config.short_borrow_annual_pct * trading_days / 252
             except (ValueError, TypeError):
                 pass
 
@@ -247,21 +256,41 @@ def create_paper_trades_from_report(
             continue
 
         direction = str(evaluation["direction"])
-        raw_close = float(row["close"])
-        # Apply entry slippage: longs pay more, shorts receive less
+
+        # Entry price = NEXT DAY OPEN (signal generates after close,
+        # earliest possible entry is next trading day's open).
+        # Fall back to today's close if next-day open not yet available.
+        next_open_row = conn.execute(
+            "SELECT CAST(open AS REAL), date FROM price_daily "
+            "WHERE ticker = ? AND date > ? ORDER BY date ASC LIMIT 1",
+            (ticker, report_date),
+        ).fetchone()
+        if next_open_row and next_open_row[0] is not None:
+            raw_entry = float(next_open_row[0])
+            entry_date_actual = next_open_row[1]
+        else:
+            # Next day data not available yet (live trading edge);
+            # use today's close as best estimate
+            raw_entry = float(row["close"])
+            entry_date_actual = report_date
+
+        # Apply entry slippage on top of open price
         slip_mult = config.entry_slippage_bps / 10_000
         if direction == "long":
-            entry_price = round(raw_close * (1 + slip_mult), 4)
+            entry_price = round(raw_entry * (1 + slip_mult), 4)
         else:
-            entry_price = round(raw_close * (1 - slip_mult), 4)
+            entry_price = round(raw_entry * (1 - slip_mult), 4)
         levels = compute_stop_and_target(row, direction, config=config)
         plan = compute_position_plan(row, evaluation, levels, config=config)
 
         # ADV liquidity check: reject if position > max_adv_pct of daily volume
         try:
             vol_row = conn.execute(
-                "SELECT AVG(CAST(volume AS REAL)) FROM price_daily "
-                "WHERE ticker = ? ORDER BY date DESC LIMIT 20",
+                "SELECT AVG(vol) FROM ("
+                "  SELECT CAST(volume AS REAL) AS vol FROM price_daily"
+                "  WHERE ticker = ? AND volume IS NOT NULL"
+                "  ORDER BY date DESC LIMIT 20"
+                ")",
                 (ticker,),
             ).fetchone()
             if vol_row and vol_row[0] and vol_row[0] > 0:
@@ -410,7 +439,7 @@ def create_paper_trades_from_report(
                 ticker,
                 direction,
                 entry_price,
-                report_date,
+                entry_date_actual,
                 levels["target_price"],
                 levels["stop_loss"],
                 levels["atr_at_entry"],
