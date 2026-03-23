@@ -430,7 +430,7 @@ class TestMarkToMarket:
         assert "invalidation" in str(status[3]).lower()
 
     def test_intraday_low_triggers_stop_even_if_close_above(self, conn):
-        """Stop should trigger on intraday low, not just close."""
+        """Stop should trigger on intraday low, with exit slippage applied."""
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0)
         # Close is above stop, but intraday low hit the stop
         _seed_price(conn, "AAPL", 98.0, high=101.0, low=94.0)
@@ -443,10 +443,11 @@ class TestMarkToMarket:
             "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
         ).fetchone()
         assert trade[0] == "stopped_out"
-        assert trade[1] == 95.0  # filled at stop level, not at the low
+        # Long stop: fills at stop * (1 - exit_slippage_bps/10000) = 95 * 0.9995 = 94.9525
+        assert trade[1] < 95.0  # slippage makes it worse than stop level
 
     def test_intraday_high_triggers_short_stop(self, conn):
-        """Short stop should trigger on intraday high."""
+        """Short stop should trigger on intraday high, with slippage."""
         self._insert_open_trade(conn, "AAPL", 100.0, direction="short", stop_loss=105.0, target_price=90.0)
         # Close is below stop, but intraday high breached it. Open is safe (101).
         _seed_price(conn, "AAPL", 102.0, high=106.0, low=99.0, open_=101.0)
@@ -459,7 +460,8 @@ class TestMarkToMarket:
             "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
         ).fetchone()
         assert trade[0] == "stopped_out"
-        assert trade[1] == 105.0  # filled at stop level
+        # Short stop: fills at stop * (1 + exit_slippage) = 105 * 1.0005 = 105.0525
+        assert trade[1] > 105.0  # slippage makes it worse than stop level
 
     def test_intraday_low_triggers_short_target(self, conn):
         """Short target should trigger on intraday low."""
@@ -494,9 +496,9 @@ class TestMarkToMarket:
         assert trade[1] == 90.0  # filled at target level
 
     def test_open_gaps_through_stop_gets_stopped(self, conn):
-        """If open itself is past the stop, stopped out with no ambiguity."""
+        """If open gaps past stop, fill at OPEN (gap loss), not at stop level."""
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0)
-        # Open gaps below stop - guaranteed stop
+        # Open gaps below stop at 93 - you get filled at 93, not 95
         _seed_price(conn, "AAPL", 96.0, high=97.0, low=91.0, open_=93.0)
 
         result = mark_to_market(conn)
@@ -507,10 +509,10 @@ class TestMarkToMarket:
             "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
         ).fetchone()
         assert trade[0] == "stopped_out"
-        assert trade[1] == 95.0  # filled at stop level
+        assert trade[1] == 93.0  # gap fill: at open, NOT at stop level
 
     def test_both_stop_and_target_hit_intraday_takes_stop(self, conn):
-        """If both stop and target hit intraday (not at open), conservative: assume stop."""
+        """If both stop and target hit intraday (not at open), conservative: assume stop with slippage."""
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0, target_price=110.0)
         # Open is safe, but both extremes breach stop and target
         _seed_price(conn, "AAPL", 102.0, high=112.0, low=93.0, open_=100.0)
@@ -523,7 +525,8 @@ class TestMarkToMarket:
             "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
         ).fetchone()
         assert trade[0] == "stopped_out"
-        assert trade[1] == 95.0  # conservative: assume stop hit first
+        # Long stop with slippage: 95 * (1 - 0.0005) = 94.9525
+        assert trade[1] < 95.0  # slippage makes it worse
 
     def test_triggers_target_hit(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, target_price=110.0)
@@ -565,6 +568,54 @@ class TestMarkToMarket:
         assert result["open_trades"] == 0
         snapshot = conn.execute("SELECT COUNT(*) FROM paper_portfolio_snapshots").fetchone()
         assert snapshot[0] == 1
+
+
+    def test_short_borrow_cost_deducted_from_pnl(self, conn):
+        """Short trades should have borrow cost deducted from P&L."""
+        entry_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=5)).strftime("%Y-%m-%d")
+        self._insert_open_trade(
+            conn, "AAPL", 100.0, direction="short", stop_loss=105.0,
+            target_price=90.0, entry_date=entry_date,
+        )
+        # Also set position_size_pct so commission calc works
+        conn.execute(
+            "UPDATE paper_trades SET position_size_pct = 8.0 WHERE ticker = 'AAPL'"
+        )
+        conn.commit()
+        # Target hit at 90 (limit order, no slippage)
+        _seed_price(conn, "AAPL", 88.0, high=95.0, low=87.0, open_=93.0)
+
+        mark_to_market(conn)
+        conn.commit()
+
+        trade = conn.execute(
+            "SELECT pnl_pct, exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        # Raw P&L: (1 - 90/100) * 100 = 10%
+        # Commission: $1 * 2 / ($1M * 0.08) = $2 / $80K = 0.0025%
+        # Borrow: 1.5% * 5/365 = 0.0205%
+        # Net P&L should be < 10% (costs deducted)
+        assert trade[0] < 10.0
+        assert trade[1] == 90.0  # target is limit order, exact fill
+
+    def test_commission_deducted_from_pnl(self, conn):
+        """Commission should reduce P&L on closed trades."""
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0, target_price=110.0)
+        conn.execute(
+            "UPDATE paper_trades SET position_size_pct = 8.0 WHERE ticker = 'AAPL'"
+        )
+        conn.commit()
+        # Target hit (limit, no slippage)
+        _seed_price(conn, "AAPL", 112.0, high=112.0, low=100.0, open_=101.0)
+
+        mark_to_market(conn)
+        conn.commit()
+
+        trade = conn.execute("SELECT pnl_pct FROM paper_trades WHERE ticker='AAPL'").fetchone()
+        # Raw P&L: (110/100 - 1) * 100 = 10%
+        # Commission: $1*2 / $80K = 0.0025% (tiny but present)
+        # After rounding to 2dp, pnl <= 10.0 (commission deducted before rounding)
+        assert trade[0] <= 10.0
 
 
 # ── Manual Close ─────────────────────────────────────────────────

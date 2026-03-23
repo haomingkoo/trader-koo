@@ -100,7 +100,44 @@ def _close_trade(
     *,
     config: PaperTradeConfig,
 ) -> None:
-    pnl = round(compute_pnl(direction, entry_price, exit_price), 2)
+    raw_pnl = compute_pnl(direction, entry_price, exit_price)
+
+    # Deduct trading costs from P&L
+    # 1. Commission: entry + exit as % of entry price
+    position_row = conn.execute(
+        "SELECT position_size_pct FROM paper_trades WHERE id = ?", (trade_id,),
+    ).fetchone()
+    pos_pct = float(position_row[0] or 8.0) if position_row and position_row[0] is not None else 8.0
+    starting_capital = 1_000_000.0
+    notional = starting_capital * (pos_pct / 100)
+    commission_cost_pct = (config.commission_per_trade * 2 / notional) * 100 if notional > 0 else 0
+
+    # 2. Short borrow cost (annualized, pro-rated to TRADING days held)
+    borrow_cost_pct = 0.0
+    if direction == "short":
+        entry_date_row = conn.execute(
+            "SELECT entry_date FROM paper_trades WHERE id = ?", (trade_id,),
+        ).fetchone()
+        if entry_date_row and entry_date_row[0]:
+            try:
+                # Count actual trading days (rows in price_daily) between entry and exit
+                trading_days_row = conn.execute(
+                    "SELECT COUNT(*) FROM price_daily "
+                    "WHERE ticker = 'SPY' AND date > ? AND date <= ?",
+                    (entry_date_row[0], exit_date),
+                ).fetchone()
+                trading_days = int(trading_days_row[0]) if trading_days_row and trading_days_row[0] else 0
+                if trading_days == 0:
+                    # Fallback: calendar days if no SPY data
+                    trading_days = max(1, (
+                        dt.datetime.strptime(exit_date, "%Y-%m-%d")
+                        - dt.datetime.strptime(entry_date_row[0], "%Y-%m-%d")
+                    ).days)
+                borrow_cost_pct = config.short_borrow_annual_pct * trading_days / 252
+            except (ValueError, TypeError):
+                pass
+
+    pnl = round(raw_pnl - commission_cost_pct - borrow_cost_pct, 2)
     r_mult = compute_r_multiple(
         direction,
         entry_price,
@@ -219,9 +256,57 @@ def create_paper_trades_from_report(
             continue
 
         direction = str(evaluation["direction"])
-        entry_price = float(row["close"])
+
+        # Entry price = NEXT DAY OPEN (signal generates after close,
+        # earliest possible entry is next trading day's open).
+        # Fall back to today's close if next-day open not yet available.
+        next_open_row = conn.execute(
+            "SELECT CAST(open AS REAL), date FROM price_daily "
+            "WHERE ticker = ? AND date > ? ORDER BY date ASC LIMIT 1",
+            (ticker, report_date),
+        ).fetchone()
+        if next_open_row and next_open_row[0] is not None:
+            raw_entry = float(next_open_row[0])
+            entry_date_actual = next_open_row[1]
+        else:
+            # Next day data not available yet (live trading edge);
+            # use today's close as best estimate
+            raw_entry = float(row["close"])
+            entry_date_actual = report_date
+
+        # Apply entry slippage on top of open price
+        slip_mult = config.entry_slippage_bps / 10_000
+        if direction == "long":
+            entry_price = round(raw_entry * (1 + slip_mult), 4)
+        else:
+            entry_price = round(raw_entry * (1 - slip_mult), 4)
         levels = compute_stop_and_target(row, direction, config=config)
         plan = compute_position_plan(row, evaluation, levels, config=config)
+
+        # ADV liquidity check: reject if position > max_adv_pct of daily volume
+        try:
+            vol_row = conn.execute(
+                "SELECT AVG(vol) FROM ("
+                "  SELECT CAST(volume AS REAL) AS vol FROM price_daily"
+                "  WHERE ticker = ? AND volume IS NOT NULL"
+                "  ORDER BY date DESC LIMIT 20"
+                ")",
+                (ticker,),
+            ).fetchone()
+            if vol_row and vol_row[0] and vol_row[0] > 0:
+                avg_daily_volume = float(vol_row[0])
+                position_pct = float(plan.get("position_size_pct") or 8.0)
+                position_dollars = 1_000_000.0 * (position_pct / 100)
+                position_shares = position_dollars / entry_price if entry_price > 0 else 0
+                adv_pct = (position_shares / avg_daily_volume) * 100 if avg_daily_volume > 0 else 0
+                if adv_pct > config.max_adv_pct:
+                    LOG.info(
+                        "Paper trade skipped: %s %s position is %.1f%% of ADV (> %.1f%% max)",
+                        direction.upper(), ticker, adv_pct, config.max_adv_pct,
+                    )
+                    continue
+        except Exception as exc:
+            LOG.debug("ADV check skipped: %s", exc)
 
         expected_r_multiple = plan.get("expected_r_multiple")
         if (
@@ -354,7 +439,7 @@ def create_paper_trades_from_report(
                 ticker,
                 direction,
                 entry_price,
-                report_date,
+                entry_date_actual,
                 levels["target_price"],
                 levels["stop_loss"],
                 levels["atr_at_entry"],
@@ -480,22 +565,33 @@ def mark_to_market(
             intraday_hits_stop = stop_loss is not None and day_high >= stop_loss
             intraday_hits_target = target_price is not None and day_low <= target_price
 
+        # Apply exit slippage multiplier
+        exit_slip = config.exit_slippage_bps / 10_000
+
         if open_hits_stop:
-            # Open gapped through stop - no ambiguity
+            # Open gapped past stop - fill at OPEN (realistic gap loss)
             hit_stop = True
-            current_price = stop_loss
+            current_price = day_open
         elif open_hits_target:
-            # Open gapped through target - no ambiguity, take profit
+            # Open gapped past target - fill at target (limit order fills at limit)
             hit_target = True
             current_price = target_price
         elif intraday_hits_stop and intraday_hits_target:
             # Both hit intraday - conservative: assume stop hit first
             hit_stop = True
-            current_price = stop_loss
+            if direction == "long":
+                current_price = round(stop_loss * (1 - exit_slip), 4)
+            else:
+                current_price = round(stop_loss * (1 + exit_slip), 4)
         elif intraday_hits_stop:
             hit_stop = True
-            current_price = stop_loss
+            # Stop is a market order - apply slippage against you
+            if direction == "long":
+                current_price = round(stop_loss * (1 - exit_slip), 4)
+            else:
+                current_price = round(stop_loss * (1 + exit_slip), 4)
         elif intraday_hits_target:
+            # Target is a limit order - fills at exact level (no slippage)
             hit_target = True
             current_price = target_price
 

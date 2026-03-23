@@ -37,6 +37,12 @@ class PaperTradeConfig:
     ml_min_win_prob: float = 0.55
     max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
     max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this
+    # Realism costs (conservative defaults — better to overestimate than underestimate)
+    entry_slippage_bps: float = 10.0  # 10 bps entry slippage (0.10%)
+    exit_slippage_bps: float = 10.0  # 10 bps exit slippage on stop-market orders
+    commission_per_trade: float = 5.0  # $5 per side (IBKR-like for typical position)
+    short_borrow_annual_pct: float = 3.0  # 3% annualized (conservative avg across S&P 500)
+    max_adv_pct: float = 15.0  # max 15% of average daily volume per position
 
 
 def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
