@@ -61,6 +61,7 @@ LGBM_PARAMS = {
     "random_state": 42,
     "verbose": -1,
     "importance_type": "gain",
+    "is_unbalance": True,
 }
 
 
@@ -165,6 +166,39 @@ def build_dataset(
         on=["ticker", "entry_date"],
         how="inner",
     )
+
+    # 3d. Filter out label=0 (time expiry) samples — these are noise
+    before_filter = len(dataset)
+    dataset = dataset[dataset["label"] != 0].reset_index(drop=True)
+    filtered_count = before_filter - len(dataset)
+    if filtered_count > 0:
+        LOG.info(
+            "Filtered %d time-expiry samples (label=0), %d remaining (%.1f%% removed)",
+            filtered_count, len(dataset), filtered_count / before_filter * 100,
+        )
+
+    if dataset.empty:
+        LOG.warning("All samples were time-expiry; no clean labels remain")
+        return pd.DataFrame()
+
+    # 3c. Feature correlation audit — log highly correlated pairs
+    feat_cols = [c for c in (feature_columns or FEATURE_COLUMNS) if c in dataset.columns]
+    if len(feat_cols) >= 2:
+        try:
+            corr_matrix = dataset[feat_cols].corr().abs()
+            high_corr_pairs = []
+            for i in range(len(feat_cols)):
+                for j in range(i + 1, len(feat_cols)):
+                    r = corr_matrix.iloc[i, j]
+                    if r > 0.85:
+                        high_corr_pairs.append((feat_cols[i], feat_cols[j], round(r, 3)))
+            if high_corr_pairs:
+                LOG.warning(
+                    "Correlated feature pairs (r > 0.85): %s",
+                    [(a, b, f"r={c}") for a, b, c in sorted(high_corr_pairs, key=lambda x: -x[2])[:5]],
+                )
+        except Exception as exc:
+            LOG.debug("Correlation audit skipped: %s", exc)
 
     # Target column is set later by _apply_target_mode() based on the
     # chosen target_mode.  Default placeholder so build_dataset() callers
