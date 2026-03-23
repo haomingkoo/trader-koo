@@ -5,8 +5,9 @@ This module defines the audit_logs table with partitioning support,
 indexes for efficient querying, and retention policy management.
 """
 
+import datetime as dt
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 
@@ -90,7 +91,7 @@ def apply_retention_policy(conn: sqlite3.Connection, retention_days: int = 90) -
     Returns:
         Number of rows deleted
     """
-    cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff_date = dt.datetime.now(dt.timezone.utc) - timedelta(days=retention_days)
     cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
     
     cursor = conn.execute(

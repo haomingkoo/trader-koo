@@ -104,6 +104,9 @@ ADMIN_USER = str(os.getenv("TRADER_KOO_ADMIN_USERNAME", "admin") or "admin").str
 ADMIN_STRICT_API_KEY = str(os.getenv("ADMIN_STRICT_API_KEY", "1")).strip().lower() in {
     "1", "true", "yes", "on",
 }
+DEVELOPMENT_MODE = str(os.getenv("TRADER_KOO_DEVELOPMENT_MODE", "0")).strip().lower() in {
+    "1", "true", "yes", "on",
+}
 ADMIN_AUTH_WINDOW_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_WINDOW_SEC", "300")))
 ADMIN_AUTH_MAX_FAILS = max(3, int(os.getenv("TRADER_KOO_ADMIN_AUTH_MAX_FAILS", "20")))
 ADMIN_AUTH_BLOCK_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_BLOCK_SEC", "600")))
@@ -476,8 +479,8 @@ else:
         CORSMiddleware,
         allow_origins=[_ALLOWED_ORIGIN] if _ALLOWED_ORIGIN != "*" else ["*"],
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*", "X-API-Key"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-API-Key", "Accept"],
     )
 
 # Error sanitization middleware
@@ -529,6 +532,17 @@ async def api_key_middleware(request: Request, call_next):
                     {"detail": "Admin API key is not configured on server."},
                     status_code=503,
                 )
+            if not DEVELOPMENT_MODE:
+                LOG.error(
+                    "Admin access denied: no API key and TRADER_KOO_DEVELOPMENT_MODE is not set "
+                    "(path=%s, client_ip=%s). Set TRADER_KOO_DEVELOPMENT_MODE=1 for local dev.",
+                    path, client_ip,
+                )
+                return JSONResponse(
+                    {"detail": "Admin API key required. Set TRADER_KOO_DEVELOPMENT_MODE=1 for local dev."},
+                    status_code=503,
+                )
+            LOG.warning("OPEN-ADMIN: %s %s from %s (dev mode)", request.method, path, client_ip)
             request.state.admin_identity = {"username": "local-dev", "mode": "open-admin"}
             try:
                 audit_logger = _get_audit_logger()
