@@ -176,7 +176,7 @@ def _fetch_paper_trade_stats(conn: sqlite3.Connection) -> dict[str, Any]:
 
     try:
         closed = conn.execute(
-            "SELECT pnl_pct FROM paper_trades WHERE status != 'open' AND pnl_pct IS NOT NULL"
+            "SELECT pnl_pct, position_size_pct FROM paper_trades WHERE status != 'open' AND pnl_pct IS NOT NULL"
         ).fetchall()
         if closed:
             total = len(closed)
@@ -188,9 +188,23 @@ def _fetch_paper_trade_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             realized = 0.0
             for r in closed:
                 pnl_pct = float(r[0])
-                position_dollars = starting_capital * 0.08
+                pos_pct = float(r[1] or 8.0) if len(r) > 1 else 8.0
+                position_dollars = starting_capital * (pos_pct / 100)
                 realized += position_dollars * (pnl_pct / 100)
-            stats["portfolio_value"] = round(starting_capital + realized, 0)
+            # Include unrealized P&L from open trades
+            unrealized = 0.0
+            try:
+                open_rows = conn.execute(
+                    "SELECT unrealized_pnl_pct, position_size_pct FROM paper_trades WHERE status = 'open'"
+                ).fetchall()
+                for orow in open_rows:
+                    u_pnl = float(orow[0] or 0)
+                    pos_pct = float(orow[1] or 8.0)
+                    position_dollars = starting_capital * (pos_pct / 100)
+                    unrealized += position_dollars * (u_pnl / 100)
+            except Exception:
+                pass
+            stats["portfolio_value"] = round(starting_capital + realized + unrealized, 0)
     except Exception:
         pass
     return stats

@@ -285,6 +285,7 @@ def create_paper_trades_from_report(
                 evaluation=evaluation,
                 plan=plan,
                 market_ctx=market_ctx,
+                max_open=config.max_open,
             )
             if not critic["approved"]:
                 LOG.info(
