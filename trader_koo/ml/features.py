@@ -179,11 +179,14 @@ def _trend_strength(close: pd.Series, window: int = 10) -> float:
     return float(corr ** 2)
 
 
-def _mean_reversion_signal(returns: pd.Series, window: int = 5) -> float:
-    """Cumulative return over window — extreme values signal reversion."""
-    if len(returns) < window:
+def _mean_reversion_signal(close: pd.Series, window: int = 5) -> float:
+    """Distance from SMA as percentage — positive = above SMA, negative = below."""
+    if len(close) < window:
         return np.nan
-    return float(returns.iloc[-window:].sum())
+    sma = close.iloc[-window:].mean()
+    if sma <= 0:
+        return np.nan
+    return float((close.iloc[-1] - sma) / sma * 100)
 
 
 def _get_news_sentiment_scores(
@@ -633,7 +636,7 @@ def extract_features_for_universe(
         autocorr_1 = _autocorrelation(daily_ret.dropna(), 1)
         autocorr_5 = _autocorrelation(daily_ret.dropna(), 5)
         trend_str = _trend_strength(close, 10)
-        mean_rev = _mean_reversion_signal(daily_ret.dropna(), 5)
+        mean_rev = _mean_reversion_signal(close, 5)
 
         # YOLO
         yolo = yolo_data.get(str(ticker), (0, 0.0))
