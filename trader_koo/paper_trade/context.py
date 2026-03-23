@@ -40,6 +40,8 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
         "regime_state_at_entry": None,
         "hmm_regime_at_entry": None,
         "hmm_confidence_at_entry": None,
+        "directional_regime_at_entry": None,
+        "directional_regime_confidence": None,
     }
 
     try:
@@ -131,6 +133,33 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
                     ctx["hmm_confidence_at_entry"] = probs.get(current_label)
         except Exception as exc:
             LOG.debug("HMM regime capture skipped: %s", exc)
+
+        # Directional HMM (bullish/chop/bearish) — same as crypto uses
+        try:
+            from trader_koo.structure.hmm_regime import predict_directional_regimes
+
+            # Reuse spy_ohlcv from above if available, otherwise re-fetch
+            if "spy_df" not in dir():
+                spy_ohlcv_dir = conn.execute(
+                    "SELECT date, open, high, low, close, volume "
+                    "FROM price_daily WHERE ticker = 'SPY' AND close IS NOT NULL "
+                    "ORDER BY date ASC",
+                ).fetchall()
+                if len(spy_ohlcv_dir) >= 60:
+                    import pandas as pd
+                    spy_df = pd.DataFrame(
+                        spy_ohlcv_dir,
+                        columns=["date", "open", "high", "low", "close", "volume"],
+                    )
+            if "spy_df" in dir() and spy_df is not None:
+                dir_result = predict_directional_regimes(spy_df, ticker="SPY")
+                if dir_result:
+                    ctx["directional_regime_at_entry"] = str(dir_result.get("current_state", ""))
+                    dir_probs = dir_result.get("current_probs") or {}
+                    dir_label = dir_result.get("current_state", "")
+                    ctx["directional_regime_confidence"] = dir_probs.get(dir_label)
+        except Exception as exc:
+            LOG.debug("Directional HMM capture skipped: %s", exc)
 
     except Exception as exc:
         LOG.warning("Market context capture failed (non-fatal): %s", exc)

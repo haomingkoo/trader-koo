@@ -119,6 +119,8 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "ml_confidence", "ml_confidence REAL")
     _ensure_column(conn, "paper_trades", "ml_signal", "ml_signal TEXT")
     _ensure_column(conn, "paper_trades", "notes", "notes TEXT DEFAULT ''")
+    _ensure_column(conn, "paper_trades", "directional_regime_at_entry", "directional_regime_at_entry TEXT")
+    _ensure_column(conn, "paper_trades", "directional_regime_confidence", "directional_regime_confidence REAL")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bot_versions (
@@ -158,6 +160,8 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    _ensure_column(conn, "paper_portfolio_snapshots", "sortino_ratio", "sortino_ratio REAL")
+    _ensure_column(conn, "paper_portfolio_snapshots", "calmar_ratio", "calmar_ratio REAL")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_portfolio_date "
         "ON paper_portfolio_snapshots(snapshot_date)"
