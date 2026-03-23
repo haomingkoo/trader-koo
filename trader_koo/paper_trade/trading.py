@@ -442,7 +442,9 @@ def mark_to_market(
         target_price, stop_loss, high_water_mark, low_water_mark = row[5:]
 
         price_row = conn.execute(
-            "SELECT CAST(close AS REAL), date FROM price_daily "
+            "SELECT CAST(close AS REAL), date, "
+            "CAST(high AS REAL), CAST(low AS REAL) "
+            "FROM price_daily "
             "WHERE ticker = ? ORDER BY date DESC LIMIT 1",
             (ticker,),
         ).fetchone()
@@ -452,23 +454,31 @@ def mark_to_market(
 
         current_price = float(price_row[0])
         price_date = price_row[1]
+        day_high = float(price_row[2]) if price_row[2] is not None else current_price
+        day_low = float(price_row[3]) if price_row[3] is not None else current_price
         unrealized = round(compute_pnl(direction, entry_price, current_price), 2)
-        new_hwm = max(high_water_mark or current_price, current_price)
-        new_lwm = min(low_water_mark or current_price, current_price)
+        # Track HWM/LWM using intraday extremes for realistic trailing stops
+        new_hwm = max(high_water_mark or day_high, day_high)
+        new_lwm = min(low_water_mark or day_low, day_low)
 
+        # Use intraday high/low to check stops/targets (not just close)
         hit_stop = False
         if stop_loss is not None:
-            if direction == "long" and current_price <= stop_loss:
+            if direction == "long" and day_low <= stop_loss:
                 hit_stop = True
-            elif direction == "short" and current_price >= stop_loss:
+                current_price = stop_loss  # fill at stop level
+            elif direction == "short" and day_high >= stop_loss:
                 hit_stop = True
+                current_price = stop_loss  # fill at stop level
 
         hit_target = False
-        if target_price is not None:
-            if direction == "long" and current_price >= target_price:
+        if not hit_stop and target_price is not None:
+            if direction == "long" and day_high >= target_price:
                 hit_target = True
-            elif direction == "short" and current_price <= target_price:
+                current_price = target_price  # fill at target level
+            elif direction == "short" and day_low <= target_price:
                 hit_target = True
+                current_price = target_price  # fill at target level
 
         expired = False
         try:

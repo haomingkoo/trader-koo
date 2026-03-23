@@ -39,10 +39,17 @@ def conn():
     return db
 
 
-def _seed_price(conn: sqlite3.Connection, ticker: str, close: float, date: str = "2026-03-14") -> None:
+def _seed_price(
+    conn: sqlite3.Connection,
+    ticker: str,
+    close: float,
+    date: str = "2026-03-14",
+    high: float | None = None,
+    low: float | None = None,
+) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO price_daily (ticker, date, close) VALUES (?, ?, ?)",
-        (ticker, date, close),
+        "INSERT OR REPLACE INTO price_daily (ticker, date, close, high, low) VALUES (?, ?, ?, ?, ?)",
+        (ticker, date, close, high if high is not None else close, low if low is not None else close),
     )
     conn.commit()
 
@@ -374,7 +381,9 @@ class TestCreatePaperTrades:
 
 class TestMarkToMarket:
     def _insert_open_trade(self, conn, ticker="AAPL", entry_price=100.0, direction="long",
-                           stop_loss=95.0, target_price=110.0, entry_date="2026-03-10"):
+                           stop_loss=95.0, target_price=110.0, entry_date=None):
+        if entry_date is None:
+            entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, status, current_price, unrealized_pnl_pct,
@@ -413,6 +422,54 @@ class TestMarkToMarket:
         assert status[1] == "stopped_out"
         assert status[2] == "stopped_out"
         assert "invalidation" in str(status[3]).lower()
+
+    def test_intraday_low_triggers_stop_even_if_close_above(self, conn):
+        """Stop should trigger on intraday low, not just close."""
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0)
+        # Close is above stop, but intraday low hit the stop
+        _seed_price(conn, "AAPL", 98.0, high=101.0, low=94.0)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "stopped_out"
+        assert trade[1] == 95.0  # filled at stop level, not at the low
+
+    def test_intraday_high_triggers_short_stop(self, conn):
+        """Short stop should trigger on intraday high."""
+        self._insert_open_trade(conn, "AAPL", 100.0, direction="short", stop_loss=105.0)
+        # Close is below stop, but intraday high breached it
+        _seed_price(conn, "AAPL", 102.0, high=106.0, low=99.0)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "stopped_out"
+        assert trade[1] == 105.0  # filled at stop level
+
+    def test_intraday_low_triggers_short_target(self, conn):
+        """Short target should trigger on intraday low."""
+        self._insert_open_trade(conn, "AAPL", 100.0, direction="short", target_price=90.0, stop_loss=105.0)
+        # Close is above target, but intraday low hit it
+        _seed_price(conn, "AAPL", 93.0, high=98.0, low=89.0)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "target_hit"
+        assert trade[1] == 90.0  # filled at target level
 
     def test_triggers_target_hit(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, target_price=110.0)
