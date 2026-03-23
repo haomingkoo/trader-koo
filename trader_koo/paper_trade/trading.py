@@ -239,8 +239,37 @@ def create_paper_trades_from_report(
     except Exception as exc:
         LOG.debug("Drawdown check skipped: %s", exc)
 
+    # Daily loss circuit breaker — halt if today's realized losses exceed limit
+    try:
+        daily_loss_row = conn.execute(
+            "SELECT SUM(pnl_pct) FROM paper_trades "
+            "WHERE exit_date = ? AND status != 'open' AND pnl_pct IS NOT NULL",
+            (report_date,),
+        ).fetchone()
+        daily_loss = float(daily_loss_row[0]) if daily_loss_row and daily_loss_row[0] else 0.0
+        if daily_loss < 0 and abs(daily_loss) >= config.max_daily_loss_pct:
+            LOG.warning(
+                "CIRCUIT BREAKER: daily loss %.1f%% exceeds %.1f%% limit, blocking new entries",
+                abs(daily_loss), config.max_daily_loss_pct,
+            )
+            return 0
+    except Exception as exc:
+        LOG.debug("Daily loss check skipped: %s", exc)
+
     remaining_slots = config.max_open - open_count
     inserted = 0
+
+    # Pre-fetch VIX level once for position sizing (used by all trades this batch)
+    _vix_level: float | None = None
+    try:
+        _vix_row = conn.execute(
+            "SELECT CAST(close AS REAL) FROM price_daily "
+            "WHERE ticker = '^VIX' AND close IS NOT NULL ORDER BY date DESC LIMIT 1"
+        ).fetchone()
+        if _vix_row and _vix_row[0] is not None:
+            _vix_level = float(_vix_row[0])
+    except Exception:
+        pass
 
     for row in setup_rows:
         if inserted >= remaining_slots:
@@ -281,7 +310,7 @@ def create_paper_trades_from_report(
         else:
             entry_price = round(raw_entry * (1 - slip_mult), 4)
         levels = compute_stop_and_target(row, direction, config=config)
-        plan = compute_position_plan(row, evaluation, levels, config=config)
+        plan = compute_position_plan(row, evaluation, levels, config=config, vix_level=_vix_level)
 
         # ADV liquidity check: reject if position > max_adv_pct of daily volume
         try:
@@ -411,6 +440,7 @@ def create_paper_trades_from_report(
                 review_status, review_summary,
                 bot_version, vix_at_entry, vix_percentile_at_entry,
                 regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry,
+                directional_regime_at_entry, directional_regime_confidence,
                 ml_predicted_win_prob, ml_confidence, ml_signal
             ) VALUES (
                 ?, ?, ?, ?,
@@ -429,6 +459,7 @@ def create_paper_trades_from_report(
                 ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
+                ?, ?,
                 ?, ?, ?
             )
             ON CONFLICT(report_date, ticker, direction) DO NOTHING
@@ -482,6 +513,8 @@ def create_paper_trades_from_report(
                 market_ctx["regime_state_at_entry"],
                 market_ctx["hmm_regime_at_entry"],
                 market_ctx["hmm_confidence_at_entry"],
+                market_ctx.get("directional_regime_at_entry"),
+                market_ctx.get("directional_regime_confidence"),
                 ml_prediction.get("predicted_win_prob"),
                 ml_prediction.get("confidence"),
                 ml_prediction.get("signal"),

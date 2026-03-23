@@ -190,6 +190,7 @@ def compute_position_plan(
     levels: dict[str, float | None],
     *,
     config: PaperTradeConfig,
+    vix_level: float | None = None,
 ) -> dict[str, float | str | None]:
     """Build a simple sizing and execution plan for a paper trade."""
     entry = float(row["close"])
@@ -220,6 +221,20 @@ def compute_position_plan(
     if "earnings" in risk_note:
         position_size_pct *= config.earnings_position_scale
         sizing_notes.append("event-risk haircut applied")
+
+    if vix_level is not None:
+        if vix_level < 15:
+            vix_scale = 1.1
+        elif vix_level < 20:
+            vix_scale = 1.0
+        elif vix_level < 25:
+            vix_scale = 0.85
+        elif vix_level < 30:
+            vix_scale = 0.65
+        else:
+            vix_scale = 0.5
+        position_size_pct *= vix_scale
+        sizing_notes.append(f"VIX={vix_level:.1f} scale={vix_scale:.2f}")
 
     position_size_pct = _clamp(
         position_size_pct,

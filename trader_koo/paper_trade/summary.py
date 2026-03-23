@@ -66,8 +66,26 @@ def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
         var_p = sum((pnl - mean_p) ** 2 for pnl in pnls) / (len(pnls) - 1)
         std_p = math.sqrt(var_p) if var_p > 0 else 0
         sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
+
+        # Sortino: uses downside deviation (only negative returns)
+        neg_pnls = [p for p in pnls if p < 0]
+        if neg_pnls:
+            downside_var = sum((p - mean_p) ** 2 for p in neg_pnls) / len(neg_pnls)
+            downside_std = math.sqrt(downside_var) if downside_var > 0 else 0
+            sortino = round(mean_p / downside_std, 2) if downside_std > 0 else None
+        else:
+            sortino = None  # no losses = infinite sortino
+
+        # Calmar: annualized return / max drawdown
+        if max_dd > 0 and total_closed >= 5:
+            annualized_return = mean_p * min(total_closed, 252)
+            calmar = round(annualized_return / max_dd, 2)
+        else:
+            calmar = None
     else:
         sharpe = None
+        sortino = None
+        calmar = None
 
     gross_win = sum(pnl for pnl in pnls if pnl > 0)
     gross_loss = abs(sum(pnl for pnl in pnls if pnl < 0))
@@ -86,13 +104,15 @@ def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
         INSERT OR REPLACE INTO paper_portfolio_snapshots
             (snapshot_date, open_trades, closed_trades_total, wins, losses,
              win_rate_pct, avg_pnl_pct, avg_r_multiple, total_pnl_pct,
-             max_drawdown_pct, sharpe_ratio, profit_factor, equity_index,
+             max_drawdown_pct, sharpe_ratio, sortino_ratio, calmar_ratio,
+             profit_factor, equity_index,
              best_trade_pct, worst_trade_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (today, open_count, total_closed, wins, losses,
          win_rate, avg_pnl, avg_r, total_pnl,
-         max_dd, sharpe, profit_factor, equity, best_trade, worst_trade),
+         max_dd, sharpe, sortino, calmar, profit_factor, equity,
+         best_trade, worst_trade),
     )
 
 
