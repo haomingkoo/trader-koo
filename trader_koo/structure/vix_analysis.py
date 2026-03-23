@@ -11,7 +11,7 @@ This module provides VIX analysis capabilities including:
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+import datetime as dt
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class TermStructure:
     source: str  # "VIX3M" | "VIX6M" | "synthetic" | "unavailable"
     contango: bool
     slope: Optional[float]
-    timestamp: datetime
+    timestamp: dt.datetime
     
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
@@ -110,7 +110,7 @@ def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
     
     Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6
     """
-    timestamp = datetime.utcnow()
+    timestamp = dt.datetime.now(dt.timezone.utc)
     
     # Fetch VIX spot (required)
     vix_spot = _fetch_latest_close(conn, "^VIX")

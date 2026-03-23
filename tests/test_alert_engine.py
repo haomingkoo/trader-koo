@@ -11,7 +11,7 @@ import pytest
 
 from trader_koo.notifications.alert_engine import (
     DEFAULT_COOLDOWN_SEC,
-    MAX_POLL_TICKERS,
+    MAX_REPORT_TICKERS,
     POLL_INTERVAL_SEC,
     AlertEngine,
     _ensure_telegram_alerts_table,
@@ -102,7 +102,7 @@ class TestAlertEngineConfig:
         assert POLL_INTERVAL_SEC == 120
 
     def test_max_poll_tickers_is_10(self) -> None:
-        assert MAX_POLL_TICKERS == 10
+        assert MAX_REPORT_TICKERS == 10
 
     def test_cooldown_is_4_hours(self) -> None:
         assert DEFAULT_COOLDOWN_SEC == 4 * 3600
@@ -427,7 +427,7 @@ class TestWatchlistSummary:
 
         assert summary["tickers"] == 2
         assert summary["levels"] == 2
-        assert summary["max_tickers"] == MAX_POLL_TICKERS
+        assert summary["max_tickers"] == MAX_REPORT_TICKERS
         assert summary["poll_interval_sec"] == POLL_INTERVAL_SEC
         assert "AAPL" in summary["ticker_list"]
         assert "TSLA" in summary["ticker_list"]

@@ -2,7 +2,8 @@
 API endpoints for audit log querying and management.
 """
 
-from datetime import datetime, timedelta
+import datetime as dt
+from datetime import timedelta
 from typing import Any
 
 from trader_koo.audit.logger import AuditLogger
@@ -143,7 +144,7 @@ def export_audit_logs(
     # Default to JSON
     return {
         "logs": logs,
-        "export_timestamp": datetime.utcnow().isoformat(),
+        "export_timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
         "filters": {
             "start_date": start_date,
             "end_date": end_date,
@@ -165,7 +166,7 @@ def get_audit_summary(logger: AuditLogger, days: int = 7) -> dict[str, Any]:
     Returns:
         Summary statistics
     """
-    start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    start_date = (dt.datetime.now(dt.timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     
     # Get all logs for the period
     logs = logger.query_logs(

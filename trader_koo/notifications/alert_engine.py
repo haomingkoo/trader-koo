@@ -224,7 +224,7 @@ class AlertEngine:
             "(capped at %d for REST polling)",
             len(new_watchlist),
             total_levels,
-            MAX_POLL_TICKERS,
+            MAX_REPORT_TICKERS,
         )
         return total_levels
 
@@ -480,7 +480,7 @@ class AlertEngine:
             "Telegram alert engine started "
             "(REST polling, %ds interval, max %d tickers)",
             POLL_INTERVAL_SEC,
-            MAX_POLL_TICKERS,
+            MAX_REPORT_TICKERS,
         )
 
         # Initial setup load
@@ -580,7 +580,7 @@ class AlertEngine:
             "running": self._running,
             "tickers": len(tickers),
             "levels": total_levels,
-            "max_tickers": MAX_POLL_TICKERS,
+            "max_tickers": MAX_REPORT_TICKERS,
             "poll_interval_sec": POLL_INTERVAL_SEC,
             "cooldown_sec": self._cooldown_sec,
             "proximity_pct": self._proximity_pct,

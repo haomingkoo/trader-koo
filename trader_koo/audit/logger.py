@@ -10,7 +10,7 @@ This module provides immutable append-only audit logging for:
 import json
 import sqlite3
 import uuid
-from datetime import datetime
+import datetime as dt
 from enum import Enum
 from typing import Any
 
@@ -117,7 +117,7 @@ class AuditLogger:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"),
                 event_type,
                 user_id,
                 username,

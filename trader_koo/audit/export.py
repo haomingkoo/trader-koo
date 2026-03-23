@@ -8,7 +8,8 @@ for long-term retention and compliance.
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta
+import datetime as dt
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -73,7 +74,7 @@ class AuditExporter:
             }
         
         # Generate filename
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"audit_logs_{timestamp}.{export_format}"
         
         # Prepare export data
@@ -99,7 +100,7 @@ class AuditExporter:
             "location": location,
             "filename": filename,
             "records_exported": len(logs),
-            "export_timestamp": datetime.utcnow().isoformat(),
+            "export_timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
             "start_date": start_date,
             "end_date": end_date,
             "format": export_format,
@@ -214,7 +215,7 @@ def schedule_daily_export(
         Export result
     """
     # Export logs that are about to be deleted (older than retention - 1 day)
-    cutoff_date = datetime.utcnow() - timedelta(days=retention_days - 1)
+    cutoff_date = dt.datetime.now(dt.timezone.utc) - timedelta(days=retention_days - 1)
     start_date = (cutoff_date - timedelta(days=1)).strftime("%Y-%m-%d")
     end_date = cutoff_date.strftime("%Y-%m-%d")
     
