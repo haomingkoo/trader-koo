@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Post-Sprint Fixes (PR #116)
+- Technical ensemble wired into report pipeline (per-ticker, 5 strategies)
+- R-multiple now net of costs (was gross, inconsistent with net P&L)
+- SPY benchmark includes ~1.8% annual dividend yield
+- Unfiltered baseline aligned to 10-day hold (was 5-day)
+
 ## [1.1.0] - 2026-03-24
 
 ### Major: Paper Trade Realism Overhaul
