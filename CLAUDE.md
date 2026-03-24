@@ -71,7 +71,6 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - `GET /api/admin/yolo-events` — per-ticker YOLO outcomes (ok/skipped/timeout/failed)
 
 ## Known Issues (track here)
-- Polymarket page shows aggregated YES/NO only — needs timeline sub-markets with individual date milestones
 - ML model AUC 0.5235 pre-fix. Bug fixes applied (mean_reversion, is_unbalance, noise filter, correlation audit). Retraining pending — needs prod DB data.
 - Frontend test coverage is sparse (12 test files, needs more assertions)
 - VIX metrics caching: `regime_context` shape differs from `compute_vix_metrics()` return
