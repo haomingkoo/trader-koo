@@ -166,7 +166,7 @@ def _fetch_market_spikes(
                 "timestamp": now_iso,
                 "time_ago": "recent",
                 "external_url": f"https://polymarket.com/event/{event_slug}" if event_slug else None,
-                "internal_path": "/pred-markets",
+                "internal_path": "/markets",
             })
         return alerts
     except Exception as exc:
