@@ -71,7 +71,6 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - `GET /api/admin/yolo-events` — per-ticker YOLO outcomes (ok/skipped/timeout/failed)
 
 ## Known Issues (track here)
-- FRED features need bulk-fetch architecture (per-date API calls too slow for ML training)
 - Polymarket page shows aggregated YES/NO only — needs timeline sub-markets with individual date milestones
 - ML model AUC 0.5235 pre-fix. Bug fixes applied (mean_reversion, is_unbalance, noise filter, correlation audit). Retraining pending — needs prod DB data.
 - Frontend test coverage is sparse (12 test files, needs more assertions)

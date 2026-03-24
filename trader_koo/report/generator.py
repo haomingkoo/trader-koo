@@ -77,6 +77,48 @@ LOG = logging.getLogger(__name__)
 _report_warnings: list[str] = []
 
 
+def _apply_ensemble_adjustment(row: dict[str, Any]) -> None:
+    """Adjust score and tier based on technical ensemble agreement.
+
+    If the 5-strategy ensemble agrees with confluence bias, boost score.
+    If it disagrees, penalize. High agreement (>70%) = bigger effect.
+    """
+    ensemble_bias = row.get("ensemble_bias")
+    confluence_bias = row.get("signal_bias")
+    agreement = row.get("ensemble_agreement_pct", 0)
+    net_score = row.get("ensemble_net_score", 0)
+
+    if not ensemble_bias or not confluence_bias:
+        return
+
+    score = float(row.get("score") or 0)
+    tier = str(row.get("setup_tier") or "D")
+
+    if ensemble_bias == confluence_bias:
+        # Agreement: boost score proportionally to ensemble confidence
+        boost = min(8.0, abs(net_score) * 0.1)
+        if agreement >= 80:
+            boost *= 1.5
+        score = min(100.0, score + boost)
+        row["ensemble_effect"] = f"+{boost:.1f} (ensemble agrees)"
+    elif ensemble_bias != "neutral" and confluence_bias != "neutral" and ensemble_bias != confluence_bias:
+        # Disagreement: penalize and potentially downgrade tier
+        penalty = min(10.0, abs(net_score) * 0.12)
+        if agreement >= 80:
+            penalty *= 1.5
+        score = max(0.0, score - penalty)
+        row["ensemble_effect"] = f"-{penalty:.1f} (ensemble disagrees)"
+        # Strong disagreement with high agreement: downgrade tier
+        if penalty >= 8.0 and tier in {"A", "B"}:
+            tier = "B" if tier == "A" else "C"
+    else:
+        row["ensemble_effect"] = "neutral"
+
+    row["score"] = round(score, 1)
+    row["confluence_score"] = round(score, 1)
+    row["setup_tier"] = tier
+
+
 def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     """Market signals for the daily report: 52W extremes, top YOLO patterns, candle signals."""
     signals: dict[str, Any] = {
@@ -771,6 +813,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     row["ensemble_strategies"] = ensemble["strategies"]
             except Exception as exc:
                 LOG.debug("Ensemble enrichment skipped for %s: %s", row.get("ticker"), exc)
+
+            # Adjust score/tier based on ensemble agreement with confluence bias
+            _apply_ensemble_adjustment(row)
 
             setup_rows.append(row)
 
