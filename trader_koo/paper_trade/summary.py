@@ -280,14 +280,21 @@ def _compute_spy_benchmark(
         if start_price <= 0:
             return None
 
-        return_pct = round((end_price / start_price - 1.0) * 100.0, 2)
+        price_return_pct = (end_price / start_price - 1.0) * 100.0
 
         start_dt = dt.datetime.strptime(first_entry_date, "%Y-%m-%d")
         end_dt = dt.datetime.strptime(last_exit_date, "%Y-%m-%d")
         period_days = max((end_dt - start_dt).days, 1)
 
+        # Add pro-rated SPY dividend yield (~1.8% annual)
+        spy_annual_dividend_yield = 1.8
+        dividend_pct = spy_annual_dividend_yield * period_days / 365
+        total_return_pct = round(price_return_pct + dividend_pct, 2)
+
         return {
-            "return_pct": return_pct,
+            "return_pct": total_return_pct,
+            "price_return_pct": round(price_return_pct, 2),
+            "dividend_pct": round(dividend_pct, 2),
             "period_days": period_days,
             "start_price": round(start_price, 2),
             "end_price": round(end_price, 2),
@@ -349,7 +356,9 @@ def _compute_unfiltered_baseline(
         if not entries:
             return None
 
-        # For each entry, compute the 5-day forward return
+        # For each entry, compute the forward return matching expiry_days
+        # (default 10 trading days, consistent with paper trade expiry)
+        baseline_hold_days = 10
         pnls: list[float] = []
         for ticker, direction, entry_date, entry_price in entries:
             if entry_price is None or float(entry_price) <= 0:
@@ -359,9 +368,9 @@ def _compute_unfiltered_baseline(
                 SELECT close FROM price_daily
                 WHERE ticker = ? AND date > ?
                 ORDER BY date ASC
-                LIMIT 1 OFFSET 4
+                LIMIT 1 OFFSET ?
                 """,
-                (str(ticker), str(entry_date)),
+                (str(ticker), str(entry_date), baseline_hold_days - 1),
             ).fetchone()
             if not forward_row or forward_row[0] is None:
                 # Fall back to latest available price
@@ -404,6 +413,7 @@ def _compute_unfiltered_baseline(
             "return_pct": avg_return,
             "total_return_pct": total_return,
             "sharpe": sharpe,
+            "hold_days": baseline_hold_days,
         }
     except Exception as exc:
         LOG.warning("Unfiltered baseline computation failed: %s", exc)

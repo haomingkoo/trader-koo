@@ -137,11 +137,17 @@ def _close_trade(
             except (ValueError, TypeError):
                 pass
 
-    pnl = round(raw_pnl - commission_cost_pct - borrow_cost_pct, 2)
+    total_cost_pct = commission_cost_pct + borrow_cost_pct
+    pnl = round(raw_pnl - total_cost_pct, 2)
+    # R-multiple net of costs: adjust exit price by total cost drag
+    if direction == "long":
+        cost_adjusted_exit = exit_price * (1 - total_cost_pct / 100)
+    else:
+        cost_adjusted_exit = exit_price * (1 + total_cost_pct / 100)
     r_mult = compute_r_multiple(
         direction,
         entry_price,
-        exit_price,
+        cost_adjusted_exit,
         stop_loss,
         config=config,
     )
