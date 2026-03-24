@@ -48,15 +48,16 @@ def public_daily_report(
         include_internal_paths=False,
         include_admin_log_hints=False,
     )
-    # VIX metrics — always compute live (regime_context has different shape)
-    conn = get_conn()
-    try:
-        payload["vix_metrics"] = compute_vix_metrics(conn)
-    except Exception as exc:
-        LOG.warning("Failed to compute VIX metrics: %s", exc)
-        payload["vix_metrics"] = None
-    finally:
-        conn.close()
+    # VIX metrics — use cached from nightly report if available, else compute live
+    if not payload.get("vix_metrics"):
+        conn = get_conn()
+        try:
+            payload["vix_metrics"] = compute_vix_metrics(conn)
+        except Exception as exc:
+            LOG.warning("Failed to compute VIX metrics: %s", exc)
+            payload["vix_metrics"] = None
+        finally:
+            conn.close()
     return payload
 
 

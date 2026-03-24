@@ -91,6 +91,25 @@ def _check_regime_alignment(
     if direction == "short" and is_bear:
         return True, f"Short in {regime} — aligned with trend"
 
+    # Check directional HMM regime (more precise than VIX-based regime)
+    dir_regime = str(market_ctx.get("directional_regime_at_entry") or "").lower()
+    if dir_regime:
+        hmm_aligned = (
+            (direction == "long" and dir_regime == "bullish")
+            or (direction == "short" and dir_regime == "bearish")
+        )
+        hmm_counter = (
+            (direction == "long" and dir_regime == "bearish")
+            or (direction == "short" and dir_regime == "bullish")
+        )
+        if hmm_counter:
+            return False, (
+                f"Counter-trend: {direction} in HMM directional regime '{dir_regime}'. "
+                "Critic rejects trades opposing the directional HMM regime."
+            )
+        if hmm_aligned:
+            return True, f"{direction.title()} aligned with HMM directional regime '{dir_regime}'"
+
     # Counter-trend requires exceptional conviction
     tier = str(row.get("setup_tier") or "").upper()
     score = float(row.get("score") or 0)
@@ -99,7 +118,7 @@ def _check_regime_alignment(
 
     return False, (
         f"Counter-trend: {direction} in {regime}. "
-        "Critic rejects counter-trend trades unless A-tier with score ≥80."
+        "Critic rejects counter-trend trades unless A-tier with score >=80."
     )
 
 
