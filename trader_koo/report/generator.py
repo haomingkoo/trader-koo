@@ -747,6 +747,31 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 },
             }
             row.update(_score_setup_from_confluence(row))
+
+            # Enrich with 5-strategy technical ensemble
+            try:
+                from trader_koo.analysis.technical_ensemble import compute_technical_ensemble
+
+                ticker_ohlcv = conn.execute(
+                    "SELECT date, open, high, low, close, volume FROM price_daily "
+                    "WHERE ticker = ? AND close IS NOT NULL ORDER BY date ASC",
+                    (row.get("ticker"),),
+                ).fetchall()
+                if len(ticker_ohlcv) >= 64:
+                    import pandas as pd
+
+                    ticker_df = pd.DataFrame(
+                        ticker_ohlcv,
+                        columns=["date", "open", "high", "low", "close", "volume"],
+                    )
+                    ensemble = compute_technical_ensemble(ticker_df)
+                    row["ensemble_bias"] = ensemble["aggregate"]["bias"]
+                    row["ensemble_net_score"] = ensemble["aggregate"]["net_score"]
+                    row["ensemble_agreement_pct"] = ensemble["aggregate"]["agreement_pct"]
+                    row["ensemble_strategies"] = ensemble["strategies"]
+            except Exception as exc:
+                LOG.debug("Ensemble enrichment skipped for %s: %s", row.get("ticker"), exc)
+
             setup_rows.append(row)
 
         sector_rows: list[dict[str, Any]] = []
