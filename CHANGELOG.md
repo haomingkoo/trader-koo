@@ -5,11 +5,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Post-Sprint Fixes (PR #116)
+### Hyperliquid Whale Tracker (PRs #118-#119)
+- New module: `trader_koo/hyperliquid/` - track wallets and generate counter-trade signals
+- Default tracked wallet: machibro (`0x020ca66c...5872`)
+- Counter-trade signal logic: confidence scales with leverage, notional size, proximity to liquidation
+- Trade history with per-coin PnL breakdown (up to 10K fills via `user_fills_by_time`)
+- Open orders tracking
+- Hourly polling via APScheduler
+- Telegram alerts for whale position updates (uPnL, liq distance warnings)
+- API: `/api/hyperliquid/live/{label}`, `/api/hyperliquid/history/{label}`, `/api/hyperliquid/signals`
+- 8 unit tests
+
+### Post-Sprint Fixes (PRs #116-#117)
 - Technical ensemble wired into report pipeline (per-ticker, 5 strategies)
 - R-multiple now net of costs (was gross, inconsistent with net P&L)
 - SPY benchmark includes ~1.8% annual dividend yield
 - Unfiltered baseline aligned to 10-day hold (was 5-day)
+- Dynamic capital: position sizing uses current portfolio equity (not always $1M)
+- Polymarket alert "View" link fixed (was /pred-markets, now /markets)
 
 ## [1.1.0] - 2026-03-24
 

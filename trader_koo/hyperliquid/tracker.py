@@ -400,4 +400,52 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             all_signals.extend(signals)
             LOG.info("HL counter signals: %d generated for %s", saved, label)
 
+        # Send Telegram alert for notable positions
+        _send_telegram_whale_alert(snapshot)
+
     return all_signals
+
+
+def _send_telegram_whale_alert(snapshot: WalletSnapshot) -> None:
+    """Send Telegram alert if whale has notable positions."""
+    import os
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        return
+
+    if not snapshot.positions:
+        return
+
+    lines = [f"🐋 <b>{snapshot.wallet_label}</b> — ${snapshot.account_value:,.0f}"]
+    lines.append(f"Margin: {snapshot.margin_ratio:.0%} used")
+
+    for pos in snapshot.positions:
+        emoji = "🟢" if pos.side == "long" else "🔴"
+        pnl_emoji = "✅" if pos.unrealized_pnl > 0 else "❌"
+        lines.append(
+            f"{emoji} {pos.coin} {pos.side.upper()} {pos.size:,.1f} "
+            f"@ ${pos.entry_price:,.2f} ({pos.leverage_value}x)"
+        )
+        lines.append(
+            f"   {pnl_emoji} uPnL: ${pos.unrealized_pnl:+,.0f} "
+            f"| ${pos.notional_usd:,.0f} notional"
+        )
+        if pos.liquidation_price:
+            liq_dist = abs(pos.mark_price - pos.liquidation_price) / pos.mark_price * 100
+            if liq_dist < 10:
+                lines.append(f"   ⚠️ Liq price: ${pos.liquidation_price:,.2f} ({liq_dist:.1f}% away)")
+
+    text = "\n".join(lines)
+
+    try:
+        import httpx
+
+        httpx.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception as exc:
+        LOG.debug("Telegram whale alert failed: %s", exc)
