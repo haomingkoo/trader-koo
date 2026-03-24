@@ -161,6 +161,13 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         LOG.error("Regime context build failed: %s", exc, exc_info=True)
         _report_warnings.append("regime_context_failed")
         signals["regime_context"] = {}
+    # Cache VIX metrics in nightly report (avoids live recompute on every page load)
+    try:
+        from trader_koo.structure.vix_metrics import compute_vix_metrics
+        signals["vix_metrics"] = compute_vix_metrics(conn)
+    except Exception as exc:
+        LOG.debug("VIX metrics cache in report skipped: %s", exc)
+        signals["vix_metrics"] = None
     # Drain warnings accumulated by market_context functions.
     _report_warnings.extend(_mc_report_warnings)
     _mc_report_warnings.clear()
