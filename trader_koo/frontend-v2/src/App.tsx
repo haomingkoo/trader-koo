@@ -12,6 +12,7 @@ const OpportunitiesPage = lazy(() => import("./pages/OpportunitiesPage"));
 const PaperTradePage = lazy(() => import("./pages/PaperTradePage"));
 const CryptoPage = lazy(() => import("./pages/CryptoPage"));
 const PolymarketPage = lazy(() => import("./pages/PolymarketPage"));
+const HyperliquidPage = lazy(() => import("./pages/HyperliquidPage"));
 const MethodologyPage = lazy(() => import("./pages/MethodologyPage"));
 const AlertsPage = lazy(() => import("./pages/AlertsPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
@@ -102,6 +103,14 @@ export default function App() {
             <CryptoPage />,
             "Loading crypto dashboard",
             "Streaming price cards, indicators, and intraday bar history.",
+          )}
+        />
+        <Route
+          path="hyperliquid"
+          element={routeElement(
+            <HyperliquidPage />,
+            "Loading Hyperliquid tracker",
+            "Fetching whale positions and counter-trade signals.",
           )}
         />
         <Route

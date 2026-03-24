@@ -666,7 +666,7 @@ LOG.info("Logos static mount: %s", _LOGOS_DIR)
 # SPA routes at root level
 _SPA_ROUTES = {
     "report", "vix", "earnings", "chart", "crypto",
-    "opportunities", "paper-trades", "markets",
+    "opportunities", "paper-trades", "markets", "hyperliquid",
 }
 
 # Ensure .js files are served with correct MIME type (some Linux systems lack this)

@@ -12,6 +12,7 @@ import {
   BarChart3,
   Layers,
   Bell,
+  Fish,
   ChevronLeft,
   ChevronRight,
   X,
@@ -39,6 +40,7 @@ const navItems: NavItem[] = [
   { to: "/markets", label: "Pred Markets", Icon: BarChart3 },
   // Trading
   { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
+  { to: "/hyperliquid", label: "Hyperliquid", Icon: Fish },
   // Info
   { to: "/methodology", label: "Methodology", Icon: Layers },
 ];
