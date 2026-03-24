@@ -15,3 +15,4 @@ redis>=5.0.0
 websocket-client>=1.7
 hmmlearn>=0.3
 scikit-learn>=1.5
+hyperliquid-python-sdk>=0.22.0

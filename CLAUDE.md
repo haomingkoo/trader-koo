@@ -71,19 +71,23 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 - `GET /api/admin/yolo-events` — per-ticker YOLO outcomes (ok/skipped/timeout/failed)
 
 ## Known Issues (track here)
-- `data_source` column: old DB rows (pre-migration) have NULL — fixed via ALTER TABLE migration in `ensure_schema()`
-- `audit_logs` table: initialised at startup via `ensure_audit_schema(conn)` — if missing on prod, redeploy to trigger startup hook
-- LLM validation failures: fixed — sanitize before validate in `llm_narrative.py`
-- HMM regime fitting is now clipped/stabilized locally and the previous sklearn warnings no longer reproduce in the current pytest baseline
-- Market Sentiment widget now supports optional Alpha Vantage news sentiment, but it still does not use Twitter/Reddit social scraping
 - FRED features need bulk-fetch architecture (per-date API calls too slow for ML training)
 - Polymarket page shows aggregated YES/NO only — needs timeline sub-markets with individual date milestones
-- ML model AUC 0.5235 pre-fix. Bug fixes applied: early stopping, barrier alignment, intraday barrier touches, cross-sectional ranking. Retraining pending.
-- Frontend has zero test coverage
-- `test_v2_shell_routes_disable_caching` references deleted `/v2` routes (broken test)
-- VIX metrics caching: `regime_context` shape differs from `compute_vix_metrics()` return. Need to align fields or compute vix_metrics in nightly report.
-- Sentiment NLP: scores are too coarse (0/50/100). StockTwits rule-based scoring misclassifies sarcasm/neutral posts.
-- Pre-existing test failures: `test_alert_engine.py` (MAX_POLL_TICKERS import), `test_admin_auth.py` + `test_app.py` (/data read-only on macOS)
+- ML model AUC 0.5235 pre-fix. Bug fixes applied (mean_reversion, is_unbalance, noise filter, correlation audit). Retraining pending — needs prod DB data.
+- Frontend test coverage is sparse (12 test files, needs more assertions)
+- VIX metrics caching: `regime_context` shape differs from `compute_vix_metrics()` return
+- Sentiment NLP: scores are too coarse (0/50/100). StockTwits misclassifies sarcasm/neutral posts.
+- Pre-existing test failures: `test_admin_auth.py` + `test_app.py` (/data read-only on macOS)
+- Hyperliquid router not yet wired into main.py SPA route catch-all (needs frontend page)
+- Technical ensemble not yet influencing setup tier/score (outputs stored but not weighted into confluence)
+
+## Recent Changes (2026-03-24)
+- Paper trade realism overhaul: next-day open entry, slippage, commissions, borrow costs, gap fills, ADV gate
+- Sprint 1: CORS hardened, admin guard, datetime migration, test import fix
+- Sprint 2: VIX sizing, expectancy gate, daily loss breaker, Sortino/Calmar, directional HMM
+- Sprint 3: ML fixes (mean_reversion, is_unbalance, noise filter), signal ensemble (5 strategies)
+- Hyperliquid whale tracker: machibro counter-trade signals, hourly polling, Telegram alerts
+- Dynamic capital, R-multiple net of costs, SPY benchmark with dividends
 
 ## Recent Changes (2026-03-22)
 - Earnings markers: cross-validated against Finviz (no more false E BMO)

@@ -475,6 +475,26 @@ def _run_crypto_health_check() -> None:
         LOG.error("Crypto health check failed: %s", exc)
 
 
+def _run_hyperliquid_poll() -> None:
+    """Hourly: poll tracked Hyperliquid wallets for position changes."""
+    import sqlite3
+
+    _append_run_log("HL_POLL", "Hyperliquid poll started")
+    try:
+        from trader_koo.hyperliquid.tracker import poll_all_wallets
+
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            signals = poll_all_wallets(conn)
+            LOG.info("Hyperliquid poll complete: %d signals generated", len(signals))
+        finally:
+            conn.close()
+        _append_run_log("HL_POLL", f"Hyperliquid poll complete: {len(signals)} signals")
+    except Exception as exc:
+        LOG.warning("Hyperliquid poll failed: %s", exc)
+        _append_run_log("HL_POLL", f"Hyperliquid poll failed: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
@@ -581,5 +601,14 @@ def create_scheduler() -> BackgroundScheduler:
         )
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — macro alert job not registered")
+
+    # Hyperliquid whale tracker — hourly poll of tracked wallets
+    scheduler.add_job(
+        _run_hyperliquid_poll,
+        IntervalTrigger(hours=1),
+        id="hyperliquid_poll",
+        replace_existing=True,
+    )
+    LOG.info("Hyperliquid poll job registered: every 1h")
 
     return scheduler

@@ -85,6 +85,7 @@ from trader_koo.backend.routers.crypto import router as crypto_router
 from trader_koo.backend.routers.data_sync import router as data_sync_router
 from trader_koo.backend.routers.streaming import router as streaming_router
 from trader_koo.backend.routers.alerts import router as alerts_router
+from trader_koo.hyperliquid.routes import router as hyperliquid_router
 
 # Usage module helpers needed at startup
 from trader_koo.backend.routers.usage import (
@@ -647,6 +648,7 @@ app.include_router(data_sync_router)
 app.include_router(crypto_router)
 app.include_router(streaming_router)
 app.include_router(alerts_router)
+app.include_router(hyperliquid_router)
 
 # ---------------------------------------------------------------------------
 # Logos static mount — serve cached company logos from /data/logos
