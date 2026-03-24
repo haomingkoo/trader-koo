@@ -10,6 +10,8 @@ from trader_koo.backend.services.database import get_conn
 from trader_koo.hyperliquid.tracker import (
     ensure_hyperliquid_schema,
     fetch_wallet_fills,
+    fetch_wallet_history,
+    fetch_wallet_open_orders,
     fetch_wallet_state,
     generate_counter_signals,
     poll_all_wallets,
@@ -111,6 +113,44 @@ def get_wallet_fills(label: str, limit: int = 50) -> dict[str, Any]:
 
         fills = fetch_wallet_fills(row[0], limit=limit)
         return {"ok": True, "fills": fills, "count": len(fills)}
+    finally:
+        conn.close()
+
+
+@router.get("/api/hyperliquid/history/{label}")
+def get_trade_history(label: str, days: int = 7) -> dict[str, Any]:
+    """Fetch full trade history with PnL stats and per-coin breakdown."""
+    conn = get_conn()
+    try:
+        ensure_hyperliquid_schema(conn)
+        row = conn.execute(
+            "SELECT address FROM hyperliquid_wallets WHERE label = ? AND active = 1",
+            (label,),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"Wallet '{label}' not found"}
+
+        history = fetch_wallet_history(row[0], lookback_days=days)
+        return {"ok": True, "label": label, **history}
+    finally:
+        conn.close()
+
+
+@router.get("/api/hyperliquid/orders/{label}")
+def get_open_orders(label: str) -> dict[str, Any]:
+    """Fetch pending/open orders for a tracked wallet."""
+    conn = get_conn()
+    try:
+        ensure_hyperliquid_schema(conn)
+        row = conn.execute(
+            "SELECT address FROM hyperliquid_wallets WHERE label = ? AND active = 1",
+            (label,),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"Wallet '{label}' not found"}
+
+        orders = fetch_wallet_open_orders(row[0])
+        return {"ok": True, "label": label, "orders": orders, "count": len(orders)}
     finally:
         conn.close()
 

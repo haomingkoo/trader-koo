@@ -116,9 +116,9 @@ def fetch_wallet_state(
 
 def fetch_wallet_fills(
     wallet_address: str,
-    limit: int = 50,
+    limit: int = 2000,
 ) -> list[dict[str, Any]]:
-    """Fetch recent trade fills for a wallet."""
+    """Fetch recent trade fills for a wallet (up to 2000 from API)."""
     try:
         info = _get_info_client()
         fills = info.user_fills(wallet_address)
@@ -126,6 +126,85 @@ def fetch_wallet_fills(
     except Exception as exc:
         LOG.warning("Failed to fetch fills for %s: %s", wallet_address, exc)
         return []
+
+
+def fetch_wallet_open_orders(
+    wallet_address: str,
+) -> list[dict[str, Any]]:
+    """Fetch open/pending orders for a wallet."""
+    try:
+        info = _get_info_client()
+        return info.open_orders(wallet_address)
+    except Exception as exc:
+        LOG.warning("Failed to fetch open orders for %s: %s", wallet_address, exc)
+        return []
+
+
+def fetch_wallet_history(
+    wallet_address: str,
+    lookback_days: int = 30,
+) -> dict[str, Any]:
+    """Fetch full trade history and compute performance stats.
+
+    Returns historical fills with aggregated PnL, win rate, and per-coin breakdown.
+    Uses user_fills_by_time for deeper history (up to 10K fills).
+    """
+    import time as _time
+
+    try:
+        info = _get_info_client()
+        start_ms = int((_time.time() - lookback_days * 86400) * 1000)
+        fills = info.user_fills_by_time(wallet_address, start_ms)
+
+        if not fills:
+            return {"fills": [], "stats": {}, "by_coin": {}}
+
+        total_pnl = sum(float(f.get("closedPnl", 0)) for f in fills)
+        fees = sum(float(f.get("fee", 0)) for f in fills)
+        wins = sum(1 for f in fills if float(f.get("closedPnl", 0)) > 0)
+        losses = sum(1 for f in fills if float(f.get("closedPnl", 0)) < 0)
+        liqs = sum(1 for f in fills if f.get("liquidation"))
+
+        # Per-coin breakdown
+        by_coin: dict[str, dict[str, float | int]] = {}
+        for f in fills:
+            coin = f.get("coin", "?")
+            pnl = float(f.get("closedPnl", 0))
+            if coin not in by_coin:
+                by_coin[coin] = {"pnl": 0.0, "fills": 0, "wins": 0, "losses": 0}
+            by_coin[coin]["pnl"] += pnl
+            by_coin[coin]["fills"] += 1
+            if pnl > 0:
+                by_coin[coin]["wins"] += 1
+            elif pnl < 0:
+                by_coin[coin]["losses"] += 1
+
+        return {
+            "fill_count": len(fills),
+            "lookback_days": lookback_days,
+            "stats": {
+                "total_pnl": round(total_pnl, 2),
+                "total_fees": round(fees, 2),
+                "net_pnl": round(total_pnl - fees, 2),
+                "wins": wins,
+                "losses": losses,
+                "win_rate_pct": round(wins / (wins + losses) * 100, 1) if (wins + losses) > 0 else 0,
+                "liquidations": liqs,
+            },
+            "by_coin": {
+                coin: {
+                    "pnl": round(data["pnl"], 2),
+                    "fills": data["fills"],
+                    "win_rate_pct": round(
+                        data["wins"] / (data["wins"] + data["losses"]) * 100, 1
+                    ) if (data["wins"] + data["losses"]) > 0 else 0,
+                }
+                for coin, data in sorted(by_coin.items(), key=lambda x: x[1]["pnl"])
+            },
+        }
+    except Exception as exc:
+        LOG.warning("Failed to fetch wallet history for %s: %s", wallet_address, exc)
+        return {"fills": [], "stats": {}, "by_coin": {}}
 
 
 def generate_counter_signals(snapshot: WalletSnapshot) -> list[dict[str, Any]]:
