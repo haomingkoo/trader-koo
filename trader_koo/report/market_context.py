@@ -399,7 +399,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
         level_source = "shared_level_engine"
         try:
             model = pd.DataFrame(vix_rows).copy()
-            if len(model) >= REPORT_FEATURE_CFG.min_bars:
+            if len(model) >= max(REPORT_FEATURE_CFG.atr_length * 2, 30):
                 model = add_basic_features(model, REPORT_FEATURE_CFG)
                 model = compute_pivots(model, REPORT_FEATURE_CFG)
                 levels_raw = build_levels_from_pivots(model, REPORT_LEVEL_CFG)
