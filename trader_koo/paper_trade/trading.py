@@ -108,8 +108,7 @@ def _close_trade(
         "SELECT position_size_pct FROM paper_trades WHERE id = ?", (trade_id,),
     ).fetchone()
     pos_pct = float(position_row[0] or 8.0) if position_row and position_row[0] is not None else 8.0
-    starting_capital = 1_000_000.0
-    notional = starting_capital * (pos_pct / 100)
+    notional = config.starting_capital * (pos_pct / 100)
     commission_cost_pct = (config.commission_per_trade * 2 / notional) * 100 if notional > 0 else 0
 
     # 2. Short borrow cost (annualized, pro-rated to TRADING days held)
@@ -277,6 +276,18 @@ def create_paper_trades_from_report(
     except Exception:
         pass
 
+    # Current portfolio equity for position sizing (adapts as equity changes)
+    _current_equity = config.starting_capital
+    try:
+        _eq_row = conn.execute(
+            "SELECT equity_index FROM paper_portfolio_snapshots "
+            "ORDER BY snapshot_date DESC LIMIT 1"
+        ).fetchone()
+        if _eq_row and _eq_row[0] is not None:
+            _current_equity = config.starting_capital * (float(_eq_row[0]) / 100.0)
+    except Exception:
+        pass
+
     for row in setup_rows:
         if inserted >= remaining_slots:
             break
@@ -331,7 +342,7 @@ def create_paper_trades_from_report(
             if vol_row and vol_row[0] and vol_row[0] > 0:
                 avg_daily_volume = float(vol_row[0])
                 position_pct = float(plan.get("position_size_pct") or 8.0)
-                position_dollars = 1_000_000.0 * (position_pct / 100)
+                position_dollars = config.starting_capital * (position_pct / 100)
                 position_shares = position_dollars / entry_price if entry_price > 0 else 0
                 adv_pct = (position_shares / avg_daily_volume) * 100 if avg_daily_volume > 0 else 0
                 if adv_pct > config.max_adv_pct:

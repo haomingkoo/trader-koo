@@ -450,7 +450,8 @@ def paper_trade_summary(
         return {
             "overall": {
                 "total_trades": 0, "open_count": open_trades,
-                "starting_capital": 1_000_000.0, "portfolio_value": 1_000_000.0,
+                "starting_capital": config.starting_capital if config else 1_000_000.0,
+                "portfolio_value": config.starting_capital if config else 1_000_000.0,
                 "realized_pnl": 0, "unrealized_pnl": 0, "total_return_pct": 0,
             },
             "by_direction": {},
@@ -482,8 +483,8 @@ def paper_trade_summary(
     hit_target_count = sum(1 for row in all_closed if row[5] == "target_hit")
     stopped_out_count = sum(1 for row in all_closed if row[5] == "stopped_out")
 
-    # Portfolio value tracking ($1M starting capital)
-    STARTING_CAPITAL = 1_000_000.0
+    # Portfolio value tracking
+    STARTING_CAPITAL = config.starting_capital if config else 1_000_000.0
     # Each closed trade's PnL is position_size_pct × pnl_pct / 100
     # Default position size ~8% (tier B), so each trade risks ~8% of capital
     realized_pnl_dollars = 0.0

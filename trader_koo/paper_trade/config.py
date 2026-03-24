@@ -37,6 +37,7 @@ class PaperTradeConfig:
     ml_min_win_prob: float = 0.55
     max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
     max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this
+    starting_capital: float = 1_000_000.0  # initial paper portfolio value
     # Realism costs (conservative defaults — better to overestimate than underestimate)
     entry_slippage_bps: float = 10.0  # 10 bps entry slippage (0.10%)
     exit_slippage_bps: float = 10.0  # 10 bps exit slippage on stop-market orders
