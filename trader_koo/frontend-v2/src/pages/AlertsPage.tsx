@@ -32,6 +32,11 @@ const SEVERITY_VARIANT: Record<string, "red" | "amber" | "muted"> = {
   low: "muted",
 };
 
+function extractTicker(title: string): string | null {
+  const match = title.match(/^([A-Z]{1,5})\s/);
+  return match ? match[1] : null;
+}
+
 function AlertCard({ alert }: { alert: AlertItem }) {
   const Icon = TYPE_ICON[alert.type] ?? TrendingUp;
   const severityVariant = SEVERITY_VARIANT[alert.severity] ?? "muted";
@@ -43,7 +48,10 @@ function AlertCard({ alert }: { alert: AlertItem }) {
         ? "border-l-[var(--amber)]"
         : "border-l-[var(--line)]";
 
-  const hasLink = alert.external_url || alert.internal_path;
+  // Auto-link price alerts to chart page
+  const ticker = alert.type === "price_alert" ? extractTicker(alert.title) : null;
+  const linkPath = alert.internal_path || (ticker ? `/chart?ticker=${ticker}` : null);
+  const hasLink = alert.external_url || linkPath;
 
   const content = (
     <div className="flex items-start gap-3">
@@ -84,11 +92,11 @@ function AlertCard({ alert }: { alert: AlertItem }) {
     </div>
   );
 
-  if (alert.internal_path) {
+  if (linkPath) {
     return (
       <Link
-        to={alert.internal_path}
-        className={`block rounded-lg border border-[var(--line)] border-l-4 ${borderColor} bg-[var(--panel)] p-4 transition-colors hover:bg-[var(--panel-hover)] ${hasLink ? "cursor-pointer" : ""}`}
+        to={linkPath}
+        className={`block rounded-lg border border-[var(--line)] border-l-4 ${borderColor} bg-[var(--panel)] p-4 transition-colors hover:bg-[var(--panel-hover)] cursor-pointer`}
       >
         {content}
       </Link>
