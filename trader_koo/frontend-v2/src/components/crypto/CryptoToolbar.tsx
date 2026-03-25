@@ -182,8 +182,8 @@ export default function CryptoToolbar({
 
       {/* ── Desktop layout (>= sm) — unchanged ── */}
       <div className="hidden sm:block sm:space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 overflow-hidden">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
             <div className="flex gap-1">
               {allSymbols.map((sym) => (
                 <button
@@ -215,13 +215,13 @@ export default function CryptoToolbar({
               ))}
             </div>
           </div>
-          <div className="text-right text-xs text-[var(--muted)]">
-            <div>
+          <div className="min-w-0 shrink text-right text-xs text-[var(--muted)]">
+            <div className="truncate">
               {availableBarCount > 0
                 ? `${availableBarCount} bars \u00b7 ${formatVisibleWindow(selectedInterval, availableBarCount)} visible`
                 : `Target window ${currentInterval.targetWindow}`}
             </div>
-            <div>{selectedSymbol.replace("-USD", "")} from native Binance history with live 1-minute patching</div>
+            <div className="truncate">{selectedSymbol.replace("-USD", "")} from native Binance history with live 1-minute patching</div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
