@@ -404,27 +404,27 @@ class AlertEngine:
                     continue
                 self._cooldowns[cooldown_key] = now_ts
 
-            sent = send_price_alert(
+            # Always persist to DB (Alerts page shows all)
+            self._persist_alert(
                 ticker=ticker,
-                current_price=price,
                 level=level,
-                level_type=entry["level_type"],
+                price=price,
+                alert_type=alert_type,
                 setup_tier=entry["setup_tier"],
                 bias=entry["bias"],
-                alert_type=alert_type,
             )
-            if sent:
-                self._persist_alert(
+
+            # Only send Telegram for breakouts/breakdowns (high severity)
+            is_breakout = alert_type in ("breakout_above_resistance", "breakdown_below_support")
+            if is_breakout:
+                send_price_alert(
                     ticker=ticker,
+                    current_price=price,
                     level=level,
-                    price=price,
-                    alert_type=alert_type,
+                    level_type=entry["level_type"],
                     setup_tier=entry["setup_tier"],
                     bias=entry["bias"],
-                )
-            else:
-                LOG.warning(
-                    "Failed to send alert for %s at %.2f", ticker, price
+                    alert_type=alert_type,
                 )
 
     def _persist_alert(
