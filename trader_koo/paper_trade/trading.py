@@ -654,6 +654,18 @@ def mark_to_market(
         except (ValueError, TypeError):
             pass
 
+        # Compute original risk from ATR (fixed value, not affected by trailing)
+        atr_row = conn.execute(
+            "SELECT atr_at_entry FROM paper_trades WHERE id = ?", (trade_id,),
+        ).fetchone()
+        atr_at_entry = float(atr_row[0]) if atr_row and atr_row[0] else None
+        # Original risk = ATR-based stop distance (what the stop was set from)
+        if atr_at_entry is not None and atr_at_entry > 0 and entry_price > 0:
+            original_risk = entry_price * (atr_at_entry / 100)
+        else:
+            # Fallback: use default stop % from config
+            original_risk = entry_price * (config.default_stop_pct / 100)
+
         if hit_stop:
             _close_trade(
                 conn,
@@ -695,26 +707,24 @@ def mark_to_market(
             closed += 1
         else:
             # Trailing stop logic: protect profits on winning trades
+            # Uses original_risk (from ATR at entry), NOT current stop distance,
+            # so trailing stop still works after breakeven/trail updates.
             new_stop = stop_loss
-            if stop_loss is not None and entry_price > 0:
-                risk = abs(entry_price - stop_loss)
-                if risk > 0:
-                    if direction == "long":
-                        current_r = (new_hwm - entry_price) / risk
-                        if current_r >= 1.5:
-                            # Trail stop at HWM minus 0.5R
-                            trail_stop = new_hwm - (0.5 * risk)
-                            new_stop = max(stop_loss, trail_stop)
-                        elif current_r >= 1.0:
-                            # Move stop to breakeven
-                            new_stop = max(stop_loss, entry_price)
-                    else:  # short
-                        current_r = (entry_price - new_lwm) / risk
-                        if current_r >= 1.5:
-                            trail_stop = new_lwm + (0.5 * risk)
-                            new_stop = min(stop_loss, trail_stop)
-                        elif current_r >= 1.0:
-                            new_stop = min(stop_loss, entry_price)
+            if original_risk > 0 and entry_price > 0:
+                if direction == "long":
+                    current_r = (new_hwm - entry_price) / original_risk
+                    if current_r >= 1.5:
+                        trail_stop = new_hwm - (0.5 * original_risk)
+                        new_stop = max(stop_loss or 0, trail_stop)
+                    elif current_r >= 1.0:
+                        new_stop = max(stop_loss or 0, entry_price)
+                else:  # short
+                    current_r = (entry_price - new_lwm) / original_risk
+                    if current_r >= 1.5:
+                        trail_stop = new_lwm + (0.5 * original_risk)
+                        new_stop = min(stop_loss or entry_price, trail_stop)
+                    elif current_r >= 1.0:
+                        new_stop = min(stop_loss or entry_price, entry_price)
 
             now = dt.datetime.now(dt.timezone.utc).isoformat()
             conn.execute(
