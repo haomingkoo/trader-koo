@@ -299,19 +299,59 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
         </div>
       )}
 
+      {/* Strategy Comparison Table */}
+      {backtest && (() => {
+        const stratKeys = Object.keys(backtest).filter(k => k !== "trader_equity_curve" && typeof backtest[k] === "object" && "trades" in (backtest[k] as Record<string, unknown>));
+        if (!stratKeys.length) return null;
+        type StratData = { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; description?: string; equity_curve: { date: string; equity: number }[] };
+        const strats = stratKeys.map(k => ({ key: k, ...(backtest[k] as unknown as StratData) }));
+        return (
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
+            <h4 className="text-sm font-bold text-[var(--text)] mb-3">Strategy Backtest Comparison</h4>
+            <p className="text-xs text-[var(--muted)] mb-4">
+              All strategies: 1x leverage, 5% position sizing, max $50K per trade, realistic costs.
+              $100K starting capital, Jul 2025 - Nov 2025.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                    <th className="py-2 text-left">Strategy</th>
+                    <th className="py-2 text-right">Trades</th>
+                    <th className="py-2 text-right">Win Rate</th>
+                    <th className="py-2 text-right">Return</th>
+                    <th className="py-2 text-right">Max DD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strats.map((s) => (
+                    <tr key={s.key} className="border-b border-[var(--line)]/50">
+                      <td className="py-2 text-[var(--text)]">{(s as StratData & { key: string }).description || s.key}</td>
+                      <td className="py-2 text-right text-[var(--muted)]">{s.trades}</td>
+                      <td className={`py-2 text-right font-medium ${s.win_rate_pct >= 75 ? "text-[var(--green)]" : s.win_rate_pct >= 60 ? "text-[var(--text)]" : "text-[var(--amber)]"}`}>{s.win_rate_pct}%</td>
+                      <td className="py-2 text-right font-medium text-[var(--green)]">+{s.return_pct}%</td>
+                      <td className="py-2 text-right text-[var(--muted)]">{s.max_drawdown_pct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Backtest Equity Curve */}
       {backtest && (() => {
-        const strat = backtest.counter_25m as { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; equity_curve: { date: string; equity: number }[] } | undefined;
+        const strat = (backtest.counter_25m_held_7d || backtest.counter_25m) as { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; equity_curve: { date: string; equity: number }[] } | undefined;
         const traderCurve = backtest.trader_equity_curve as { date: string; equity: number }[] | undefined;
         if (!strat?.equity_curve?.length) return null;
         return (
           <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
             <h4 className="text-sm font-bold text-[var(--text)] mb-1">
-              Backtest: Counter-Trade vs Trader Performance
+              Equity Curve: Best Strategy vs Trader
             </h4>
             <p className="text-xs text-[var(--muted)] mb-3">
-              Equity curve comparison. Counter-trade strategy: short when notional exceeds $25M.
-              Both normalized to $100K starting capital with 5% position sizing.
+              Counter >$25M held &gt;7 days (88.9% WR). Both normalized to $100K, 1x leverage, 5% sizing.
             </p>
 
             {/* Stats row */}
