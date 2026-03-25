@@ -489,8 +489,8 @@ def _send_telegram_signal_alert(
     if not bot_token or not chat_id:
         return
 
-    # Filter for actionable signals only
-    actionable = [s for s in signals if s.get("action") in ("COUNTER", "LEAN_COUNTER")]
+    # Send for all signals that have a score
+    actionable = [s for s in signals if s.get("score", 0) >= 0]
     if not actionable:
         return
 
