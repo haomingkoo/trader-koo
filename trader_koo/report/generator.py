@@ -1052,22 +1052,28 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         LOG.error("Candle patterns / setup scoring section failed: %s", exc, exc_info=True)
         _report_warnings.append("candle_patterns_section_failed")
 
-    # ── Pre-compute HMM regime for all tracked tickers ────────────────────
+    # ── Pre-compute HMM regime for top setup tickers only ─────────────────
+    #    Full 536-ticker HMM takes 8+ hours on Railway with cold cache.
+    #    Only pre-compute for the top-40 report setups + market context tickers.
+    #    Other tickers get HMM on-demand via the chart endpoint (cached 24h).
     try:
         import pandas as pd
         from trader_koo.structure.hmm_regime import predict_regimes as hmm_predict_regimes
 
-        lookup_tickers = list((signals.get("setup_quality_lookup") or {}).keys())
-        if not lookup_tickers:
-            lookup_tickers = [
-                str(r[0] or "").upper()
-                for r in conn.execute("SELECT DISTINCT ticker FROM price_daily").fetchall()
-                if str(r[0] or "").strip()
-            ]
+        # Top setup tickers (actionable) + market context tickers
+        _top_setup_tickers = [
+            str(r.get("ticker") or "").upper()
+            for r in (signals.get("setup_quality_top") or [])
+            if isinstance(r, dict) and r.get("ticker")
+        ]
+        _market_ctx_tickers = ["^VIX", "SPY", "QQQ"]
+        lookup_tickers = list(dict.fromkeys(_top_setup_tickers + _market_ctx_tickers))
         hmm_cache: dict[str, dict[str, Any]] = {}
         hmm_t0 = dt.datetime.now(dt.timezone.utc)
+        _HMM_PER_TICKER_TIMEOUT = 120  # seconds
         for ticker_sym in lookup_tickers:
             try:
+                ticker_t0 = dt.datetime.now(dt.timezone.utc)
                 rows = conn.execute(
                     "SELECT date, open, high, low, close, volume FROM price_daily WHERE ticker = ? ORDER BY date",
                     (ticker_sym,),
@@ -1076,6 +1082,9 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     continue
                 df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
                 result = hmm_predict_regimes(df, ticker=ticker_sym)
+                ticker_elapsed = (dt.datetime.now(dt.timezone.utc) - ticker_t0).total_seconds()
+                if ticker_elapsed > _HMM_PER_TICKER_TIMEOUT:
+                    LOG.warning("HMM regime: %s took %.1fs (exceeded %ds timeout)", ticker_sym, ticker_elapsed, _HMM_PER_TICKER_TIMEOUT)
                 if result is not None:
                     hmm_cache[ticker_sym] = {
                         "current_state": result.get("current_state"),
