@@ -49,7 +49,7 @@ export default function ChartPage() {
   const [urlConsumed, setUrlConsumed] = useState(false);
   useEffect(() => {
     if (urlConsumed) return;
-    const urlTicker = searchParams.get("t");
+    const urlTicker = searchParams.get("t") || searchParams.get("ticker");
     if (urlTicker) {
       const clean = urlTicker.trim().toUpperCase();
       if (clean) {
