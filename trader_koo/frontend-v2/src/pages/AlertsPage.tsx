@@ -51,7 +51,7 @@ function AlertCard({ alert }: { alert: AlertItem }) {
   // Auto-link price alerts to chart page
   const ticker = alert.type === "price_alert" ? extractTicker(alert.title) : null;
   const linkPath = alert.internal_path || (ticker ? `/chart?ticker=${ticker}` : null);
-  const hasLink = alert.external_url || linkPath;
+  // linkPath handles both internal_path and auto-generated chart links
 
   const content = (
     <div className="flex items-start gap-3">
