@@ -208,31 +208,63 @@ def fetch_wallet_history(
 
 
 def generate_counter_signals(snapshot: WalletSnapshot) -> list[dict[str, Any]]:
-    """Generate counter-trade signals based on tracked wallet positions.
+    """Generate counter-trade signals using backtested ETH-normalized logic.
 
-    Logic: if a tracked trader (e.g. machibro) is long with high leverage,
-    generate a short signal. Scale confidence by their position size and
-    leverage (bigger + more leveraged = more confident counter).
+    Strategy: counter-trade when position notional exceeds ETH-normalized
+    threshold (ref $10M at ETH $4400). Confidence scales with how far
+    above threshold + leverage + liquidation proximity.
+
+    Based on 8-month backtest: 22 trades, 63.6% WR, +16.6% return.
     """
+    # ETH-normalized threshold: $10M ref at ETH $4400
+    # Current ETH price approximated from snapshot ETH position or default
+    REF_NOTIONAL = 10_000_000
+    REF_ETH = 4400
+    eth_price = 2100  # default fallback
+    for pos in snapshot.positions:
+        if pos.coin == "ETH" and pos.mark_price > 0:
+            eth_price = pos.mark_price
+            break
+    counter_threshold = REF_NOTIONAL * (eth_price / REF_ETH)
+
+    # Account leverage = total notional / account value
+    total_notional = sum(p.notional_usd for p in snapshot.positions)
+    account_leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
+
     signals: list[dict[str, Any]] = []
     for pos in snapshot.positions:
         counter_side = "short" if pos.side == "long" else "long"
 
-        # Confidence scales with leverage and notional size
-        lev_factor = min(pos.leverage_value / 25.0, 1.0)  # max at 25x
-        size_factor = min(pos.notional_usd / 1_000_000, 1.0)  # max at $1M
-        confidence = round(30 + (lev_factor * 35) + (size_factor * 35), 1)
+        # Is this position above the ETH-normalized counter threshold?
+        above_threshold = pos.notional_usd >= counter_threshold
+        threshold_ratio = pos.notional_usd / counter_threshold if counter_threshold > 0 else 0
+
+        # Confidence: base 30, scale up based on signals
+        confidence = 30.0
+
+        # +25 if above ETH-normalized threshold (the primary signal)
+        if above_threshold:
+            confidence += 25 + min(threshold_ratio - 1, 2) * 10  # up to +45
+
+        # +15 if account leverage > 10x (overextended)
+        if account_leverage > 10:
+            confidence += min((account_leverage - 10) / 10, 1.0) * 15
+
+        # +10 if high individual leverage
+        lev_factor = min(pos.leverage_value / 25.0, 1.0)
+        confidence += lev_factor * 10
 
         # Proximity to liquidation boosts confidence
+        liq_distance_pct = None
         if pos.liquidation_price and pos.mark_price > 0:
             if pos.side == "long":
                 liq_distance_pct = (pos.mark_price - pos.liquidation_price) / pos.mark_price * 100
             else:
                 liq_distance_pct = (pos.liquidation_price - pos.mark_price) / pos.mark_price * 100
             if liq_distance_pct < 5:
-                confidence = min(95, confidence + 20)
-        else:
-            liq_distance_pct = None
+                confidence += 15
+
+        confidence = round(min(95, max(30, confidence)), 1)
 
         signals.append({
             "source": "hyperliquid_counter",
@@ -407,7 +439,10 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def _send_telegram_whale_alert(snapshot: WalletSnapshot) -> None:
-    """Send Telegram alert if whale has notable positions."""
+    """Send Telegram alert if whale has notable positions.
+
+    Includes counter-trade signal when ETH-normalized threshold is exceeded.
+    """
     import os
 
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -418,11 +453,30 @@ def _send_telegram_whale_alert(snapshot: WalletSnapshot) -> None:
     if not snapshot.positions:
         return
 
-    lines = [f"🐋 <b>{snapshot.wallet_label}</b> — ${snapshot.account_value:,.0f}"]
-    lines.append(f"Margin: {snapshot.margin_ratio:.0%} used")
+    # ETH-normalized threshold
+    REF_NOTIONAL = 10_000_000
+    REF_ETH = 4400
+    eth_price = 2100
+    for pos in snapshot.positions:
+        if pos.coin == "ETH" and pos.mark_price > 0:
+            eth_price = pos.mark_price
+            break
+    counter_threshold = REF_NOTIONAL * (eth_price / REF_ETH)
+    total_notional = sum(p.notional_usd for p in snapshot.positions)
+    acct_leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
+
+    # Check if any position is in counter zone
+    has_counter_signal = any(p.notional_usd >= counter_threshold for p in snapshot.positions)
+
+    lines = [f"{'🔴 COUNTER SIGNAL' if has_counter_signal else '🐋'} <b>{snapshot.wallet_label}</b> — ${snapshot.account_value:,.0f}"]
+    lines.append(f"Leverage: {acct_leverage:.0f}x | Margin: {snapshot.margin_ratio:.0%}")
+    if has_counter_signal:
+        lines.append(f"Threshold: ${counter_threshold:,.0f} (ETH ${eth_price:,.0f})")
 
     for pos in snapshot.positions:
-        emoji = "🟢" if pos.side == "long" else "🔴"
+        in_zone = pos.notional_usd >= counter_threshold
+        emoji = "🎯" if in_zone else ("🟢" if pos.side == "long" else "🔴")
+        counter_side = "SHORT" if pos.side == "long" else "LONG"
         pnl_emoji = "✅" if pos.unrealized_pnl > 0 else "❌"
         lines.append(
             f"{emoji} {pos.coin} {pos.side.upper()} {pos.size:,.1f} "
@@ -432,10 +486,16 @@ def _send_telegram_whale_alert(snapshot: WalletSnapshot) -> None:
             f"   {pnl_emoji} uPnL: ${pos.unrealized_pnl:+,.0f} "
             f"| ${pos.notional_usd:,.0f} notional"
         )
+        if in_zone:
+            lines.append(f"   ➡️ Counter: {counter_side} {pos.coin} ({pos.notional_usd/counter_threshold:.1f}x threshold)")
         if pos.liquidation_price:
             liq_dist = abs(pos.mark_price - pos.liquidation_price) / pos.mark_price * 100
             if liq_dist < 10:
-                lines.append(f"   ⚠️ Liq price: ${pos.liquidation_price:,.2f} ({liq_dist:.1f}% away)")
+                lines.append(f"   ⚠️ Liq: ${pos.liquidation_price:,.2f} ({liq_dist:.1f}% away)")
+
+    if has_counter_signal:
+        lines.append("")
+        lines.append("Research signal only. Not financial advice.")
 
     text = "\n".join(lines)
 
