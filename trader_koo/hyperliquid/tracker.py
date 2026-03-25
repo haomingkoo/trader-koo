@@ -468,7 +468,7 @@ def _send_telegram_whale_alert(snapshot: WalletSnapshot) -> None:
     # Check if any position is in counter zone
     has_counter_signal = any(p.notional_usd >= counter_threshold for p in snapshot.positions)
 
-    lines = [f"{'🔴 COUNTER SIGNAL' if has_counter_signal else '🐋'} <b>{snapshot.wallet_label}</b> — ${snapshot.account_value:,.0f}"]
+    lines = [f"{'🟢 COUNTER SIGNAL' if has_counter_signal else '🐋'} <b>{snapshot.wallet_label}</b> — ${snapshot.account_value:,.0f}"]
     lines.append(f"Leverage: {acct_leverage:.0f}x | Margin: {snapshot.margin_ratio:.0%}")
     if has_counter_signal:
         lines.append(f"Threshold: ${counter_threshold:,.0f} (ETH ${eth_price:,.0f})")
