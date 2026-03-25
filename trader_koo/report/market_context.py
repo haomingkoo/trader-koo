@@ -401,7 +401,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
             model = pd.DataFrame(vix_rows).copy()
             if len(model) >= max(REPORT_FEATURE_CFG.atr_length * 2, 30):
                 model = add_basic_features(model, REPORT_FEATURE_CFG)
-                model = compute_pivots(model, REPORT_FEATURE_CFG)
+                model = compute_pivots(model, left=3, right=3)
                 levels_raw = build_levels_from_pivots(model, REPORT_LEVEL_CFG)
                 levels = select_target_levels(levels_raw, float(latest), REPORT_LEVEL_CFG)
                 levels = add_fallback_levels(model, levels, float(latest), REPORT_LEVEL_CFG)

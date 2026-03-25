@@ -14,12 +14,16 @@ from fastapi import APIRouter, Query
 LOG = logging.getLogger("trader_koo.routers.system")
 
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
-from trader_koo.backend.services.market_data import days_since, hours_since
+from trader_koo.backend.services.market_data import days_since, hours_since, parse_iso_utc
 from trader_koo.backend.services.pipeline import (
     get_cached_status,
     pipeline_status_snapshot,
     post_ingest_resume_candidate,
     set_cached_status,
+)
+from trader_koo.backend.services.report_loader import (
+    is_report_fresh,
+    latest_daily_report_json,
 )
 from trader_koo.llm_narrative import llm_status
 from trader_koo.security.endpoint_validator import sanitize_public_response
@@ -32,6 +36,7 @@ router = APIRouter()
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 LOG_DIR = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
+REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 RUN_LOG_PATH = LOG_DIR / "cron_daily.log"
 
 EXPOSE_STATUS_INTERNAL = str(os.getenv("TRADER_KOO_EXPOSE_STATUS_INTERNAL", "0")).strip().lower() in {
@@ -304,11 +309,24 @@ def status() -> dict[str, Any]:
         fund_age_hours = hours_since(latest_fund_snapshot, now)
         opt_age_hours = hours_since(latest_opt_snapshot, now)
 
+        # Report freshness
+        _, report_payload = latest_daily_report_json(REPORT_DIR)
+        report_generated_ts_str = (report_payload or {}).get("generated_ts")
+        report_generated_ts = parse_iso_utc(report_generated_ts_str)
+        report_age_hours = (
+            (now - report_generated_ts).total_seconds() / 3600
+            if report_generated_ts is not None
+            else None
+        )
+        report_fresh = is_report_fresh(report_payload)
+
         warnings: list[str] = []
         if price_age_days is None or price_age_days > 3:
             warnings.append("price_daily stale")
         if fund_age_hours is None or fund_age_hours > 48:
             warnings.append("finviz_fundamentals stale")
+        if not report_fresh:
+            warnings.append("daily_report stale")
 
         latest_run = dict(run_row) if run_row is not None else None
         if latest_run and latest_run.get("status") in {"failed"}:
@@ -428,6 +446,9 @@ def status() -> dict[str, Any]:
                 "price_age_days": None if price_age_days is None else round(price_age_days, 2),
                 "fund_age_hours": None if fund_age_hours is None else round(fund_age_hours, 2),
                 "opt_age_hours": None if opt_age_hours is None else round(opt_age_hours, 2),
+                "report_age_hours": None if report_age_hours is None else round(report_age_hours, 2),
+                "report_generated_ts": report_generated_ts_str,
+                "report_fresh": report_fresh,
             },
             "counts": {
                 "tracked_tickers": counts["tracked_tickers"] if counts else 0,
