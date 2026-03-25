@@ -225,3 +225,21 @@ def trigger_poll() -> dict[str, Any]:
         }
     finally:
         conn.close()
+
+
+@router.get("/api/hyperliquid/study/{label}")
+def get_counter_trade_study(label: str) -> dict[str, Any]:
+    """Counter-trade study analysis for a tracked wallet.
+
+    Returns position cycle reconstruction, notional regime analysis,
+    duration patterns, coin breakdown, and strategy rules.
+
+    Research only. Not financial advice.
+    """
+    from trader_koo.hyperliquid.study import compute_study
+
+    conn = get_conn()
+    try:
+        return compute_study(conn, wallet=label)
+    finally:
+        conn.close()
