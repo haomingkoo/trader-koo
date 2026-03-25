@@ -463,7 +463,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
               Equity Curve: Best Strategy vs Trader
             </h4>
             <p className="text-xs text-[var(--muted)] mb-3">
-              Counter >$25M held &gt;7 days (88.9% WR). Both normalized to $100K, 1x leverage, 5% sizing.
+              {"Counter >$25M held >7 days (88.9% WR). Both normalized to $100K, 1x leverage, 5% sizing."}
             </p>
 
             {/* Stats row */}
