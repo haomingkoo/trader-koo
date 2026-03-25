@@ -24,7 +24,7 @@ def _check_conviction_grade(
     row: dict[str, Any],
     evaluation: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Only A-tier or A-equivalent setups with high scores pass."""
+    """Filter by tier and score. B-tier is the workhorse of the pipeline."""
     tier = str(row.get("setup_tier") or "").upper().strip()
     score = float(row.get("score") or 0)
 
@@ -33,11 +33,16 @@ def _check_conviction_grade(
     if tier == "A" and score >= 65:
         return True, f"A-tier with score {score:.0f} — acceptable conviction"
 
-    # B-tier can pass ONLY with exceptional score AND clean approval
-    if tier == "B" and score >= 85 and evaluation.get("decision_state") == "approved":
-        return True, f"B-tier but exceptional score {score:.0f} with clean approval"
+    # B-tier passes with solid score (70+). Most actionable setups land here.
+    if tier == "B" and score >= 75:
+        return True, f"B-tier with score {score:.0f} — good conviction"
+    if tier == "B" and score >= 70:
+        decision = evaluation.get("decision_state", "")
+        if decision in ("approved", "approved_with_flags"):
+            return True, f"B-tier with score {score:.0f} — adequate conviction ({decision})"
+        return False, f"B-tier score {score:.0f} OK but decision_state='{decision}' needs approval"
 
-    return False, f"Conviction too low: tier={tier}, score={score:.0f}. Need A-tier ≥65 or B-tier ≥85 with clean approval."
+    return False, f"Conviction too low: tier={tier}, score={score:.0f}. Need A-tier ≥65 or B-tier ≥70 with approval."
 
 
 def _check_debate_strength(
@@ -74,9 +79,13 @@ def _check_regime_alignment(
     evaluation: dict[str, Any],
     market_ctx: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Direction must align with regime — no counter-trend trades in strong trends."""
+    """Direction should align with regime. VIX regime matters:
+    high_vol = favor shorts, low_vol = allow longs, normal = either.
+    HMM directional regime is the tiebreaker.
+    """
     direction = str(evaluation.get("direction") or "").lower()
     regime = str(market_ctx.get("regime_state_at_entry") or "").lower()
+    vix = market_ctx.get("vix_at_entry")
 
     if not regime or regime == "unknown":
         return True, "Regime unknown — no alignment check"
@@ -84,12 +93,25 @@ def _check_regime_alignment(
     is_bull = "bull" in regime
     is_bear = "bear" in regime
 
-    # Long in bull regime = aligned
+    # VIX regime context — high vol favors shorts, low vol favors longs
+    vix_regime = "normal"
+    if isinstance(vix, (int, float)):
+        if vix > 25:
+            vix_regime = "high_vol"
+        elif vix < 16:
+            vix_regime = "low_vol"
+
+    # Aligned trades always pass
     if direction == "long" and is_bull:
         return True, f"Long in {regime} — aligned with trend"
-    # Short in bear regime = aligned
     if direction == "short" and is_bear:
         return True, f"Short in {regime} — aligned with trend"
+
+    # VIX regime alignment (shorts in high vol, longs in low vol)
+    if direction == "short" and vix_regime == "high_vol":
+        return True, f"Short in high-vol VIX regime ({vix:.1f}) — regime-appropriate"
+    if direction == "long" and vix_regime == "low_vol":
+        return True, f"Long in low-vol VIX regime ({vix:.1f}) — regime-appropriate"
 
     # Check directional HMM regime (more precise than VIX-based regime)
     dir_regime = str(market_ctx.get("directional_regime_at_entry") or "").lower()
@@ -103,22 +125,27 @@ def _check_regime_alignment(
             or (direction == "short" and dir_regime == "bullish")
         )
         if hmm_counter:
+            # Hard block only for low-conviction counter-trend
+            tier = str(row.get("setup_tier") or "").upper()
+            score = float(row.get("score") or 0)
+            if tier == "A" and score >= 75:
+                return True, f"Counter-trend ({direction} vs HMM '{dir_regime}') but A-tier {score:.0f} — allowed"
             return False, (
                 f"Counter-trend: {direction} in HMM directional regime '{dir_regime}'. "
-                "Critic rejects trades opposing the directional HMM regime."
+                "Need A-tier ≥75 to override."
             )
         if hmm_aligned:
             return True, f"{direction.title()} aligned with HMM directional regime '{dir_regime}'"
 
-    # Counter-trend requires exceptional conviction
+    # Neutral/chop regime or no strong signal — allow with decent conviction
     tier = str(row.get("setup_tier") or "").upper()
     score = float(row.get("score") or 0)
-    if tier == "A" and score >= 80:
-        return True, f"Counter-trend ({direction} in {regime}) but A-tier with score {score:.0f} — allowed"
+    if score >= 70:
+        return True, f"No strong regime signal, score {score:.0f} adequate — allowing"
 
     return False, (
-        f"Counter-trend: {direction} in {regime}. "
-        "Critic rejects counter-trend trades unless A-tier with score >=80."
+        f"Counter-trend: {direction} in {regime} with score {score:.0f}. "
+        "Need score ≥70 in ambiguous regime."
     )
 
 
@@ -148,10 +175,11 @@ def _check_portfolio_concentration(
     if ticker.upper() in open_tickers:
         return False, f"Already holding {ticker}. No duplicate positions."
 
-    # Check direction imbalance (max 4 in same direction)
+    # Check direction imbalance — allow up to half of max_open in same direction
+    max_same_dir = max(max_open // 2, 4)
     same_dir = sum(1 for r in open_trades if str(r[1]).lower() == direction.lower())
-    if same_dir >= 4:
-        return False, f"Direction overweight: {same_dir} {direction} trades already open. Add the other side."
+    if same_dir >= max_same_dir:
+        return False, f"Direction overweight: {same_dir}/{max_same_dir} {direction} trades open. Add the other side."
 
     # Check family clustering (max 2 from same family)
     family = str(row.get("setup_family") or "").lower()
