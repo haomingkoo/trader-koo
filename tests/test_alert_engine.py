@@ -162,20 +162,21 @@ class TestCheckTick:
             "AAPL": [
                 {
                     "level": 200.0,
-                    "level_type": "support",
+                    "level_type": "resistance",
                     "setup_tier": "A",
                     "bias": "bullish",
                 },
             ],
         })
 
-        # Price is 200.50 — 0.25% above 200.0 support (within 1%)
+        # Price is 200.50 - above 200.0 resistance = breakout (within 1%)
+        # Telegram only fires for breakouts/breakdowns
         engine._check_tick("AAPL", 200.50)
 
         mock_send.assert_called_once()
         call_kwargs = mock_send.call_args
         assert call_kwargs[1]["ticker"] == "AAPL"
-        assert call_kwargs[1]["alert_type"] == "approaching_support"
+        assert call_kwargs[1]["alert_type"] == "breakout_above_resistance"
 
     @patch("trader_koo.notifications.alert_engine.send_price_alert")
     def test_no_alert_outside_proximity(
