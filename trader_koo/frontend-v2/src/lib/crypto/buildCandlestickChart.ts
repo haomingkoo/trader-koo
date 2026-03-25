@@ -592,7 +592,7 @@ export function buildCandlestickChart(
     },
     shapes,
     annotations,
-    height: hasRsi ? 750 : 500,
+    autosize: true,
   };
 
   if (hasRsi) {

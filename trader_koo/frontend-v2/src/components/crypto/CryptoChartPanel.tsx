@@ -36,7 +36,7 @@ export default function CryptoChartPanel({
 
   if (hasChart && chartData && chartLayout) {
     return (
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-1 sm:p-2 mb-4 min-h-[500px] sm:min-h-[700px] overflow-hidden">
+      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-1 sm:p-2 mb-4 overflow-hidden">
         <PlotlyWrapper
           data={chartData}
           layout={chartLayout}
@@ -46,7 +46,7 @@ export default function CryptoChartPanel({
             scrollZoom: !isMobile,
           }}
           onRelayout={onRelayout}
-          style={{ width: "100%", height: isMobile ? 600 : 700 }}
+          style={{ width: "100%", height: isMobile ? 500 : 700 }}
         />
       </div>
     );
