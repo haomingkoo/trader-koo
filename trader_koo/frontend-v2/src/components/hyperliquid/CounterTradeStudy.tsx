@@ -465,6 +465,113 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
         </div>
       )}
 
+      {/* Statistical Review - Critic Panel */}
+      <div className="rounded-xl border border-[var(--red)]/20 bg-[var(--panel)] p-4 sm:p-6">
+        <h4 className="text-sm font-bold text-[var(--text)] mb-1">Statistical Review</h4>
+        <p className="text-[10px] text-[var(--muted)] mb-4">
+          Independent critic panel assessment. We present limitations honestly.
+        </p>
+
+        <div className="space-y-3 text-xs">
+          {/* Verdict */}
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-3 py-2">
+            <span className="rounded bg-[var(--amber)] px-2 py-0.5 text-[10px] font-bold text-black">INCONCLUSIVE</span>
+            <span className="text-[var(--muted)]">
+              p = 0.055 (barely misses significance at alpha = 0.05). Promising but not proven.
+            </span>
+          </div>
+
+          {/* Stats table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                  <th className="py-1.5 text-left">Test</th>
+                  <th className="py-1.5 text-right">Result</th>
+                  <th className="py-1.5 text-right">p-value</th>
+                  <th className="py-1.5 text-right">Significant?</th>
+                </tr>
+              </thead>
+              <tbody className="text-[var(--muted)]">
+                <tr className="border-b border-[var(--line)]/50">
+                  <td className="py-1.5">Binomial (WR &gt; 50%)</td>
+                  <td className="py-1.5 text-right">21/32 wins</td>
+                  <td className="py-1.5 text-right">0.055</td>
+                  <td className="py-1.5 text-right text-[var(--amber)]">Borderline</td>
+                </tr>
+                <tr className="border-b border-[var(--line)]/50">
+                  <td className="py-1.5">Bootstrap (10K resamples)</td>
+                  <td className="py-1.5 text-right">96.6% positive</td>
+                  <td className="py-1.5 text-right">-</td>
+                  <td className="py-1.5 text-right text-[var(--green)]">Encouraging</td>
+                </tr>
+                <tr className="border-b border-[var(--line)]/50">
+                  <td className="py-1.5">95% CI (Wilson)</td>
+                  <td className="py-1.5 text-right">[48.3%, 79.6%]</td>
+                  <td className="py-1.5 text-right">-</td>
+                  <td className="py-1.5 text-right text-[var(--amber)]">Includes 50%</td>
+                </tr>
+                <tr>
+                  <td className="py-1.5">Power analysis</td>
+                  <td className="py-1.5 text-right">Need ~90 trades</td>
+                  <td className="py-1.5 text-right">-</td>
+                  <td className="py-1.5 text-right text-[var(--muted)]">Have 32</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Risk factors */}
+          <div>
+            <div className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">Known Risks</div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[
+                { label: "Sample size", severity: "critical", detail: "32 trades over 4 months. Need 78-90 for 80% power." },
+                { label: "Selection bias", severity: "critical", detail: "Chose target because he's a known loser. Tautological." },
+                { label: "Regime dependency", severity: "critical", detail: "Bear market only (BTC $95K->$70K). Untested in bull." },
+                { label: "Data coverage", severity: "high", detail: "API only goes back to Dec 2025. Missing his $50M peak era." },
+                { label: "Execution latency", severity: "medium", detail: "He scales in over 2K+ fills per cycle. Entry timing unclear." },
+                { label: "Single point of failure", severity: "medium", detail: "Strategy dies if he stops trading or changes behavior." },
+              ].map((risk) => (
+                <div
+                  key={risk.label}
+                  className="flex items-start gap-2 rounded border border-[var(--line)] bg-[var(--bg)] px-3 py-2"
+                >
+                  <span
+                    className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${
+                      risk.severity === "critical"
+                        ? "bg-[var(--red)]/20 text-[var(--red)]"
+                        : risk.severity === "high"
+                          ? "bg-[var(--amber)]/20 text-[var(--amber)]"
+                          : "bg-[var(--line)] text-[var(--muted)]"
+                    }`}
+                  >
+                    {risk.severity}
+                  </span>
+                  <div>
+                    <div className="font-medium text-[var(--text)]">{risk.label}</div>
+                    <div className="text-[var(--muted)]">{risk.detail}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* What would change our mind */}
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+            <div className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-1">
+              What would make this conclusive
+            </div>
+            <ul className="space-y-0.5 text-[var(--muted)]">
+              <li>- 78+ more trade cycles at &gt;$1M notional (currently 32)</li>
+              <li>- Positive results through a bull market regime change</li>
+              <li>- Out-of-sample validation on other whales (not just known losers)</li>
+              <li>- Live paper trading for 6+ months before real capital</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
       {/* Key Findings */}
       <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
         <h4 className="text-sm font-bold text-[var(--text)] mb-3">Key Findings</h4>
