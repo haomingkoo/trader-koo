@@ -2,7 +2,7 @@
 # Daily market data scrape — runs after US market close (5am SGT = 9pm UTC)
 # Cron schedule: 0 6 * * 1-6  (6am SGT, Mon–Sat, covers Mon–Fri closes)
 
-set -euo pipefail
+set -u  # keep unset-var protection; drop -e/-o pipefail so YOLO failure cannot kill the report step
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -186,7 +186,7 @@ if [ "$YOLO_PREFLIGHT_RC" -eq 0 ] && "$PYTHON" "$SCRIPT_DIR/run_yolo_patterns.py
     YOLO_RC=0
 elif [ "$YOLO_PREFLIGHT_RC" -eq 0 ]; then
     YOLO_RC=$?
-    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Pattern detection failed rc=${YOLO_RC} (non-fatal)" >> "$RUN_LOG"
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  FAILED rc=${YOLO_RC} — report step will still run" >> "$RUN_LOG"
 else
     YOLO_RC="$YOLO_PREFLIGHT_RC"
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Skipped due to preflight failure rc=${YOLO_RC} (non-fatal)" >> "$RUN_LOG"
@@ -239,7 +239,21 @@ if "$PYTHON" "$SCRIPT_DIR/generate_daily_report.py" \
     REPORT_RC=0
 else
     REPORT_RC=$?
-    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Failed to generate report rc=${REPORT_RC} (non-fatal)" >> "$RUN_LOG"
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] FAILED rc=${REPORT_RC} — retrying once in 60s" >> "$RUN_LOG"
+    sleep 60
+    if "$PYTHON" "$SCRIPT_DIR/generate_daily_report.py" \
+        --db-path "$DB_PATH" \
+        --out-dir "$REPORT_DIR" \
+        --run-log "$RUN_LOG" \
+        --tail-lines 120 \
+        $SEND_EMAIL_FLAG \
+        >> "$RUN_LOG" 2>&1; then
+        REPORT_RC=0
+        echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Retry succeeded" >> "$RUN_LOG"
+    else
+        REPORT_RC=$?
+        echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Retry also FAILED rc=${REPORT_RC}" >> "$RUN_LOG"
+    fi
 fi
 REPORT_T1=$(date +%s)
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [REPORT] Done. rc=${REPORT_RC} sec=$((REPORT_T1-REPORT_T0))" >> "$RUN_LOG"
@@ -252,7 +266,17 @@ fi
 echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [LOGOS] Caching company logos..." >> "$RUN_LOG"
 "$PYTHON" -m trader_koo.scripts.cache_logos --db-path "$DB_PATH" >> "$RUN_LOG" 2>&1 || echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [LOGOS] Logo caching failed (non-fatal)" >> "$RUN_LOG"
 
-echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh mode=${UPDATE_MODE}" >> "$RUN_LOG"
+# ── Summary — surface failures explicitly ─────────────────────────────────
+FINAL_RC=0
+SUMMARY="ingest=${INGEST_RC} yolo=${YOLO_RC} report=${REPORT_RC}"
+if [ "$REPORT_RC" -ne 0 ]; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [FAIL]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY}" >> "$RUN_LOG"
+    FINAL_RC=1
+elif [ "$YOLO_RC" -ne 0 ]; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [WARN]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY} (YOLO failed, report OK)" >> "$RUN_LOG"
+else
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY}" >> "$RUN_LOG"
+fi
 
 # ── 5. Housekeeping — keep last 30 report archives, cap log size ──────────────
 # Keep only the 30 most recent timestamped report files (latest.* are always kept)
@@ -266,3 +290,5 @@ for f in "$LOG_DIR"/*.log; do
         tail -c 5242880 "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     fi
 done
+
+exit "$FINAL_RC"
