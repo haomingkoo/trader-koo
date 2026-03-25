@@ -227,6 +227,54 @@ def trigger_poll() -> dict[str, Any]:
         conn.close()
 
 
+@router.post("/api/hyperliquid/collect/{label}")
+def collect_fill_history(label: str, days: int = 120) -> dict[str, Any]:
+    """Collect fill history from Hyperliquid API for a tracked wallet.
+
+    Seeds the hyperliquid_fills table so the study endpoint has data.
+    Limited to ~10K most recent fills by API constraints.
+    """
+    conn = get_conn()
+    try:
+        ensure_hyperliquid_schema(conn)
+        wallet = conn.execute(
+            "SELECT address FROM hyperliquid_wallets WHERE label = ?", (label,),
+        ).fetchone()
+        if not wallet:
+            return {"ok": False, "error": f"wallet '{label}' not found"}
+        address = wallet[0]
+
+        from trader_koo.hyperliquid.collect_history import (
+            ensure_fills_schema,
+            collect_forward,
+            get_latest_fill_time,
+        )
+        import time as _time
+
+        ensure_fills_schema(conn)
+        latest = get_latest_fill_time(conn, label)
+        start_ms = latest + 1 if latest else int((_time.time() - days * 86400) * 1000)
+        stored = collect_forward(conn, label, address, start_ms)
+
+        total = conn.execute(
+            "SELECT COUNT(*) FROM hyperliquid_fills WHERE wallet_label = ?", (label,),
+        ).fetchone()[0]
+        date_range = conn.execute(
+            "SELECT MIN(fill_date), MAX(fill_date) FROM hyperliquid_fills WHERE wallet_label = ?",
+            (label,),
+        ).fetchone()
+
+        return {
+            "ok": True,
+            "wallet": label,
+            "new_fills": stored,
+            "total_fills": total,
+            "date_range": {"start": date_range[0], "end": date_range[1]} if date_range[0] else None,
+        }
+    finally:
+        conn.close()
+
+
 @router.get("/api/hyperliquid/study/{label}")
 def get_counter_trade_study(label: str) -> dict[str, Any]:
     """Counter-trade study analysis for a tracked wallet.
@@ -237,9 +285,11 @@ def get_counter_trade_study(label: str) -> dict[str, Any]:
     Research only. Not financial advice.
     """
     from trader_koo.hyperliquid.study import compute_study
+    from trader_koo.hyperliquid.collect_history import ensure_fills_schema
 
     conn = get_conn()
     try:
+        ensure_fills_schema(conn)
         return compute_study(conn, wallet=label)
     finally:
         conn.close()
