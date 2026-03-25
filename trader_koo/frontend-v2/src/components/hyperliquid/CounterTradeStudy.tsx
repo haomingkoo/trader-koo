@@ -4,6 +4,115 @@ import PlotlyWrapper from "../PlotlyWrapper";
 import Spinner from "../ui/Spinner";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
 
+/* ── Live Signal Panel ── */
+interface LivePosition {
+  coin: string;
+  side: string;
+  notional_usd: number;
+  entry_price: number;
+  mark_price: number;
+  unrealized_pnl: number;
+  leverage: string;
+  liquidation_price: number | null;
+}
+
+interface LiveData {
+  ok: boolean;
+  wallet: { account_value: number; margin_ratio: number };
+  positions: LivePosition[];
+}
+
+const REF_NOTIONAL = 10_000_000;
+const REF_ETH = 4400;
+
+function LiveSignalPanel({ wallet }: { wallet: string }) {
+  const { data } = useQuery<LiveData>({
+    queryKey: ["hl-live", wallet],
+    queryFn: () => apiFetch(`/api/hyperliquid/live/${wallet}`),
+    refetchInterval: 60_000,
+  });
+
+  if (!data?.ok || !data.positions?.length) return null;
+
+  const ethPrice = data.positions.find((p) => p.coin === "ETH")?.mark_price || 2100;
+  const threshold = REF_NOTIONAL * (ethPrice / REF_ETH);
+  const totalNotional = data.positions.reduce((s, p) => s + p.notional_usd, 0);
+  const acctLeverage = data.wallet.account_value > 0 ? totalNotional / data.wallet.account_value : 0;
+  const counterPositions = data.positions.filter((p) => p.notional_usd >= threshold);
+  const hasSignal = counterPositions.length > 0;
+
+  return (
+    <div className={`rounded-xl border-2 p-4 sm:p-6 ${hasSignal ? "border-[var(--green)] bg-[var(--green)]/5" : "border-[var(--line)] bg-[var(--panel)]"}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className={`inline-block h-3 w-3 rounded-full ${hasSignal ? "bg-[var(--green)] animate-pulse" : "bg-[var(--muted)]"}`} />
+          <h4 className="text-sm font-bold text-[var(--text)]">
+            {hasSignal ? "Counter-Trade Signal Active" : "Monitoring"}
+          </h4>
+        </div>
+        <span className="text-[10px] text-[var(--muted)]">Updates every 60s</span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4 text-xs">
+        <div>
+          <div className="text-[var(--muted)]">Account</div>
+          <div className="font-semibold text-[var(--text)]">${data.wallet.account_value.toLocaleString()}</div>
+        </div>
+        <div>
+          <div className="text-[var(--muted)]">Total Exposure</div>
+          <div className="font-semibold text-[var(--text)]">{formatUsd(totalNotional)}</div>
+        </div>
+        <div>
+          <div className="text-[var(--muted)]">Account Leverage</div>
+          <div className={`font-semibold ${acctLeverage > 10 ? "text-[var(--red)]" : "text-[var(--text)]"}`}>{acctLeverage.toFixed(0)}x</div>
+        </div>
+        <div>
+          <div className="text-[var(--muted)]">Threshold</div>
+          <div className="font-semibold text-[var(--text)]">{formatUsd(threshold)}</div>
+        </div>
+      </div>
+
+      {data.positions.map((p) => {
+        const above = p.notional_usd >= threshold;
+        const counterSide = p.side === "long" ? "SHORT" : "LONG";
+        const liqDist = p.liquidation_price && p.mark_price > 0
+          ? Math.abs(p.mark_price - p.liquidation_price) / p.mark_price * 100
+          : null;
+        return (
+          <div key={p.coin} className={`rounded-lg border px-3 py-2 mb-2 ${above ? "border-[var(--green)]/50 bg-[var(--green)]/5" : "border-[var(--line)] bg-[var(--bg)]"}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {above && <span className="rounded bg-[var(--green)] px-1.5 py-0.5 text-[9px] font-bold text-black">{counterSide} {p.coin}</span>}
+                <span className="text-xs font-medium text-[var(--text)]">{p.coin} {p.side.toUpperCase()}</span>
+                <span className="text-[10px] text-[var(--muted)]">{p.leverage}</span>
+              </div>
+              <span className="text-xs font-medium text-[var(--text)]">{formatUsd(p.notional_usd)}</span>
+            </div>
+            <div className="flex items-center justify-between mt-1 text-[10px] text-[var(--muted)]">
+              <span>Entry: ${p.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+              <span className={p.unrealized_pnl >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                uPnL: ${p.unrealized_pnl.toLocaleString()}
+              </span>
+              {liqDist !== null && liqDist < 10 && (
+                <span className="text-[var(--red)]">Liq {liqDist.toFixed(1)}% away</span>
+              )}
+            </div>
+            {above && (
+              <div className="mt-1 text-[10px] text-[var(--green)]">
+                {(p.notional_usd / threshold).toFixed(1)}x above threshold - counter-trade opportunity (backtest: 63.6% WR)
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="text-[9px] text-[var(--muted)] mt-2">
+        Research signal only. Not financial advice. Past performance does not guarantee future results.
+      </div>
+    </div>
+  );
+}
+
 interface BucketData {
   bucket: string;
   count: number;
@@ -86,10 +195,10 @@ interface StudyData {
 }
 
 const ACTION_COLORS: Record<string, string> = {
-  COUNTER: "#ff6b6b",
-  LEAN_COUNTER: "#f59e0b",
-  SKIP: "#94a3b8",
-  COPY: "#38d39f",
+  COUNTER: "#38d39f",      // green = go, counter-trade
+  LEAN_COUNTER: "#6366f1", // purple = lean counter
+  SKIP: "#94a3b8",         // grey = no action
+  COPY: "#f59e0b",         // amber = copy (follow him)
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -120,6 +229,9 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
 
   return (
     <div className="space-y-6">
+      {/* Live Signal Panel */}
+      <LiveSignalPanel wallet={wallet} />
+
       {/* NFA Banner */}
       <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-3 text-xs text-[var(--amber)]">
         <strong>Research Study</strong> - {strategy.disclaimer}
