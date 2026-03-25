@@ -128,11 +128,11 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             <div className="text-xl font-bold text-[var(--text)]">{overview.total_cycles}</div>
           </div>
           <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-3">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">His Win Rate</div>
+            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Trader Win Rate</div>
             <div className="text-xl font-bold text-[var(--text)]">{overview.win_rate_pct}%</div>
           </div>
           <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-3">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">His Total PnL</div>
+            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Trader Total PnL</div>
             <div className={`text-xl font-bold ${overview.total_pnl >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
               {formatUsd(overview.total_pnl)}
             </div>
@@ -179,7 +179,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             Win Rate by Position Size
           </h4>
           <p className="text-xs text-[var(--muted)] mb-3">
-            His win rate by notional bucket. Below 50% = counter-trade edge.
+            Win rate by notional bucket. Below 50% = potential counter-trade opportunity.
           </p>
           <div className="h-[300px]">
             <PlotlyWrapper
@@ -197,7 +197,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                   textposition: "outside" as const,
                   textfont: { color: theme.font, size: 11 },
                   hovertemplate:
-                    "%{x}<br>Win Rate: %{y:.1f}%<br>Trades: %{customdata[0]}<br>His PnL: %{customdata[1]}<extra></extra>",
+                    "%{x}<br>Win Rate: %{y:.1f}%<br>Trades: %{customdata[0]}<br>PnL: %{customdata[1]}<extra></extra>",
                   customdata: notional_analysis.map((b) => [
                     b.count,
                     formatUsd(b.total_pnl),
@@ -212,7 +212,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                 xaxis: { gridcolor: theme.grid, title: { text: "Position Notional", font: { size: 10 } } },
                 yaxis: {
                   gridcolor: theme.grid,
-                  title: { text: "His Win Rate %", font: { size: 10 } },
+                  title: { text: "Trader Win Rate %", font: { size: 10 } },
                   range: [0, 100],
                 },
                 shapes: [
@@ -250,7 +250,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             Counter-Trade Edge by Bucket
           </h4>
           <p className="text-xs text-[var(--muted)] mb-3">
-            Potential profit from counter-trading each bucket (his loss = our gain, before costs).
+            Potential edge from taking the opposite side of each bucket (before costs).
           </p>
           <div className="h-[300px]">
             <PlotlyWrapper
@@ -356,7 +356,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
           </h4>
           <p className="text-xs text-[var(--muted)] mb-4">
             After 3 or more consecutive losses, his behavior changes dramatically. Classic martingale
-            pattern: he sizes UP when losing, leading to worse outcomes. This is the highest-confidence
+            pattern: position sizing increases after consecutive losses, leading to worse outcomes. This is the highest-confidence
             counter-trade window.
           </p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -379,7 +379,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
               <div className="text-xl font-bold text-[var(--red)]">
                 {formatUsd(tilt_analysis.after_streak_3plus.total_pnl)}
               </div>
-              <div className="text-[10px] text-[var(--muted)]">his loss = your edge</div>
+              <div className="text-[10px] text-[var(--muted)]">opposite side P&L</div>
             </div>
           </div>
         </div>
@@ -395,8 +395,8 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                 <tr className="border-b border-[var(--line)] text-[var(--muted)]">
                   <th className="py-2 text-left">Coin</th>
                   <th className="py-2 text-right">Cycles</th>
-                  <th className="py-2 text-right">His WR</th>
-                  <th className="py-2 text-right">His Total PnL</th>
+                  <th className="py-2 text-right">WR</th>
+                  <th className="py-2 text-right">Trader Total PnL</th>
                   <th className="py-2 text-right">Liquidations</th>
                   <th className="py-2 text-right">Counter Edge</th>
                 </tr>
@@ -454,7 +454,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                 xaxis: { gridcolor: theme.grid },
                 yaxis: {
                   gridcolor: theme.grid,
-                  title: { text: "His PnL ($)", font: { size: 10 } },
+                  title: { text: "Trader PnL ($)", font: { size: 10 } },
                 },
                 autosize: true,
               }}
@@ -527,7 +527,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             <div className="grid gap-2 sm:grid-cols-2">
               {[
                 { label: "Sample size", severity: "critical", detail: "32 trades over 4 months. Need 78-90 for 80% power." },
-                { label: "Selection bias", severity: "critical", detail: "Chose target because he's a known loser. Tautological." },
+                { label: "Selection bias", severity: "critical", detail: "Target selected after observing PnL history. Forward performance unproven." },
                 { label: "Regime dependency", severity: "critical", detail: "Bear market only (BTC $95K->$70K). Untested in bull." },
                 { label: "Data coverage", severity: "high", detail: "API only goes back to Dec 2025. Missing his $50M peak era." },
                 { label: "Execution latency", severity: "medium", detail: "He scales in over 2K+ fills per cycle. Entry timing unclear." },
@@ -565,7 +565,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             <ul className="space-y-0.5 text-[var(--muted)]">
               <li>- 78+ more trade cycles at &gt;$1M notional (currently 32)</li>
               <li>- Positive results through a bull market regime change</li>
-              <li>- Out-of-sample validation on other whales (not just known losers)</li>
+              <li>- Out-of-sample validation on other whales (not pre-selected by PnL)</li>
               <li>- Live paper trading for 6+ months before real capital</li>
             </ul>
           </div>
