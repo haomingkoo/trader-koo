@@ -160,7 +160,11 @@ def _relationship_label(window_20: dict[str, Any]) -> str:
         return "anti-risk divergence"
     if corr >= 0.45:
         return "risk assets moving together"
-    return "mixed cross-asset tape"
+    if corr <= -0.2:
+        return "inverse correlation"
+    if corr <= 0.2:
+        return "low correlation"
+    return "weak positive correlation"
 
 
 def build_btc_spy_correlation(
