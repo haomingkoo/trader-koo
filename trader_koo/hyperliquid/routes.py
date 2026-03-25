@@ -245,13 +245,13 @@ def collect_fill_history(label: str, days: int = 120) -> dict[str, Any]:
         address = wallet[0]
 
         from trader_koo.hyperliquid.collect_history import (
-            ensure_fills_schema,
+            ensure_fills_table,
             collect_forward,
             get_latest_fill_time,
         )
         import time as _time
 
-        ensure_fills_schema(conn)
+        ensure_fills_table(conn)
         latest = get_latest_fill_time(conn, label)
         start_ms = latest + 1 if latest else int((_time.time() - days * 86400) * 1000)
         stored = collect_forward(conn, label, address, start_ms)
@@ -285,11 +285,11 @@ def get_counter_trade_study(label: str) -> dict[str, Any]:
     Research only. Not financial advice.
     """
     from trader_koo.hyperliquid.study import compute_study
-    from trader_koo.hyperliquid.collect_history import ensure_fills_schema
+    from trader_koo.hyperliquid.collect_history import ensure_fills_table
 
     conn = get_conn()
     try:
-        ensure_fills_schema(conn)
+        ensure_fills_table(conn)
         return compute_study(conn, wallet=label)
     finally:
         conn.close()
