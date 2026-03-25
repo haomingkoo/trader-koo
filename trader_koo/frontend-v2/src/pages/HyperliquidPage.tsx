@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import Spinner from "../components/ui/Spinner";
 import Badge from "../components/ui/Badge";
+import CounterTradeStudy from "../components/hyperliquid/CounterTradeStudy";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -363,8 +364,14 @@ export default function HyperliquidPage() {
         <p className="text-sm text-[var(--muted)]">No history available</p>
       )}
 
+      {/* Counter-Trade Research Study */}
+      <div className="border-t border-[var(--line)] pt-6 mt-6">
+        <h2 className="text-lg font-bold text-[var(--text)] mb-4">Counter-Trade Research</h2>
+        <CounterTradeStudy wallet="machibro" />
+      </div>
+
       <p className="text-[9px] text-[var(--muted)]">
-        Data from Hyperliquid API. Positions refresh every 60s. Counter-trade signals are informational only.
+        Data from Hyperliquid API. Positions refresh every 60s. Counter-trade signals are informational only. Not financial advice.
       </p>
     </div>
   );
