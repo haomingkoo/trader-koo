@@ -66,6 +66,16 @@ interface StudyData {
     after_streak_3plus: { count: number; win_rate_pct: number; avg_pnl: number; total_pnl: number } | Record<string, never>;
     normal: { count: number; win_rate_pct: number; avg_pnl: number } | Record<string, never>;
   };
+  backtest: Record<string, {
+    trades: number;
+    wins: number;
+    win_rate_pct: number;
+    total_pnl: number;
+    return_pct: number;
+    max_drawdown_pct: number;
+    final_equity: number;
+    equity_curve: { date: string; equity: number; coin?: string; our_pnl?: number }[];
+  } | { date: string; equity: number }[]>;
   strategy: {
     name: string;
     description: string;
@@ -106,7 +116,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
   if (!data?.ok) return null;
 
   const theme = getPlotlyColors();
-  const { overview, notional_analysis, duration_analysis, coin_analysis, monthly_analysis, tilt_analysis, strategy } = data;
+  const { overview, notional_analysis, duration_analysis, coin_analysis, monthly_analysis, tilt_analysis, backtest, strategy } = data;
 
   return (
     <div className="space-y-6">
@@ -288,6 +298,102 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
           </div>
         </div>
       )}
+
+      {/* Backtest Equity Curve */}
+      {backtest && (() => {
+        const strat = backtest.counter_25m as { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; equity_curve: { date: string; equity: number }[] } | undefined;
+        const traderCurve = backtest.trader_equity_curve as { date: string; equity: number }[] | undefined;
+        if (!strat?.equity_curve?.length) return null;
+        return (
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
+            <h4 className="text-sm font-bold text-[var(--text)] mb-1">
+              Backtest: Counter-Trade vs Trader Performance
+            </h4>
+            <p className="text-xs text-[var(--muted)] mb-3">
+              Equity curve comparison. Counter-trade strategy: short when notional exceeds $25M.
+              Both normalized to $100K starting capital with 5% position sizing.
+            </p>
+
+            {/* Stats row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              <div className="rounded-lg border border-[var(--green)]/30 bg-[var(--green)]/5 p-2">
+                <div className="text-[9px] uppercase text-[var(--green)]">Counter Return</div>
+                <div className="text-lg font-bold text-[var(--green)]">+{strat.return_pct}%</div>
+              </div>
+              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
+                <div className="text-[9px] uppercase text-[var(--muted)]">Win Rate</div>
+                <div className="text-lg font-bold text-[var(--text)]">{strat.win_rate_pct}%</div>
+              </div>
+              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
+                <div className="text-[9px] uppercase text-[var(--muted)]">Trades</div>
+                <div className="text-lg font-bold text-[var(--text)]">{strat.trades}</div>
+              </div>
+              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
+                <div className="text-[9px] uppercase text-[var(--muted)]">Max Drawdown</div>
+                <div className="text-lg font-bold text-[var(--text)]">{strat.max_drawdown_pct}%</div>
+              </div>
+            </div>
+
+            <div className="h-[350px]">
+              <PlotlyWrapper
+                data={[
+                  ...(Array.isArray(traderCurve) && traderCurve.length > 0
+                    ? [{
+                        type: "scatter" as const,
+                        mode: "lines" as const,
+                        x: traderCurve.map((p) => p.date),
+                        y: traderCurve.map((p) => p.equity),
+                        name: "Trader (scaled)",
+                        line: { color: "#ff6b6b", width: 1.5 },
+                        fill: "tozeroy" as const,
+                        fillcolor: "rgba(255,107,107,0.05)",
+                      }]
+                    : []),
+                  {
+                    type: "scatter" as const,
+                    mode: "lines+markers" as const,
+                    x: strat.equity_curve.map((p) => p.date),
+                    y: strat.equity_curve.map((p) => p.equity),
+                    name: "Counter >$25M",
+                    line: { color: "#38d39f", width: 2.5 },
+                    marker: { size: 6 },
+                  },
+                ]}
+                layout={{
+                  paper_bgcolor: theme.bg,
+                  plot_bgcolor: theme.bg,
+                  font: { color: theme.font, size: 10 },
+                  margin: { t: 10, r: 20, b: 40, l: 60 },
+                  xaxis: { gridcolor: theme.grid },
+                  yaxis: {
+                    gridcolor: theme.grid,
+                    title: { text: "Equity ($)", font: { size: 10 } },
+                  },
+                  showlegend: true,
+                  legend: { x: 0.01, y: 0.99, bgcolor: "rgba(11,15,22,0.8)", font: { size: 10 } },
+                  shapes: [
+                    {
+                      type: "line" as const,
+                      x0: strat.equity_curve[0]?.date,
+                      x1: strat.equity_curve[strat.equity_curve.length - 1]?.date,
+                      y0: 100000,
+                      y1: 100000,
+                      line: { color: "#94a3b8", width: 1, dash: "dot" as const },
+                    },
+                  ],
+                  autosize: true,
+                }}
+                config={{ responsive: true, displayModeBar: false }}
+                style={{ width: "100%", height: 350 }}
+              />
+            </div>
+            <p className="text-[9px] text-[var(--muted)] mt-2">
+              Backtest uses 5% of position notional (max $50K), with 10bps entry + 15bps exit slippage + 3.5bps taker fees.
+              Past performance does not guarantee future results.
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Duration Analysis */}
       {duration_analysis.length > 0 && (

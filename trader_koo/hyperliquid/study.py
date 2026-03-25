@@ -360,6 +360,86 @@ def compute_study(
         ),
     }
 
+    # Backtest: compute equity curves for comparison
+    _CAPITAL = 100_000.0
+    _MAX_POS = 50_000.0
+    _COST_BPS = 30  # entry + exit slippage + fees
+
+    backtest: dict[str, Any] = {}
+    sorted_cycles = sorted(cycles, key=lambda c: c.get("cycle_start") or "")
+
+    for strat_name, min_notional, min_dur_hours in [
+        ("counter_25m", 25_000_000, 0),
+        ("counter_25m_extended", 25_000_000, 24),
+        ("counter_5m", 5_000_000, 0),
+    ]:
+        eq = _CAPITAL
+        peak = _CAPITAL
+        max_dd = 0.0
+        wins = 0
+        losses = 0
+        curve_pts: list[dict[str, Any]] = []
+        his_eq = _CAPITAL  # Track his equity if he held same positions
+
+        for c in sorted_cycles:
+            notional = c["entry_notional_usd"]
+            pnl = c["closed_pnl"]
+            dur = c["duration_hours"]
+
+            # Track his equity for all cycles
+            his_notional_frac = min(notional * 0.05, _MAX_POS, _CAPITAL * 0.25)
+            his_pnl_scaled = pnl * (his_notional_frac / notional) if notional > 0 else 0
+
+            if notional >= min_notional and dur >= min_dur_hours:
+                our_notional = min(notional * 0.05, _MAX_POS, eq * 0.25)
+                raw_ct = (-pnl) * (our_notional / notional) if notional > 0 else 0
+                costs = our_notional * _COST_BPS / 10_000
+                net = raw_ct - costs
+                eq += net
+                peak = max(peak, eq)
+                dd = (peak - eq) / peak * 100
+                max_dd = max(max_dd, dd)
+                if net > 0:
+                    wins += 1
+                else:
+                    losses += 1
+                curve_pts.append({
+                    "date": c.get("cycle_end") or c.get("cycle_start"),
+                    "equity": round(eq, 2),
+                    "coin": c["coin"],
+                    "notional": round(notional),
+                    "his_pnl": round(pnl),
+                    "our_pnl": round(net, 2),
+                    "duration_h": round(dur, 1),
+                })
+
+        total = wins + losses
+        backtest[strat_name] = {
+            "trades": total,
+            "wins": wins,
+            "win_rate_pct": round(wins / total * 100, 1) if total else 0,
+            "total_pnl": round(eq - _CAPITAL, 2),
+            "return_pct": round((eq / _CAPITAL - 1) * 100, 1),
+            "max_drawdown_pct": round(max_dd, 2),
+            "final_equity": round(eq, 2),
+            "equity_curve": curve_pts,
+        }
+
+    # His overall equity curve (all cycles scaled to same capital)
+    his_eq = _CAPITAL
+    his_curve: list[dict[str, Any]] = []
+    for c in sorted_cycles:
+        notional = c["entry_notional_usd"]
+        pnl = c["closed_pnl"]
+        if notional > 0:
+            scaled = pnl * (min(notional * 0.05, _MAX_POS) / notional)
+            his_eq += scaled
+            his_curve.append({
+                "date": c.get("cycle_end") or c.get("cycle_start"),
+                "equity": round(his_eq, 2),
+            })
+    backtest["trader_equity_curve"] = his_curve
+
     return {
         "ok": True,
         "wallet": wallet,
@@ -369,6 +449,7 @@ def compute_study(
         "coin_analysis": coin_analysis,
         "monthly_analysis": monthly_analysis,
         "tilt_analysis": tilt_analysis,
+        "backtest": backtest,
         "strategy": strategy,
-        "cycles": cycles,  # Raw data for charts
+        "cycles": cycles,
     }
