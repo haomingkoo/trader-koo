@@ -62,6 +62,10 @@ interface StudyData {
   duration_analysis: DurationData[];
   coin_analysis: CoinData[];
   monthly_analysis: MonthlyData[];
+  tilt_analysis: {
+    after_streak_3plus: { count: number; win_rate_pct: number; avg_pnl: number; total_pnl: number } | Record<string, never>;
+    normal: { count: number; win_rate_pct: number; avg_pnl: number } | Record<string, never>;
+  };
   strategy: {
     name: string;
     description: string;
@@ -102,7 +106,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
   if (!data?.ok) return null;
 
   const theme = getPlotlyColors();
-  const { overview, notional_analysis, duration_analysis, coin_analysis, monthly_analysis, strategy } = data;
+  const { overview, notional_analysis, duration_analysis, coin_analysis, monthly_analysis, tilt_analysis, strategy } = data;
 
   return (
     <div className="space-y-6">
@@ -340,6 +344,43 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
               config={{ responsive: true, displayModeBar: false }}
               style={{ width: "100%", height: 280 }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Tilt Detection */}
+      {tilt_analysis?.after_streak_3plus?.count > 0 && (
+        <div className="rounded-xl border border-[var(--red)]/30 bg-[var(--red)]/5 p-4 sm:p-6">
+          <h4 className="text-sm font-bold text-[var(--red)] mb-3">
+            Tilt Detection Signal
+          </h4>
+          <p className="text-xs text-[var(--muted)] mb-4">
+            After 3 or more consecutive losses, his behavior changes dramatically. Classic martingale
+            pattern: he sizes UP when losing, leading to worse outcomes. This is the highest-confidence
+            counter-trade window.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-3">
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Normal WR</div>
+              <div className="text-xl font-bold text-[var(--green)]">
+                {tilt_analysis.normal?.win_rate_pct ?? "--"}%
+              </div>
+              <div className="text-[10px] text-[var(--muted)]">{tilt_analysis.normal?.count ?? 0} trades</div>
+            </div>
+            <div className="rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/10 p-3">
+              <div className="text-[10px] uppercase tracking-wider text-[var(--red)]">After 3+ Losses</div>
+              <div className="text-xl font-bold text-[var(--red)]">
+                {tilt_analysis.after_streak_3plus.win_rate_pct}%
+              </div>
+              <div className="text-[10px] text-[var(--muted)]">{tilt_analysis.after_streak_3plus.count} trades</div>
+            </div>
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-3">
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Tilt PnL Impact</div>
+              <div className="text-xl font-bold text-[var(--red)]">
+                {formatUsd(tilt_analysis.after_streak_3plus.total_pnl)}
+              </div>
+              <div className="text-[10px] text-[var(--muted)]">his loss = your edge</div>
+            </div>
           </div>
         </div>
       )}

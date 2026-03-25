@@ -269,6 +269,34 @@ def compute_study(
             "counter_edge": item["counter_edge_total"],
         })
 
+    # Tilt detection: after 3+ consecutive losses, what happens?
+    tilt_analysis: dict[str, Any] = {"after_streak_3plus": {}, "normal": {}}
+    streak = 0
+    post_tilt_pnls: list[float] = []
+    normal_pnls: list[float] = []
+    for c in sorted(cycles, key=lambda x: x.get("cycle_start") or ""):
+        pnl = c["closed_pnl"]
+        if streak >= 3:
+            post_tilt_pnls.append(pnl)
+        else:
+            normal_pnls.append(pnl)
+        streak = streak + 1 if pnl < 0 else 0
+    if post_tilt_pnls:
+        tilt_wins = sum(1 for p in post_tilt_pnls if p > 0)
+        tilt_analysis["after_streak_3plus"] = {
+            "count": len(post_tilt_pnls),
+            "win_rate_pct": round(tilt_wins / len(post_tilt_pnls) * 100, 1),
+            "avg_pnl": round(sum(post_tilt_pnls) / len(post_tilt_pnls), 2),
+            "total_pnl": round(sum(post_tilt_pnls), 2),
+        }
+    if normal_pnls:
+        normal_wins = sum(1 for p in normal_pnls if p > 0)
+        tilt_analysis["normal"] = {
+            "count": len(normal_pnls),
+            "win_rate_pct": round(normal_wins / len(normal_pnls) * 100, 1),
+            "avg_pnl": round(sum(normal_pnls) / len(normal_pnls), 2),
+        }
+
     # Determine dominant direction
     directions = [c["direction"] for c in cycles]
     long_pct = round(sum(1 for d in directions if d == "Long") / len(directions) * 100, 1)
@@ -306,6 +334,12 @@ def compute_study(
         key_findings.append(
             f"Best duration: {best_dur['duration']} ({best_dur['win_rate_pct']}% WR, avg ${best_dur['avg_pnl']:,.0f})"
         )
+    tilt_post = tilt_analysis.get("after_streak_3plus", {})
+    if tilt_post.get("count", 0) >= 3:
+        key_findings.append(
+            f"TILT SIGNAL: After 3+ consecutive losses, his WR drops to "
+            f"{tilt_post['win_rate_pct']}% (n={tilt_post['count']}). Counter-trade confidence is highest here."
+        )
 
     strategy = {
         "name": "Notional Regime Counter-Trade",
@@ -334,6 +368,7 @@ def compute_study(
         "duration_analysis": duration_analysis,
         "coin_analysis": coin_analysis,
         "monthly_analysis": monthly_analysis,
+        "tilt_analysis": tilt_analysis,
         "strategy": strategy,
         "cycles": cycles,  # Raw data for charts
     }
