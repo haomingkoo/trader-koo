@@ -468,34 +468,30 @@ def _send_telegram_whale_alert(snapshot: WalletSnapshot) -> None:
     # Check if any position is in counter zone
     has_counter_signal = any(p.notional_usd >= counter_threshold for p in snapshot.positions)
 
-    lines = [f"{'🟢 COUNTER SIGNAL' if has_counter_signal else '🐋'} <b>{snapshot.wallet_label}</b> — ${snapshot.account_value:,.0f}"]
-    lines.append(f"Leverage: {acct_leverage:.0f}x | Margin: {snapshot.margin_ratio:.0%}")
-    if has_counter_signal:
-        lines.append(f"Threshold: ${counter_threshold:,.0f} (ETH ${eth_price:,.0f})")
+    # Only send Telegram when counter signal is active
+    if not has_counter_signal:
+        return
 
-    for pos in snapshot.positions:
-        in_zone = pos.notional_usd >= counter_threshold
-        emoji = "🎯" if in_zone else ("🟢" if pos.side == "long" else "🔴")
+    counter_positions = [p for p in snapshot.positions if p.notional_usd >= counter_threshold]
+
+    lines = [f"<b>{snapshot.wallet_label}</b> Counter Signal"]
+    lines.append(f"Account ${snapshot.account_value:,.0f} | {acct_leverage:.0f}x leverage")
+    lines.append("")
+
+    for pos in counter_positions:
         counter_side = "SHORT" if pos.side == "long" else "LONG"
-        pnl_emoji = "✅" if pos.unrealized_pnl > 0 else "❌"
-        lines.append(
-            f"{emoji} {pos.coin} {pos.side.upper()} {pos.size:,.1f} "
-            f"@ ${pos.entry_price:,.2f} ({pos.leverage_value}x)"
-        )
-        lines.append(
-            f"   {pnl_emoji} uPnL: ${pos.unrealized_pnl:+,.0f} "
-            f"| ${pos.notional_usd:,.0f} notional"
-        )
-        if in_zone:
-            lines.append(f"   ➡️ Counter: {counter_side} {pos.coin} ({pos.notional_usd/counter_threshold:.1f}x threshold)")
+        ratio = pos.notional_usd / counter_threshold
+        lines.append(f"Signal: <b>{counter_side} {pos.coin}</b>")
+        lines.append(f"  His position: ${pos.notional_usd:,.0f} {pos.side} ({pos.leverage_value}x)")
+        lines.append(f"  {ratio:.1f}x above threshold")
         if pos.liquidation_price:
             liq_dist = abs(pos.mark_price - pos.liquidation_price) / pos.mark_price * 100
-            if liq_dist < 10:
-                lines.append(f"   ⚠️ Liq: ${pos.liquidation_price:,.2f} ({liq_dist:.1f}% away)")
+            lines.append(f"  Liq {liq_dist:.1f}% away (${pos.liquidation_price:,.2f})")
+        lines.append(f"  uPnL: ${pos.unrealized_pnl:+,.0f}")
 
-    if has_counter_signal:
-        lines.append("")
-        lines.append("Research signal only. Not financial advice.")
+    lines.append("")
+    lines.append("Backtest: 63.6% WR, +16.6% return (8mo)")
+    lines.append("Not financial advice.")
 
     text = "\n".join(lines)
 
