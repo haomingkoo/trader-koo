@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from trader_koo.backend.services.database import get_conn
 from trader_koo.hyperliquid.tracker import (
@@ -279,11 +279,23 @@ def collect_fill_history(label: str, days: int = 120) -> dict[str, Any]:
 def get_counter_trade_study(label: str) -> dict[str, Any]:
     """Counter-trade study analysis for a tracked wallet.
 
-    Returns position cycle reconstruction, notional regime analysis,
-    duration patterns, coin breakdown, and strategy rules.
+    Serves pre-computed study from static JSON (full S3 dataset).
+    Falls back to live computation if static file not found.
 
     Research only. Not financial advice.
     """
+    import json
+    from pathlib import Path
+
+    # Serve pre-computed study (full 579K fill dataset)
+    static_path = Path(__file__).parent / f"{label}_study.json"
+    if static_path.exists():
+        try:
+            return json.loads(static_path.read_text())
+        except Exception:
+            pass
+
+    # Fallback: compute live from DB
     from trader_koo.hyperliquid.study import compute_study
     from trader_koo.hyperliquid.collect_history import ensure_fills_table
 
