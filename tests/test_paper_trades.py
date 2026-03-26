@@ -206,7 +206,8 @@ class TestComputeStopAndTarget:
 
         result = compute_stop_and_target(row, "long")
 
-        assert result["stop_loss"] == 97.0  # 3% default stop
+        # Min stop floor: max(3.0 * 1.5 / 100, 0.025) = 4.5% = $95.50
+        assert result["stop_loss"] == 95.5
         assert result["atr_at_entry"] is None
 
 
