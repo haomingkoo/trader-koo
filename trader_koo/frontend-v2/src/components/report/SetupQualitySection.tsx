@@ -236,17 +236,25 @@ function SetupTableRow({
                 </div>
               </div>
 
-              {row.yolo_pattern && (
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="muted">YOLO {String(row.yolo_pattern)}</Badge>
-                  {Boolean(row.primary_yolo_recency) && (
-                    <Badge variant="muted">{String(row.primary_yolo_recency)}</Badge>
-                  )}
-                  {Boolean(row.yolo_bias) && (
-                    <Badge variant={biasVariant(String(row.yolo_bias))}>{String(row.yolo_bias)}</Badge>
-                  )}
-                </div>
-              )}
+              <div className="flex flex-wrap gap-2">
+                {row.earnings_within_5d && (
+                  <Badge variant="amber">
+                    Earnings {row.earnings_date ?? ""}{" "}
+                    ({row.days_to_earnings != null ? `${row.days_to_earnings}d` : "TBD"})
+                  </Badge>
+                )}
+                {row.yolo_pattern && (
+                  <>
+                    <Badge variant="muted">YOLO {String(row.yolo_pattern)}</Badge>
+                    {Boolean(row.primary_yolo_recency) && (
+                      <Badge variant="muted">{String(row.primary_yolo_recency)}</Badge>
+                    )}
+                    {Boolean(row.yolo_bias) && (
+                      <Badge variant={biasVariant(String(row.yolo_bias))}>{String(row.yolo_bias)}</Badge>
+                    )}
+                  </>
+                )}
+              </div>
 
               {debate ? (
                 <DebateVisualization debate={debate} />
@@ -316,12 +324,19 @@ export default function SetupQualitySection({
       key: "ticker",
       label: "Ticker",
       render: (row) => (
-        <Link
-          to={`/chart?t=${row.ticker}`}
-          className="font-mono font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
-        >
-          {row.ticker}
-        </Link>
+        <span className="flex items-center gap-1.5">
+          <Link
+            to={`/chart?t=${row.ticker}`}
+            className="font-mono font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
+          >
+            {row.ticker}
+          </Link>
+          {row.earnings_within_5d && (
+            <Badge variant="amber" className="text-[9px] px-1.5 py-0">
+              E {row.days_to_earnings != null ? `${row.days_to_earnings}d` : ""}
+            </Badge>
+          )}
+        </span>
       ),
     },
     {
@@ -405,12 +420,19 @@ export default function SetupQualitySection({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <Link
-                        to={`/chart?t=${row.ticker}`}
-                        className="font-mono text-lg font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
-                      >
-                        {row.ticker}
-                      </Link>
+                      <span className="flex items-center gap-2">
+                        <Link
+                          to={`/chart?t=${row.ticker}`}
+                          className="font-mono text-lg font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
+                        >
+                          {row.ticker}
+                        </Link>
+                        {row.earnings_within_5d && (
+                          <Badge variant="amber" className="text-[9px] px-1.5 py-0">
+                            E {row.days_to_earnings != null ? `${row.days_to_earnings}d` : ""}
+                          </Badge>
+                        )}
+                      </span>
                       <div className="mt-1 text-xs text-[var(--muted)]">
                         Score {fmt(row.score, 1)}
                       </div>

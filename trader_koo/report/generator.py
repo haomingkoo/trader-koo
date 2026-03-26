@@ -53,6 +53,7 @@ from trader_koo.report.setup_scoring import (
     _yolo_age_factor,
     _yolo_pattern_bias,
     _yolo_recency_label,
+    annotate_earnings_proximity,
     build_no_trade_conditions,
     build_tonight_key_changes,
     ensure_setup_call_eval_schema,
@@ -1370,6 +1371,30 @@ def fetch_report_payload(
                 LOG.warning("Earnings catalysts build failed: %s", exc)
                 _report_warnings.append("earnings_catalysts_failed")
                 payload["signals"]["earnings_catalysts"] = {}
+
+        # ── Annotate setups with earnings proximity ─────────────────────
+        try:
+            setup_rows_for_earnings = (
+                (payload.get("signals") or {}).get("setup_quality_top")
+                if isinstance(
+                    (payload.get("signals") or {}).get("setup_quality_top"), list
+                )
+                else []
+            )
+            earnings_cat = (payload.get("signals") or {}).get(
+                "earnings_catalysts"
+            ) or {}
+            flagged_count = annotate_earnings_proximity(
+                setup_rows_for_earnings, earnings_cat
+            )
+            if flagged_count:
+                LOG.info(
+                    "Earnings proximity: %d setups flagged within 5 trading days",
+                    flagged_count,
+                )
+        except Exception as exc:
+            LOG.warning("Earnings proximity annotation failed: %s", exc)
+            _report_warnings.append("earnings_proximity_failed")
 
         # YOLO deltas and persistence by timeframe.
         delta_daily = fetch_yolo_delta(conn, timeframe="daily")

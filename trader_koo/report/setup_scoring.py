@@ -1810,6 +1810,81 @@ def _apply_setup_eval_fields(
     }
 
 
+EARNINGS_PROXIMITY_DAYS = 5
+
+
+def annotate_earnings_proximity(
+    setup_rows: list[dict[str, Any]],
+    earnings_catalysts: dict[str, Any],
+) -> int:
+    """Flag setups with earnings within *EARNINGS_PROXIMITY_DAYS* trading days.
+
+    Mutates each setup row in-place, adding:
+      - earnings_within_5d (bool)
+      - earnings_date (str | None)
+      - days_to_earnings (int | None)
+
+    When a ticker has nearby earnings, "earnings within Xd" is appended to
+    the existing risk_note so the paper-trade decision pipeline applies its
+    event-risk position haircut automatically.
+
+    Returns the number of setups flagged.
+    """
+    if not setup_rows or not isinstance(earnings_catalysts, dict):
+        for row in setup_rows or []:
+            row.setdefault("earnings_within_5d", False)
+            row.setdefault("earnings_date", None)
+            row.setdefault("days_to_earnings", None)
+        return 0
+
+    # Build a ticker -> (nearest earnings_date, days_until) lookup from
+    # the earnings calendar rows.
+    earnings_rows = earnings_catalysts.get("rows") or []
+    nearest: dict[str, tuple[str, int]] = {}
+    for erow in earnings_rows:
+        if not isinstance(erow, dict):
+            continue
+        ticker = str(erow.get("ticker") or "").upper().strip()
+        days_until = erow.get("days_until")
+        if not ticker or not isinstance(days_until, (int, float)):
+            continue
+        days_int = int(days_until)
+        if days_int < 0:
+            continue
+        prev = nearest.get(ticker)
+        if prev is None or days_int < prev[1]:
+            nearest[ticker] = (
+                str(erow.get("earnings_date") or ""),
+                days_int,
+            )
+
+    flagged = 0
+    for row in setup_rows:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "").upper().strip()
+        hit = nearest.get(ticker)
+        if hit and hit[1] <= EARNINGS_PROXIMITY_DAYS:
+            row["earnings_within_5d"] = True
+            row["earnings_date"] = hit[0]
+            row["days_to_earnings"] = hit[1]
+            # Append to risk_note so paper-trade decision.py picks it up
+            existing = str(row.get("risk_note") or "").strip()
+            earnings_tag = f"earnings within {hit[1]}d"
+            if "earnings" not in existing.lower():
+                if existing and existing.lower() != "none":
+                    row["risk_note"] = f"{existing}, {earnings_tag}"
+                else:
+                    row["risk_note"] = earnings_tag
+            flagged += 1
+        else:
+            row["earnings_within_5d"] = False
+            row["earnings_date"] = hit[0] if hit else None
+            row["days_to_earnings"] = hit[1] if hit else None
+
+    return flagged
+
+
 def _refresh_setup_eval_surfaces(signals: dict[str, Any]) -> None:
     setup_rows = (signals.get("setup_quality_top") or []) if isinstance(signals, dict) else []
     by_ticker = {
