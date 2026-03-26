@@ -724,111 +724,151 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       )}
 
       {/* Statistical Review - Critic Panel */}
-      <div className="rounded-xl border border-[var(--red)]/20 bg-[var(--panel)] p-4 sm:p-6">
-        <h4 className="text-sm font-bold text-[var(--text)] mb-1">Statistical Review</h4>
-        <p className="text-[10px] text-[var(--muted)] mb-4">
-          Independent critic panel assessment. We present limitations honestly.
-        </p>
+      {(() => {
+        const rec = backtest.after_1_loss_day_recommended;
+        const recStats = rec && "trades" in rec ? rec : null;
+        const trades = recStats?.trades ?? 0;
+        const wins = recStats?.wins ?? 0;
+        const wr = recStats?.win_rate_pct ?? 0;
+        const days = overview.total_cycles;
+        const dateStart = overview.date_range.start;
+        const dateEnd = overview.date_range.end;
+        // Binomial test: p-value for WR > 50% with n trades and k wins
+        // Using normal approximation: z = (k - n*0.5) / sqrt(n*0.25)
+        const z = trades > 0 ? (wins - trades * 0.5) / Math.sqrt(trades * 0.25) : 0;
+        const isSignificant = wr > 50 && z > 2.33; // p < 0.01
+        const isBorderline = wr > 50 && z > 1.64 && !isSignificant; // p < 0.05
+        const verdictLabel = isSignificant ? "SIGNIFICANT" : isBorderline ? "BORDERLINE" : trades < 30 ? "INCONCLUSIVE" : wr > 60 ? "PROMISING" : "INCONCLUSIVE";
+        const verdictColor = isSignificant ? "var(--green)" : isBorderline ? "var(--amber)" : "var(--amber)";
+        // Wilson CI
+        const zCI = 1.96;
+        const pHat = trades > 0 ? wins / trades : 0;
+        const denom = 1 + zCI * zCI / trades;
+        const center = (pHat + zCI * zCI / (2 * trades)) / denom;
+        const margin = trades > 0 ? (zCI * Math.sqrt(pHat * (1 - pHat) / trades + zCI * zCI / (4 * trades * trades))) / denom : 0;
+        const ciLow = Math.max(0, (center - margin) * 100).toFixed(1);
+        const ciHigh = Math.min(100, (center + margin) * 100).toFixed(1);
+        const ciIncludesFifty = parseFloat(ciLow) <= 50;
 
-        <div className="space-y-3 text-xs">
-          {/* Verdict */}
-          <div className="flex items-center gap-2 rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-3 py-2">
-            <span className="rounded bg-[var(--amber)] px-2 py-0.5 text-[10px] font-bold text-black">INCONCLUSIVE</span>
-            <span className="text-[var(--muted)]">
-              p = 0.055 (barely misses significance at alpha = 0.05). Promising but not proven.
-            </span>
-          </div>
+        return (
+          <div className="rounded-xl border border-[var(--red)]/20 bg-[var(--panel)] p-4 sm:p-6">
+            <h4 className="text-sm font-bold text-[var(--text)] mb-1">Statistical Review</h4>
+            <p className="text-[10px] text-[var(--muted)] mb-4">
+              Independent critic panel assessment. We present limitations honestly.
+            </p>
 
-          {/* Stats table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-[var(--line)] text-[var(--muted)]">
-                  <th className="py-1.5 text-left">Test</th>
-                  <th className="py-1.5 text-right">Result</th>
-                  <th className="py-1.5 text-right">p-value</th>
-                  <th className="py-1.5 text-right">Significant?</th>
-                </tr>
-              </thead>
-              <tbody className="text-[var(--muted)]">
-                <tr className="border-b border-[var(--line)]/50">
-                  <td className="py-1.5">Binomial (WR &gt; 50%)</td>
-                  <td className="py-1.5 text-right">21/32 wins</td>
-                  <td className="py-1.5 text-right">0.055</td>
-                  <td className="py-1.5 text-right text-[var(--amber)]">Borderline</td>
-                </tr>
-                <tr className="border-b border-[var(--line)]/50">
-                  <td className="py-1.5">Bootstrap (10K resamples)</td>
-                  <td className="py-1.5 text-right">96.6% positive</td>
-                  <td className="py-1.5 text-right">-</td>
-                  <td className="py-1.5 text-right text-[var(--green)]">Encouraging</td>
-                </tr>
-                <tr className="border-b border-[var(--line)]/50">
-                  <td className="py-1.5">95% CI (Wilson)</td>
-                  <td className="py-1.5 text-right">[48.3%, 79.6%]</td>
-                  <td className="py-1.5 text-right">-</td>
-                  <td className="py-1.5 text-right text-[var(--amber)]">Includes 50%</td>
-                </tr>
-                <tr>
-                  <td className="py-1.5">Power analysis</td>
-                  <td className="py-1.5 text-right">Need ~90 trades</td>
-                  <td className="py-1.5 text-right">-</td>
-                  <td className="py-1.5 text-right text-[var(--muted)]">Have 32</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+            <div className="space-y-3 text-xs">
+              {/* Verdict */}
+              <div className="flex items-center gap-2 rounded-lg border px-3 py-2" style={{ borderColor: `${verdictColor}30`, backgroundColor: `${verdictColor}0d` }}>
+                <span className="rounded px-2 py-0.5 text-[10px] font-bold text-black" style={{ backgroundColor: verdictColor }}>{verdictLabel}</span>
+                <span className="text-[var(--muted)]">
+                  {isSignificant
+                    ? `z = ${z.toFixed(2)}, p < 0.01. Statistically significant edge with ${trades} trades over ${days} days.`
+                    : isBorderline
+                      ? `z = ${z.toFixed(2)}. Near-significant at alpha = 0.05. ${trades} trades over ${days} days.`
+                      : `z = ${z.toFixed(2)}. ${wr}% WR across ${trades} trades over ${days} days (${dateStart} to ${dateEnd}).`
+                  }
+                </span>
+              </div>
 
-          {/* Risk factors */}
-          <div>
-            <div className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">Known Risks</div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {[
-                { label: "Sample size", severity: "critical", detail: "32 trades over 4 months. Need 78-90 for 80% power." },
-                { label: "Selection bias", severity: "critical", detail: "Target selected after observing PnL history. Forward performance unproven." },
-                { label: "Regime dependency", severity: "critical", detail: "Bear market only (BTC $95K->$70K). Untested in bull." },
-                { label: "Data coverage", severity: "high", detail: "API only goes back to Dec 2025. Missing his $50M peak era." },
-                { label: "Execution latency", severity: "medium", detail: "He scales in over 2K+ fills per cycle. Entry timing unclear." },
-                { label: "Single point of failure", severity: "medium", detail: "Strategy dies if he stops trading or changes behavior." },
-              ].map((risk) => (
-                <div
-                  key={risk.label}
-                  className="flex items-start gap-2 rounded border border-[var(--line)] bg-[var(--bg)] px-3 py-2"
-                >
-                  <span
-                    className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${
-                      risk.severity === "critical"
-                        ? "bg-[var(--red)]/20 text-[var(--red)]"
-                        : risk.severity === "high"
-                          ? "bg-[var(--amber)]/20 text-[var(--amber)]"
-                          : "bg-[var(--line)] text-[var(--muted)]"
-                    }`}
-                  >
-                    {risk.severity}
-                  </span>
-                  <div>
-                    <div className="font-medium text-[var(--text)]">{risk.label}</div>
-                    <div className="text-[var(--muted)]">{risk.detail}</div>
-                  </div>
+              {/* Stats table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                      <th className="py-1.5 text-left">Test</th>
+                      <th className="py-1.5 text-right">Result</th>
+                      <th className="py-1.5 text-right">z-score</th>
+                      <th className="py-1.5 text-right">Significant?</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-[var(--muted)]">
+                    <tr className="border-b border-[var(--line)]/50">
+                      <td className="py-1.5">Binomial (WR &gt; 50%)</td>
+                      <td className="py-1.5 text-right">{wins}/{trades} wins ({wr}%)</td>
+                      <td className="py-1.5 text-right">{z.toFixed(2)}</td>
+                      <td className={`py-1.5 text-right ${isSignificant ? "text-[var(--green)]" : isBorderline ? "text-[var(--amber)]" : "text-[var(--muted)]"}`}>
+                        {isSignificant ? "Yes (p < 0.01)" : isBorderline ? "Borderline" : "No"}
+                      </td>
+                    </tr>
+                    <tr className="border-b border-[var(--line)]/50">
+                      <td className="py-1.5">Daily snapshot analysis</td>
+                      <td className="py-1.5 text-right">{days} trading days</td>
+                      <td className="py-1.5 text-right">-</td>
+                      <td className="py-1.5 text-right text-[var(--green)]">Full dataset</td>
+                    </tr>
+                    <tr className="border-b border-[var(--line)]/50">
+                      <td className="py-1.5">95% CI (Wilson)</td>
+                      <td className="py-1.5 text-right">[{ciLow}%, {ciHigh}%]</td>
+                      <td className="py-1.5 text-right">-</td>
+                      <td className={`py-1.5 text-right ${ciIncludesFifty ? "text-[var(--amber)]" : "text-[var(--green)]"}`}>
+                        {ciIncludesFifty ? "Includes 50%" : "Above 50%"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="py-1.5">Sample adequacy</td>
+                      <td className="py-1.5 text-right">Need ~90 for 80% power</td>
+                      <td className="py-1.5 text-right">-</td>
+                      <td className={`py-1.5 text-right ${trades >= 90 ? "text-[var(--green)]" : trades >= 60 ? "text-[var(--amber)]" : "text-[var(--muted)]"}`}>
+                        Have {trades}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Risk factors */}
+              <div>
+                <div className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">Known Risks</div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    { label: "Sample size", severity: trades >= 90 ? "medium" : "critical", detail: `${trades} trades over ${days} days. Need 78-90 for 80% power.` },
+                    { label: "Selection bias", severity: "critical", detail: "Target selected after observing PnL history. Forward performance unproven." },
+                    { label: "Regime dependency", severity: "critical", detail: "Bear market only (BTC $95K->$70K). Untested in bull." },
+                    { label: "Data coverage", severity: "high", detail: `Data: ${dateStart} to ${dateEnd}. Missing his $50M peak era.` },
+                    { label: "Execution latency", severity: "medium", detail: "He scales in over 2K+ fills per cycle. Entry timing unclear." },
+                    { label: "Single point of failure", severity: "medium", detail: "Strategy dies if he stops trading or changes behavior." },
+                  ].map((risk) => (
+                    <div
+                      key={risk.label}
+                      className="flex items-start gap-2 rounded border border-[var(--line)] bg-[var(--bg)] px-3 py-2"
+                    >
+                      <span
+                        className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${
+                          risk.severity === "critical"
+                            ? "bg-[var(--red)]/20 text-[var(--red)]"
+                            : risk.severity === "high"
+                              ? "bg-[var(--amber)]/20 text-[var(--amber)]"
+                              : "bg-[var(--line)] text-[var(--muted)]"
+                        }`}
+                      >
+                        {risk.severity}
+                      </span>
+                      <div>
+                        <div className="font-medium text-[var(--text)]">{risk.label}</div>
+                        <div className="text-[var(--muted)]">{risk.detail}</div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
 
-          {/* What would change our mind */}
-          <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
-            <div className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-1">
-              What would make this conclusive
+              {/* What would change our mind */}
+              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+                <div className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-1">
+                  What would make this conclusive
+                </div>
+                <ul className="space-y-0.5 text-[var(--muted)]">
+                  {trades < 90 && <li>- {90 - trades}+ more counter-trade signals at &gt;$1M notional (currently {trades})</li>}
+                  <li>- Positive results through a bull market regime change</li>
+                  <li>- Out-of-sample validation on other whales (not pre-selected by PnL)</li>
+                  <li>- Live paper trading for 6+ months before real capital</li>
+                </ul>
+              </div>
             </div>
-            <ul className="space-y-0.5 text-[var(--muted)]">
-              <li>- 78+ more trade cycles at &gt;$1M notional (currently 32)</li>
-              <li>- Positive results through a bull market regime change</li>
-              <li>- Out-of-sample validation on other whales (not pre-selected by PnL)</li>
-              <li>- Live paper trading for 6+ months before real capital</li>
-            </ul>
           </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Key Findings */}
       <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">

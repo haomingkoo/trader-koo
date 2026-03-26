@@ -26,23 +26,22 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  // Overview
-  { to: "/", label: "Guide", Icon: BookOpen },
+  // Core (daily use)
   { to: "/report", label: "Report", Icon: FileText },
-  { to: "/alerts", label: "Alerts", Icon: Bell },
-  // Analysis
   { to: "/chart", label: "Chart", Icon: TrendingUp },
+  { to: "/alerts", label: "Alerts", Icon: Bell },
+  { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
+  // Analysis
   { to: "/vix", label: "VIX Analysis", Icon: Thermometer },
   { to: "/earnings", label: "Calendar", Icon: Calendar },
   { to: "/opportunities", label: "Opportunities", Icon: Search },
-  // Markets
+  // Crypto
   { to: "/crypto", label: "Crypto", Icon: Bitcoin },
-  { to: "/markets", label: "Pred Markets", Icon: BarChart3 },
-  // Trading
-  { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
   { to: "/hyperliquid", label: "Hyperliquid", Icon: Fish },
-  // Info
+  // Other
+  { to: "/markets", label: "Pred Markets", Icon: BarChart3 },
   { to: "/methodology", label: "Methodology", Icon: Layers },
+  { to: "/", label: "Guide", Icon: BookOpen },
 ];
 
 export default function Sidebar({
