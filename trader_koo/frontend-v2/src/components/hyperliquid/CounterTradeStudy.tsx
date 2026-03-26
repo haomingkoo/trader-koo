@@ -412,7 +412,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       )}
 
       {/* Strategy Comparison Table */}
-      {backtest && (() => {
+      {backtest ? (() => {
         const stratKeys = Object.keys(backtest).filter(k => k !== "trader_equity_curve" && typeof backtest[k] === "object" && "trades" in (backtest[k] as Record<string, unknown>));
         if (!stratKeys.length) return null;
         type StratData = { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; description?: string; equity_curve: { date: string; equity: number }[] };
@@ -450,10 +450,10 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             </div>
           </div>
         );
-      })()}
+      })() : null}
 
       {/* Backtest Equity Curve */}
-      {backtest && ((): React.ReactNode => {
+      {backtest ? (() => {
         const strat = (backtest.counter_25m_held_7d || backtest.counter_25m) as { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; equity_curve: { date: string; equity: number }[] } | undefined;
         const traderCurve = backtest.trader_equity_curve as { date: string; equity: number }[] | undefined;
         if (!strat?.equity_curve?.length) return null;
@@ -545,7 +545,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             </p>
           </div>
         );
-      })()}
+      })() : null}
 
       {/* Duration Analysis */}
       {duration_analysis.length > 0 && (
@@ -844,7 +844,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       </div>
 
       {/* Agent Analysis */}
-      {(strategy as Record<string, unknown>).agent_analysis && (() => {
+      {(strategy as Record<string, unknown>).agent_analysis ? (() => {
         const agents = (strategy as Record<string, unknown>).agent_analysis as Record<string, { title: string; findings: string[] }>;
         return (
           <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
@@ -866,7 +866,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             </div>
           </div>
         );
-      })()}
+      })() : null}
 
       {/* Bottom NFA */}
       <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-4 py-3 text-[10px] text-[var(--muted)]">
