@@ -453,7 +453,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       })()}
 
       {/* Backtest Equity Curve */}
-      {backtest && (() => {
+      {backtest && ((): React.ReactNode => {
         const strat = (backtest.counter_25m_held_7d || backtest.counter_25m) as { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; equity_curve: { date: string; equity: number }[] } | undefined;
         const traderCurve = backtest.trader_equity_curve as { date: string; equity: number }[] | undefined;
         if (!strat?.equity_curve?.length) return null;
