@@ -495,6 +495,19 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         usage_meta=usage_meta if isinstance(usage_meta, dict) else {},
     )
 
+    # Guard against empty LLM response (API returned {} or unparseable content)
+    if not rewritten:
+        _safe_note_failure(
+            db_path,
+            source=source,
+            ticker=context.get("ticker"),
+            reason="empty_llm_response",
+            error_class="empty_response",
+            details="LLM returned empty or unparseable response",
+        )
+        fallback = generate_fallback_narrative(context)
+        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+
     # Sanitize raw LLM output (strip HTML, trim to schema field limits) before
     # validation so that slightly-over-length strings don't trigger fallback.
     rewritten = sanitize_llm_output(
@@ -504,7 +517,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     # Validate LLM output against schema
     validation_ctx = {"source": source, "ticker": context.get("ticker")}
     validation_result = validate_llm_output(rewritten, SetupRewrite, context=validation_ctx)
-    
+
     if not validation_result.is_valid:
         _safe_note_failure(
             db_path,
@@ -521,15 +534,15 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         fallback = generate_fallback_narrative(context)
         out = sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
     else:
-        # Sanitize validated output
         validated_dict = validation_result.data.model_dump()
         out = sanitize_llm_output(validated_dict, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        # Only record success when validation actually passes
+        _safe_note_success(
+            db_path,
+            source=source,
+            ticker=context.get("ticker"),
+        )
 
     with _CACHE_LOCK:
         _PROMPT_CACHE[prompt_hash] = dict(out)
-    _safe_note_success(
-        db_path,
-        source=source,
-        ticker=context.get("ticker"),
-    )
     return out
