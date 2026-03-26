@@ -497,10 +497,6 @@ def _send_telegram_signal_alert(
     total_notional = sum(p.notional_usd for p in snapshot.positions)
     acct_leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
 
-    # Only send Telegram when counter signal is active
-    if not has_counter_signal:
-        return
-
     # Build message from scored signals
     best = max(actionable, key=lambda s: s.get("score", 0))
     action_label = best.get("action", "SIGNAL")
