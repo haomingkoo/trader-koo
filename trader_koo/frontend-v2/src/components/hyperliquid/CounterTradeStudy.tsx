@@ -843,6 +843,31 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
         </ul>
       </div>
 
+      {/* Agent Analysis */}
+      {(strategy as Record<string, unknown>).agent_analysis && (() => {
+        const agents = (strategy as Record<string, unknown>).agent_analysis as Record<string, { title: string; findings: string[] }>;
+        return (
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
+            <h4 className="text-sm font-bold text-[var(--text)] mb-4">Expert Panel Analysis</h4>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {Object.values(agents).map((agent) => (
+                <div key={agent.title} className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-3">
+                  <div className="text-xs font-semibold text-[var(--accent)] mb-2">{agent.title}</div>
+                  <ul className="space-y-1">
+                    {agent.findings.map((f: string, i: number) => (
+                      <li key={i} className="text-[10px] text-[var(--muted)] flex items-start gap-1">
+                        <span className="mt-0.5 shrink-0">-</span>
+                        <span>{f}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Bottom NFA */}
       <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-4 py-3 text-[10px] text-[var(--muted)]">
         <strong>Disclaimer:</strong> {strategy.disclaimer}
