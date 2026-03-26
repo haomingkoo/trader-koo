@@ -1,6 +1,10 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 
 export default function NotFoundPage() {
+  useEffect(() => {
+    document.title = "404 Not Found \u2014 Trader Koo";
+  }, []);
   return (
     <div className="flex flex-col items-center justify-center gap-4 pt-24 text-center">
       <div className="text-6xl font-bold text-[var(--line)]">404</div>

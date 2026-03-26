@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bell, TrendingUp, BarChart3, Bitcoin } from "lucide-react";
 import { useAlerts } from "../api/hooks";
@@ -113,6 +113,9 @@ function AlertCard({ alert }: { alert: AlertItem }) {
 }
 
 export default function AlertsPage() {
+  useEffect(() => {
+    document.title = "Alerts \u2014 Trader Koo";
+  }, []);
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const { data, isLoading, isError } = useAlerts(200);
 
