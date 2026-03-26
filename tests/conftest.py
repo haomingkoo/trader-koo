@@ -91,6 +91,21 @@ def _create_test_db() -> sqlite3.Connection:
             UNIQUE(run_id, ticker)
         );
 
+        CREATE TABLE pipeline_runs (
+            run_id TEXT PRIMARY KEY,
+            started_ts TEXT NOT NULL,
+            finished_ts TEXT,
+            mode TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            stage_started_ts TEXT,
+            ingest_ok INTEGER DEFAULT 0,
+            yolo_ok INTEGER DEFAULT 0,
+            report_ok INTEGER DEFAULT 0,
+            error_message TEXT
+        );
+
         CREATE TABLE paper_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             report_date TEXT,
