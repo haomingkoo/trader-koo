@@ -62,6 +62,10 @@ from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.utils import client_ip as _client_ip
 from trader_koo.backend.services.scheduler import create_scheduler
 from trader_koo.backend.services.pipeline import (
+    determine_resume_mode,
+    ensure_pipeline_runs_schema,
+    finish_pipeline_run,
+    read_interrupted_pipeline_run,
     reconcile_stale_running_runs,
     queue_post_ingest_resume,
 )
@@ -291,6 +295,8 @@ async def lifespan(_app: FastAPI):
             LOG.info("Paper trade schema initialized")
             ensure_crypto_schema(conn)
             LOG.info("Crypto bars schema initialized")
+            ensure_pipeline_runs_schema(conn)
+            LOG.info("Pipeline runs schema initialized")
             from trader_koo.notifications.market_monitor import ensure_polymarket_schema
             ensure_polymarket_schema(conn)
             LOG.info("Polymarket snapshots schema initialized")
@@ -315,6 +321,57 @@ async def lifespan(_app: FastAPI):
                 reconcile.get("reconciled"),
                 ",".join(reconcile.get("run_ids", [])),
             )
+
+        # DB-based pipeline resume: check for interrupted pipeline_runs
+        interrupted = read_interrupted_pipeline_run()
+        if interrupted:
+            interrupted_id = str(interrupted.get("run_id") or "")
+            interrupted_mode = str(interrupted.get("mode") or "")
+            interrupted_stage = str(interrupted.get("stage") or "")
+            LOG.warning(
+                "Startup detected interrupted pipeline run_id=%s mode=%s stage=%s",
+                interrupted_id,
+                interrupted_mode,
+                interrupted_stage,
+            )
+            # Mark the interrupted run as failed
+            try:
+                finish_pipeline_run(
+                    interrupted_id,
+                    status="interrupted",
+                    error_message="killed_by_restart",
+                )
+            except Exception as exc:
+                LOG.warning("Failed to mark interrupted pipeline run: %s", exc)
+
+            # Determine resume mode and schedule it
+            resume_mode = determine_resume_mode(interrupted)
+            if resume_mode:
+                from trader_koo.backend.services.scheduler import _run_daily_update
+                resume_source = f"startup_resume:interrupted:{interrupted_id}"
+                job_id = f"resume_pipeline_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+                _scheduler.add_job(
+                    _run_daily_update,
+                    trigger="date",
+                    run_date=dt.datetime.now(dt.timezone.utc),
+                    id=job_id,
+                    kwargs={"mode": resume_mode, "source": resume_source},
+                )
+                LOG.warning(
+                    "Startup queued pipeline resume job_id=%s mode=%s from interrupted run_id=%s stage=%s",
+                    job_id,
+                    resume_mode,
+                    interrupted_id,
+                    interrupted_stage,
+                )
+            else:
+                LOG.info(
+                    "Startup: interrupted pipeline run_id=%s does not need resume (stage=%s)",
+                    interrupted_id,
+                    interrupted_stage,
+                )
+
+        # Legacy log-based post-ingest resume (kept for backward compat)
         resume = queue_post_ingest_resume(_scheduler, source="startup_resume")
         if resume.get("scheduled"):
             LOG.warning(

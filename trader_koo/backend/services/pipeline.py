@@ -2,8 +2,13 @@
 
 Infers the current pipeline phase (idle, ingest, yolo, report) from
 cron log tails and the ``ingest_runs`` DB table.  Also provides the
-status-cache machinery and stale-run reconciliation used by the
-``/api/status`` and ``/api/admin/pipeline-status`` endpoints.
+status-cache machinery, stale-run reconciliation, and DB-based
+``pipeline_runs`` tracking used by the ``/api/status`` and
+``/api/admin/pipeline-status`` endpoints.
+
+The ``pipeline_runs`` table persists each pipeline execution so that
+Railway deploy-kills can be detected on restart and the pipeline
+auto-resumed from the last completed stage.
 """
 from __future__ import annotations
 
@@ -47,6 +52,274 @@ AUTO_RESUME_POST_INGEST = str(os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1
 }
 AUTO_RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_AGE_HOURS", "18")))
 AUTO_RESUME_MAX_RETRIES = max(0, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_RETRIES", "2")))
+
+# ---------------------------------------------------------------------------
+# pipeline_runs table: DB-based pipeline stage tracking
+# ---------------------------------------------------------------------------
+
+_PIPELINE_RUNS_DDL = """
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    run_id TEXT PRIMARY KEY,
+    started_ts TEXT NOT NULL,
+    finished_ts TEXT,
+    mode TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    stage_started_ts TEXT,
+    ingest_ok INTEGER DEFAULT 0,
+    yolo_ok INTEGER DEFAULT 0,
+    report_ok INTEGER DEFAULT 0,
+    error_message TEXT
+)
+"""
+
+
+def ensure_pipeline_runs_schema(conn: sqlite3.Connection) -> None:
+    """Create the ``pipeline_runs`` table if it does not exist."""
+    conn.execute(_PIPELINE_RUNS_DDL)
+    conn.commit()
+
+
+def create_pipeline_run(
+    *,
+    run_id: str,
+    mode: str,
+    source: str,
+    db_path: Path | None = None,
+) -> None:
+    """Insert a new pipeline_runs row with status=running, stage=starting."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return
+    now_iso = (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    conn = sqlite3.connect(str(path))
+    try:
+        ensure_pipeline_runs_schema(conn)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO pipeline_runs
+                (run_id, started_ts, mode, source, status, stage, stage_started_ts)
+            VALUES (?, ?, ?, ?, 'running', 'starting', ?)
+            """,
+            (run_id, now_iso, mode, source, now_iso),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_pipeline_stage(
+    run_id: str,
+    stage: str,
+    *,
+    db_path: Path | None = None,
+) -> None:
+    """Advance the pipeline_runs row to a new *stage*."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return
+    now_iso = (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            """
+            UPDATE pipeline_runs
+            SET stage = ?, stage_started_ts = ?
+            WHERE run_id = ?
+            """,
+            (stage, now_iso, run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def finish_pipeline_run(
+    run_id: str,
+    *,
+    status: str = "ok",
+    error_message: str | None = None,
+    ingest_ok: bool = False,
+    yolo_ok: bool = False,
+    report_ok: bool = False,
+    db_path: Path | None = None,
+) -> None:
+    """Mark a pipeline_runs row as completed (ok or failed)."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return
+    now_iso = (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            """
+            UPDATE pipeline_runs
+            SET finished_ts = ?,
+                status = ?,
+                stage = 'done',
+                ingest_ok = ?,
+                yolo_ok = ?,
+                report_ok = ?,
+                error_message = COALESCE(?, error_message)
+            WHERE run_id = ?
+            """,
+            (
+                now_iso,
+                status,
+                int(ingest_ok),
+                int(yolo_ok),
+                int(report_ok),
+                error_message,
+                run_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def read_latest_pipeline_run(
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Return the most recent ``pipeline_runs`` row, or None."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not table_exists(conn, "pipeline_runs"):
+            return None
+        row = conn.execute(
+            """
+            SELECT *
+            FROM pipeline_runs
+            ORDER BY started_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def read_interrupted_pipeline_run(
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Find the most recent pipeline_runs row with status='running'.
+
+    This indicates a run that was killed (e.g. by a Railway deploy)
+    before it could finish.
+    """
+    path = db_path or DB_PATH
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not table_exists(conn, "pipeline_runs"):
+            return None
+        row = conn.execute(
+            """
+            SELECT *
+            FROM pipeline_runs
+            WHERE status = 'running'
+            ORDER BY started_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def count_resume_attempts(
+    run_id: str,
+    *,
+    db_path: Path | None = None,
+) -> int:
+    """Count how many pipeline_runs reference *run_id* in their source field
+    as a resume (source contains 'resume' and references the original run).
+
+    Falls back to log-line counting for backward compatibility.
+    """
+    path = db_path or DB_PATH
+    if not path.exists() or not run_id:
+        return 0
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not table_exists(conn, "pipeline_runs"):
+            return 0
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM pipeline_runs
+            WHERE source LIKE '%resume%'
+              AND source LIKE ?
+            """,
+            (f"%{run_id}%",),
+        ).fetchone()
+        return int(row["c"] or 0) if row else 0
+    finally:
+        conn.close()
+
+
+def determine_resume_mode(interrupted: dict[str, Any]) -> str | None:
+    """Given an interrupted pipeline_runs row, determine which mode to resume.
+
+    Returns the mode string (e.g. 'yolo', 'report') or None if no resume
+    is possible (e.g. ingest was interrupted and must be restarted fully).
+    """
+    stage = str(interrupted.get("stage") or "").lower()
+    mode = str(interrupted.get("mode") or "full").lower()
+    ingest_ok = bool(interrupted.get("ingest_ok"))
+    yolo_ok = bool(interrupted.get("yolo_ok"))
+    report_ok = bool(interrupted.get("report_ok"))
+
+    # If the report already succeeded, nothing to resume
+    if report_ok:
+        return None
+
+    # If YOLO succeeded but report did not, resume with report only
+    if yolo_ok and not report_ok:
+        return "report"
+
+    # If ingest succeeded but YOLO did not, resume with yolo+report
+    if ingest_ok and not yolo_ok:
+        return "yolo"
+
+    # If we were in the ingest stage itself, we cannot safely resume
+    # mid-ingest -- the caller should decide whether to do a full run.
+    # For modes that skip ingest (yolo, report), resume from the start
+    # of that mode.
+    if mode == "yolo":
+        return "yolo"
+    if mode == "report":
+        return "report"
+
+    # Full mode with interrupted ingest -- need full re-run
+    if stage in ("starting", "ingest") and not ingest_ok:
+        return "full"
+
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Status cache (thread-safe)
@@ -468,8 +741,18 @@ def _count_post_ingest_resume_attempts(
     *,
     source: str = "startup_resume",
 ) -> int:
+    """Count resume attempts for a given run_id.
+
+    Prefers DB-based counting via pipeline_runs table, falls back to
+    log-line parsing for backward compatibility.
+    """
     if not run_id:
         return 0
+    # Try DB-based count first
+    db_count = count_resume_attempts(run_id)
+    if db_count > 0:
+        return db_count
+    # Fall back to log-line parsing
     tail = _tail_text_file(RUN_LOG_PATH, lines=5000, max_bytes=1_000_000)
     needle_source = f"source={source}"
     needle_run = f"run_id={run_id}"

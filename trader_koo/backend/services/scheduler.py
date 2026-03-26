@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -120,44 +121,114 @@ def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
     """Execute ``daily_update.sh`` with the given *mode*.
 
     Called by the APScheduler job or manually from the admin trigger
-    endpoint.
+    endpoint.  Creates a ``pipeline_runs`` DB record to track progress
+    so that interrupted runs can be detected and resumed after restarts.
     """
+    from trader_koo.backend.services.pipeline import (
+        create_pipeline_run,
+        finish_pipeline_run,
+        update_pipeline_stage,
+    )
+
     mode_norm = _normalize_update_mode(mode) or "full"
     script = SCRIPTS_DIR / "daily_update.sh"
     started = dt.datetime.now(dt.timezone.utc)
     rss_before = _current_rss_mb()
+
+    # Generate a unique run_id for pipeline tracking
+    pipeline_run_id = f"pipe_{started.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
+
     _append_run_log(
         "SCHED",
-        f"daily_update invoked source={source} mode={mode_norm} rss_before_mb={_fmt_mb(rss_before)}",
+        f"daily_update invoked source={source} mode={mode_norm} run_id={pipeline_run_id} rss_before_mb={_fmt_mb(rss_before)}",
     )
     LOG.info(
-        "Scheduler: starting daily_update.sh (source=%s, mode=%s, rss_before_mb=%s, run_log=%s)",
+        "Scheduler: starting daily_update.sh (source=%s, mode=%s, run_id=%s, rss_before_mb=%s, run_log=%s)",
         source,
         mode_norm,
+        pipeline_run_id,
         _fmt_mb(rss_before),
         RUN_LOG_PATH,
     )
+
+    # Record pipeline run in DB before starting
+    try:
+        create_pipeline_run(
+            run_id=pipeline_run_id,
+            mode=mode_norm,
+            source=source,
+            db_path=DB_PATH,
+        )
+    except Exception as exc:
+        LOG.warning("Failed to create pipeline_runs record: %s", exc)
+
+    # Determine which stages will run based on mode
+    run_ingest = mode_norm == "full"
+    run_yolo = mode_norm in ("full", "yolo")
+    run_report = mode_norm in ("full", "yolo", "report")
+
+    # Update stage to reflect what the shell script will do first
+    first_stage = "ingest" if run_ingest else ("yolo" if run_yolo else "report")
+    try:
+        update_pipeline_stage(pipeline_run_id, first_stage, db_path=DB_PATH)
+    except Exception as exc:
+        LOG.warning("Failed to update pipeline stage: %s", exc)
+
     env = os.environ.copy()
     env["TRADER_KOO_UPDATE_MODE"] = mode_norm
+    env["TRADER_KOO_PIPELINE_RUN_ID"] = pipeline_run_id
     result = subprocess.run(["bash", str(script)], capture_output=False, env=env)
     elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     rss_after = _current_rss_mb()
     delta = (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None
+
+    # Determine which stages succeeded based on exit code
+    # daily_update.sh exits 0 only when all enabled stages pass
+    ingest_ok = run_ingest and result.returncode == 0
+    yolo_ok = run_yolo and result.returncode == 0
+    report_ok = run_report and result.returncode == 0
+
+    # For partial success detection: if the script failed but ingest
+    # completed (mode=full), we can infer ingest was ok from the log.
+    # The shell script only aborts early on ingest failure.
+    if run_ingest and result.returncode != 0:
+        tail = _tail_text_file(RUN_LOG_PATH, lines=60, max_bytes=100_000)
+        ingest_ok = any("[INGEST] done rc=0" in line for line in tail)
+        if ingest_ok and run_yolo:
+            yolo_ok = any("[YOLO]  Daily pattern detection done. rc=0" in line for line in tail)
+            if yolo_ok and run_report:
+                report_ok = any("[REPORT] Done. rc=0" in line for line in tail)
+
+    # Finish the pipeline_runs record
+    try:
+        finish_pipeline_run(
+            pipeline_run_id,
+            status="ok" if result.returncode == 0 else "failed",
+            error_message=f"daily_update.sh rc={result.returncode}" if result.returncode != 0 else None,
+            ingest_ok=ingest_ok,
+            yolo_ok=yolo_ok,
+            report_ok=report_ok,
+            db_path=DB_PATH,
+        )
+    except Exception as exc:
+        LOG.warning("Failed to finish pipeline_runs record: %s", exc)
+
     if result.returncode == 0:
         _append_run_log(
             "SCHED",
             (
-                f"daily_update completed source={source} mode={mode_norm} rc={result.returncode} "
+                f"daily_update completed source={source} mode={mode_norm} run_id={pipeline_run_id} rc={result.returncode} "
                 f"sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}"
             ),
         )
         LOG.info(
             (
                 "Scheduler: daily_update.sh completed OK "
-                "(source=%s, mode=%s, rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s)"
+                "(source=%s, mode=%s, run_id=%s, rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s)"
             ),
             source,
             mode_norm,
+            pipeline_run_id,
             result.returncode,
             elapsed,
             _fmt_mb(rss_after),
@@ -167,17 +238,18 @@ def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
         _append_run_log(
             "SCHED",
             (
-                f"daily_update failed source={source} mode={mode_norm} rc={result.returncode} "
+                f"daily_update failed source={source} mode={mode_norm} run_id={pipeline_run_id} rc={result.returncode} "
                 f"sec={elapsed:.1f} rss_after_mb={_fmt_mb(rss_after)} rss_delta_mb={_fmt_mb(delta)}"
             ),
         )
         LOG.error(
             (
                 "Scheduler: daily_update.sh failed "
-                "(source=%s, mode=%s, rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s, run_log=%s)"
+                "(source=%s, mode=%s, run_id=%s, rc=%d, sec=%.1f, rss_after_mb=%s, rss_delta_mb=%s, run_log=%s)"
             ),
             source,
             mode_norm,
+            pipeline_run_id,
             result.returncode,
             elapsed,
             _fmt_mb(rss_after),
