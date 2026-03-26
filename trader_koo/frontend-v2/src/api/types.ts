@@ -209,6 +209,9 @@ export interface SetupRow {
   discount_pct: number | null;
   peg: number | null;
   sector: string | null;
+  earnings_within_5d?: boolean;
+  earnings_date?: string | null;
+  days_to_earnings?: number | null;
   [key: string]: unknown;
 }
 
@@ -262,6 +265,19 @@ export interface VixData {
   ma_state?: string;
 }
 
+export interface SectorHeatmapRow {
+  sector: string;
+  avg_pct_change: number | null;
+  median_pct_change: number | null;
+  pct_advancing: number | null;
+  tickers: number;
+  advancers: number;
+  decliners: number;
+  unchanged: number;
+  near_high_count: number;
+  near_low_count: number;
+}
+
 export interface ReportSignals {
   tonight_key_changes: KeyChange[];
   regime_context: RegimeContext | null;
@@ -269,6 +285,7 @@ export interface ReportSignals {
   setup_evaluation: SetupEvaluation | Record<string, never>;
   volatility_context?: Record<string, unknown>;
   market_breadth?: Record<string, unknown>;
+  sector_heatmap?: SectorHeatmapRow[];
 }
 
 export interface ReportLatest {

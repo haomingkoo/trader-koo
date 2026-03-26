@@ -10,6 +10,7 @@ import {
   SummaryKpiRow,
   VixRegimeWidget,
 } from "../components/report/ReportOverviewSections";
+import SectorHeatmap from "../components/report/SectorHeatmap";
 import SetupEvaluationPanel from "../components/report/SetupEvaluationPanel";
 import SetupQualitySection from "../components/report/SetupQualitySection";
 
@@ -107,6 +108,8 @@ export default function ReportPage() {
             <FearGreedGauge />
             <VixRegimeWidget regime={signals.regime_context} />
           </div>
+
+          <SectorHeatmap rows={signals.sector_heatmap ?? []} />
 
           <SetupQualitySection rows={setupRows} debateMap={debateMap} activeTicker={activeTicker} />
 

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from trader_koo.backend.routers.admin.alert_quality import (
+    router as alert_quality_router,
+)
 from trader_koo.backend.routers.admin.backups import (
     router as backups_router,
 )
@@ -32,6 +35,7 @@ from trader_koo.backend.routers.admin.telegram import (
 
 router = APIRouter()
 
+router.include_router(alert_quality_router)
 router.include_router(pipeline_router)
 router.include_router(ml_router)
 router.include_router(data_router)
