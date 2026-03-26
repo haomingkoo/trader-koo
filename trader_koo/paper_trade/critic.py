@@ -88,7 +88,10 @@ def _check_regime_alignment(
     vix = market_ctx.get("vix_at_entry")
 
     if not regime or regime == "unknown":
-        return True, "Regime unknown — no alignment check"
+        # Fail closed when VIX is elevated - don't let trades through without regime data
+        if isinstance(vix, (int, float)) and vix > 22:
+            return False, f"Regime unknown but VIX={vix:.1f} elevated. Blocking without regime data."
+        return True, "Regime unknown, low-vol environment — allowing"
 
     is_bull = "bull" in regime
     is_bear = "bear" in regime
@@ -137,9 +140,16 @@ def _check_regime_alignment(
         if hmm_aligned:
             return True, f"{direction.title()} aligned with HMM directional regime '{dir_regime}'"
 
-    # Neutral/chop regime or no strong signal — allow with decent conviction
+    # Neutral/chop regime or no strong signal
     tier = str(row.get("setup_tier") or "").upper()
     score = float(row.get("score") or 0)
+
+    # Block longs in high-vol unless A-tier with strong conviction
+    if direction == "long" and vix_regime == "high_vol":
+        if tier == "A" and score >= 80:
+            return True, f"Long in high-vol but A-tier {score:.0f} — allowed"
+        return False, f"Long blocked in high-vol VIX regime ({vix:.1f}). Need A-tier ≥80."
+
     if score >= 70:
         return True, f"No strong regime signal, score {score:.0f} adequate — allowing"
 

@@ -173,6 +173,15 @@ def compute_stop_and_target(
         else:
             target_price = max(entry - (risk * 2.0), 0.01)  # floor at 0.01 — stock can't go negative
 
+    # Enforce minimum stop distance: max(1.5x ATR, 2.5%) to avoid noise stops
+    atr_pct_val = float(atr_pct) if isinstance(atr_pct, (int, float)) else 3.0
+    min_stop_pct = max(atr_pct_val * 1.5 / 100.0, 0.025)
+    min_stop_distance = entry * min_stop_pct
+    if direction == "long" and (entry - stop_loss) < min_stop_distance:
+        stop_loss = round(entry - min_stop_distance, 2)
+    elif direction == "short" and (stop_loss - entry) < min_stop_distance:
+        stop_loss = round(entry + min_stop_distance, 2)
+
     return {
         "stop_loss": round(stop_loss, 2),
         "target_price": round(target_price, 2),
