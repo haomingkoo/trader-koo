@@ -54,8 +54,56 @@ FINNHUB_TIMEOUT_SEC = 10
 # Alert cooldown: suppress macro alerts for 1 hour
 MACRO_COOLDOWN_SEC = 3600
 
-# Module-level cooldown tracker
-_last_macro_alert_ts: float = 0.0
+# DB table for persisting cooldown timestamps across deploys
+_COOLDOWN_TABLE = "macro_alert_cooldowns"
+
+
+def _ensure_cooldown_table(db_path: Path) -> None:
+    """Create the cooldown persistence table if it does not exist."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_COOLDOWN_TABLE} (
+                alert_type TEXT PRIMARY KEY,
+                last_ts    REAL NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        LOG.warning("Failed to ensure cooldown table: %s", exc)
+
+
+def _read_last_alert_ts(db_path: Path, alert_type: str) -> float:
+    """Read the last alert timestamp from SQLite. Returns 0.0 if absent."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            f"SELECT last_ts FROM {_COOLDOWN_TABLE} WHERE alert_type = ?",
+            (alert_type,),
+        ).fetchone()
+        conn.close()
+        return float(row[0]) if row else 0.0
+    except Exception as exc:
+        LOG.debug("Cooldown read failed (table may not exist): %s", exc)
+        return 0.0
+
+
+def _write_last_alert_ts(
+    db_path: Path, alert_type: str, ts: float
+) -> None:
+    """Persist the last alert timestamp to SQLite."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            f"INSERT OR REPLACE INTO {_COOLDOWN_TABLE} (alert_type, last_ts) "
+            "VALUES (?, ?)",
+            (alert_type, ts),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        LOG.warning("Cooldown write failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -384,19 +432,22 @@ def send_macro_alert(db_path: Path) -> bool:
     - Any instrument exceeds its spike threshold, OR
     - A regime shift with confidence >= 50 is detected
 
+    Cooldown is persisted to SQLite so it survives deploys.
     Returns True when an alert was sent.
     """
-    global _last_macro_alert_ts  # noqa: PLW0603
-
     from trader_koo.notifications.telegram import is_configured, send_message
 
     if not is_configured():
         LOG.info("Telegram not configured — skipping macro alert")
         return False
 
-    # Cooldown check
+    # Ensure the cooldown table exists (idempotent)
+    _ensure_cooldown_table(db_path)
+
+    # Cooldown check — read from DB instead of in-memory variable
     now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
-    if now_ts - _last_macro_alert_ts < MACRO_COOLDOWN_SEC:
+    last_ts = _read_last_alert_ts(db_path, "macro")
+    if now_ts - last_ts < MACRO_COOLDOWN_SEC:
         LOG.debug("Macro alert on cooldown — skipping")
         return False
 
@@ -420,7 +471,7 @@ def send_macro_alert(db_path: Path) -> bool:
     msg = _format_macro_alert(moves, regime)
     sent = send_message(msg)
     if sent:
-        _last_macro_alert_ts = now_ts
+        _write_last_alert_ts(db_path, "macro", now_ts)
         LOG.info(
             "Macro alert sent: regime=%s confidence=%d exceeded=%d",
             regime["regime"],
