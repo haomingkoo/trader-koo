@@ -764,7 +764,7 @@ if DIST_DIR.exists() and DIST_DIR.is_dir():
 
 
     # Serve favicon and other root-level static files from dist-v2/
-    for _static_file in ("favicon.svg", "favicon.ico", "robots.txt"):
+    for _static_file in ("favicon.svg", "favicon.ico", "robots.txt", "sitemap.xml"):
         _static_path = DIST_DIR / _static_file
         if _static_path.is_file():
             def _make_static_handler(_p: str = str(_static_path)):
