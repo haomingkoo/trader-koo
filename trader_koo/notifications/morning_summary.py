@@ -3,8 +3,12 @@
 Assembles a market briefing from:
 - Latest daily report JSON (setups, market data, earnings)
 - ``price_daily`` table (SPY / QQQ / VIX latest close + change)
-- ``paper_trades`` table (open count, today's closed, win rate, equity)
+- ``crypto_bars`` table (BTC, ETH overnight moves)
+- ``price_daily`` for GLD (gold) and UUP (dollar) overnight moves
+- ``paper_trades`` table (open positions with P&L + summary stats)
 - Earnings calendar data embedded in the report
+- Economic calendar events for today (CPI, FOMC, etc.)
+- Active Hyperliquid counter-trade signals
 
 Public API
 ----------
@@ -312,6 +316,178 @@ def _fmt_money(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def _fetch_crypto_snapshot(
+    conn: sqlite3.Connection,
+    symbol: str,
+) -> dict[str, Any] | None:
+    """Latest close + 24h change for a crypto symbol from ``crypto_bars``.
+
+    Uses the 1d interval if available, otherwise falls back to the latest
+    two 1h bars to approximate a 24h change.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT timestamp, close
+            FROM crypto_bars
+            WHERE symbol = ? AND interval = '1d'
+            ORDER BY timestamp DESC
+            LIMIT 2
+            """,
+            (symbol,),
+        ).fetchall()
+        if rows and len(rows) >= 2:
+            latest = float(rows[0]["close"])
+            prev = float(rows[1]["close"])
+            change_pct = ((latest / prev) - 1.0) * 100.0 if prev > 0 else 0.0
+            return {
+                "symbol": symbol,
+                "close": round(latest, 2),
+                "change_pct": round(change_pct, 2),
+            }
+        # Fallback: use latest 1h bar close vs 24h-ago 1h bar
+        rows = conn.execute(
+            """
+            SELECT timestamp, close
+            FROM crypto_bars
+            WHERE symbol = ? AND interval = '1h'
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchall()
+        if not rows:
+            return None
+        latest_close = float(rows[0]["close"])
+        latest_ts = str(rows[0]["timestamp"])
+        # Find bar ~24h ago
+        try:
+            ts_dt = dt.datetime.fromisoformat(latest_ts.replace("Z", "+00:00"))
+            ago_ts = (ts_dt - dt.timedelta(hours=24)).isoformat()
+        except Exception:
+            return {"symbol": symbol, "close": round(latest_close, 2), "change_pct": 0.0}
+        old_rows = conn.execute(
+            """
+            SELECT close FROM crypto_bars
+            WHERE symbol = ? AND interval = '1h' AND timestamp <= ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (symbol, ago_ts),
+        ).fetchall()
+        if old_rows:
+            prev = float(old_rows[0]["close"])
+            change_pct = ((latest_close / prev) - 1.0) * 100.0 if prev > 0 else 0.0
+        else:
+            change_pct = 0.0
+        return {
+            "symbol": symbol,
+            "close": round(latest_close, 2),
+            "change_pct": round(change_pct, 2),
+        }
+    except Exception as exc:
+        LOG.debug("Crypto snapshot for %s failed: %s", symbol, exc)
+        return None
+
+
+def _fetch_open_positions(
+    conn: sqlite3.Connection,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Fetch open paper trade positions with unrealized P&L."""
+    positions: list[dict[str, Any]] = []
+    try:
+        rows = conn.execute(
+            """
+            SELECT ticker, direction, entry_price,
+                   unrealized_pnl_pct, position_size_pct, entry_date
+            FROM paper_trades
+            WHERE status = 'open'
+            ORDER BY entry_date DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        for row in rows:
+            pnl = float(row["unrealized_pnl_pct"] or 0)
+            positions.append({
+                "ticker": str(row["ticker"]),
+                "direction": str(row["direction"] or "long"),
+                "entry_price": float(row["entry_price"] or 0),
+                "pnl_pct": round(pnl, 2),
+                "size_pct": float(row["position_size_pct"] or 8.0),
+            })
+    except Exception as exc:
+        LOG.debug("Open positions fetch failed: %s", exc)
+    return positions
+
+
+def _fetch_economic_events_today() -> list[dict[str, Any]]:
+    """Fetch today's (and tomorrow's) economic calendar events."""
+    events: list[dict[str, Any]] = []
+    try:
+        from trader_koo.catalyst_data import fetch_economic_calendar
+
+        # At 00:00 UTC, the upcoming US trading day is "today" UTC or
+        # "tomorrow" UTC depending on weekday. Fetch a 2-day window.
+        today_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        tomorrow_str = (
+            dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        raw = fetch_economic_calendar(today_str, tomorrow_str)
+        for ev in raw:
+            if not isinstance(ev, dict):
+                continue
+            if str(ev.get("impact", "")).lower() in ("high", "medium"):
+                events.append({
+                    "date": str(ev.get("date", ""))[:10],
+                    "event": str(ev.get("event", "")),
+                    "impact": str(ev.get("impact", "")),
+                })
+    except Exception as exc:
+        LOG.debug("Economic calendar fetch failed: %s", exc)
+    return events
+
+
+def _fetch_counter_trade_signals(
+    conn: sqlite3.Connection,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Fetch recent active counter-trade signals from Hyperliquid tracker."""
+    signals: list[dict[str, Any]] = []
+    try:
+        rows = conn.execute(
+            """
+            SELECT coin, direction, entry_price, signal_ts, wallet_label
+            FROM hyperliquid_counter_signals
+            ORDER BY signal_ts DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        for row in rows:
+            # Only include signals from the last 24 hours
+            try:
+                ts = dt.datetime.fromisoformat(
+                    str(row["signal_ts"]).replace("Z", "+00:00")
+                )
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=dt.timezone.utc)
+                if (now_utc - ts).total_seconds() > 86400:
+                    continue
+            except Exception:
+                pass
+            signals.append({
+                "coin": str(row["coin"]),
+                "direction": str(row["direction"]),
+                "entry_price": float(row["entry_price"] or 0),
+                "wallet": str(row["wallet_label"] or ""),
+            })
+    except Exception as exc:
+        LOG.debug("Counter-trade signals fetch failed: %s", exc)
+    return signals
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -342,6 +518,12 @@ def generate_morning_summary(
         qqq = _fetch_index_snapshot(conn, "QQQ")
         vix = _fetch_index_snapshot(conn, "^VIX")
 
+        # Overnight moves: crypto + macro proxies
+        btc = _fetch_crypto_snapshot(conn, "BTC-USD")
+        eth = _fetch_crypto_snapshot(conn, "ETH-USD")
+        gold = _fetch_index_snapshot(conn, "GLD")
+        dxy = _fetch_index_snapshot(conn, "UUP")
+
         # Fear/Greed
         fg = _fetch_fear_greed(conn)
         fg_score = int(fg.get("composite_score", 0)) if fg else None
@@ -350,8 +532,9 @@ def generate_morning_summary(
         # Top setups
         setups = _extract_top_setups(report, limit=5)
 
-        # Paper trades
+        # Paper trades: summary stats + individual open positions
         pt = _fetch_paper_trade_stats(conn)
+        open_positions = _fetch_open_positions(conn, limit=8)
 
         # Earnings
         earnings = _extract_earnings_today(report)
@@ -359,8 +542,14 @@ def generate_morning_summary(
         # Watched tickers
         watched = _count_watched_tickers(report)
 
+        # Counter-trade signals (Hyperliquid)
+        counter_signals = _fetch_counter_trade_signals(conn, limit=5)
+
     finally:
         conn.close()
+
+    # Economic calendar events (no DB needed)
+    econ_events = _fetch_economic_events_today()
 
     # Hours to market open
     hours_to_open = _hours_to_market_open()
@@ -385,6 +574,28 @@ def generate_morning_summary(
     lines.append(f"{vix_line}  |  {fg_line}")
     lines.append("")
 
+    # Overnight Moves (crypto + macro)
+    overnight_parts: list[str] = []
+    if btc:
+        sign = "+" if btc["change_pct"] >= 0 else ""
+        overnight_parts.append(f"BTC ${btc['close']:,.0f} ({sign}{btc['change_pct']}%)")
+    if eth:
+        sign = "+" if eth["change_pct"] >= 0 else ""
+        overnight_parts.append(f"ETH ${eth['close']:,.0f} ({sign}{eth['change_pct']}%)")
+    if gold:
+        sign = "+" if gold["change_pct"] >= 0 else ""
+        overnight_parts.append(f"Gold ${gold['close']} ({sign}{gold['change_pct']}%)")
+    if dxy:
+        sign = "+" if dxy["change_pct"] >= 0 else ""
+        overnight_parts.append(f"DXY ${dxy['close']} ({sign}{dxy['change_pct']}%)")
+    if overnight_parts:
+        lines.append("\U0001f30d *Overnight Moves*")
+        # Two items per line for readability
+        for i in range(0, len(overnight_parts), 2):
+            pair = overnight_parts[i : i + 2]
+            lines.append("  |  ".join(pair))
+        lines.append("")
+
     # Top Setups
     if setups:
         lines.append(f"\U0001f3af *Top {len(setups)} Setups Today*")
@@ -394,7 +605,7 @@ def generate_morning_summary(
             )
         lines.append("")
 
-    # Paper Trades
+    # Paper Trades: summary + open positions
     lines.append("\U0001f4c8 *Paper Trades*")
     lines.append(
         f"Open: {pt['open_count']} | Closed today: {pt['closed_today']}"
@@ -402,6 +613,16 @@ def generate_morning_summary(
     lines.append(
         f"Win rate: {int(pt['win_rate_pct'])}% | Equity: {_fmt_money(pt['portfolio_value'])}"
     )
+    if open_positions:
+        lines.append("")
+        lines.append("_Open positions:_")
+        for pos in open_positions:
+            pnl_sign = "+" if pos["pnl_pct"] >= 0 else ""
+            direction_arrow = "\u2191" if pos["direction"] == "long" else "\u2193"
+            lines.append(
+                f"  {direction_arrow} {pos['ticker']} @ ${pos['entry_price']:,.2f}"
+                f" ({pnl_sign}{pos['pnl_pct']}%)"
+            )
     lines.append("")
 
     # Earnings Today
@@ -415,6 +636,25 @@ def generate_morning_summary(
         if amc:
             parts.append(f"AFT: {', '.join(amc[:8])}")
         lines.append("  |  ".join(parts))
+        lines.append("")
+
+    # Economic Calendar
+    if econ_events:
+        lines.append("\U0001f4cb *Economic Calendar*")
+        for ev in econ_events[:6]:
+            impact_icon = "\U0001f534" if ev["impact"].lower() == "high" else "\U0001f7e0"
+            lines.append(f"  {impact_icon} {ev['event']} ({ev['date'][:10]})")
+        lines.append("")
+
+    # Counter-Trade Signals (Hyperliquid)
+    if counter_signals:
+        lines.append("\u2694\ufe0f *Active Counter-Trade Signals*")
+        for sig in counter_signals:
+            direction_icon = "\U0001f7e2" if sig["direction"] == "long" else "\U0001f534"
+            lines.append(
+                f"  {direction_icon} {sig['coin']} {sig['direction'].upper()}"
+                f" @ ${sig['entry_price']:,.2f}"
+            )
         lines.append("")
 
     # Alerts watching
