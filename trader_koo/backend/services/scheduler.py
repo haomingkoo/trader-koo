@@ -567,6 +567,16 @@ def _run_hyperliquid_poll() -> None:
         _append_run_log("HL_POLL", f"Hyperliquid poll failed: {exc}")
 
 
+def _run_site_health_check() -> None:
+    """Every 30 min: ping all kooexperience.com sites, alert on failure."""
+    try:
+        from trader_koo.notifications.health_check import run_health_check
+
+        run_health_check()
+    except Exception as exc:
+        LOG.warning("Site health check failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
@@ -682,5 +692,15 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     LOG.info("Hyperliquid poll job registered: every 1h")
+
+    # Site health check — every 30 min, alerts via Telegram on consecutive failures
+    if telegram_configured:
+        scheduler.add_job(
+            _run_site_health_check,
+            IntervalTrigger(minutes=30),
+            id="site_health_check",
+            replace_existing=True,
+        )
+        LOG.info("Site health check job registered: every 30min")
 
     return scheduler
