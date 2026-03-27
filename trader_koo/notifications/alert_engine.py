@@ -383,7 +383,17 @@ class AlertEngine:
             distance_pct = abs(price - level) / level
 
             if distance_pct <= self._proximity_pct:
-                if entry["level_type"] == "support":
+                # Use price position relative to level as the ground truth,
+                # not just the historical pivot classification.  A level
+                # labelled "resistance" that is now BELOW price is acting
+                # as support (role reversal), and vice-versa.
+                effective_type = entry["level_type"]
+                if price > level and effective_type == "resistance":
+                    effective_type = "support"  # role reversal
+                elif price < level and effective_type == "support":
+                    effective_type = "resistance"  # role reversal
+
+                if effective_type == "support":
                     if price < level:
                         alert_type = "breakdown_below_support"
                     else:
@@ -421,7 +431,7 @@ class AlertEngine:
                     ticker=ticker,
                     current_price=price,
                     level=level,
-                    level_type=entry["level_type"],
+                    level_type=effective_type,
                     setup_tier=entry["setup_tier"],
                     bias=entry["bias"],
                     alert_type=alert_type,

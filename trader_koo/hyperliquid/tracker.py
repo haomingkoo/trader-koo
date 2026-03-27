@@ -461,6 +461,12 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             label, snapshot.account_value, len(snapshot.positions), snapshot.margin_ratio,
         )
 
+        # Detect liquidation: account was active, now empty
+        _check_liquidation(conn, snapshot, label)
+
+        # Detect reload: account was empty, now has positions again
+        _check_reload(conn, snapshot, label)
+
         if track_mode == "counter" and snapshot.positions:
             signals = generate_counter_signals(snapshot)
             saved = save_counter_signals(conn, signals)
@@ -471,6 +477,172 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         _send_telegram_signal_alert(snapshot, signals if track_mode == "counter" else [])
 
     return all_signals
+
+
+def _check_liquidation(
+    conn: sqlite3.Connection,
+    snapshot: WalletSnapshot,
+    label: str,
+) -> None:
+    """Detect liquidation by comparing current snapshot to previous.
+
+    If the previous snapshot had positions and account value > $1000,
+    but now the account is empty ($0 or near-zero with no positions),
+    that's a liquidation event.
+    """
+    if snapshot.account_value > 100 or snapshot.positions:
+        return  # Account still active, not liquidated
+
+    # Check the previous snapshot
+    row = conn.execute(
+        """
+        SELECT account_value, positions_json, snapshot_ts
+        FROM hyperliquid_snapshots
+        WHERE wallet_label = ?
+        ORDER BY snapshot_ts DESC
+        LIMIT 1 OFFSET 1
+        """,
+        (label,),
+    ).fetchone()
+
+    if not row:
+        return  # No previous snapshot to compare
+
+    prev_value, prev_positions_json, prev_ts = row
+    prev_positions = json.loads(prev_positions_json) if prev_positions_json else []
+
+    if float(prev_value) < 1000 or not prev_positions:
+        return  # Previous snapshot was already empty
+
+    # This looks like a liquidation
+    LOG.warning(
+        "LIQUIDATION DETECTED: %s went from $%,.0f (%d positions) to $%,.0f (0 positions)",
+        label, float(prev_value), len(prev_positions), snapshot.account_value,
+    )
+    _send_telegram_liquidation_alert(label, float(prev_value), prev_positions, prev_ts)
+
+
+def _check_reload(
+    conn: sqlite3.Connection,
+    snapshot: WalletSnapshot,
+    label: str,
+) -> None:
+    """Detect when a wallet reloads after being empty."""
+    if snapshot.account_value < 100 or not snapshot.positions:
+        return  # Still empty
+
+    row = conn.execute(
+        """
+        SELECT account_value, positions_json
+        FROM hyperliquid_snapshots
+        WHERE wallet_label = ?
+        ORDER BY snapshot_ts DESC
+        LIMIT 1 OFFSET 1
+        """,
+        (label,),
+    ).fetchone()
+
+    if not row:
+        return
+
+    prev_value, prev_positions_json = row
+    prev_positions = json.loads(prev_positions_json) if prev_positions_json else []
+
+    if float(prev_value) > 100 or prev_positions:
+        return  # Previous snapshot was active, not a reload
+
+    LOG.info("RELOAD DETECTED: %s back with $%,.0f and %d positions",
+             label, snapshot.account_value, len(snapshot.positions))
+
+    _send_telegram_reload_alert(snapshot)
+
+
+def _send_telegram_reload_alert(snapshot: WalletSnapshot) -> None:
+    """Send Telegram alert when a tracked wallet reloads after being empty."""
+    import os
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        return
+
+    total_notional = sum(p.notional_usd for p in snapshot.positions)
+    leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
+
+    lines = [
+        f"<b>RELOAD: {snapshot.wallet_label}</b>",
+        f"Back with ${snapshot.account_value:,.0f} | {leverage:.0f}x leverage",
+        "",
+    ]
+
+    for p in snapshot.positions:
+        lines.append(f"  {p.coin} {p.side.upper()} ${p.notional_usd:,.0f} at {p.leverage_value}x")
+
+    lines.append("")
+    lines.append("Watch for new counter signals.")
+
+    text = "\n".join(lines)
+
+    try:
+        import httpx
+
+        httpx.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception as exc:
+        LOG.debug("Telegram reload alert failed: %s", exc)
+
+
+def _send_telegram_liquidation_alert(
+    label: str,
+    prev_value: float,
+    prev_positions: list[dict],
+    prev_ts: str,
+) -> None:
+    """Send Telegram alert when a tracked wallet gets liquidated."""
+    import os
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        return
+
+    lines = [
+        f"<b>LIQUIDATED: {label}</b>",
+        f"Account went from ${prev_value:,.0f} to $0",
+        f"Last seen: {prev_ts}",
+        "",
+    ]
+
+    for p in prev_positions[:5]:
+        coin = p.get("coin", "?")
+        side = p.get("side", "?").upper()
+        notional = float(p.get("notional_usd", 0))
+        leverage = p.get("leverage_value", "?")
+        liq_px = p.get("liquidation_price")
+        entry_px = float(p.get("entry_price", 0))
+        lines.append(f"  {coin} {side} ${notional:,.0f} at {leverage}x (entry ${entry_px:,.2f})")
+        if liq_px:
+            lines.append(f"  Liq price was ${float(liq_px):,.2f}")
+
+    lines.append("")
+    lines.append("Counter-trade strategy validated.")
+
+    text = "\n".join(lines)
+
+    try:
+        import httpx
+
+        httpx.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        )
+        LOG.info("Liquidation alert sent for %s", label)
+    except Exception as exc:
+        LOG.debug("Telegram liquidation alert failed: %s", exc)
 
 
 def _send_telegram_signal_alert(
