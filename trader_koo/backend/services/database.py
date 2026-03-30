@@ -43,7 +43,7 @@ def get_conn(db_path: Path | None = None) -> sqlite3.Connection:
     if not path.exists():
         LOG.error("Database file not found at %s", path)
         raise HTTPException(status_code=500, detail="Database unavailable")
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 

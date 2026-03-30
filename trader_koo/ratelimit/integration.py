@@ -27,7 +27,7 @@ def initialize_rate_limiting(app: FastAPI) -> RateLimiter:
         RateLimiter instance
     """
     # Get configuration from environment
-    public_limit = int(os.getenv("RATE_LIMIT_PUBLIC_PER_MINUTE", "100"))
+    public_limit = int(os.getenv("RATE_LIMIT_PUBLIC_PER_MINUTE", "300"))
     authenticated_limit = int(os.getenv("RATE_LIMIT_AUTH_PER_HOUR", "1000"))
     export_limit = int(os.getenv("RATE_LIMIT_EXPORT_PER_HOUR", "10"))
     

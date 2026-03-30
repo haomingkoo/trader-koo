@@ -28,7 +28,7 @@ def app():
     rate_limiter = RateLimiter(config)
     app.add_middleware(RateLimitMiddleware, rate_limiter=rate_limiter, config=config)
     
-    @app.get("/test")
+    @app.get("/api/test")
     def test_endpoint():
         return {"message": "success"}
     
@@ -50,7 +50,7 @@ class TestRateLimitMiddleware:
     
     def test_rate_limit_headers(self, client):
         """Test that rate limit headers are included in response."""
-        response = client.get("/test")
+        response = client.get("/api/test")
         
         assert response.status_code == 200
         assert "X-RateLimit-Limit" in response.headers
@@ -67,21 +67,21 @@ class TestRateLimitMiddleware:
         """Test that rate limits are enforced (Requirement 17.1)."""
         # Make 5 requests (the limit)
         for i in range(5):
-            response = client.get("/test")
+            response = client.get("/api/test")
             assert response.status_code == 200, f"Request {i+1} should succeed"
         
         # 6th request should be rate limited
-        response = client.get("/test")
+        response = client.get("/api/test")
         assert response.status_code == 429, "6th request should be rate limited"
     
     def test_http_429_response(self, client):
         """Test HTTP 429 response format (Requirement 17.2)."""
         # Use up rate limit
         for _ in range(5):
-            client.get("/test")
+            client.get("/api/test")
         
         # Next request should return 429
-        response = client.get("/test")
+        response = client.get("/api/test")
         
         assert response.status_code == 429
         assert "Retry-After" in response.headers
@@ -98,24 +98,33 @@ class TestRateLimitMiddleware:
     
     def test_health_endpoint_bypass(self, client):
         """Test that health check endpoints bypass rate limiting."""
-        # Make many requests to health endpoint
         for _ in range(20):
             response = client.get("/health")
             assert response.status_code == 200, "Health endpoint should not be rate limited"
+
+    def test_non_api_paths_bypass(self, client, app):
+        """Test that non-/api/ paths (SPA routes, assets) skip rate limiting."""
+        @app.get("/opportunities")
+        def spa_route():
+            return {"page": "spa"}
+
+        for _ in range(20):
+            response = client.get("/opportunities")
+            assert response.status_code == 200, "SPA routes should not be rate limited"
     
     def test_different_ips_independent_limits(self, client):
         """Test that different IPs have independent rate limits."""
         # Use up limit for first IP
         for _ in range(5):
-            response = client.get("/test", headers={"X-Forwarded-For": "192.168.1.1"})
+            response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.1"})
             assert response.status_code == 200
         
         # First IP should be rate limited
-        response = client.get("/test", headers={"X-Forwarded-For": "192.168.1.1"})
+        response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.1"})
         assert response.status_code == 429
         
         # Second IP should still work
-        response = client.get("/test", headers={"X-Forwarded-For": "192.168.1.2"})
+        response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.2"})
         assert response.status_code == 200
 
 

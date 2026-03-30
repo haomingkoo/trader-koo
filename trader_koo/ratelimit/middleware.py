@@ -127,8 +127,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         Returns:
             Response from next handler, or 429 if rate limit exceeded
         """
-        # Skip rate limiting for health check endpoints
-        if request.url.path in ["/health", "/api/health", "/api/status"]:
+        # Only rate-limit /api/* paths — skip SPA routes, static assets, health
+        path = request.url.path
+        if not path.startswith("/api/") or path in ("/api/health", "/api/status"):
             return await call_next(request)
         
         # Get rate limit parameters

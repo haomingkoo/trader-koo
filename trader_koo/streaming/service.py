@@ -164,7 +164,7 @@ def start_equity_feed(api_key: str) -> None:
 
     _client = FinnhubWSClient(
         api_key=api_key,
-        always_on=["SPY", "QQQ"],
+        always_on=["SPY", "QQQ", "DIA"],
         on_tick=_broadcast_tick,
     )
     _client.start()
@@ -177,7 +177,7 @@ def start_equity_feed(api_key: str) -> None:
         daemon=True,
     )
     _staleness_thread.start()
-    LOG.info("Equity feed started (Finnhub WS for SPY/QQQ + on-demand)")
+    LOG.info("Equity feed started (Finnhub WS for SPY/QQQ/DIA + on-demand)")
 
 
 def stop_equity_feed() -> None:

@@ -548,6 +548,13 @@ def generate_morning_summary(
     finally:
         conn.close()
 
+    # Crypto derivatives (funding, L/S, F&G) — uses its own connection
+    try:
+        from trader_koo.crypto.derivatives import get_latest_derivatives_summary
+        derivatives = get_latest_derivatives_summary(db_path)
+    except Exception:
+        derivatives = {"funding": {}, "ls_ratios": {}, "fng": None}
+
     # Economic calendar events (no DB needed)
     econ_events = _fetch_economic_events_today()
 
@@ -593,6 +600,28 @@ def generate_morning_summary(
         # Two items per line for readability
         for i in range(0, len(overnight_parts), 2):
             pair = overnight_parts[i : i + 2]
+            lines.append("  |  ".join(pair))
+        lines.append("")
+
+    # Crypto Derivatives
+    deriv_parts: list[str] = []
+    if derivatives.get("fng"):
+        fng_val = derivatives["fng"]["value"]
+        fng_cls = derivatives["fng"]["classification"]
+        deriv_parts.append(f"F&G: {fng_val} ({fng_cls})")
+    for sym in ["BTC-USD", "ETH-USD", "SOL-USD"]:
+        fr = derivatives.get("funding", {}).get(sym)
+        ls = derivatives.get("ls_ratios", {}).get(sym)
+        if fr:
+            label = sym.split("-")[0]
+            fr_str = f"{label} FR: {fr['rate_pct']:+.4f}%"
+            if ls:
+                fr_str += f" | L/S: {ls['long_pct']}/{ls['short_pct']}"
+            deriv_parts.append(fr_str)
+    if deriv_parts:
+        lines.append("\U0001f4b0 *Crypto Derivatives*")
+        for i in range(0, len(deriv_parts), 2):
+            pair = deriv_parts[i : i + 2]
             lines.append("  |  ".join(pair))
         lines.append("")
 

@@ -16,10 +16,12 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 from fastapi import HTTPException
 
 from trader_koo.catalyst_data import get_ticker_earnings_markers
+from trader_koo.report.utils import nyse_holidays_for_year
 from trader_koo.cv.compare import HybridCVCompareConfig, compare_hybrid_vs_cv
 from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
@@ -820,7 +822,19 @@ def _build_chart_commentary_payload(
 # Data freshness
 # ---------------------------------------------------------------------------
 
-_STALE_THRESHOLD_HOURS = 36  # accounts for weekends + buffer
+def _nyse_holiday_dates(start: dt.date, end: dt.date) -> list[str]:
+    """Return NYSE holiday dates as ISO strings covering [start, end]."""
+    years = set(range(start.year, end.year + 1))
+    holidays: list[str] = []
+    for y in years:
+        holidays.extend(d.isoformat() for d in nyse_holidays_for_year(y))
+    return holidays
+
+
+def _trading_days_between(start: dt.date, end: dt.date) -> int:
+    """Count trading days (excl weekends + NYSE holidays) in (start, end]."""
+    holidays = _nyse_holiday_dates(start, end)
+    return int(np.busday_count(start, end, holidays=holidays))
 
 
 def _compute_data_freshness(
@@ -852,10 +866,16 @@ def _compute_data_freshness(
     latest_dt = dt.datetime.combine(latest_date, dt.time(21, 0), tzinfo=dt.timezone.utc)
     now = dt.datetime.now(dt.timezone.utc)
     age_hours = round((now - latest_dt).total_seconds() / 3600.0, 1)
+    # Trading-day-aware staleness: count trading days (excl weekends + NYSE
+    # holidays) between latest date and today. Allow 1 gap for today's data
+    # which arrives after market close via the nightly pipeline.
+    today = now.date()
+    bdays_behind = _trading_days_between(latest_date, today)
+    is_stale = bdays_behind > 1
     return {
         "latest_price_date": latest_date.isoformat(),
         "age_hours": age_hours,
-        "is_stale": age_hours > _STALE_THRESHOLD_HOURS,
+        "is_stale": is_stale,
     }
 
 

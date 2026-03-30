@@ -577,6 +577,68 @@ def _run_site_health_check() -> None:
         LOG.warning("Site health check failed: %s", exc)
 
 
+def _run_derivatives_snapshot() -> None:
+    """Every hour: fetch funding rates, L/S ratios, crypto F&G. Alert on extremes."""
+    _append_run_log("DERIVATIVES", "Derivatives snapshot started")
+    try:
+        from trader_koo.crypto.derivatives import snapshot_derivatives, check_and_alert
+
+        summary = snapshot_derivatives(DB_PATH)
+        alerts_sent = check_and_alert(DB_PATH, summary)
+        _append_run_log(
+            "DERIVATIVES",
+            f"Snapshot OK: {len(summary.get('funding', []))} funding, "
+            f"{len(summary.get('ls_ratios', []))} L/S, "
+            f"F&G={summary.get('fng', {}).get('value', 'N/A')}, "
+            f"alerts={alerts_sent}",
+        )
+    except Exception as exc:
+        _append_run_log("DERIVATIVES", f"Snapshot failed: {exc}")
+        LOG.error("Derivatives snapshot failed: %s", exc)
+
+
+def _run_memory_cleanup() -> None:
+    """Every 10 min: prune expired entries from in-memory dicts.
+
+    Prevents unbounded growth in:
+    - Admin auth rate-limit state (brute-force IP tracking)
+    - Rate limiter sliding window storage (per-IP request timestamps)
+    """
+    import time as _time
+
+    from trader_koo.backend.main import (
+        _ADMIN_AUTH_LOCK,
+        _ADMIN_AUTH_STATE,
+        _prune_admin_auth_state,
+    )
+
+    # Prune admin auth state
+    pruned_auth = 0
+    with _ADMIN_AUTH_LOCK:
+        before = len(_ADMIN_AUTH_STATE)
+        _prune_admin_auth_state(_time.time())
+        pruned_auth = before - len(_ADMIN_AUTH_STATE)
+
+    # Prune rate limiter storage
+    pruned_rl = 0
+    try:
+        from trader_koo.ratelimit.service import RateLimiter
+        from trader_koo.backend.main import app
+
+        rate_limiter: RateLimiter | None = getattr(app.state, "rate_limiter", None)
+        if rate_limiter is not None:
+            pruned_rl = rate_limiter.cleanup_expired()
+    except Exception as exc:
+        LOG.debug("Rate limiter cleanup skipped: %s", exc)
+
+    if pruned_auth > 0 or pruned_rl > 0:
+        LOG.info(
+            "Memory cleanup: pruned %d admin auth entries, %d rate limit entries",
+            pruned_auth,
+            pruned_rl,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Scheduler factory
 # ---------------------------------------------------------------------------
@@ -702,5 +764,23 @@ def create_scheduler() -> BackgroundScheduler:
             replace_existing=True,
         )
         LOG.info("Site health check job registered: every 30min")
+
+    # Crypto derivatives — funding rates, L/S ratio, F&G every hour
+    scheduler.add_job(
+        _run_derivatives_snapshot,
+        IntervalTrigger(hours=1),
+        id="derivatives_snapshot",
+        replace_existing=True,
+    )
+    LOG.info("Derivatives snapshot job registered: every 1h")
+
+    # Memory cleanup — prune admin auth state + rate limiter storage
+    scheduler.add_job(
+        _run_memory_cleanup,
+        IntervalTrigger(minutes=10),
+        id="memory_cleanup",
+        replace_existing=True,
+    )
+    LOG.info("Memory cleanup job registered: every 10min")
 
     return scheduler

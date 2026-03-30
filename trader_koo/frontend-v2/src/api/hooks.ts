@@ -2,7 +2,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
   DailyReportPayload,
-  DashboardPayload,
   DashboardQuickPayload,
   DashboardCommentaryPayload,
   PaperTradeSummary,
@@ -29,15 +28,6 @@ export function useReport() {
     queryKey: ["report"],
     queryFn: () => apiFetch<DailyReportPayload>("/api/daily-report?limit=20"),
     staleTime: 2 * 60 * 1000,
-  });
-}
-
-export function useChart(ticker: string, enabled: boolean = true) {
-  return useQuery({
-    queryKey: ["chart", ticker],
-    queryFn: () => apiFetch<DashboardPayload>(`/api/dashboard/${ticker}?months=0`),
-    staleTime: 2 * 60 * 1000,
-    enabled: enabled && ticker.length > 0,
   });
 }
 
@@ -131,8 +121,8 @@ export function usePipelineStatus() {
   return useQuery({
     queryKey: ["pipeline-status"],
     queryFn: () => apiFetch<PipelineStatus>("/api/status"),
-    refetchInterval: 30 * 1000,
-    staleTime: 15 * 1000,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 }
 
@@ -140,7 +130,8 @@ export function useCryptoSummary() {
   return useQuery({
     queryKey: ["crypto-summary"],
     queryFn: () => apiFetch<CryptoSummary>("/api/crypto/summary"),
-    refetchInterval: 5000,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
   });
 }
 
@@ -161,8 +152,8 @@ export function useCryptoIndicators(symbol: string, interval: string = "1m") {
     queryKey: ["crypto-indicators", symbol, interval],
     queryFn: () =>
       apiFetch<CryptoIndicatorsPayload>(`/api/crypto/indicators/${symbol}?interval=${interval}`),
-    refetchInterval: 15_000,
-    staleTime: 10_000,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
   });
 }
 
