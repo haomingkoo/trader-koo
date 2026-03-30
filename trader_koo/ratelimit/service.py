@@ -19,7 +19,7 @@ class RateLimitConfig:
     """Rate limit configuration."""
     
     # Per-IP limits for public endpoints (Requirement 17.1)
-    public_limit: int = 100  # requests per minute
+    public_limit: int = 300  # requests per minute
     public_window: timedelta = timedelta(minutes=1)
     
     # Per-user limits for authenticated endpoints (Requirement 17.1)

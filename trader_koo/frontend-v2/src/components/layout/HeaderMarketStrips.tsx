@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useCryptoWs } from "../../hooks/useCryptoWs";
+import { useEquityWs } from "../../hooks/useEquityWs";
 import type { CryptoPrice, EquityTick } from "../../api/types";
 
 function formatPrice(price: number): string {
@@ -58,110 +59,6 @@ function EquityPriceChip({ label, tick }: { label: string; tick: EquityTick | un
   );
 }
 
-function useCryptoWebSocket(): {
-  prices: Record<string, CryptoPrice>;
-  connected: boolean;
-} {
-  const [prices, setPrices] = useState<Record<string, CryptoPrice>>({});
-  const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const backoff = useRef(1000);
-
-  const connect = useCallback(() => {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/ws/crypto`);
-
-    ws.onopen = () => {
-      setConnected(true);
-      backoff.current = 1000;
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const tick = JSON.parse(event.data) as CryptoPrice;
-        setPrices((prev) => ({ ...prev, [tick.symbol]: tick }));
-      } catch {
-        // Ignore malformed messages.
-      }
-    };
-
-    ws.onclose = () => {
-      setConnected(false);
-      wsRef.current = null;
-      reconnectTimer.current = setTimeout(() => {
-        backoff.current = Math.min(backoff.current * 2, 30000);
-        connect();
-      }, backoff.current);
-    };
-
-    ws.onerror = () => ws.close();
-    wsRef.current = ws;
-  }, []);
-
-  useEffect(() => {
-    connect();
-    return () => {
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-    };
-  }, [connect]);
-
-  return { prices, connected };
-}
-
-function useEquityWebSocket(): {
-  prices: Record<string, EquityTick>;
-  connected: boolean;
-} {
-  const [prices, setPrices] = useState<Record<string, EquityTick>>({});
-  const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const backoff = useRef(1000);
-
-  const connect = useCallback(() => {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/ws/equities`);
-
-    ws.onopen = () => {
-      setConnected(true);
-      backoff.current = 1000;
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const tick = JSON.parse(event.data) as EquityTick;
-        setPrices((prev) => ({ ...prev, [tick.symbol]: tick }));
-      } catch {
-        // Ignore malformed messages.
-      }
-    };
-
-    ws.onclose = () => {
-      setConnected(false);
-      wsRef.current = null;
-      reconnectTimer.current = setTimeout(() => {
-        backoff.current = Math.min(backoff.current * 2, 30000);
-        connect();
-      }, backoff.current);
-    };
-
-    ws.onerror = () => ws.close();
-    wsRef.current = ws;
-  }, []);
-
-  useEffect(() => {
-    connect();
-    return () => {
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-    };
-  }, [connect]);
-
-  return { prices, connected };
-}
-
 const CRYPTO_SYMBOLS = [
   { key: "BTC-USD", label: "BTC" },
   { key: "ETH-USD", label: "ETH" },
@@ -173,10 +70,11 @@ const CRYPTO_SYMBOLS = [
 const EQUITY_SYMBOLS = [
   { key: "SPY", label: "SPY" },
   { key: "QQQ", label: "QQQ" },
+  { key: "DIA", label: "DIA" },
 ] as const;
 
 export function EquityPriceStrip() {
-  const { prices, connected } = useEquityWebSocket();
+  const { prices, connected } = useEquityWs();
   const hasData = Object.keys(prices).length > 0;
 
   if (!connected && !hasData) {
@@ -219,7 +117,7 @@ export function EquityPriceStrip() {
 }
 
 export function CryptoPriceStrip() {
-  const { prices, connected } = useCryptoWebSocket();
+  const { prices, connected } = useCryptoWs();
 
   if (!connected && Object.keys(prices).length === 0) {
     return (

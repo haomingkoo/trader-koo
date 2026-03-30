@@ -440,6 +440,100 @@ def seed_default_wallets(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _load_previous_positions(
+    conn: sqlite3.Connection,
+    label: str,
+) -> dict[str, dict[str, Any]]:
+    """Load positions from the previous snapshot keyed by coin."""
+    row = conn.execute(
+        """
+        SELECT positions_json FROM hyperliquid_snapshots
+        WHERE wallet_label = ? ORDER BY snapshot_ts DESC LIMIT 1
+        """,
+        (label,),
+    ).fetchone()
+    if not row or not row[0]:
+        return {}
+    try:
+        return {p["coin"]: p for p in json.loads(row[0])}
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+@dataclass(frozen=True)
+class PositionChange:
+    """Describes how a position changed between two snapshots."""
+
+    coin: str
+    change_type: str  # "new" | "closed" | "partial_close" | "increased" | "flipped" | "unchanged"
+    prev_side: str | None
+    prev_size: float | None
+    curr_side: str | None
+    curr_size: float | None
+    size_delta_pct: float | None  # % change in absolute size
+
+
+def _diff_positions(
+    prev: dict[str, dict[str, Any]],
+    current: list[WalletPosition],
+) -> list[PositionChange]:
+    """Compare previous and current positions to detect changes."""
+    changes: list[PositionChange] = []
+    seen_coins: set[str] = set()
+
+    for pos in current:
+        seen_coins.add(pos.coin)
+        old = prev.get(pos.coin)
+        if old is None:
+            changes.append(PositionChange(
+                coin=pos.coin, change_type="new",
+                prev_side=None, prev_size=None,
+                curr_side=pos.side, curr_size=pos.size,
+                size_delta_pct=None,
+            ))
+            continue
+
+        old_side = old.get("side", "")
+        old_size = float(old.get("size", 0))
+
+        if old_side != pos.side:
+            changes.append(PositionChange(
+                coin=pos.coin, change_type="flipped",
+                prev_side=old_side, prev_size=old_size,
+                curr_side=pos.side, curr_size=pos.size,
+                size_delta_pct=None,
+            ))
+        elif old_size > 0:
+            delta_pct = (pos.size - old_size) / old_size * 100
+            if delta_pct < -5:
+                changes.append(PositionChange(
+                    coin=pos.coin, change_type="partial_close",
+                    prev_side=old_side, prev_size=old_size,
+                    curr_side=pos.side, curr_size=pos.size,
+                    size_delta_pct=round(delta_pct, 1),
+                ))
+            elif delta_pct > 5:
+                changes.append(PositionChange(
+                    coin=pos.coin, change_type="increased",
+                    prev_side=old_side, prev_size=old_size,
+                    curr_side=pos.side, curr_size=pos.size,
+                    size_delta_pct=round(delta_pct, 1),
+                ))
+            # else: unchanged (within 5% noise band)
+
+    # Coins that were in previous but not in current = fully closed
+    for coin, old in prev.items():
+        if coin not in seen_coins:
+            changes.append(PositionChange(
+                coin=coin, change_type="closed",
+                prev_side=old.get("side"), prev_size=float(old.get("size", 0)),
+                curr_side=None, curr_size=None,
+                size_delta_pct=None,
+            ))
+
+    return changes
+
+
 def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Poll all active tracked wallets, save snapshots, generate signals."""
     ensure_hyperliquid_schema(conn)
@@ -451,6 +545,9 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
     all_signals: list[dict[str, Any]] = []
     for label, address, track_mode in wallets:
+        # Load previous positions BEFORE saving new snapshot
+        prev_positions = _load_previous_positions(conn, label)
+
         snapshot = fetch_wallet_state(address, wallet_label=label)
         if not snapshot:
             continue
@@ -467,14 +564,16 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         # Detect reload: account was empty, now has positions again
         _check_reload(conn, snapshot, label)
 
+        signals: list[dict[str, Any]] = []
         if track_mode == "counter" and snapshot.positions:
             signals = generate_counter_signals(snapshot)
             saved = save_counter_signals(conn, signals)
             all_signals.extend(signals)
             LOG.info("HL counter signals: %d generated for %s", saved, label)
 
-        # Send Telegram alert using score-based signals
-        _send_telegram_signal_alert(snapshot, signals if track_mode == "counter" else [])
+        # Diff positions and only alert on meaningful changes
+        changes = _diff_positions(prev_positions, snapshot.positions)
+        _send_telegram_signal_alert(snapshot, signals, changes)
 
     return all_signals
 
@@ -648,11 +747,14 @@ def _send_telegram_liquidation_alert(
 def _send_telegram_signal_alert(
     snapshot: WalletSnapshot,
     signals: list[dict[str, Any]],
+    changes: list[PositionChange] | None = None,
 ) -> None:
-    """Send Telegram alert only when score-based signals meet criteria.
+    """Send Telegram alert only when positions meaningfully change.
 
-    Only fires for COUNTER (score >= 6) or LEAN_COUNTER (score >= 3).
-    MONITOR signals are silent.
+    Alert triggers:
+    - Position opened, closed, partially closed, increased, or flipped
+    - High-score signal (COUNTER >= 6) even without size change (liq proximity)
+    Stays silent when nothing changed and no critical scores.
     """
     import os
 
@@ -661,36 +763,97 @@ def _send_telegram_signal_alert(
     if not bot_token or not chat_id:
         return
 
-    # Send for all signals that have a score
-    actionable = [s for s in signals if s.get("score", 0) >= 0]
-    if not actionable:
+    changes = changes or []
+    changed_coins = {c.coin for c in changes}
+    has_position_changes = len(changes) > 0
+
+    # Only alert on critical scores (COUNTER) if no position changes
+    critical_signals = [s for s in signals if s.get("score", 0) >= 6]
+    if not has_position_changes and not critical_signals:
         return
 
     total_notional = sum(p.notional_usd for p in snapshot.positions)
     acct_leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
 
-    # Build message from scored signals
-    best = max(actionable, key=lambda s: s.get("score", 0))
-    action_label = best.get("action", "SIGNAL")
+    sig_by_coin = {s["coin"]: s for s in signals}
 
-    lines = [f"<b>{snapshot.wallet_label}</b> {action_label} (score {best.get('score', 0)})"]
+    lines = [f"<b>{snapshot.wallet_label}</b>"]
     lines.append(f"Account ${snapshot.account_value:,.0f} | {acct_leverage:.0f}x leverage")
     lines.append("")
 
-    for sig in actionable:
-        counter_side = sig["counter_side"].upper()
-        lines.append(f"<b>{counter_side} {sig['coin']}</b> [{sig.get('action')}]")
-        lines.append(f"  Position: ${sig['their_notional_usd']:,.0f} {sig['their_side']} ({sig['their_leverage']}x)")
-        if sig.get("their_liq_distance_pct") is not None:
-            lines.append(f"  Liq: {sig['their_liq_distance_pct']:.1f}% away")
-        lines.append(f"  uPnL: ${sig['their_unrealized_pnl']:+,.0f}")
-        reasons = sig.get("reasons", [])
-        if reasons:
-            lines.append(f"  Why: {', '.join(reasons[:3])}")
+    # Position changes section
+    if changes:
+        for ch in changes:
+            _CHANGE_EMOJI = {
+                "new": "\U0001f7e2",       # green circle
+                "closed": "\u274c",         # red X
+                "partial_close": "\U0001f4c9",  # chart decreasing
+                "increased": "\U0001f4c8",  # chart increasing
+                "flipped": "\U0001f504",    # arrows
+            }
+            emoji = _CHANGE_EMOJI.get(ch.change_type, "\u2022")
+
+            if ch.change_type == "closed":
+                lines.append(f"{emoji} <b>{ch.coin}</b> CLOSED (was {ch.prev_side} {ch.prev_size:,.2f})")
+            elif ch.change_type == "partial_close":
+                lines.append(
+                    f"{emoji} <b>{ch.coin}</b> PARTIAL CLOSE {ch.size_delta_pct:+.0f}%"
+                    f" ({ch.prev_size:,.2f} \u2192 {ch.curr_size:,.2f} {ch.curr_side})"
+                )
+            elif ch.change_type == "new":
+                lines.append(f"{emoji} <b>{ch.coin}</b> NEW {ch.curr_side.upper()} {ch.curr_size:,.2f}")
+            elif ch.change_type == "increased":
+                lines.append(
+                    f"{emoji} <b>{ch.coin}</b> INCREASED {ch.size_delta_pct:+.0f}%"
+                    f" ({ch.prev_size:,.2f} \u2192 {ch.curr_size:,.2f} {ch.curr_side})"
+                )
+            elif ch.change_type == "flipped":
+                lines.append(
+                    f"{emoji} <b>{ch.coin}</b> FLIPPED"
+                    f" {ch.prev_side} \u2192 {ch.curr_side} ({ch.curr_size:,.2f})"
+                )
+
+            # Add liquidation info for current positions
+            sig = sig_by_coin.get(ch.coin)
+            if sig and sig.get("their_liq_distance_pct") is not None:
+                liq_dist = sig["their_liq_distance_pct"]
+                pos = next((p for p in snapshot.positions if p.coin == ch.coin), None)
+                liq_str = f"  Liq: {liq_dist:.1f}% away"
+                if pos and pos.liquidation_price:
+                    liq_str += f" (${pos.liquidation_price:,.2f})"
+                lines.append(liq_str)
+
         lines.append("")
 
-    lines.append("Not financial advice.")
+    # Current positions summary with liquidation prices
+    if snapshot.positions:
+        lines.append("<b>Open positions:</b>")
+        for pos in snapshot.positions:
+            liq_info = ""
+            if pos.liquidation_price:
+                if pos.mark_price > 0:
+                    if pos.side == "long":
+                        dist = (pos.mark_price - pos.liquidation_price) / pos.mark_price * 100
+                    else:
+                        dist = (pos.liquidation_price - pos.mark_price) / pos.mark_price * 100
+                    liq_info = f" | liq ${pos.liquidation_price:,.2f} ({dist:.1f}%)"
+            coin_marker = " \u26a0\ufe0f" if pos.coin in changed_coins else ""
+            lines.append(
+                f"  {pos.coin}{coin_marker} {pos.side.upper()} ${pos.notional_usd:,.0f}"
+                f" ({pos.leverage_value}x) uPnL ${pos.unrealized_pnl:+,.0f}{liq_info}"
+            )
+        lines.append("")
 
+    # Counter signals for critical scores only
+    if critical_signals:
+        best = max(critical_signals, key=lambda s: s.get("score", 0))
+        lines.append(f"\U0001f6a8 <b>COUNTER signal</b> (score {best['score']})")
+        for sig in critical_signals:
+            reasons = sig.get("reasons", [])
+            lines.append(f"  {sig['counter_side'].upper()} {sig['coin']}: {', '.join(reasons[:3])}")
+        lines.append("")
+
+    lines.append("<i>NFA</i>")
     text = "\n".join(lines)
 
     try:

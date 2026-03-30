@@ -309,6 +309,18 @@ def crypto_open_interest(
     }
 
 
+@router.get("/api/crypto/derivatives")
+def crypto_derivatives() -> dict[str, Any]:
+    """Latest funding rates, long/short ratios, and crypto Fear & Greed."""
+    from trader_koo.crypto.derivatives import get_latest_derivatives_summary
+    from trader_koo.backend.services.database import DB_PATH
+
+    return {
+        "ok": True,
+        **get_latest_derivatives_summary(DB_PATH),
+    }
+
+
 @router.websocket("/ws/crypto")
 async def ws_crypto(websocket: WebSocket) -> None:
     """Push live crypto ticks to the browser as they arrive from Binance.

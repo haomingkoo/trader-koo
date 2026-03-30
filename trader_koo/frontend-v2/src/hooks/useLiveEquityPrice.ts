@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client";
 import type { EquityTick } from "../api/types";
+import { useEquityWs } from "./useEquityWs";
 
 interface LivePriceResponse {
   ok: boolean;
@@ -11,65 +12,26 @@ interface LivePriceResponse {
 }
 
 export function useLiveEquityPrice(ticker: string) {
+  const { prices, connected: socketConnected } = useEquityWs();
   const [livePrice, setLivePrice] = useState<EquityTick | null>(null);
-  const [socketConnected, setSocketConnected] = useState(false);
   const [subscriptionReady, setSubscriptionReady] = useState(false);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const backoff = useRef(1000);
   const tickerRef = useRef("");
-  const shouldReconnect = useRef(true);
 
   useEffect(() => {
     tickerRef.current = ticker.trim().toUpperCase();
   }, [ticker]);
 
-  const connect = useCallback(() => {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${proto}//${window.location.host}/ws/equities`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      setSocketConnected(true);
-      backoff.current = 1000;
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const tick = JSON.parse(event.data) as EquityTick;
-        if (tick.symbol === tickerRef.current) {
-          setLivePrice(tick);
-        }
-      } catch {
-        // Ignore malformed websocket messages.
-      }
-    };
-
-    ws.onclose = () => {
-      setSocketConnected(false);
-      wsRef.current = null;
-      if (!shouldReconnect.current) return;
-      reconnectTimer.current = setTimeout(() => {
-        backoff.current = Math.min(backoff.current * 2, 30000);
-        connect();
-      }, backoff.current);
-    };
-
-    ws.onerror = () => ws.close();
-    wsRef.current = ws;
-  }, []);
-
+  // Pick up ticks from the shared WS for the active ticker
   useEffect(() => {
-    shouldReconnect.current = true;
-    connect();
-    return () => {
-      shouldReconnect.current = false;
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-    };
-  }, [connect]);
+    const symbol = ticker.trim().toUpperCase();
+    if (!symbol) return;
+    const tick = prices[symbol];
+    if (tick) {
+      setLivePrice(tick);
+    }
+  }, [prices, ticker]);
 
+  // Subscribe via HTTP API so the backend streams this ticker
   useEffect(() => {
     const symbol = ticker.trim().toUpperCase();
     if (!symbol) {
