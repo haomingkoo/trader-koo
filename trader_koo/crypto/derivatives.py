@@ -330,8 +330,15 @@ def _previous_fng_zone(db_path: Path) -> str | None:
         conn.close()
 
 
+_DERIV_ALERT_COOLDOWN: dict[str, dt.datetime] = {}
+_DERIV_ALERT_COOLDOWN_HOURS = 6
+
+
 def check_and_alert(db_path: Path, summary: dict[str, Any]) -> int:
     """Evaluate derivatives summary and send Telegram alerts for extremes.
+
+    Includes a 6h cooldown per alert type to avoid spamming during
+    sustained extreme conditions (e.g., persistent fear or skewed L/S).
 
     Returns number of alerts sent.
     """
@@ -342,12 +349,21 @@ def check_and_alert(db_path: Path, summary: dict[str, Any]) -> int:
     if not bot_token or not chat_id:
         return 0
 
+    def _cooldown_ok(alert_key: str) -> bool:
+        """Return True if this alert type hasn't fired within cooldown window."""
+        now = dt.datetime.now(dt.timezone.utc)
+        last = _DERIV_ALERT_COOLDOWN.get(alert_key)
+        if last and (now - last).total_seconds() < _DERIV_ALERT_COOLDOWN_HOURS * 3600:
+            return False
+        _DERIV_ALERT_COOLDOWN[alert_key] = now
+        return True
+
     alerts: list[str] = []
 
     # Funding rate extremes
     for f in summary.get("funding", []):
         rate = f["rate"]
-        if abs(rate) >= _FUNDING_EXTREME_THRESHOLD:
+        if abs(rate) >= _FUNDING_EXTREME_THRESHOLD and _cooldown_ok(f"funding:{f['symbol']}"):
             direction = "longs pay shorts" if rate > 0 else "shorts pay longs"
             alerts.append(
                 f"\U0001f525 <b>{f['symbol']} funding extreme</b>: "
@@ -358,36 +374,37 @@ def check_and_alert(db_path: Path, summary: dict[str, Any]) -> int:
     # L/S ratio extremes
     for ls in summary.get("ls_ratios", []):
         ratio = ls["ratio"]
-        if ratio >= _LS_RATIO_EXTREME:
+        if ratio >= _LS_RATIO_EXTREME and _cooldown_ok(f"ls_ratio:{ls['symbol']}:long"):
             alerts.append(
                 f"\u2696\ufe0f <b>{ls['symbol']} L/S ratio extreme</b>: "
                 f"{ls['long_pct']}% long / {ls['short_pct']}% short (ratio {ratio})\n"
                 f"  Top traders heavily long — contrarian short signal"
             )
-        elif ratio <= 1.0 / _LS_RATIO_EXTREME:
+        elif ratio <= 1.0 / _LS_RATIO_EXTREME and _cooldown_ok(f"ls_ratio:{ls['symbol']}:short"):
             alerts.append(
                 f"\u2696\ufe0f <b>{ls['symbol']} L/S ratio extreme</b>: "
                 f"{ls['long_pct']}% long / {ls['short_pct']}% short (ratio {ratio})\n"
                 f"  Top traders heavily short — contrarian long signal"
             )
 
-    # F&G zone transitions
+    # F&G zone transitions (transitions always alert; persistent extremes get cooldown)
     fng = summary.get("fng")
     if fng:
         prev_zone = _previous_fng_zone(db_path)
         curr_class = fng["classification"]
         if prev_zone and prev_zone != curr_class:
+            # Zone TRANSITION — always alert (meaningful change)
             emoji = "\U0001f630" if "fear" in curr_class.lower() else "\U0001f911"
             alerts.append(
                 f"{emoji} <b>Crypto Fear & Greed shifted</b>: "
                 f"{prev_zone} \u2192 {curr_class} ({fng['value']}/100)"
             )
-        elif fng["value"] <= _FNG_EXTREME_FEAR:
+        elif fng["value"] <= _FNG_EXTREME_FEAR and _cooldown_ok("fng:extreme_fear"):
             alerts.append(
                 f"\U0001f630 <b>Crypto Extreme Fear</b>: {fng['value']}/100 ({curr_class})\n"
                 f"  Historically correlates with local bottoms"
             )
-        elif fng["value"] >= _FNG_EXTREME_GREED:
+        elif fng["value"] >= _FNG_EXTREME_GREED and _cooldown_ok("fng:extreme_greed"):
             alerts.append(
                 f"\U0001f911 <b>Crypto Extreme Greed</b>: {fng['value']}/100 ({curr_class})\n"
                 f"  Elevated risk of correction"

@@ -783,7 +783,13 @@ def seed_default_wallets(conn: sqlite3.Connection) -> None:
     ensure_hyperliquid_schema(conn)
     for label, address in get_tracked_wallets().items():
         conn.execute(
-            "INSERT OR IGNORE INTO hyperliquid_wallets (label, address) VALUES (?, ?)",
+            """
+            INSERT INTO hyperliquid_wallets (label, address)
+            VALUES (?, ?)
+            ON CONFLICT(label) DO UPDATE SET
+                address = excluded.address
+            WHERE COALESCE(hyperliquid_wallets.address, '') != COALESCE(excluded.address, '')
+            """,
             (label, address),
         )
     conn.commit()
@@ -1123,6 +1129,11 @@ def _send_telegram_liquidation_alert(
         LOG.debug("Telegram liquidation alert failed: %s", exc)
 
 
+# Cooldown: suppress repeated alerts for unchanged positions
+_SIGNAL_ALERT_COOLDOWN: dict[str, dt.datetime] = {}
+_SIGNAL_ALERT_COOLDOWN_HOURS = 6
+
+
 def _send_telegram_signal_alert(
     snapshot: WalletSnapshot,
     signals: list[dict[str, Any]],
@@ -1134,6 +1145,7 @@ def _send_telegram_signal_alert(
     - Position opened, closed, partially closed, increased, or flipped
     - High-score signal (COUNTER >= 6) even without size change (liq proximity)
     Stays silent when nothing changed and no critical scores.
+    Suppresses repeat alerts for unchanged positions within 6h cooldown.
     """
     import os
 
@@ -1150,6 +1162,16 @@ def _send_telegram_signal_alert(
     critical_signals = [s for s in signals if s.get("score", 0) >= 6]
     if not has_position_changes and not critical_signals:
         return
+
+    # Cooldown: suppress repeat critical-score alerts if no position changes
+    # Position changes always bypass cooldown (something actually happened)
+    if not has_position_changes and critical_signals:
+        cooldown_key = f"{snapshot.wallet_label}:{len(snapshot.positions)}"
+        now = dt.datetime.now(dt.timezone.utc)
+        last_alert = _SIGNAL_ALERT_COOLDOWN.get(cooldown_key)
+        if last_alert and (now - last_alert).total_seconds() < _SIGNAL_ALERT_COOLDOWN_HOURS * 3600:
+            return  # suppress — same state, already alerted recently
+        _SIGNAL_ALERT_COOLDOWN[cooldown_key] = now
 
     total_notional = sum(p.notional_usd for p in snapshot.positions)
     acct_leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
