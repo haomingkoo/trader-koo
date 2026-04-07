@@ -960,9 +960,9 @@ class TestTradingDayExpiry:
         entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
-        # Seed ATR so original_risk is computed correctly
+        # Seed the persisted entry stop distance used by trailing-stop logic
         conn.execute(
-            "UPDATE paper_trades SET atr_at_entry = 5.0 WHERE ticker = 'AAPL'"
+            "UPDATE paper_trades SET stop_distance_pct = 5.0, atr_at_entry = 2.0 WHERE ticker = 'AAPL'"
         )
         conn.commit()
         # Price at $106.25 → HWM=106.25, R = 6.25/5 = 1.25 (breakeven threshold)
@@ -980,7 +980,7 @@ class TestTradingDayExpiry:
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
         conn.execute(
-            "UPDATE paper_trades SET atr_at_entry = 5.0 WHERE ticker = 'AAPL'"
+            "UPDATE paper_trades SET stop_distance_pct = 5.0, atr_at_entry = 2.0 WHERE ticker = 'AAPL'"
         )
         conn.commit()
         # Price at $107.50 → HWM=107.50, R = 7.5/5 = 1.5 (mid trail)
@@ -992,3 +992,20 @@ class TestTradingDayExpiry:
 
         trade = conn.execute("SELECT stop_loss FROM paper_trades WHERE ticker='AAPL'").fetchone()
         assert trade[0] == 102.50
+
+    def test_mtm_trailing_prefers_persisted_entry_stop_distance(self, conn):
+        """Trailing math should use stored entry risk, not raw ATR%."""
+        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
+                                target_price=110.0, entry_date=entry_date)
+        conn.execute(
+            "UPDATE paper_trades SET stop_distance_pct = 5.0, atr_at_entry = 2.0 WHERE ticker = 'AAPL'"
+        )
+        conn.commit()
+        _seed_price(conn, "AAPL", 106.25, high=106.25, low=105.0)
+
+        mark_to_market(conn)
+        conn.commit()
+
+        trade = conn.execute("SELECT stop_loss FROM paper_trades WHERE ticker='AAPL'").fetchone()
+        assert trade[0] == 100.0

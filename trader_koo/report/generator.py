@@ -65,6 +65,7 @@ from trader_koo.report.utils import (
     days_since_date,
     hours_since,
     market_calendar_context,
+    nyse_holidays_for_year,
     row_to_dict,
     table_exists,
     tail_text,
@@ -76,6 +77,72 @@ LOG = logging.getLogger(__name__)
 # frontend can surface which sections degraded.  Reset at the start of each
 # fetch_report_payload() call.
 _report_warnings: list[str] = []
+
+
+def _trading_days_between(start_date: dt.date, end_date: dt.date) -> int:
+    """Count NYSE trading days in the open interval (start_date, end_date]."""
+    if end_date <= start_date:
+        return 0
+
+    holidays: set[dt.date] = set()
+    for year in range(start_date.year, end_date.year + 1):
+        holidays.update(nyse_holidays_for_year(year).keys())
+
+    days = 0
+    cursor = start_date + dt.timedelta(days=1)
+    while cursor <= end_date:
+        if cursor.weekday() < 5 and cursor not in holidays:
+            days += 1
+        cursor += dt.timedelta(days=1)
+    return days
+
+
+def _report_stale_price_guard_error(
+    *,
+    latest_run: dict[str, Any] | None,
+    latest_price_date: str | None,
+    market_date: str | None,
+) -> str | None:
+    """Return a blocking stale-price message when report generation should abort."""
+    if not isinstance(latest_run, dict):
+        return None
+
+    run_status = str(latest_run.get("status") or "").strip().lower()
+    if run_status != "failed":
+        return None
+
+    if not latest_price_date:
+        return (
+            "Latest ingest run failed and price_daily has no latest price date. "
+            "Aborting report generation to avoid publishing a report with missing price data."
+        )
+
+    try:
+        price_date = dt.date.fromisoformat(str(latest_price_date).strip()[:10])
+    except ValueError:
+        return (
+            "Latest ingest run failed and latest price date is invalid "
+            f"({latest_price_date!r}). Aborting report generation."
+        )
+
+    try:
+        session_date = dt.date.fromisoformat(str(market_date or "").strip()[:10])
+    except ValueError:
+        session_date = dt.datetime.now(dt.timezone.utc).date()
+
+    trading_days_behind = _trading_days_between(price_date, session_date)
+    if trading_days_behind <= 0:
+        return None
+
+    started_ts = str(latest_run.get("started_ts") or "").strip() or "unknown"
+    finished_ts = str(latest_run.get("finished_ts") or "").strip() or "unknown"
+    return (
+        "Latest ingest run failed and latest price data is stale "
+        f"(price_date={price_date.isoformat()}, market_date={session_date.isoformat()}, "
+        f"trading_days_behind={trading_days_behind}, started_ts={started_ts}, "
+        f"finished_ts={finished_ts}). Aborting report generation to avoid "
+        "publishing stale prices."
+    )
 
 
 def _apply_ensemble_adjustment(row: dict[str, Any]) -> None:
@@ -1227,6 +1294,14 @@ def fetch_report_payload(
                 payload["warnings"].append("latest_ingest_run_failed")
         else:
             payload["warnings"].append("ingest_runs_missing")
+
+        stale_price_error = _report_stale_price_guard_error(
+            latest_run=payload["latest_ingest_run"],
+            latest_price_date=payload["latest_data"].get("price_date"),
+            market_date=(payload.get("market_session") or {}).get("market_date"),
+        )
+        if stale_price_error:
+            raise RuntimeError(stale_price_error)
 
         if table_exists(conn, "yolo_patterns"):
             payload["yolo"]["table_exists"] = True

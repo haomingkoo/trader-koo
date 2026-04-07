@@ -135,6 +135,35 @@ def compute_trailing_stop(
         return current_stop
 
 
+def _resolve_original_risk(
+    *,
+    entry_price: float,
+    current_stop: float | None,
+    stop_distance_pct: float | None,
+    atr_at_entry: float | None,
+    config: PaperTradeConfig,
+) -> float:
+    """Reconstruct the original stop distance used for R-multiple trailing.
+
+    Prefer the persisted entry stop distance when available. This keeps
+    trailing-stop math anchored to the trade's original risk budget even
+    after stop_loss has been tightened by MTM updates.
+    """
+    if entry_price <= 0:
+        return 0.0
+
+    if isinstance(stop_distance_pct, (int, float)) and float(stop_distance_pct) > 0:
+        return entry_price * (float(stop_distance_pct) / 100.0)
+
+    if isinstance(atr_at_entry, (int, float)) and float(atr_at_entry) > 0:
+        return entry_price * (float(atr_at_entry) / 100.0) * config.stop_atr_mult
+
+    if isinstance(current_stop, (int, float)) and float(current_stop) > 0:
+        return abs(entry_price - float(current_stop))
+
+    return entry_price * (config.default_stop_pct / 100.0)
+
+
 def _close_trade(
     conn: sqlite3.Connection,
     trade_id: int,
@@ -606,7 +635,8 @@ def mark_to_market(
     open_rows = conn.execute(
         """
         SELECT id, ticker, direction, entry_price, entry_date,
-               target_price, stop_loss, high_water_mark, low_water_mark
+               target_price, stop_loss, high_water_mark, low_water_mark,
+               stop_distance_pct, atr_at_entry
         FROM paper_trades WHERE status = 'open'
         """
     ).fetchall()
@@ -621,7 +651,8 @@ def mark_to_market(
 
     for row in open_rows:
         trade_id, ticker, direction, entry_price, entry_date = row[:5]
-        target_price, stop_loss, high_water_mark, low_water_mark = row[5:]
+        target_price, stop_loss, high_water_mark, low_water_mark = row[5:9]
+        stop_distance_pct, atr_at_entry = row[9:]
 
         price_row = conn.execute(
             "SELECT CAST(close AS REAL), date, "
@@ -719,17 +750,13 @@ def mark_to_market(
         except (ValueError, TypeError):
             pass
 
-        # Compute original risk from ATR (fixed value, not affected by trailing)
-        atr_row = conn.execute(
-            "SELECT atr_at_entry FROM paper_trades WHERE id = ?", (trade_id,),
-        ).fetchone()
-        atr_at_entry = float(atr_row[0]) if atr_row and atr_row[0] else None
-        # Original risk = ATR-based stop distance (what the stop was set from)
-        if atr_at_entry is not None and atr_at_entry > 0 and entry_price > 0:
-            original_risk = entry_price * (atr_at_entry / 100)
-        else:
-            # Fallback: use default stop % from config
-            original_risk = entry_price * (config.default_stop_pct / 100)
+        original_risk = _resolve_original_risk(
+            entry_price=float(entry_price or 0.0),
+            current_stop=float(stop_loss) if isinstance(stop_loss, (int, float)) else None,
+            stop_distance_pct=float(stop_distance_pct) if isinstance(stop_distance_pct, (int, float)) else None,
+            atr_at_entry=float(atr_at_entry) if isinstance(atr_at_entry, (int, float)) else None,
+            config=config,
+        )
 
         if hit_stop:
             _close_trade(
