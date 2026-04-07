@@ -12,6 +12,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from trader_koo.backend.utils import client_ip as _client_ip
 
 LOG = logging.getLogger("trader_koo.middleware.cors")
 
@@ -161,15 +162,4 @@ class RestrictiveCORSMiddleware(BaseHTTPMiddleware):
         Returns:
             Client IP address string.
         """
-        # Check X-Forwarded-For header first (for proxies)
-        xff = request.headers.get("x-forwarded-for", "")
-        if xff:
-            first = xff.split(",")[0].strip()
-            if first:
-                return first
-        
-        # Fall back to direct client IP
-        if request.client and request.client.host:
-            return request.client.host
-        
-        return "-"
+        return _client_ip(request)

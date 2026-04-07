@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
+from trader_koo.backend.utils import resolve_child_filename
 from trader_koo.middleware.auth import require_admin_auth
 
 router = APIRouter()
@@ -278,8 +279,14 @@ async def upload_model(
     allowed_extensions = {".txt", ".json", ".pkl", ".joblib"}
     original_name = file.filename or "model.txt"
     target_name = filename.strip() or original_name
+    dest_dir = _model_dir()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        safe_name, dest_path = resolve_child_filename(dest_dir, target_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    ext = Path(target_name).suffix.lower()
+    ext = Path(safe_name).suffix.lower()
     if ext not in allowed_extensions:
         raise HTTPException(
             status_code=400,
@@ -293,17 +300,13 @@ async def upload_model(
             detail=f"File too large ({len(content)} bytes). Max: {MAX_MODEL_SIZE} bytes",
         )
 
-    dest_dir = _model_dir()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = dest_dir / target_name
-
     dest_path.write_bytes(content)
     LOG.info("Model uploaded: %s (%d bytes)", dest_path, len(content))
 
     return {
         "ok": True,
         "path": str(dest_path),
-        "filename": target_name,
+        "filename": safe_name,
         "size_bytes": len(content),
     }
 

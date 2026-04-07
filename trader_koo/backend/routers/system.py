@@ -128,6 +128,83 @@ def _max_rss_mb() -> float | None:
         return None
 
 
+def _sanitize_status_run(row: dict[str, Any] | None, *, expose_internal: bool) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+    if expose_internal:
+        return sanitize_public_response(row)
+
+    allowed_keys = (
+        "status",
+        "started_ts",
+        "finished_ts",
+        "tickers_total",
+        "tickers_ok",
+        "tickers_failed",
+        "tickers_processed",
+    )
+    return {
+        key: row.get(key)
+        for key in allowed_keys
+        if row.get(key) is not None
+    } or None
+
+
+def _sanitize_status_llm(meta: dict[str, Any], *, expose_internal: bool) -> dict[str, Any]:
+    sanitized = sanitize_public_response(meta)
+    if expose_internal:
+        return sanitized
+
+    health = dict(meta.get("health") or {})
+    counts = dict(health.get("counts") or {})
+    sanitized["health"] = {
+        "degraded": bool(health.get("degraded")),
+        "degraded_threshold": health.get("degraded_threshold"),
+        "consecutive_failures": health.get("consecutive_failures"),
+        "last_success_ts": health.get("last_success_ts"),
+        "last_failure_ts": health.get("last_failure_ts"),
+        **({"counts": counts} if counts else {}),
+    }
+    return sanitized
+
+
+def _sanitize_status_payload(payload: dict[str, Any], *, expose_internal: bool) -> dict[str, Any]:
+    sanitized = sanitize_public_response(payload)
+    if expose_internal:
+        return sanitized
+
+    service_meta = dict(sanitized.get("service_meta") or {})
+    for key in ("git_sha", "deployed_ts", "deployment_id"):
+        service_meta.pop(key, None)
+    sanitized["service_meta"] = service_meta
+
+    sanitized["latest_run"] = _sanitize_status_run(payload.get("latest_run"), expose_internal=False)
+
+    raw_errors = payload.get("errors") if isinstance(payload.get("errors"), dict) else {}
+    errors = dict(sanitized.get("errors") or {})
+    errors["latest_error_message"] = (
+        "Latest pipeline run failed. Check server logs for details."
+        if str(raw_errors.get("latest_error_message") or "").strip()
+        else None
+    )
+    errors["latest_failed_run"] = _sanitize_status_run(
+        raw_errors.get("latest_failed_run"),
+        expose_internal=False,
+    )
+    sanitized["errors"] = errors
+
+    pipeline = dict(sanitized.get("pipeline") or {})
+    pipeline.pop("stage_line", None)
+    pipeline.pop("last_completed_line", None)
+    sanitized["pipeline"] = pipeline
+
+    sanitized["llm"] = _sanitize_status_llm(
+        payload.get("llm") if isinstance(payload.get("llm"), dict) else {},
+        expose_internal=False,
+    )
+    return sanitized
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -242,7 +319,10 @@ def status() -> dict[str, Any]:
             "uptime_sec": int((now - PROCESS_START_UTC).total_seconds()),
         }
     if not DB_PATH.exists():
-        return {**base, "ok": False, "error": "Database file not found"}
+        return _sanitize_status_payload(
+            {**base, "ok": False, "error": "Database file not found"},
+            expose_internal=EXPOSE_STATUS_INTERNAL,
+        )
 
     conn = get_conn()
     try:
@@ -464,8 +544,9 @@ def status() -> dict[str, Any]:
                 "options_snapshot": latest_opt_snapshot,
             },
         }
-        set_cached_status(now, payload)
-        return sanitize_public_response(payload)
+        response_payload = _sanitize_status_payload(payload, expose_internal=EXPOSE_STATUS_INTERNAL)
+        set_cached_status(now, response_payload)
+        return response_payload
     finally:
         conn.close()
 

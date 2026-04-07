@@ -112,8 +112,10 @@ class TestRateLimitMiddleware:
             response = client.get("/opportunities")
             assert response.status_code == 200, "SPA routes should not be rate limited"
     
-    def test_different_ips_independent_limits(self, client):
+    def test_different_ips_independent_limits(self, client, monkeypatch):
         """Test that different IPs have independent rate limits."""
+        monkeypatch.setenv("TRADER_KOO_TRUST_PROXY_HEADERS", "1")
+
         # Use up limit for first IP
         for _ in range(5):
             response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.1"})
@@ -126,6 +128,15 @@ class TestRateLimitMiddleware:
         # Second IP should still work
         response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.2"})
         assert response.status_code == 200
+
+    def test_spoofed_forwarded_headers_do_not_split_rate_limits_by_default(self, client):
+        """Untrusted peers should not bypass limits by rotating X-Forwarded-For."""
+        for _ in range(5):
+            response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.1"})
+            assert response.status_code == 200
+
+        response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.2"})
+        assert response.status_code == 429
 
 
 if __name__ == "__main__":

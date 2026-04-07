@@ -278,3 +278,91 @@ class TestEndpointSecretExposure:
         assert not is_valid
         assert len(violations) > 0
         assert "API_KEY" in violations[0]
+
+    def test_public_status_payload_strips_operational_details(self):
+        """Public status payload should keep summaries but hide raw internals."""
+        from trader_koo.backend.routers.system import _sanitize_status_payload
+
+        payload = {
+            "service_meta": {
+                "version": "0.2.0",
+                "git_sha": "abc123",
+                "deployment_id": "dep-123",
+            },
+            "latest_run": {
+                "status": "failed",
+                "started_ts": "2026-04-07T00:00:00+00:00",
+                "finished_ts": "2026-04-07T00:05:00+00:00",
+                "tickers_total": 10,
+                "tickers_failed": 2,
+                "error_message": "raw internal error",
+            },
+            "errors": {
+                "failed_runs_7d": 3,
+                "latest_error_message": "raw internal error",
+                "latest_error_ts": "2026-04-07T00:05:00+00:00",
+                "latest_failed_run": {
+                    "status": "failed",
+                    "started_ts": "2026-04-07T00:00:00+00:00",
+                    "finished_ts": "2026-04-07T00:05:00+00:00",
+                    "error_message": "raw internal error",
+                },
+            },
+            "pipeline": {
+                "stage": "report",
+                "stage_line": "[REPORT] internal log line",
+                "last_completed_line": "[DONE] internal log line",
+            },
+            "llm": {
+                "enabled": True,
+                "health": {
+                    "degraded": True,
+                    "degraded_threshold": 3,
+                    "consecutive_failures": 4,
+                    "last_success_ts": "2026-04-06T00:00:00+00:00",
+                    "last_failure_ts": "2026-04-07T00:00:00+00:00",
+                    "last_failure_reason": "request_failed",
+                    "last_error_class": "TimeoutError",
+                    "last_error_details": "internal traceback",
+                    "recent_events": [{"details": "internal traceback"}],
+                    "counts": {"success": 1, "failure": 4, "other": 0, "total": 5},
+                },
+            },
+        }
+
+        sanitized = _sanitize_status_payload(payload, expose_internal=False)
+
+        assert "git_sha" not in sanitized["service_meta"]
+        assert "deployment_id" not in sanitized["service_meta"]
+        assert "error_message" not in (sanitized["latest_run"] or {})
+        assert sanitized["errors"]["latest_error_message"] == (
+            "Latest pipeline run failed. Check server logs for details."
+        )
+        assert "error_message" not in (sanitized["errors"]["latest_failed_run"] or {})
+        assert "stage_line" not in sanitized["pipeline"]
+        assert "last_completed_line" not in sanitized["pipeline"]
+        assert "last_error_details" not in sanitized["llm"]["health"]
+        assert "recent_events" not in sanitized["llm"]["health"]
+        assert "last_failure_reason" not in sanitized["llm"]["health"]
+        assert "last_error_class" not in sanitized["llm"]["health"]
+
+    def test_internal_status_payload_keeps_operational_details(self):
+        """Internal status payload can retain debug detail when explicitly enabled."""
+        from trader_koo.backend.routers.system import _sanitize_status_payload
+
+        payload = {
+            "service_meta": {"git_sha": "abc123", "deployment_id": "dep-123"},
+            "latest_run": {"error_message": "raw internal error"},
+            "errors": {"latest_error_message": "raw internal error"},
+            "pipeline": {"stage_line": "[REPORT] internal log line"},
+            "llm": {"health": {"last_error_details": "internal traceback"}},
+        }
+
+        sanitized = _sanitize_status_payload(payload, expose_internal=True)
+
+        assert sanitized["service_meta"]["git_sha"] == "abc123"
+        assert sanitized["service_meta"]["deployment_id"] == "dep-123"
+        assert sanitized["latest_run"]["error_message"] == "raw internal error"
+        assert sanitized["errors"]["latest_error_message"] == "raw internal error"
+        assert sanitized["pipeline"]["stage_line"] == "[REPORT] internal log line"
+        assert sanitized["llm"]["health"]["last_error_details"] == "internal traceback"

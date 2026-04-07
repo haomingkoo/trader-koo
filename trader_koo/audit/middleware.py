@@ -15,6 +15,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from trader_koo.audit.logger import AuditLogger
+from trader_koo.backend.utils import client_ip as _client_ip
 
 
 class AuditMiddleware(BaseHTTPMiddleware):
@@ -103,22 +104,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
     
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP address from request."""
-        # Check X-Forwarded-For header (for proxies/load balancers)
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            # Take the first IP in the chain
-            return forwarded_for.split(",")[0].strip()
-        
-        # Check X-Real-IP header
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
-            return real_ip
-        
-        # Fall back to direct client
-        if request.client:
-            return request.client.host
-        
-        return "unknown"
+        return _client_ip(request)
 
 
 def log_auth_attempt(

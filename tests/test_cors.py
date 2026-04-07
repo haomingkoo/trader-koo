@@ -367,3 +367,12 @@ class TestCORSMiddleware:
         ip = RestrictiveCORSMiddleware._get_client_ip(mock_request)
         
         assert ip == "192.168.1.1"
+
+    def test_client_ip_ignores_spoofed_xff_from_untrusted_peer(self, mock_request):
+        """Forwarded headers are ignored unless the immediate peer is trusted."""
+        mock_request.headers = {"x-forwarded-for": "1.2.3.4, 5.6.7.8"}
+        mock_request.client.host = "8.8.8.8"
+
+        ip = RestrictiveCORSMiddleware._get_client_ip(mock_request)
+
+        assert ip == "8.8.8.8"

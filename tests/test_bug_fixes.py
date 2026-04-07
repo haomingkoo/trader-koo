@@ -350,3 +350,65 @@ class TestLLMSanitizeBeforeValidation:
 
         assert "observation" in result
         assert len(result["observation"]) <= 260
+
+    def test_maybe_rewrite_empty_response_activates_runtime_cooldown(self):
+        """Empty LLM replies should trigger cooldown before falling back."""
+        from trader_koo.llm_narrative import maybe_rewrite_setup_copy
+
+        row = {
+            "ticker": "SPY",
+            "observation": "SPY is bullish.",
+            "action": "Buy on dip.",
+            "risk_note": "Use stops.",
+        }
+
+        with (
+            patch.dict("trader_koo.llm_narrative._PROMPT_CACHE", {}, clear=True),
+            patch("trader_koo.llm_narrative._runtime_disabled_now", return_value=False),
+            patch("trader_koo.llm_narrative.llm_ready", return_value=True),
+            patch("trader_koo.llm_narrative._llm_provider", return_value="azure_openai"),
+            patch("trader_koo.llm_narrative._azure_chat_rewrite", return_value=({}, {})),
+            patch("trader_koo.llm_narrative._safe_note_token_usage"),
+            patch("trader_koo.llm_narrative._safe_note_success"),
+            patch("trader_koo.llm_narrative._safe_note_failure"),
+            patch("trader_koo.llm_narrative._set_runtime_disable") as mock_disable,
+            patch("trader_koo.llm_narrative._default_db_path", return_value=":memory:"),
+        ):
+            result = maybe_rewrite_setup_copy(row, source="test")
+
+        assert mock_disable.called
+        assert "observation" in result
+
+    def test_maybe_rewrite_schema_failure_activates_runtime_cooldown(self):
+        """Schema-invalid LLM replies should also trigger cooldown."""
+        from trader_koo.llm_narrative import maybe_rewrite_setup_copy
+
+        row = {
+            "ticker": "SPY",
+            "observation": "SPY is bullish.",
+            "action": "Buy on dip.",
+            "risk_note": "Use stops.",
+        }
+
+        invalid_llm_response = {
+            "observation": None,
+            "action": ["bad", "type"],
+            "risk_note": 123,
+        }
+
+        with (
+            patch.dict("trader_koo.llm_narrative._PROMPT_CACHE", {}, clear=True),
+            patch("trader_koo.llm_narrative._runtime_disabled_now", return_value=False),
+            patch("trader_koo.llm_narrative.llm_ready", return_value=True),
+            patch("trader_koo.llm_narrative._llm_provider", return_value="azure_openai"),
+            patch("trader_koo.llm_narrative._azure_chat_rewrite", return_value=(invalid_llm_response, {})),
+            patch("trader_koo.llm_narrative._safe_note_token_usage"),
+            patch("trader_koo.llm_narrative._safe_note_success"),
+            patch("trader_koo.llm_narrative._safe_note_failure"),
+            patch("trader_koo.llm_narrative._set_runtime_disable") as mock_disable,
+            patch("trader_koo.llm_narrative._default_db_path", return_value=":memory:"),
+        ):
+            result = maybe_rewrite_setup_copy(row, source="test")
+
+        assert mock_disable.called
+        assert "observation" in result

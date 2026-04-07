@@ -13,6 +13,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from trader_koo.backend.utils import client_ip as _client_ip
 from trader_koo.ratelimit.service import RateLimiter, RateLimitConfig
 
 LOG = logging.getLogger(__name__)
@@ -45,30 +46,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         LOG.info("RateLimitMiddleware initialized")
     
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP address from request.
-        
-        Checks X-Forwarded-For header first (for proxied requests),
-        then falls back to direct client IP.
-        
-        Args:
-            request: FastAPI request object
-            
-        Returns:
-            Client IP address as string
-        """
-        # Check X-Forwarded-For header (for proxied requests)
-        xff = request.headers.get("x-forwarded-for", "")
-        if xff:
-            # Take first IP in the chain
-            first_ip = xff.split(",")[0].strip()
-            if first_ip:
-                return first_ip
-        
-        # Fall back to direct client IP
-        if request.client and request.client.host:
-            return request.client.host
-        
-        return "unknown"
+        """Extract client IP address from request."""
+        return _client_ip(request)
     
     def _get_rate_limit_key(self, request: Request) -> tuple[str, int, timedelta]:
         """Determine rate limit key and limits based on request.
