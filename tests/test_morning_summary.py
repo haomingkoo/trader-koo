@@ -80,11 +80,17 @@ def db_path(tmp_path: Path) -> Path:
 
         CREATE TABLE hyperliquid_counter_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_label TEXT NOT NULL,
             coin TEXT NOT NULL,
-            direction TEXT NOT NULL,
-            entry_price REAL,
+            counter_side TEXT NOT NULL,
+            their_side TEXT NOT NULL,
+            their_size REAL,
+            their_leverage INTEGER,
+            their_notional_usd REAL,
+            confidence REAL,
+            reasoning TEXT,
             signal_ts TEXT NOT NULL,
-            wallet_label TEXT
+            created_ts TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
     conn.commit()
@@ -145,11 +151,16 @@ def populated_conn(conn: sqlite3.Connection) -> sqlite3.Connection:
     now_ts = dt.datetime.now(dt.timezone.utc).isoformat()
     old_ts = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=48)).isoformat()
     conn.executemany(
-        "INSERT INTO hyperliquid_counter_signals (coin, direction, entry_price, signal_ts, wallet_label) VALUES (?, ?, ?, ?, ?)",
+        """
+        INSERT INTO hyperliquid_counter_signals
+            (wallet_label, coin, counter_side, their_side, their_size, their_leverage,
+             their_notional_usd, confidence, reasoning, signal_ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
         [
-            ("BTC", "short", 88000, now_ts, "machibro"),
-            ("ETH", "long", 2050, now_ts, "machibro"),
-            ("SOL", "short", 180, old_ts, "machibro"),  # older than 24h
+            ("machibro", "BTC", "short", "long", 1.2, 25, 88_000, 82.0, "counter BTC long", now_ts),
+            ("machibro", "ETH", "long", "short", 12.0, 15, 2_050, 71.0, "counter ETH short", now_ts),
+            ("machibro", "SOL", "short", "long", 100.0, 20, 180, 76.0, "counter SOL long", old_ts),  # older than 24h
         ],
     )
 
@@ -284,8 +295,38 @@ class TestFetchCounterTradeSignals:
 
         btc = next(s for s in signals if s["coin"] == "BTC")
         assert btc["direction"] == "short"
-        assert btc["entry_price"] == 88000
+        assert btc["entry_price"] is None
         assert btc["wallet"] == "machibro"
+
+    def test_legacy_schema_still_supported(self, conn: sqlite3.Connection) -> None:
+        conn.execute("DROP TABLE hyperliquid_counter_signals")
+        conn.execute(
+            """
+            CREATE TABLE hyperliquid_counter_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                coin TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL,
+                signal_ts TEXT NOT NULL,
+                wallet_label TEXT
+            )
+            """
+        )
+        now_ts = dt.datetime.now(dt.timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO hyperliquid_counter_signals
+                (coin, direction, entry_price, signal_ts, wallet_label)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("BTC", "short", 88000, now_ts, "machibro"),
+        )
+        conn.commit()
+
+        signals = _fetch_counter_trade_signals(conn)
+        assert signals[0]["direction"] == "short"
+        assert signals[0]["entry_price"] == 88000
+        assert signals[0]["wallet"] == "machibro"
 
     def test_empty_when_no_signals(self, conn: sqlite3.Connection) -> None:
         # Table doesn't exist yet in bare conn

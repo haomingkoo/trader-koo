@@ -27,11 +27,12 @@ Full-stack S&P 500 + crypto market analysis platform with ML-powered swing trade
 
 **Trading**
 - Paper trading with full lifecycle ($1M simulated portfolio)
+- Hyperliquid whale tracker with configurable wallets, reload detection, and free Binance crowd context
 - Debate engine: 5-role analyst panel + deterministic arbiter
 - ATR-aware risk controls, critic review, graduated trailing stops, equity curve, family edge tracking
 
 **Frontend**
-- 10 pages: Guide, Report, VIX, Earnings, Chart, Opportunities, Paper Trades, Crypto, Polymarket, 404
+- 12 app pages plus methodology, alerts, Hyperliquid, and 404 fallbacks
 - Dark/light mode, interactive Plotly charts with overlays, live streaming tickers in header
 - Lazy-loaded routes, Zustand state management
 
@@ -79,7 +80,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full details.
 ```
 Railway Service (single process)
 ├── FastAPI (uvicorn, port 8080)
-│   ├── 11 routers (82 endpoints)
+│   ├── API routers + admin modules
 │   ├── Static file serving (React build → /)
 │   └── WebSocket endpoints (/ws/crypto, /ws/equities)
 │
@@ -94,7 +95,7 @@ Railway Service (single process)
 │   └── Saturday 00:30 UTC: YOLO full seed (daily + weekly timeframes)
 │
 └── /data/ (Railway persistent volume)
-    ├── trader_koo.db    (SQLite, 23 tables)
+    ├── trader_koo.db    (SQLite app data)
     ├── models/          (LightGBM .pkl files)
     ├── reports/         (daily JSON + MD archives)
     └── logs/            (structured log files)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 
 from trader_koo.backend.services.database import get_conn
 from trader_koo.hyperliquid.tracker import (
@@ -12,6 +12,7 @@ from trader_koo.hyperliquid.tracker import (
     fetch_wallet_fills,
     fetch_wallet_history,
     fetch_wallet_open_orders,
+    _recent_reload_context,
     fetch_wallet_state,
     generate_counter_signals,
     poll_all_wallets,
@@ -52,6 +53,7 @@ def get_live_wallet(label: str) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_hyperliquid_schema(conn)
+        seed_default_wallets(conn)
         row = conn.execute(
             "SELECT address, track_mode FROM hyperliquid_wallets WHERE label = ? AND active = 1",
             (label,),
@@ -68,14 +70,17 @@ def get_live_wallet(label: str) -> dict[str, Any]:
         if track_mode == "counter":
             counter_signals = generate_counter_signals(snapshot, conn=conn)
 
+        recent_reload = _recent_reload_context(conn, label, snapshot.timestamp)
         return {
             "ok": True,
             "wallet": {
                 "label": label,
                 "address": address,
+                "track_mode": track_mode,
                 "account_value": snapshot.account_value,
                 "total_margin_used": snapshot.total_margin_used,
                 "margin_ratio": snapshot.margin_ratio,
+                "recent_reload": recent_reload,
                 "timestamp": snapshot.timestamp,
             },
             "positions": [
@@ -104,6 +109,7 @@ def get_wallet_fills(label: str, limit: int = 50) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_hyperliquid_schema(conn)
+        seed_default_wallets(conn)
         row = conn.execute(
             "SELECT address FROM hyperliquid_wallets WHERE label = ? AND active = 1",
             (label,),
@@ -123,6 +129,7 @@ def get_trade_history(label: str, days: int = 7) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_hyperliquid_schema(conn)
+        seed_default_wallets(conn)
         row = conn.execute(
             "SELECT address FROM hyperliquid_wallets WHERE label = ? AND active = 1",
             (label,),
@@ -142,6 +149,7 @@ def get_open_orders(label: str) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_hyperliquid_schema(conn)
+        seed_default_wallets(conn)
         row = conn.execute(
             "SELECT address FROM hyperliquid_wallets WHERE label = ? AND active = 1",
             (label,),
@@ -161,6 +169,7 @@ def get_wallet_history(label: str, limit: int = 100) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_hyperliquid_schema(conn)
+        seed_default_wallets(conn)
         rows = conn.execute(
             "SELECT account_value, total_margin_used, margin_ratio, "
             "positions_json, snapshot_ts FROM hyperliquid_snapshots "
@@ -190,6 +199,7 @@ def get_counter_signals(limit: int = 50) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_hyperliquid_schema(conn)
+        seed_default_wallets(conn)
         rows = conn.execute(
             "SELECT wallet_label, coin, counter_side, their_side, their_size, "
             "their_leverage, their_notional_usd, confidence, reasoning, signal_ts "
@@ -237,6 +247,7 @@ def collect_fill_history(label: str, days: int = 120) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_hyperliquid_schema(conn)
+        seed_default_wallets(conn)
         wallet = conn.execute(
             "SELECT address FROM hyperliquid_wallets WHERE label = ?", (label,),
         ).fetchone()

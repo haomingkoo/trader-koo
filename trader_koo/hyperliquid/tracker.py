@@ -14,12 +14,9 @@ import sqlite3
 from dataclasses import asdict, dataclass
 from typing import Any
 
-LOG = logging.getLogger(__name__)
+from trader_koo.hyperliquid.wallets import get_tracked_wallets
 
-# Default tracked wallets
-TRACKED_WALLETS: dict[str, str] = {
-    "machibro": "0x020ca66c30bec2c4fe3861a94e4db4a498a35872",
-}
+LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -275,6 +272,196 @@ _SKIP_COUNTER_COINS: frozenset[str] = frozenset(
     c.strip() for c in os.getenv("TRADER_KOO_HL_SKIP_COUNTER_COINS", "BTC").split(",")
     if c.strip()
 )
+_RELOAD_SIGNAL_BOOST = max(0, int(os.getenv("TRADER_KOO_HL_RELOAD_SIGNAL_BOOST", "3")))
+_RELOAD_LOOKBACK_HOURS = max(
+    1.0,
+    float(os.getenv("TRADER_KOO_HL_RELOAD_LOOKBACK_HOURS", "72")),
+)
+_CROWD_RATIO_THRESHOLD = max(
+    1.1,
+    float(os.getenv("TRADER_KOO_HL_CROWD_RATIO_THRESHOLD", "1.8")),
+)
+_CROWD_FUNDING_THRESHOLD = max(
+    0.0,
+    float(os.getenv("TRADER_KOO_HL_CROWD_FUNDING_THRESHOLD", "0.0003")),
+)
+
+_DERIVATIVE_SYMBOLS: dict[str, str] = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+    "SOL": "SOL-USD",
+}
+
+
+def _parse_iso_ts(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _recent_reload_context(
+    conn: sqlite3.Connection | None,
+    wallet_label: str,
+    as_of_ts: str,
+) -> dict[str, Any] | None:
+    """Return the latest reload event if it is still within the boost window."""
+    if conn is None:
+        return None
+
+    as_of = _parse_iso_ts(as_of_ts) or dt.datetime.now(dt.timezone.utc)
+    try:
+        row = conn.execute(
+            """
+            SELECT account_value, position_count, detected_ts
+            FROM hyperliquid_reload_events
+            WHERE wallet_label = ?
+            ORDER BY detected_ts DESC
+            LIMIT 1
+            """,
+            (wallet_label,),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+
+    if not row:
+        return None
+
+    detected_at = _parse_iso_ts(row[2])
+    if detected_at is None:
+        return None
+
+    hours_since = max(0.0, (as_of - detected_at).total_seconds() / 3600)
+    if hours_since > _RELOAD_LOOKBACK_HOURS:
+        return None
+
+    return {
+        "detected_ts": detected_at.isoformat(),
+        "hours_since": round(hours_since, 1),
+        "account_value": float(row[0] or 0),
+        "position_count": int(row[1] or 0),
+        "score_boost": _RELOAD_SIGNAL_BOOST,
+    }
+
+
+def _latest_market_crowding_context(
+    conn: sqlite3.Connection | None,
+    coin: str,
+    their_side: str,
+) -> dict[str, Any] | None:
+    """Build free market crowding context from stored Binance derivatives data."""
+    if conn is None:
+        return None
+
+    symbol = _DERIVATIVE_SYMBOLS.get(coin.upper())
+    if not symbol:
+        return None
+
+    funding_rate: float | None = None
+    ratio: float | None = None
+    long_pct: float | None = None
+    short_pct: float | None = None
+
+    try:
+        funding_row = conn.execute(
+            """
+            SELECT funding_rate
+            FROM crypto_funding_rates
+            WHERE symbol = ?
+            ORDER BY snapshot_ts DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
+        if funding_row:
+            funding_rate = float(funding_row[0])
+
+        ratio_row = conn.execute(
+            """
+            SELECT long_account, short_account, long_short_ratio
+            FROM crypto_long_short_ratio
+            WHERE symbol = ?
+            ORDER BY snapshot_ts DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
+        if ratio_row:
+            long_pct = float(ratio_row[0]) * 100
+            short_pct = float(ratio_row[1]) * 100
+            ratio = float(ratio_row[2])
+    except sqlite3.Error:
+        return None
+
+    if funding_rate is None and ratio is None:
+        return None
+
+    score_boost = 0
+    notes: list[str] = []
+    crowd_side = "neutral"
+
+    if funding_rate is not None and abs(funding_rate) >= _CROWD_FUNDING_THRESHOLD:
+        if funding_rate > 0:
+            crowd_side = "long"
+            if their_side == "long":
+                score_boost += 1
+            notes.append(f"funding {funding_rate * 100:+.4f}% longs crowded")
+        else:
+            crowd_side = "short"
+            if their_side == "short":
+                score_boost += 1
+            notes.append(f"funding {funding_rate * 100:+.4f}% shorts crowded")
+
+    if ratio is not None:
+        if ratio >= _CROWD_RATIO_THRESHOLD:
+            crowd_side = "long"
+            if their_side == "long":
+                score_boost += 1
+            if long_pct is not None and short_pct is not None:
+                notes.append(f"Binance top traders {long_pct:.0f}/{short_pct:.0f} long")
+            else:
+                notes.append(f"Binance long/short ratio {ratio:.2f}")
+        elif ratio <= 1.0 / _CROWD_RATIO_THRESHOLD:
+            crowd_side = "short"
+            if their_side == "short":
+                score_boost += 1
+            if long_pct is not None and short_pct is not None:
+                notes.append(f"Binance top traders {long_pct:.0f}/{short_pct:.0f} short")
+            else:
+                notes.append(f"Binance long/short ratio {ratio:.2f}")
+
+    score_boost = min(score_boost, 2)
+    if not notes:
+        return {
+            "symbol": symbol,
+            "funding_rate_pct": round(funding_rate * 100, 4) if funding_rate is not None else None,
+            "long_short_ratio": round(ratio, 2) if ratio is not None else None,
+            "long_pct": round(long_pct, 1) if long_pct is not None else None,
+            "short_pct": round(short_pct, 1) if short_pct is not None else None,
+            "crowd_side": crowd_side,
+            "aligns_with_counter": False,
+            "score_boost": 0,
+            "summary": "No strong crowding signal",
+        }
+
+    counter_side = "short" if their_side == "long" else "long"
+    return {
+        "symbol": symbol,
+        "funding_rate_pct": round(funding_rate * 100, 4) if funding_rate is not None else None,
+        "long_short_ratio": round(ratio, 2) if ratio is not None else None,
+        "long_pct": round(long_pct, 1) if long_pct is not None else None,
+        "short_pct": round(short_pct, 1) if short_pct is not None else None,
+        "crowd_side": crowd_side,
+        "aligns_with_counter": score_boost > 0,
+        "score_boost": score_boost,
+        "summary": "; ".join(notes[:2]),
+        "counter_side": counter_side,
+    }
 
 
 def generate_counter_signals(
@@ -308,9 +495,11 @@ def generate_counter_signals(
     else:
         count_multiplier = 1.0
 
+    recent_reload = _recent_reload_context(conn, snapshot.wallet_label, snapshot.timestamp)
     signals: list[dict[str, Any]] = []
     for pos in snapshot.positions:
         counter_side = "short" if pos.side == "long" else "long"
+        market_context = _latest_market_crowding_context(conn, pos.coin, pos.side)
 
         # Skip coins where he consistently wins (study-validated)
         if pos.coin in _SKIP_COUNTER_COINS:
@@ -333,6 +522,8 @@ def generate_counter_signals(
                 "position_age_hours": None,
                 "position_count": position_count,
                 "reasoning": f"[SKIP] {pos.coin} excluded — he wins this coin",
+                "wallet_context": {"recent_reload": recent_reload},
+                "market_context": market_context,
                 "timestamp": snapshot.timestamp,
             })
             continue
@@ -408,6 +599,18 @@ def generate_counter_signals(
                     score += 1
                     reasons.append(f"held {age_hours / 24:.0f}d")
 
+        if recent_reload and _RELOAD_SIGNAL_BOOST > 0:
+            score += _RELOAD_SIGNAL_BOOST
+            reasons.append(
+                f"post-reload {recent_reload['hours_since']:.0f}h after wipe"
+            )
+
+        if market_context and market_context.get("score_boost", 0) > 0:
+            score += int(market_context["score_boost"])
+            summary = str(market_context.get("summary") or "").strip()
+            if summary:
+                reasons.append(summary)
+
         # Apply position count multiplier
         score = round(score * count_multiplier)
 
@@ -448,6 +651,8 @@ def generate_counter_signals(
                 f"[{action}] score={score} ({position_count} pos) | {', '.join(reasons[:4])}"
                 if reasons else f"[{action}] score={score}"
             ),
+            "wallet_context": {"recent_reload": recent_reload},
+            "market_context": market_context,
             "timestamp": snapshot.timestamp,
         })
 
@@ -508,6 +713,21 @@ def ensure_hyperliquid_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_hl_signals_coin_ts "
         "ON hyperliquid_counter_signals(coin, signal_ts DESC)"
     )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS hyperliquid_reload_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_label TEXT NOT NULL,
+            wallet_address TEXT NOT NULL,
+            account_value REAL,
+            position_count INTEGER NOT NULL,
+            detected_ts TEXT NOT NULL,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_hl_reload_wallet_ts "
+        "ON hyperliquid_reload_events(wallet_label, detected_ts DESC)"
+    )
     conn.commit()
 
 
@@ -561,7 +781,7 @@ def save_counter_signals(
 def seed_default_wallets(conn: sqlite3.Connection) -> None:
     """Insert default tracked wallets if not already present."""
     ensure_hyperliquid_schema(conn)
-    for label, address in TRACKED_WALLETS.items():
+    for label, address in get_tracked_wallets().items():
         conn.execute(
             "INSERT OR IGNORE INTO hyperliquid_wallets (label, address) VALUES (?, ?)",
             (label, address),
@@ -693,8 +913,8 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
         save_snapshot(conn, snapshot)
         LOG.info(
-            "HL snapshot: %s | $%,.0f acct | %d positions | margin ratio %.2f",
-            label, snapshot.account_value, len(snapshot.positions), snapshot.margin_ratio,
+            "HL snapshot: %s | $%s acct | %d positions | margin ratio %.2f",
+            label, f"{snapshot.account_value:,.0f}", len(snapshot.positions), snapshot.margin_ratio,
         )
 
         # Detect liquidation: account was active, now empty
@@ -754,8 +974,8 @@ def _check_liquidation(
 
     # This looks like a liquidation
     LOG.warning(
-        "LIQUIDATION DETECTED: %s went from $%,.0f (%d positions) to $%,.0f (0 positions)",
-        label, float(prev_value), len(prev_positions), snapshot.account_value,
+        "LIQUIDATION DETECTED: %s went from $%s (%d positions) to $%s (0 positions)",
+        label, f"{float(prev_value):,.0f}", len(prev_positions), f"{snapshot.account_value:,.0f}",
     )
     _send_telegram_liquidation_alert(label, float(prev_value), prev_positions, prev_ts)
 
@@ -789,8 +1009,28 @@ def _check_reload(
     if float(prev_value) > 100 or prev_positions:
         return  # Previous snapshot was active, not a reload
 
-    LOG.info("RELOAD DETECTED: %s back with $%,.0f and %d positions",
-             label, snapshot.account_value, len(snapshot.positions))
+    conn.execute(
+        """
+        INSERT INTO hyperliquid_reload_events
+            (wallet_label, wallet_address, account_value, position_count, detected_ts)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            label,
+            snapshot.wallet_address,
+            snapshot.account_value,
+            len(snapshot.positions),
+            snapshot.timestamp,
+        ),
+    )
+    conn.commit()
+
+    LOG.info(
+        "RELOAD DETECTED: %s back with $%s and %d positions",
+        label,
+        f"{snapshot.account_value:,.0f}",
+        len(snapshot.positions),
+    )
 
     _send_telegram_reload_alert(snapshot)
 

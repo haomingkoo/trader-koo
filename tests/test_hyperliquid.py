@@ -1,23 +1,26 @@
 """Tests for Hyperliquid whale tracker."""
 from __future__ import annotations
 
+import datetime as dt
+import json
 import sqlite3
+from typing import Any
 
 import pytest
 
-import json
-
 from trader_koo.hyperliquid.tracker import (
-    PositionChange,
     WalletPosition,
     WalletSnapshot,
+    _check_reload,
     _diff_positions,
+    _recent_reload_context,
     ensure_hyperliquid_schema,
     generate_counter_signals,
     save_counter_signals,
     save_snapshot,
     seed_default_wallets,
 )
+from trader_koo.hyperliquid.wallets import get_tracked_wallets
 
 
 @pytest.fixture
@@ -38,14 +41,50 @@ class TestSchema:
         assert "hyperliquid_wallets" in tables
         assert "hyperliquid_snapshots" in tables
         assert "hyperliquid_counter_signals" in tables
+        assert "hyperliquid_reload_events" in tables
 
     def test_seed_default_wallets(self, conn):
         seed_default_wallets(conn)
-        row = conn.execute(
+        machi = conn.execute(
             "SELECT label, address FROM hyperliquid_wallets WHERE label = 'machibro'"
         ).fetchone()
-        assert row is not None
-        assert "0x020c" in row[1]
+        james = conn.execute(
+            "SELECT label, address FROM hyperliquid_wallets WHERE label = 'james_wynn'"
+        ).fetchone()
+        assert machi is not None
+        assert "0x020c" in machi[1]
+        assert james == ("james_wynn", "0x5078c2fbea2b2ad61bc840bc023e35fce56bedb6")
+
+    def test_seed_default_wallets_honours_env_wallets(self, conn, monkeypatch):
+        monkeypatch.setenv(
+            "TRADER_KOO_HL_TRACKED_WALLETS",
+            "james_wynn=0x1111111111111111111111111111111111111111",
+        )
+        seed_default_wallets(conn)
+        row = conn.execute(
+            "SELECT label, address FROM hyperliquid_wallets WHERE label = 'james_wynn'"
+        ).fetchone()
+        assert row == ("james_wynn", "0x1111111111111111111111111111111111111111")
+
+
+class TestWalletConfig:
+    def test_env_wallet_json_merges_defaults(self, monkeypatch):
+        monkeypatch.setenv(
+            "TRADER_KOO_HL_TRACKED_WALLETS",
+            json.dumps({"james_wynn": "0x1111111111111111111111111111111111111111"}),
+        )
+        wallets = get_tracked_wallets()
+        assert wallets["machibro"].startswith("0x020c")
+        assert wallets["james_wynn"] == "0x1111111111111111111111111111111111111111"
+
+    def test_env_wallet_invalid_entries_are_ignored(self, monkeypatch):
+        monkeypatch.setenv(
+            "TRADER_KOO_HL_TRACKED_WALLETS",
+            "bad=not-an-address,good=0x2222222222222222222222222222222222222222",
+        )
+        wallets = get_tracked_wallets()
+        assert "bad" not in wallets
+        assert wallets["good"] == "0x2222222222222222222222222222222222222222"
 
 
 class TestCounterSignals:
@@ -180,10 +219,6 @@ def _make_multi_snapshot(position_count: int, **kwargs: Any) -> WalletSnapshot:
         timestamp="2026-04-07T00:00:00Z",
     )
 
-
-from typing import Any
-
-
 class TestCounterSignalOverhaul:
     """Tests for v2 counter-trade signal enhancements."""
 
@@ -285,8 +320,6 @@ class TestCounterSignalOverhaul:
 
     def test_position_age_with_conn(self, conn):
         """With snapshot history, position age should add to score."""
-        import datetime as dt
-
         # Seed 5 snapshots over 4 days showing ETH long
         for i in range(5):
             ts = (dt.datetime(2026, 4, 3, tzinfo=dt.timezone.utc) + dt.timedelta(hours=i * 24)).isoformat()
@@ -344,3 +377,83 @@ class TestDiffPartialLiquidation:
         changes = _diff_positions(prev, current)
         assert len(changes) == 1
         assert changes[0].change_type == "partial_close"
+
+
+class TestReloadAndCrowdContext:
+    def test_reload_event_persists_and_boosts_signals(self, conn):
+        conn.execute(
+            """
+            INSERT INTO hyperliquid_snapshots
+                (wallet_label, wallet_address, account_value, total_margin_used,
+                 margin_ratio, positions_json, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("machibro", "0x020c", 50.0, 0.0, 0.0, "[]", "2026-04-07T00:00:00+00:00"),
+        )
+        conn.commit()
+
+        snapshot = WalletSnapshot(
+            wallet_label="machibro",
+            wallet_address="0x020c",
+            account_value=250000.0,
+            total_margin_used=120000.0,
+            margin_ratio=0.48,
+            positions=[_make_position(coin="ETH", notional=30_000_000.0)],
+            timestamp="2026-04-07T04:00:00+00:00",
+        )
+
+        save_snapshot(conn, snapshot)
+        _check_reload(conn, snapshot, "machibro")
+
+        row = conn.execute(
+            "SELECT wallet_label, position_count FROM hyperliquid_reload_events ORDER BY detected_ts DESC LIMIT 1"
+        ).fetchone()
+        assert row == ("machibro", 1)
+
+        recent = _recent_reload_context(conn, "machibro", snapshot.timestamp)
+        assert recent is not None
+        assert recent["score_boost"] == 3
+
+        signals = generate_counter_signals(snapshot, conn=conn)
+        assert any("post-reload" in reason for reason in signals[0]["reasons"])
+        assert signals[0]["wallet_context"]["recent_reload"] is not None
+
+    def test_crowded_longs_boost_counter_short(self, conn):
+        from trader_koo.crypto.derivatives import ensure_derivatives_schema
+
+        ensure_derivatives_schema(conn)
+        now_ts = "2026-04-07T08:00:00+00:00"
+        conn.execute(
+            """
+            INSERT INTO crypto_funding_rates
+                (symbol, funding_rate, funding_time, mark_price, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("ETH-USD", 0.0006, now_ts, 2100.0, now_ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO crypto_long_short_ratio
+                (symbol, long_account, short_account, long_short_ratio, timestamp, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("ETH-USD", 0.71, 0.29, 2.45, now_ts, now_ts),
+        )
+        conn.commit()
+
+        snapshot = WalletSnapshot(
+            wallet_label="machibro",
+            wallet_address="0x020c",
+            account_value=500000.0,
+            total_margin_used=400000.0,
+            margin_ratio=0.8,
+            positions=[_make_position(coin="ETH", side="long", notional=30_000_000.0)],
+            timestamp=now_ts,
+        )
+
+        signals = generate_counter_signals(snapshot, conn=conn)
+        signal = signals[0]
+        assert signal["market_context"] is not None
+        assert signal["market_context"]["aligns_with_counter"] is True
+        assert signal["market_context"]["score_boost"] == 2
+        assert any("funding" in reason.lower() or "binance top traders" in reason.lower() for reason in signal["reasons"])

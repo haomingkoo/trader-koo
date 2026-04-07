@@ -455,9 +455,33 @@ def _fetch_counter_trade_signals(
     """Fetch recent active counter-trade signals from Hyperliquid tracker."""
     signals: list[dict[str, Any]] = []
     try:
+        columns = {
+            str(row["name"] if isinstance(row, sqlite3.Row) else row[1])
+            for row in conn.execute("PRAGMA table_info(hyperliquid_counter_signals)")
+        }
+        if not columns:
+            return []
+
+        direction_expr = (
+            "counter_side AS direction"
+            if "counter_side" in columns
+            else "direction"
+            if "direction" in columns
+            else "'unknown' AS direction"
+        )
+        entry_expr = (
+            "entry_price"
+            if "entry_price" in columns
+            else "NULL AS entry_price"
+        )
+        wallet_expr = (
+            "wallet_label"
+            if "wallet_label" in columns
+            else "'' AS wallet_label"
+        )
         rows = conn.execute(
-            """
-            SELECT coin, direction, entry_price, signal_ts, wallet_label
+            f"""
+            SELECT coin, {direction_expr}, {entry_expr}, signal_ts, {wallet_expr}
             FROM hyperliquid_counter_signals
             ORDER BY signal_ts DESC
             LIMIT ?
@@ -480,7 +504,7 @@ def _fetch_counter_trade_signals(
             signals.append({
                 "coin": str(row["coin"]),
                 "direction": str(row["direction"]),
-                "entry_price": float(row["entry_price"] or 0),
+                "entry_price": float(row["entry_price"]) if row["entry_price"] is not None else None,
                 "wallet": str(row["wallet_label"] or ""),
             })
     except Exception as exc:
@@ -680,10 +704,12 @@ def generate_morning_summary(
         lines.append("\u2694\ufe0f *Active Counter-Trade Signals*")
         for sig in counter_signals:
             direction_icon = "\U0001f7e2" if sig["direction"] == "long" else "\U0001f534"
-            lines.append(
-                f"  {direction_icon} {sig['coin']} {sig['direction'].upper()}"
-                f" @ ${sig['entry_price']:,.2f}"
-            )
+            line = f"  {direction_icon} {sig['coin']} {sig['direction'].upper()}"
+            if sig.get("entry_price") is not None:
+                line += f" @ ${sig['entry_price']:,.2f}"
+            if sig.get("wallet"):
+                line += f" ({sig['wallet']})"
+            lines.append(line)
         lines.append("")
 
     # Alerts watching

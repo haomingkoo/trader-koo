@@ -21,6 +21,8 @@ from pathlib import Path
 
 import requests
 
+from trader_koo.hyperliquid.wallets import get_tracked_wallets
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 LOG = logging.getLogger(__name__)
 
@@ -28,10 +30,6 @@ DEFAULT_DB_PATH = Path(os.getenv(
     "TRADER_KOO_DB_PATH",
     str(Path(__file__).resolve().parents[2] / "data" / "trader_koo.db"),
 ))
-
-TRACKED_WALLETS = {
-    "machibro": "0x020ca66c30bec2c4fe3861a94e4db4a498a35872",
-}
 
 API_URL = "https://api.hyperliquid.xyz/info"
 FILLS_PER_PAGE = 2000
@@ -291,9 +289,10 @@ def main():
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="Database path")
     args = parser.parse_args()
 
-    address = TRACKED_WALLETS.get(args.wallet)
+    tracked_wallets = get_tracked_wallets()
+    address = tracked_wallets.get(args.wallet)
     if not address:
-        LOG.error("Unknown wallet: %s. Known: %s", args.wallet, list(TRACKED_WALLETS.keys()))
+        LOG.error("Unknown wallet: %s. Known: %s", args.wallet, list(tracked_wallets.keys()))
         return
 
     conn = sqlite3.connect(args.db)

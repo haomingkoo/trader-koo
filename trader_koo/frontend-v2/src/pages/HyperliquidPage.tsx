@@ -21,8 +21,28 @@ interface Position {
   liquidation_price: number | null;
 }
 
+interface ReloadContext {
+  detected_ts: string;
+  hours_since: number;
+  account_value: number;
+  position_count: number;
+  score_boost: number;
+}
+
+interface MarketContext {
+  symbol: string;
+  funding_rate_pct: number | null;
+  long_short_ratio: number | null;
+  long_pct: number | null;
+  short_pct: number | null;
+  crowd_side: string;
+  aligns_with_counter: boolean;
+  score_boost: number;
+  summary: string;
+}
+
 interface CounterSignal {
-  wallet: string;
+  wallet_label: string;
   coin: string;
   counter_side: string;
   their_side: string;
@@ -30,7 +50,14 @@ interface CounterSignal {
   their_leverage: number;
   their_notional_usd: number;
   confidence: number;
+  score: number;
+  action: string;
+  reasons: string[];
   reasoning: string;
+  wallet_context: {
+    recent_reload: ReloadContext | null;
+  };
+  market_context: MarketContext | null;
   timestamp: string;
 }
 
@@ -39,13 +66,28 @@ interface WalletLive {
   wallet: {
     label: string;
     address: string;
+    track_mode: string;
     account_value: number;
     total_margin_used: number;
     margin_ratio: number;
+    recent_reload: ReloadContext | null;
     timestamp: string;
   };
   positions: Position[];
   counter_signals: CounterSignal[];
+}
+
+interface TrackedWallet {
+  label: string;
+  address: string;
+  track_mode: string;
+  active: boolean;
+  notes: string | null;
+}
+
+interface WalletListResponse {
+  ok: boolean;
+  wallets: TrackedWallet[];
 }
 
 interface WalletHistory {
@@ -73,6 +115,14 @@ function useWalletLive(label: string) {
     queryKey: ["hl-live", label],
     queryFn: () => apiFetch<WalletLive>(`/api/hyperliquid/live/${label}`),
     refetchInterval: 60_000,
+  });
+}
+
+function useTrackedWallets() {
+  return useQuery({
+    queryKey: ["hl-wallets"],
+    queryFn: () => apiFetch<WalletListResponse>("/api/hyperliquid/wallets"),
+    staleTime: 300_000,
   });
 }
 
@@ -109,6 +159,7 @@ function pnlColor(n: number): string {
 function AccountHero({ wallet }: { wallet: WalletLive["wallet"] }) {
   const marginPct = (wallet.margin_ratio * 100).toFixed(1);
   const isDanger = wallet.margin_ratio > 0.9;
+  const recentReload = wallet.recent_reload;
 
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5">
@@ -119,10 +170,23 @@ function AccountHero({ wallet }: { wallet: WalletLive["wallet"] }) {
             {wallet.address.slice(0, 10)}...{wallet.address.slice(-6)}
           </p>
         </div>
-        <Badge variant={isDanger ? "red" : "default"}>
-          {marginPct}% margin used
-        </Badge>
+        <div className="flex items-center gap-2">
+          {recentReload ? (
+            <Badge variant="amber">
+              Reload {recentReload.hours_since.toFixed(0)}h ago
+            </Badge>
+          ) : null}
+          <Badge variant={isDanger ? "red" : "default"}>
+            {marginPct}% margin used
+          </Badge>
+        </div>
       </div>
+      {recentReload ? (
+        <div className="mt-3 rounded-lg border border-[var(--amber)]/30 bg-[rgba(248,194,78,0.08)] px-3 py-2 text-[11px] text-[var(--amber)]">
+          Post-reload window active: wallet came back with {fmtUsd(recentReload.account_value)} and {recentReload.position_count} position{recentReload.position_count === 1 ? "" : "s"}.
+          Signals get a temporary +{recentReload.score_boost} boost while that behavior window is fresh.
+        </div>
+      ) : null}
       <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
         <div>
           <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Account Value</p>
@@ -222,8 +286,9 @@ function CounterSignals({ signals }: { signals: CounterSignal[] }) {
                 <Badge variant={s.counter_side === "long" ? "green" : "red"}>
                   {s.counter_side.toUpperCase()} {s.coin}
                 </Badge>
+                <Badge variant="default">{s.action}</Badge>
                 <span className="text-[10px] text-[var(--muted)]">
-                  vs their {s.their_side} ({s.their_leverage}x)
+                  vs their {s.their_side} ({s.their_leverage}x), score {s.score}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -236,6 +301,22 @@ function CounterSignals({ signals }: { signals: CounterSignal[] }) {
               </div>
             </div>
             <p className="mt-1.5 text-[10px] text-[var(--muted)]">{s.reasoning}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {s.wallet_context?.recent_reload ? (
+                <span className="rounded-full border border-[var(--amber)]/30 bg-[rgba(248,194,78,0.10)] px-2 py-0.5 text-[10px] text-[var(--amber)]">
+                  Post-reload +{s.wallet_context.recent_reload.score_boost}
+                </span>
+              ) : null}
+              {s.market_context?.score_boost ? (
+                <span className="rounded-full border border-[var(--green)]/30 bg-[rgba(56,211,159,0.10)] px-2 py-0.5 text-[10px] text-[var(--green)]">
+                  Crowd +{s.market_context.score_boost}: {s.market_context.summary}
+                </span>
+              ) : s.market_context?.summary ? (
+                <span className="rounded-full border border-[var(--line)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                  {s.market_context.summary}
+                </span>
+              ) : null}
+            </div>
           </div>
         ))}
       </div>
@@ -307,8 +388,18 @@ export default function HyperliquidPage() {
     document.title = "Hyperliquid Tracker \u2014 Trader Koo";
   }, []);
 
-  const [wallet] = useState("machibro");
+  const [wallet, setWallet] = useState("machibro");
   const [historyDays, setHistoryDays] = useState(7);
+
+  const { data: walletList } = useTrackedWallets();
+  const activeWallets = (walletList?.wallets || []).filter((w) => w.active);
+
+  useEffect(() => {
+    if (!activeWallets.length) return;
+    if (!activeWallets.some((w) => w.label === wallet)) {
+      setWallet(activeWallets[0].label);
+    }
+  }, [activeWallets, wallet]);
 
   const { data: live, isLoading: liveLoading } = useWalletLive(wallet);
   const { data: history, isLoading: historyLoading } = useWalletHistory(wallet, historyDays);
@@ -326,10 +417,28 @@ export default function HyperliquidPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold text-[var(--text)]">Hyperliquid Whale Tracker</h1>
-        <p className="text-[10px] text-[var(--muted)]">
-          Counter-trade signals based on tracked wallet positions
-        </p>
+        <div>
+          <h1 className="text-lg font-bold text-[var(--text)]">Hyperliquid Whale Tracker</h1>
+          <p className="text-[10px] text-[var(--muted)]">
+            Counter-trade signals from tracked wallets, reload behavior, and free Binance crowd context
+          </p>
+        </div>
+        {activeWallets.length > 0 ? (
+          <label className="flex items-center gap-2 text-[10px] text-[var(--muted)]">
+            Wallet
+            <select
+              value={wallet}
+              onChange={(e) => setWallet(e.target.value)}
+              className="rounded-md border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-xs text-[var(--text)]"
+            >
+              {activeWallets.map((item) => (
+                <option key={item.label} value={item.label}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
 
       <AccountHero wallet={live.wallet} />

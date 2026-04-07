@@ -13,7 +13,7 @@ The entire system — API server, WebSocket clients, background scheduler, and M
 ```
 Railway Service (single process)
 ├── FastAPI (uvicorn, port 8080)
-│   ├── 11 routers (82 endpoints)
+│   ├── API routers + admin modules
 │   ├── Static file serving (React build → /)
 │   └── WebSocket endpoints (/ws/crypto, /ws/equities)
 │
@@ -28,7 +28,7 @@ Railway Service (single process)
 │   └── Saturday 00:30 UTC: YOLO full seed (daily + weekly timeframes)
 │
 └── /data/ (Railway persistent volume)
-    ├── trader_koo.db    (SQLite, 23 tables)
+    ├── trader_koo.db    (SQLite app data)
     ├── models/          (LightGBM .pkl files)
     ├── reports/         (daily JSON + MD archives)
     ├── logs/            (structured log files)
@@ -71,7 +71,7 @@ The YOLOv8 model (`foduucom/stockmarket-pattern-detection-yolov8`) is downloaded
 
 ---
 
-## Backend routers (11)
+## Backend routers
 
 All routes live under `trader_koo/backend/routers/`. The app factory in `main.py` (~600 lines) mounts them along with middleware and static file serving.
 
@@ -84,6 +84,7 @@ All routes live under `trader_koo/backend/routers/`. The app factory in `main.py
 | `paper_trades.py` | `/api/paper-trades` | Trade list, summary, detail, equity curve |
 | `email.py` | `/api/email` | Subscribe, unsubscribe, confirm, chart preview |
 | `crypto.py` | `/api/crypto` | Prices, history, indicators, structure analysis, correlation, open interest |
+| `hyperliquid/routes.py` | `/api/hyperliquid` | Whale tracking, configurable wallets, reload events, counter-trade signals |
 | `streaming.py` | `/api/streaming` | Equity tick prices, subscription management (Finnhub WS bridge) |
 | `data_sync.py` | `/api/data-sync` | Polymarket event ingestion |
 | `usage.py` | `/api/usage` | Session tracking, setup feedback collection |
@@ -163,7 +164,7 @@ Each run writes to `ingest_runs` (overall status) and `ingest_ticker_status` (pe
 
 ---
 
-## Database schema (23 tables)
+## Database schema
 
 ### Core market data
 
@@ -194,6 +195,10 @@ Each run writes to `ingest_runs` (overall status) and `ingest_ticker_status` (pe
 | `paper_trades` | Full trade lifecycle (entry, exit, PnL, R-multiple, sizing rationale) |
 | `paper_portfolio_snapshots` | Daily mark-to-market snapshots for equity curve |
 | `bot_versions` | Version tracking for the trading bot decision pipeline |
+| `hyperliquid_wallets` | Tracked-wallet registry for the whale tracker |
+| `hyperliquid_snapshots` | Historical Hyperliquid account snapshots for open positions |
+| `hyperliquid_counter_signals` | Persisted Hyperliquid counter-trade signals |
+| `hyperliquid_reload_events` | Wallet reload detections used for post-wipe scoring boosts |
 
 ### User interaction
 
