@@ -150,6 +150,15 @@ def _check_regime_alignment(
             return True, f"Long in high-vol but A-tier {score:.0f} — allowed"
         return False, f"Long blocked in high-vol VIX regime ({vix:.1f}). Need A-tier ≥80."
 
+    # Longs in non-bull regime need A-tier (data: B-tier longs 12.5% WR)
+    if direction == "long" and not is_bull:
+        if tier == "A" and score >= 75:
+            return True, f"Long in non-bull regime but A-tier {score:.0f} — allowed"
+        return False, (
+            f"Long blocked in non-bull regime ({regime}). "
+            f"Tier {tier} score {score:.0f} insufficient. Need A-tier ≥75."
+        )
+
     if score >= 70:
         return True, f"No strong regime signal, score {score:.0f} adequate — allowing"
 
@@ -236,6 +245,55 @@ def _check_caution_flags(
     return True, f"Approved with flags: {len(risk_flags)} — acceptable"
 
 
+def _check_family_edge(
+    conn: sqlite3.Connection,
+    row: dict[str, Any],
+    evaluation: dict[str, Any],
+) -> tuple[bool, str]:
+    """Block families with proven negative edge from recent closed trades.
+
+    If a (family, direction) pair has 0% win rate over 5+ closed trades,
+    reject. If win rate is under 25% over 4+ trades, require A-tier.
+    """
+    family = str(row.get("setup_family") or "").lower().replace(" ", "_")
+    direction = str(evaluation.get("direction") or "").lower()
+    if not family or not direction:
+        return True, "No family/direction — skipping family edge check"
+
+    rows = conn.execute(
+        "SELECT pnl_pct FROM paper_trades "
+        "WHERE status != 'open' AND pnl_pct IS NOT NULL "
+        "AND LOWER(REPLACE(setup_family, ' ', '_')) = ? AND direction = ? "
+        "ORDER BY exit_date DESC LIMIT 10",
+        (family, direction),
+    ).fetchall()
+
+    if len(rows) < 4:
+        return True, f"Family '{family}' {direction}: only {len(rows)} trades — insufficient for edge check"
+
+    wins = sum(1 for r in rows if float(r[0]) > 0)
+    win_rate = wins / len(rows) * 100
+
+    if win_rate == 0 and len(rows) >= 5:
+        return False, (
+            f"Family '{family}' {direction} has 0% win rate over {len(rows)} trades. "
+            "Blocking until edge recovers."
+        )
+
+    if win_rate < 25:
+        tier = str(row.get("setup_tier") or "").upper()
+        if tier != "A":
+            return False, (
+                f"Family '{family}' {direction} win rate {win_rate:.0f}% "
+                f"({wins}/{len(rows)}). Need A-tier to override weak edge."
+            )
+        return True, (
+            f"Family '{family}' {direction} win rate {win_rate:.0f}% — weak but A-tier override"
+        )
+
+    return True, f"Family '{family}' {direction} win rate {win_rate:.0f}% ({wins}/{len(rows)}) — OK"
+
+
 def _check_rolling_expectancy(
     conn: sqlite3.Connection,
 ) -> tuple[bool, str]:
@@ -295,10 +353,11 @@ def critic_review(
         ("volatility_environment", lambda: _check_volatility_environment(market_ctx)),
         ("caution_flags", lambda: _check_caution_flags(evaluation)),
         ("rolling_expectancy", lambda: _check_rolling_expectancy(conn)),
+        ("family_edge", lambda: _check_family_edge(conn, row, evaluation)),
     ]
 
     # Checks that depend on external data availability — fail open on error
-    data_dependent_checks = {"regime_alignment", "volatility_environment", "rolling_expectancy"}
+    data_dependent_checks = {"regime_alignment", "volatility_environment", "rolling_expectancy", "family_edge"}
 
     for name, fn in name_fn_pairs:
         try:
