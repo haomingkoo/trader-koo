@@ -770,6 +770,71 @@ class TestPaperTradeSummary:
         assert result["vix_bucket_edges"]
 
 
+# ── Regime Alignment Policy ────────────────────────────────────
+
+class TestRegimeAlignmentPolicy:
+    """Regression tests for the family-specific non-bull long gate.
+
+    These pin the exact policy so it doesn't drift:
+    - Continuation longs in non-bull: A-tier only
+    - Reversal longs in non-bull: B-tier allowed at score >= 75
+    - HMM bullish override: A-tier >= 75 still passes counter-trend
+    """
+
+    def _check(self, *, direction: str, family: str, tier: str, score: float,
+               regime: str = "bear_normal", hmm: str = "") -> tuple[bool, str]:
+        from trader_koo.paper_trade.critic import _check_regime_alignment
+        row = {"setup_tier": tier, "score": score, "setup_family": family}
+        evaluation = {"direction": direction}
+        market_ctx = {
+            "regime_state_at_entry": regime,
+            "vix_at_entry": 20.0,
+            "directional_regime_at_entry": hmm or "",
+        }
+        return _check_regime_alignment(row, evaluation, market_ctx)
+
+    def test_continuation_long_non_bull_b_tier_blocked(self):
+        passed, reason = self._check(
+            direction="long", family="bullish_continuation",
+            tier="B", score=80.0,
+        )
+        assert not passed
+        assert "continuation" in reason.lower() or "non-bull" in reason.lower()
+
+    def test_reversal_long_non_bull_b_tier_high_score_passes(self):
+        passed, reason = self._check(
+            direction="long", family="bullish_reversal",
+            tier="B", score=77.0,
+        )
+        assert passed
+        assert "reversal" in reason.lower()
+
+    def test_reversal_long_non_bull_b_tier_low_score_blocked(self):
+        passed, reason = self._check(
+            direction="long", family="bullish_reversal",
+            tier="B", score=72.0,
+        )
+        assert not passed
+
+    def test_hmm_bullish_override_a_tier_passes(self):
+        """A-tier long counter-trend to VIX regime but aligned with HMM bullish."""
+        passed, reason = self._check(
+            direction="long", family="bullish_continuation",
+            tier="A", score=80.0,
+            regime="bear_normal", hmm="bullish",
+        )
+        assert passed
+        assert "hmm" in reason.lower() or "aligned" in reason.lower()
+
+    def test_shorts_unaffected_in_non_bull(self):
+        """Shorts should pass in non-bull regime regardless of family."""
+        passed, _ = self._check(
+            direction="short", family="bearish_continuation",
+            tier="B", score=70.0,
+        )
+        assert passed
+
+
 # ── Trailing Stop (pure function) ──────────────────────────────
 
 def _default_trail_config(**overrides: float | bool) -> PaperTradeConfig:
