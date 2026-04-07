@@ -505,6 +505,8 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             error_class="empty_response",
             details="LLM returned empty or unparseable response",
         )
+        _set_runtime_disable()
+        LOG.warning("LLM returned empty response; cooldown activated, using fallback")
         fallback = generate_fallback_narrative(context)
         return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
 
@@ -527,8 +529,9 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             error_class="validation_error",
             details=f"Validation errors: {'; '.join(validation_result.errors)}",
         )
+        _set_runtime_disable()
         LOG.warning(
-            "LLM output validation failed; using fallback narrative. Errors: %s",
+            "LLM output validation failed; cooldown activated, using fallback. Errors: %s",
             "; ".join(validation_result.errors)
         )
         fallback = generate_fallback_narrative(context)
