@@ -49,7 +49,11 @@ export default function ReportPage() {
     setup_evaluation: {},
   };
   const reportDetail = typeof data.detail === "string" && data.detail.trim().length > 0 ? data.detail.trim() : null;
-  const reportIncomplete = Boolean(reportDetail);
+  const reportDetailLevel =
+    data.detail_level === "info" || data.detail_level === "warning" || data.detail_level === "error"
+      ? data.detail_level
+      : "warning";
+  const reportBlocksMainReport = Boolean(data.detail_blocks_main_report);
   const risk = latest.risk_filters ?? {
     trade_mode: "normal",
     hard_blocks: 0,
@@ -57,6 +61,12 @@ export default function ReportPage() {
     conditions: [],
   };
   const setupRows = signals.setup_quality_top ?? [];
+  const detailTone =
+    reportDetailLevel === "error"
+      ? "border-[var(--red)]/30 bg-[var(--red)]/8 text-[var(--red)]"
+      : reportDetailLevel === "info"
+        ? "border-[var(--accent)]/30 bg-[var(--accent)]/8 text-[var(--accent)]"
+        : "border-[var(--amber)]/30 bg-[var(--amber)]/8 text-[var(--amber)]";
 
   const debateMap = new Map<
     string,
@@ -77,10 +87,12 @@ export default function ReportPage() {
       {reportDetail && (
         <>
           <PipelineStatusInline />
-          <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/8 px-4 py-3 text-sm text-[var(--amber)]">
-            <strong>Report incomplete:</strong> {reportDetail}
+          <div className={`rounded-lg border px-4 py-3 text-sm ${detailTone}`}>
+            <strong>{reportBlocksMainReport ? "Report unavailable:" : "Report update:"}</strong> {reportDetail}
             <div className="mt-2 text-xs text-[var(--muted)]">
-              We are hiding the main report until the nightly output is fully populated.
+              {reportBlocksMainReport
+                ? "We are hiding the main report until the nightly output is fully populated."
+                : "Showing the latest completed report snapshot below while the nightly refresh catches up."}
             </div>
           </div>
         </>
@@ -93,7 +105,7 @@ export default function ReportPage() {
         priceDate={latest.latest_data?.price_date ?? null}
       />
 
-      {!reportIncomplete && (
+      {!reportBlocksMainReport && (
         <>
           <RiskFiltersPanel
             tradeMode={String(risk.trade_mode ?? "normal")}

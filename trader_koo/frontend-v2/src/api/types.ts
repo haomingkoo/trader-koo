@@ -324,6 +324,9 @@ export interface DailyReportPayload {
     modified_ts: string;
   }>;
   detail: string | null;
+  detail_code?: string | null;
+  detail_level?: "info" | "warning" | "error" | null;
+  detail_blocks_main_report?: boolean;
   pipeline?: {
     active: boolean | null;
     stage: string | null;

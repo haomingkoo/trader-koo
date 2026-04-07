@@ -368,15 +368,23 @@ def daily_report_response(
                     signals["regime_context"] = merged
     pipeline = pipeline_status_fn(log_lines=120)
     detail: str | None = None
+    detail_code: str | None = None
+    detail_level: str | None = None
+    detail_blocks_main_report = False
     log_hint = "/api/admin/logs?name=cron" if include_admin_log_hints else "server logs"
     if latest_payload is None:
         detail = "No report file found yet."
+        detail_code = "report_missing"
+        detail_level = "error"
+        detail_blocks_main_report = True
     elif pipeline.get("active"):
         detail = (
             "daily_update is still running"
             f" (stage={pipeline.get('stage', 'unknown')}); "
             "generated_ts will advance after report stage completes."
         )
+        detail_code = "pipeline_running"
+        detail_level = "info"
     else:
         latest_run = pipeline.get("latest_run") or {}
         run_finished_ts = parse_iso_utc(latest_run.get("finished_ts")) if latest_run else None
@@ -387,6 +395,8 @@ def daily_report_response(
                     "Latest ingest run finished, but latest report JSON has no generated_ts. "
                     f"Check {log_hint} for [REPORT] errors."
                 )
+                detail_code = "report_missing_generated_ts"
+                detail_level = "warning"
             elif generated_ts < (run_finished_ts - dt.timedelta(seconds=60)):
                 detail = (
                     "Latest ingest run finished at "
@@ -395,6 +405,8 @@ def daily_report_response(
                     f"{generated_ts.replace(microsecond=0).isoformat()}. "
                     f"Report output is stale; check {log_hint} for [REPORT] errors."
                 )
+                detail_code = "report_stale"
+                detail_level = "warning"
         email_block = latest_payload.get("email", {}) if isinstance(latest_payload, dict) else {}
         if detail is None and isinstance(email_block, dict):
             attempted = bool(email_block.get("attempted"))
@@ -402,6 +414,8 @@ def daily_report_response(
             if attempted and not sent:
                 error_msg = str(email_block.get("error") or "unknown SMTP error")
                 detail = f"Report generated, but email delivery failed: {error_msg}"
+                detail_code = "email_delivery_failed"
+                detail_level = "warning"
     latest_md_path = report_dir / "daily_report_latest.md"
     md_text = ""
     if include_markdown and latest_md_path.exists():
@@ -421,6 +435,9 @@ def daily_report_response(
         "latest": latest_payload or {},
         "history": history,
         "detail": detail,
+        "detail_code": detail_code,
+        "detail_level": detail_level,
+        "detail_blocks_main_report": detail_blocks_main_report,
         "pipeline": {
             "active": pipeline.get("active"),
             "stage": pipeline.get("stage"),

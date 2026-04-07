@@ -108,6 +108,59 @@ class TestDailyReportEndpoint:
         assert response.status_code == 200
         assert "detail" in data
         assert "Report output is stale" in str(data["detail"])
+        assert data["detail_code"] == "report_stale"
+        assert data["detail_level"] == "warning"
+        assert data["detail_blocks_main_report"] is False
+
+    @patch(
+        "trader_koo.backend.services.report_loader.latest_daily_report_json",
+        return_value=(
+            None,
+            {
+                "generated_ts": "2026-03-17T22:32:19Z",
+                "counts": {"tracked_tickers": 510, "price_rows": 1028349},
+                "latest_data": {"price_date": "2026-03-17"},
+                "latest_ingest_run": {"status": "ok"},
+                "signals": {"setup_quality_top": [], "setup_evaluation": {}, "tonight_key_changes": [], "regime_context": None},
+                "risk_filters": {"trade_mode": "normal", "hard_blocks": 0, "soft_flags": 0, "conditions": []},
+                "yolo": {"summary": {}, "timeframes": []},
+                "email": {"attempted": True, "sent": False, "error": "smtp timeout"},
+            },
+        ),
+    )
+    @patch(
+        "trader_koo.backend.services.pipeline.pipeline_status_snapshot",
+        return_value={
+            "active": False,
+            "stage": "idle",
+            "latest_run": {
+                "finished_ts": "2026-03-17T22:12:02Z",
+                "status": "ok",
+            },
+            "run_log_path": "/tmp/log",
+        },
+    )
+    @patch(
+        "trader_koo.backend.routers.report.pipeline_status_snapshot",
+        return_value={
+            "active": False,
+            "stage": "idle",
+            "latest_run": {
+                "finished_ts": "2026-03-17T22:12:02Z",
+                "status": "ok",
+            },
+            "run_log_path": "/tmp/log",
+        },
+    )
+    def test_daily_report_marks_email_failure_as_non_blocking(self, _mock_pipe_r, _mock_pipe_s, _mock_latest, test_app):
+        response = test_app.get("/api/daily-report")
+        data = response.json()
+
+        assert response.status_code == 200
+        assert "email delivery failed" in str(data["detail"]).lower()
+        assert data["detail_code"] == "email_delivery_failed"
+        assert data["detail_level"] == "warning"
+        assert data["detail_blocks_main_report"] is False
 
 
 class TestMarketSummaryEndpoint:
