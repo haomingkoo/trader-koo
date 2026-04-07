@@ -319,13 +319,13 @@ class TestDiffPartialLiquidation:
     """Tests for partial liquidation detection in _diff_positions."""
 
     def test_partial_liq_underwater_near_liq(self):
-        """Position reduced while underwater and near liq → partial_liq."""
+        """Position reduced while underwater and near critical liq (<2%) → partial_liq."""
         prev = {
             "ETH": {"side": "long", "size": 5000.0},
         }
         current = [_make_position(
             coin="ETH", side="long", size=2000.0,
-            upnl=-100000.0, liq_price=1960.0, mark_price=2000.0,
+            upnl=-100000.0, liq_price=1985.0, mark_price=2000.0,  # liq_dist = 0.75%
         )]
         changes = _diff_positions(prev, current)
         assert len(changes) == 1

@@ -704,6 +704,12 @@ def mark_to_market(
                 days_held = int(td_row[0]) if td_row and td_row[0] else 0
                 if days_held >= config.expiry_days:
                     expired = True
+                elif days_held == 0:
+                    # Fallback: no SPY data → use calendar days
+                    entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")
+                    today_dt = dt.datetime.strptime(today, "%Y-%m-%d")
+                    if (today_dt - entry_dt).days >= config.expiry_days:
+                        expired = True
             else:
                 # Legacy calendar-day fallback
                 entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")

@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import sqlite3
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -260,14 +261,20 @@ def _estimate_position_age_hours(
         return None
 
 
-# Minimum notional to promote a signal to COUNTER.
+# Minimum notional to promote a signal to COUNTER (configurable via env).
 # Study (595K fills, Jul 2025–Apr 2026): he wins 71-87% on <$15M positions.
 # Only >$25M positions show counter-trade edge (33% WR, -$34M total PnL).
-_MIN_COUNTER_NOTIONAL_USD = 25_000_000
+_MIN_COUNTER_NOTIONAL_USD = float(
+    os.getenv("TRADER_KOO_HL_MIN_COUNTER_NOTIONAL_USD", "25000000")
+)
 
-# Coins where he consistently wins — do NOT counter-trade these.
+# Coins where he consistently wins — do NOT counter-trade these (configurable).
 # BTC: 94.7% WR over 19 cycles (+$489K). He's skilled at BTC.
-_SKIP_COUNTER_COINS: frozenset[str] = frozenset({"BTC"})
+# Set env var to comma-separated list: "BTC,SOL" or "" to disable.
+_SKIP_COUNTER_COINS: frozenset[str] = frozenset(
+    c.strip() for c in os.getenv("TRADER_KOO_HL_SKIP_COUNTER_COINS", "BTC").split(",")
+    if c.strip()
+)
 
 
 def generate_counter_signals(
@@ -636,7 +643,7 @@ def _diff_positions(
                         liq_dist = (pos.mark_price - pos.liquidation_price) / pos.mark_price * 100 if pos.mark_price > 0 else 100
                     else:
                         liq_dist = (pos.liquidation_price - pos.mark_price) / pos.mark_price * 100 if pos.mark_price > 0 else 100
-                    if liq_dist < 5:
+                    if liq_dist < 2:  # critical zone only — 2-5% is likely voluntary
                         change = "partial_liq"
                 changes.append(PositionChange(
                     coin=pos.coin, change_type=change,
