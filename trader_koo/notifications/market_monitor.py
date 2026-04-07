@@ -497,7 +497,7 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
         crypto_spikes = detect_crypto_spikes(db_path)
         for spike in crypto_spikes:
             sym = spike.get("symbol", "?")
-            direction = "up" if spike.get("change_pct", 0) > 0 else "down"
+            direction = spike.get("direction", "up" if spike.get("price_change_pct", 0) > 0 else "down")
             new_price = spike.get("new_price", 0)
             key = f"crypto:{sym}"
 
@@ -505,8 +505,12 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
                 continue
 
             arrow = "\U0001F4C8" if direction == "up" else "\U0001F4C9"
-            change = spike.get("change_pct", 0)
-            all_lines.append(f"{arrow} {sym}: {change:+.1f}%")
+            price_chg = spike.get("price_change_pct", 0)
+            oi_chg = spike.get("oi_change_pct")
+            parts = [f"{arrow} {sym}: {price_chg:+.1f}%"]
+            if oi_chg is not None and spike.get("oi_spike"):
+                parts.append(f"OI {oi_chg:+.0f}%")
+            all_lines.append(" | ".join(parts))
             _mark_alerted(key, direction, new_price)
     except Exception as exc:
         LOG.error("Crypto spike alerting failed: %s", exc)
