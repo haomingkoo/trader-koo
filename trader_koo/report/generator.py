@@ -103,26 +103,27 @@ def _report_stale_price_guard_error(
     latest_price_date: str | None,
     market_date: str | None,
 ) -> str | None:
-    """Return a blocking stale-price message when report generation should abort."""
-    if not isinstance(latest_run, dict):
-        return None
+    """Return a blocking stale-price message when report generation should abort.
 
-    run_status = str(latest_run.get("status") or "").strip().lower()
-    if run_status != "failed":
-        return None
-
+    Blocks in two cases:
+    1. Ingest explicitly failed AND prices are stale (original behavior)
+    2. Prices are >1 trading day stale regardless of ingest status (new guard)
+       This catches partial ingest failures and weekend/holiday edge cases.
+    """
     if not latest_price_date:
-        return (
-            "Latest ingest run failed and price_daily has no latest price date. "
-            "Aborting report generation to avoid publishing a report with missing price data."
-        )
+        if isinstance(latest_run, dict) and str(latest_run.get("status") or "").strip().lower() == "failed":
+            return (
+                "Latest ingest run failed and price_daily has no latest price date. "
+                "Aborting report generation to avoid publishing a report with missing price data."
+            )
+        return None
 
     try:
         price_date = dt.date.fromisoformat(str(latest_price_date).strip()[:10])
     except ValueError:
         return (
-            "Latest ingest run failed and latest price date is invalid "
-            f"({latest_price_date!r}). Aborting report generation."
+            f"Latest price date is invalid ({latest_price_date!r}). "
+            "Aborting report generation."
         )
 
     try:
@@ -134,15 +135,33 @@ def _report_stale_price_guard_error(
     if trading_days_behind <= 0:
         return None
 
-    started_ts = str(latest_run.get("started_ts") or "").strip() or "unknown"
-    finished_ts = str(latest_run.get("finished_ts") or "").strip() or "unknown"
-    return (
-        "Latest ingest run failed and latest price data is stale "
-        f"(price_date={price_date.isoformat()}, market_date={session_date.isoformat()}, "
-        f"trading_days_behind={trading_days_behind}, started_ts={started_ts}, "
-        f"finished_ts={finished_ts}). Aborting report generation to avoid "
-        "publishing stale prices."
-    )
+    run_status = ""
+    started_ts = "unknown"
+    finished_ts = "unknown"
+    if isinstance(latest_run, dict):
+        run_status = str(latest_run.get("status") or "").strip().lower()
+        started_ts = str(latest_run.get("started_ts") or "").strip() or "unknown"
+        finished_ts = str(latest_run.get("finished_ts") or "").strip() or "unknown"
+
+    # Block if prices are >1 trading day stale (regardless of ingest status)
+    if trading_days_behind > 1:
+        return (
+            f"Price data is {trading_days_behind} trading days stale "
+            f"(price_date={price_date.isoformat()}, market_date={session_date.isoformat()}, "
+            f"ingest_status={run_status or 'unknown'}, started_ts={started_ts}, "
+            f"finished_ts={finished_ts}). Aborting report generation."
+        )
+
+    # Block if exactly 1 day stale AND ingest failed
+    if run_status == "failed":
+        return (
+            "Latest ingest run failed and price data is stale "
+            f"(price_date={price_date.isoformat()}, market_date={session_date.isoformat()}, "
+            f"trading_days_behind={trading_days_behind}, started_ts={started_ts}, "
+            f"finished_ts={finished_ts}). Aborting report generation."
+        )
+
+    return None
 
 
 def _apply_ensemble_adjustment(row: dict[str, Any]) -> None:

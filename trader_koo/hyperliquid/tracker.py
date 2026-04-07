@@ -227,7 +227,7 @@ def _estimate_position_age_hours(
         FROM hyperliquid_snapshots
         WHERE wallet_label = ?
         ORDER BY snapshot_ts DESC
-        LIMIT 100
+        LIMIT 500
         """,
         (wallet_label,),
     ).fetchall()
