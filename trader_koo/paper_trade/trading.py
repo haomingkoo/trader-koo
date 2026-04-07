@@ -88,6 +88,53 @@ def compute_r_multiple(
     return round(pnl_per_share / risk, 2)
 
 
+def compute_trailing_stop(
+    *,
+    direction: str,
+    entry_price: float,
+    original_risk: float,
+    current_hwm: float,
+    current_lwm: float,
+    current_stop: float | None,
+    config: PaperTradeConfig,
+) -> float | None:
+    """Compute the new trailing stop using graduated 4-level logic.
+
+    Levels (for longs — shorts mirror with min/LWM):
+      R >= trail_tight_r  (2.0): HWM - tight_cushion_r * risk  (lock gains)
+      R >= trail_mid_r    (1.5): HWM - mid_cushion_r * risk    (wide cushion)
+      R >= trail_breakeven_r (1.25): entry price                (breakeven)
+      R <  trail_breakeven_r: no change                         (original stop)
+
+    Returns the new stop value, guaranteed to never loosen (only tighten).
+    """
+    if original_risk <= 0 or entry_price <= 0:
+        return current_stop
+
+    if direction == "long":
+        current_r = (current_hwm - entry_price) / original_risk
+        if current_r >= config.trail_tight_r:
+            trail = current_hwm - config.trail_tight_cushion_r * original_risk
+            return max(current_stop or 0, trail)
+        if current_r >= config.trail_mid_r:
+            trail = current_hwm - config.trail_mid_cushion_r * original_risk
+            return max(current_stop or 0, trail)
+        if current_r >= config.trail_breakeven_r:
+            return max(current_stop or 0, entry_price)
+        return current_stop
+    else:  # short
+        current_r = (entry_price - current_lwm) / original_risk
+        if current_r >= config.trail_tight_r:
+            trail = current_lwm + config.trail_tight_cushion_r * original_risk
+            return min(current_stop or entry_price, trail)
+        if current_r >= config.trail_mid_r:
+            trail = current_lwm + config.trail_mid_cushion_r * original_risk
+            return min(current_stop or entry_price, trail)
+        if current_r >= config.trail_breakeven_r:
+            return min(current_stop or entry_price, entry_price)
+        return current_stop
+
+
 def _close_trade(
     conn: sqlite3.Connection,
     trade_id: int,
@@ -647,10 +694,22 @@ def mark_to_market(
 
         expired = False
         try:
-            entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")
-            today_dt = dt.datetime.strptime(today, "%Y-%m-%d")
-            if (today_dt - entry_dt).days >= config.expiry_days:
-                expired = True
+            if config.expiry_use_trading_days:
+                # Count actual trading days using SPY price rows
+                td_row = conn.execute(
+                    "SELECT COUNT(*) FROM price_daily "
+                    "WHERE ticker = 'SPY' AND date > ? AND date <= ?",
+                    (entry_date, today),
+                ).fetchone()
+                days_held = int(td_row[0]) if td_row and td_row[0] else 0
+                if days_held >= config.expiry_days:
+                    expired = True
+            else:
+                # Legacy calendar-day fallback
+                entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")
+                today_dt = dt.datetime.strptime(today, "%Y-%m-%d")
+                if (today_dt - entry_dt).days >= config.expiry_days:
+                    expired = True
         except (ValueError, TypeError):
             pass
 
@@ -706,25 +765,16 @@ def mark_to_market(
             )
             closed += 1
         else:
-            # Trailing stop logic: protect profits on winning trades
-            # Uses original_risk (from ATR at entry), NOT current stop distance,
-            # so trailing stop still works after breakeven/trail updates.
-            new_stop = stop_loss
-            if original_risk > 0 and entry_price > 0:
-                if direction == "long":
-                    current_r = (new_hwm - entry_price) / original_risk
-                    if current_r >= 1.5:
-                        trail_stop = new_hwm - (0.5 * original_risk)
-                        new_stop = max(stop_loss or 0, trail_stop)
-                    elif current_r >= 1.0:
-                        new_stop = max(stop_loss or 0, entry_price)
-                else:  # short
-                    current_r = (entry_price - new_lwm) / original_risk
-                    if current_r >= 1.5:
-                        trail_stop = new_lwm + (0.5 * original_risk)
-                        new_stop = min(stop_loss or entry_price, trail_stop)
-                    elif current_r >= 1.0:
-                        new_stop = min(stop_loss or entry_price, entry_price)
+            # Graduated trailing stop (uses original_risk from ATR at entry)
+            new_stop = compute_trailing_stop(
+                direction=direction,
+                entry_price=entry_price,
+                original_risk=original_risk,
+                current_hwm=new_hwm,
+                current_lwm=new_lwm,
+                current_stop=stop_loss,
+                config=config,
+            )
 
             now = dt.datetime.now(dt.timezone.utc).isoformat()
             conn.execute(

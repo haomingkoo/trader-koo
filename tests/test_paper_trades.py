@@ -6,11 +6,13 @@ import sqlite3
 
 import pytest
 
+from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trades import (
     _compute_pnl,
     _compute_r_multiple,
     _direction_from_row,
     compute_stop_and_target,
+    compute_trailing_stop,
     create_paper_trades_from_report,
     evaluate_setup_for_paper_trade,
     ensure_paper_trade_schema,
@@ -541,9 +543,14 @@ class TestMarkToMarket:
         assert status[0] == "target_hit"
 
     def test_triggers_expiry(self, conn):
-        old_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=15)).strftime("%Y-%m-%d")
+        old_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=20)).strftime("%Y-%m-%d")
         self._insert_open_trade(conn, "AAPL", 100.0, entry_date=old_date)
         _seed_price(conn, "AAPL", 102.0)
+        # Seed 11 trading days of SPY so trading-day expiry triggers (>= 10)
+        base = dt.datetime.strptime(old_date, "%Y-%m-%d")
+        for i in range(1, 15):
+            d = (base + dt.timedelta(days=i)).strftime("%Y-%m-%d")
+            _seed_price(conn, "SPY", 500.0, date=d)
 
         result = mark_to_market(conn)
         conn.commit()
@@ -761,3 +768,227 @@ class TestPaperTradeSummary:
         assert result["family_edges"]
         assert result["regime_edges"]
         assert result["vix_bucket_edges"]
+
+
+# ── Trailing Stop (pure function) ──────────────────────────────
+
+def _default_trail_config(**overrides: float | bool) -> PaperTradeConfig:
+    """Build a minimal PaperTradeConfig with default trailing params."""
+    kwargs: dict = dict(
+        bot_version="test", min_tier="B", min_score=60.0, max_open=5,
+        expiry_days=10, stop_atr_mult=1.5, default_stop_pct=3.0,
+        qualifying_tiers=frozenset({"A", "B"}),
+        qualifying_actionability=frozenset({"higher-probability", "conditional"}),
+        qualifying_directions=frozenset({"long", "short"}),
+        tier_rank={"A": 0, "B": 1}, decision_version="test-v1",
+        debate_caution_agreement=60.0, high_vol_atr_pct=6.0,
+        min_reward_r_multiple=1.5, min_position_pct=2.0, max_position_pct=14.0,
+        tier_a_position_pct=12.0, tier_b_position_pct=8.0, tier_c_position_pct=5.0,
+        caution_position_scale=0.65, high_vol_position_scale=0.75,
+        earnings_position_scale=0.60,
+    )
+    kwargs.update(overrides)
+    return PaperTradeConfig(**kwargs)
+
+
+class TestComputeTrailingStop:
+    """Tests for the graduated 4-level trailing stop pure function."""
+
+    # Entry $100, stop $95, risk=$5, target $110
+    # R thresholds (defaults): breakeven=1.25, mid=1.5, tight=2.0
+
+    def test_no_trail_below_breakeven_r(self):
+        # HWM at $104 → R = 4/5 = 0.8, below breakeven (1.25)
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=104.0, current_lwm=100.0, current_stop=95.0, config=cfg,
+        )
+        assert result == 95.0  # unchanged
+
+    def test_breakeven_at_threshold(self):
+        # HWM at $106.25 → R = 6.25/5 = 1.25, exactly at breakeven
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=106.25, current_lwm=100.0, current_stop=95.0, config=cfg,
+        )
+        assert result == 100.0  # moved to entry (breakeven)
+
+    def test_breakeven_below_threshold_no_change(self):
+        # HWM at $106.20 → R = 6.20/5 = 1.24, just below breakeven
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=106.20, current_lwm=100.0, current_stop=95.0, config=cfg,
+        )
+        assert result == 95.0  # unchanged
+
+    def test_mid_trail_at_1_5r(self):
+        # HWM at $107.50 → R = 7.50/5 = 1.5, mid trail
+        # Trail = HWM - 1.0*risk = 107.50 - 5.0 = 102.50
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=107.50, current_lwm=100.0, current_stop=95.0, config=cfg,
+        )
+        assert result == 102.50
+
+    def test_tight_trail_at_2_0r(self):
+        # HWM at $110 → R = 10/5 = 2.0, tight trail
+        # Trail = HWM - 0.5*risk = 110 - 2.50 = 107.50
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=110.0, current_lwm=100.0, current_stop=95.0, config=cfg,
+        )
+        assert result == 107.50
+
+    def test_trail_never_loosens(self):
+        # Previous stop already at 103 (from prior trail), HWM now 107.5 → mid trail = 102.5
+        # Stop should stay at 103 because max(103, 102.5) = 103
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=107.50, current_lwm=100.0, current_stop=103.0, config=cfg,
+        )
+        assert result == 103.0  # never loosens
+
+    def test_gap_from_low_to_high_r(self):
+        # Gap from 0.5R straight to 2.5R → should apply tightest level
+        # HWM = $112.50, R = 12.5/5 = 2.5
+        # Trail = 112.50 - 0.5*5 = 110.0
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=112.50, current_lwm=100.0, current_stop=95.0, config=cfg,
+        )
+        assert result == 110.0
+
+    def test_short_direction_mirrors(self):
+        # Short entry $100, stop $105 (risk=5), LWM at $92.50 → R = 7.5/5 = 1.5
+        # Trail = LWM + 1.0*risk = 92.50 + 5 = 97.50
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="short", entry_price=100.0, original_risk=5.0,
+            current_hwm=100.0, current_lwm=92.50, current_stop=105.0, config=cfg,
+        )
+        assert result == 97.50
+
+    def test_short_breakeven(self):
+        # Short entry $100, stop $105, LWM at $93.75 → R = 6.25/5 = 1.25
+        cfg = _default_trail_config()
+        result = compute_trailing_stop(
+            direction="short", entry_price=100.0, original_risk=5.0,
+            current_hwm=100.0, current_lwm=93.75, current_stop=105.0, config=cfg,
+        )
+        assert result == 100.0  # breakeven
+
+    def test_custom_config_overrides(self):
+        # Override to old behavior: breakeven at 1.0R, mid cushion 0.5R
+        cfg = _default_trail_config(trail_breakeven_r=1.0, trail_mid_cushion_r=0.5)
+        # HWM $105 → R = 5/5 = 1.0, should now move to breakeven
+        result = compute_trailing_stop(
+            direction="long", entry_price=100.0, original_risk=5.0,
+            current_hwm=105.0, current_lwm=100.0, current_stop=95.0, config=cfg,
+        )
+        assert result == 100.0  # old behavior: breakeven at 1.0R
+
+
+class TestTradingDayExpiry:
+    """Integration tests for trading-day expiry in mark_to_market."""
+
+    def _insert_open_trade(self, conn, ticker="AAPL", entry_price=100.0, direction="long",
+                           stop_loss=95.0, target_price=110.0, entry_date=None):
+        if entry_date is None:
+            entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        conn.execute(
+            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+               target_price, stop_loss, status, current_price, unrealized_pnl_pct,
+               high_water_mark, low_water_mark, generated_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?)""",
+            (entry_date, ticker, direction, entry_price, entry_date,
+             target_price, stop_loss, entry_price, entry_price, entry_price, "ts"),
+        )
+        conn.commit()
+
+    def test_trading_day_expiry_not_triggered_on_weekends(self, conn):
+        """12 calendar days but only 9 trading days → should NOT expire."""
+        entry_date = "2026-03-20"  # Friday
+        today = "2026-04-01"  # Tuesday (12 calendar days later)
+        self._insert_open_trade(conn, "AAPL", 100.0, entry_date=entry_date)
+        # Seed 9 trading days of SPY data (Mon-Fri, skipping weekends)
+        trading_dates = [
+            "2026-03-23", "2026-03-24", "2026-03-25", "2026-03-26", "2026-03-27",
+            "2026-03-30", "2026-03-31", "2026-04-01",
+        ]  # 8 trading days after entry
+        for d in trading_dates:
+            _seed_price(conn, "SPY", 500.0, date=d)
+        _seed_price(conn, "AAPL", 102.0, date=today)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        # 8 trading days < 10 → not expired
+        status = conn.execute("SELECT status FROM paper_trades WHERE ticker='AAPL'").fetchone()
+        assert status[0] == "open"
+
+    def test_trading_day_expiry_triggered(self, conn):
+        """10+ trading days → should expire."""
+        entry_date = "2026-03-16"  # Monday
+        today = "2026-03-31"  # Tuesday (15 calendar days, ~11 trading days)
+        self._insert_open_trade(conn, "AAPL", 100.0, entry_date=entry_date)
+        # Seed 11 trading days of SPY data
+        trading_dates = [
+            "2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20",
+            "2026-03-23", "2026-03-24", "2026-03-25", "2026-03-26", "2026-03-27",
+            "2026-03-30", "2026-03-31",
+        ]
+        for d in trading_dates:
+            _seed_price(conn, "SPY", 500.0, date=d)
+        _seed_price(conn, "AAPL", 102.0, date=today)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        status = conn.execute("SELECT status, exit_reason FROM paper_trades WHERE ticker='AAPL'").fetchone()
+        assert status[0] == "expired"
+
+    def test_mtm_trailing_updates_stop_to_breakeven(self, conn):
+        """Trade at 1.25R should move stop to breakeven."""
+        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
+                                target_price=110.0, entry_date=entry_date)
+        # Seed ATR so original_risk is computed correctly
+        conn.execute(
+            "UPDATE paper_trades SET atr_at_entry = 5.0 WHERE ticker = 'AAPL'"
+        )
+        conn.commit()
+        # Price at $106.25 → HWM=106.25, R = 6.25/5 = 1.25 (breakeven threshold)
+        _seed_price(conn, "AAPL", 106.25, high=106.25, low=105.0)
+
+        mark_to_market(conn)
+        conn.commit()
+
+        trade = conn.execute("SELECT stop_loss FROM paper_trades WHERE ticker='AAPL'").fetchone()
+        assert trade[0] == 100.0  # moved to breakeven
+
+    def test_mtm_trailing_mid_level(self, conn):
+        """Trade at 1.5R should trail with mid cushion."""
+        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
+                                target_price=110.0, entry_date=entry_date)
+        conn.execute(
+            "UPDATE paper_trades SET atr_at_entry = 5.0 WHERE ticker = 'AAPL'"
+        )
+        conn.commit()
+        # Price at $107.50 → HWM=107.50, R = 7.5/5 = 1.5 (mid trail)
+        # Trail = 107.50 - 1.0*5 = 102.50
+        _seed_price(conn, "AAPL", 107.50, high=107.50, low=106.0)
+
+        mark_to_market(conn)
+        conn.commit()
+
+        trade = conn.execute("SELECT stop_loss FROM paper_trades WHERE ticker='AAPL'").fetchone()
+        assert trade[0] == 102.50

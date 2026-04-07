@@ -66,7 +66,7 @@ def get_live_wallet(label: str) -> dict[str, Any]:
 
         counter_signals = []
         if track_mode == "counter":
-            counter_signals = generate_counter_signals(snapshot)
+            counter_signals = generate_counter_signals(snapshot, conn=conn)
 
         return {
             "ok": True,

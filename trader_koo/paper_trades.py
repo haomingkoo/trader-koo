@@ -21,6 +21,7 @@ from trader_koo.paper_trade.summary import (
 from trader_koo.paper_trade.trading import (
     compute_pnl as _compute_pnl_impl,
     compute_r_multiple as _compute_r_multiple_impl,
+    compute_trailing_stop,
     create_paper_trades_from_report as _create_paper_trades_from_report_impl,
     manually_close_trade as _manually_close_trade_impl,
     mark_to_market as _mark_to_market_impl,
@@ -45,6 +46,13 @@ PAPER_TRADE_CAUTION_POSITION_SCALE = float(os.getenv("TRADER_KOO_PAPER_TRADE_CAU
 PAPER_TRADE_HIGH_VOL_POSITION_SCALE = float(os.getenv("TRADER_KOO_PAPER_TRADE_HIGH_VOL_POSITION_SCALE", "0.75"))
 PAPER_TRADE_EARNINGS_POSITION_SCALE = float(os.getenv("TRADER_KOO_PAPER_TRADE_EARNINGS_POSITION_SCALE", "0.60"))
 PAPER_TRADE_STARTING_CAPITAL = float(os.getenv("TRADER_KOO_PAPER_TRADE_STARTING_CAPITAL", "1000000.0"))
+# Graduated trailing stop config
+PAPER_TRADE_TRAIL_BREAKEVEN_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_TRAIL_BREAKEVEN_R", "1.25"))
+PAPER_TRADE_TRAIL_MID_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_TRAIL_MID_R", "1.5"))
+PAPER_TRADE_TRAIL_MID_CUSHION_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_TRAIL_MID_CUSHION_R", "1.0"))
+PAPER_TRADE_TRAIL_TIGHT_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_TRAIL_TIGHT_R", "2.0"))
+PAPER_TRADE_TRAIL_TIGHT_CUSHION_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_TRAIL_TIGHT_CUSHION_R", "0.5"))
+PAPER_TRADE_EXPIRY_USE_TRADING_DAYS = os.getenv("TRADER_KOO_PAPER_TRADE_EXPIRY_USE_TRADING_DAYS", "1") == "1"
 
 _QUALIFYING_TIERS = frozenset({"A", "B"})
 _QUALIFYING_ACTIONABILITY = frozenset({"higher-probability", "conditional"})
@@ -82,6 +90,12 @@ def _build_config() -> PaperTradeConfig:
         high_vol_position_scale=PAPER_TRADE_HIGH_VOL_POSITION_SCALE,
         earnings_position_scale=PAPER_TRADE_EARNINGS_POSITION_SCALE,
         starting_capital=PAPER_TRADE_STARTING_CAPITAL,
+        trail_breakeven_r=PAPER_TRADE_TRAIL_BREAKEVEN_R,
+        trail_mid_r=PAPER_TRADE_TRAIL_MID_R,
+        trail_mid_cushion_r=PAPER_TRADE_TRAIL_MID_CUSHION_R,
+        trail_tight_r=PAPER_TRADE_TRAIL_TIGHT_R,
+        trail_tight_cushion_r=PAPER_TRADE_TRAIL_TIGHT_CUSHION_R,
+        expiry_use_trading_days=PAPER_TRADE_EXPIRY_USE_TRADING_DAYS,
     )
 
 
