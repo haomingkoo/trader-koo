@@ -117,8 +117,7 @@ else
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [INGEST] skipped mode=${UPDATE_MODE}" >> "$RUN_LOG"
 fi
 if [ "$INGEST_RC" -ne 0 ]; then
-    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [ERROR] ingest failed rc=${INGEST_RC}; aborting daily_update" >> "$RUN_LOG"
-    exit "$INGEST_RC"
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [WARN]  ingest failed rc=${INGEST_RC} (partial data) — continuing to report step" >> "$RUN_LOG"
 fi
 
 # ── 1b. Cache news sentiment for today's date ────────────────────────────────
@@ -272,8 +271,8 @@ SUMMARY="ingest=${INGEST_RC} yolo=${YOLO_RC} report=${REPORT_RC}"
 if [ "$REPORT_RC" -ne 0 ]; then
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [FAIL]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY}" >> "$RUN_LOG"
     FINAL_RC=1
-elif [ "$YOLO_RC" -ne 0 ]; then
-    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [WARN]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY} (YOLO failed, report OK)" >> "$RUN_LOG"
+elif [ "$INGEST_RC" -ne 0 ] || [ "$YOLO_RC" -ne 0 ]; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [WARN]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY} (partial failures, report OK)" >> "$RUN_LOG"
 else
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY}" >> "$RUN_LOG"
 fi
