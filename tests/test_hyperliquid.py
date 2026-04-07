@@ -221,14 +221,14 @@ class TestCounterSignalOverhaul:
         assert sig_2[0]["score"] >= sig_4[0]["score"]
 
     def test_notional_gate_small_downgraded(self):
-        """Small notional position with high score gets LEAN_COUNTER, not COUNTER."""
-        # $2M position with high leverage (should score high)
+        """Position under $25M notional with high score gets LEAN_COUNTER, not COUNTER."""
+        # $10M position with high leverage (should score high but under $25M gate)
         snap = WalletSnapshot(
             wallet_label="machibro", wallet_address="0x020c",
             account_value=100000.0, total_margin_used=90000.0,
             margin_ratio=0.9,
             positions=[_make_position(
-                leverage=25, notional=2_000_000.0, upnl=-100000.0,
+                leverage=25, notional=10_000_000.0, upnl=-500000.0,
                 liq_price=1960.0, mark_price=2000.0,
             )],
             timestamp="2026-04-07T00:00:00Z",
@@ -239,13 +239,13 @@ class TestCounterSignalOverhaul:
         assert signals[0]["action"] == "LEAN_COUNTER"
 
     def test_notional_gate_large_stays_counter(self):
-        """Large notional position with high score stays COUNTER."""
+        """Position >= $25M notional with high score stays COUNTER."""
         snap = WalletSnapshot(
             wallet_label="machibro", wallet_address="0x020c",
             account_value=100000.0, total_margin_used=90000.0,
             margin_ratio=0.9,
             positions=[_make_position(
-                leverage=25, notional=10_000_000.0, upnl=-500000.0,
+                leverage=25, notional=30_000_000.0, upnl=-1500000.0,
                 liq_price=1960.0, mark_price=2000.0,
             )],
             timestamp="2026-04-07T00:00:00Z",
@@ -258,7 +258,7 @@ class TestCounterSignalOverhaul:
         """Position with >70% concentration gets +2 instead of +1."""
         # One big position + one tiny
         big = _make_position(coin="ETH", notional=8_000_000.0, leverage=5, upnl=0)
-        small = _make_position(coin="BTC", notional=1_000_000.0, leverage=5, upnl=0)
+        small = _make_position(coin="SOL", notional=1_000_000.0, leverage=5, upnl=0)
         snap = WalletSnapshot(
             wallet_label="machibro", wallet_address="0x020c",
             account_value=5_000_000.0, total_margin_used=1_000_000.0,

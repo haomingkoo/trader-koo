@@ -260,8 +260,14 @@ def _estimate_position_age_hours(
         return None
 
 
-# Minimum notional to promote a signal to COUNTER (study: <$5M he generally wins)
-_MIN_COUNTER_NOTIONAL_USD = 5_000_000
+# Minimum notional to promote a signal to COUNTER.
+# Study (595K fills, Jul 2025–Apr 2026): he wins 71-87% on <$15M positions.
+# Only >$25M positions show counter-trade edge (33% WR, -$34M total PnL).
+_MIN_COUNTER_NOTIONAL_USD = 25_000_000
+
+# Coins where he consistently wins — do NOT counter-trade these.
+# BTC: 94.7% WR over 19 cycles (+$489K). He's skilled at BTC.
+_SKIP_COUNTER_COINS: frozenset[str] = frozenset({"BTC"})
 
 
 def generate_counter_signals(
@@ -298,6 +304,31 @@ def generate_counter_signals(
     signals: list[dict[str, Any]] = []
     for pos in snapshot.positions:
         counter_side = "short" if pos.side == "long" else "long"
+
+        # Skip coins where he consistently wins (study-validated)
+        if pos.coin in _SKIP_COUNTER_COINS:
+            signals.append({
+                "source": "hyperliquid_counter",
+                "wallet_label": pos.wallet_label,
+                "coin": pos.coin,
+                "counter_side": counter_side,
+                "their_side": pos.side,
+                "their_size": pos.size,
+                "their_leverage": pos.leverage_value,
+                "their_notional_usd": round(pos.notional_usd, 2),
+                "their_entry_price": pos.entry_price,
+                "their_unrealized_pnl": round(pos.unrealized_pnl, 2),
+                "their_liq_distance_pct": None,
+                "confidence": 30.0,
+                "score": 0,
+                "action": "SKIP",
+                "reasons": [f"{pos.coin} on skip list (high WR)"],
+                "position_age_hours": None,
+                "position_count": position_count,
+                "reasoning": f"[SKIP] {pos.coin} excluded — he wins this coin",
+                "timestamp": snapshot.timestamp,
+            })
+            continue
 
         # Scoring system (expert panel validated + v2 enhancements)
         score = 0
@@ -382,7 +413,7 @@ def generate_counter_signals(
         elif score >= 6:
             # High score but small position — downgrade
             action = "LEAN_COUNTER"
-            reasons.append(f"notional ${pos.notional_usd / 1e6:.1f}M < $5M gate")
+            reasons.append(f"notional ${pos.notional_usd / 1e6:.1f}M < $25M gate")
         elif score >= 3:
             action = "LEAN_COUNTER"
         else:
