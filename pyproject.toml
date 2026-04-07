@@ -23,3 +23,7 @@ include = ["trader_koo*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+asyncio_mode = "auto"
+markers = [
+    "asyncio: marks tests that require an asyncio event loop",
+]
