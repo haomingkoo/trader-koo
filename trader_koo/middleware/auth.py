@@ -23,7 +23,7 @@ _ADMIN_ENDPOINT_REGISTRY: dict[str, dict[str, Any]] = {}
 
 def register_admin_endpoint(path: str, method: str, has_auth: bool = True) -> None:
     """Register an admin endpoint in the global registry.
-    
+
     Args:
         path: The endpoint path (e.g., "/api/admin/trigger-update")
         method: HTTP method (GET, POST, PUT, DELETE, PATCH)
@@ -40,7 +40,7 @@ def register_admin_endpoint(path: str, method: str, has_auth: bool = True) -> No
 
 def get_admin_endpoint_registry() -> dict[str, dict[str, Any]]:
     """Get the complete admin endpoint registry.
-    
+
     Returns:
         Dictionary mapping endpoint keys to their metadata
     """
@@ -49,7 +49,7 @@ def get_admin_endpoint_registry() -> dict[str, dict[str, Any]]:
 
 def verify_all_admin_endpoints_protected() -> tuple[bool, list[str]]:
     """Verify all admin endpoints have authentication applied.
-    
+
     Returns:
         Tuple of (all_protected, unprotected_endpoints)
         - all_protected: True if all endpoints are protected
@@ -64,18 +64,18 @@ def verify_all_admin_endpoints_protected() -> tuple[bool, list[str]]:
 
 def require_admin_auth(func: Callable) -> Callable:
     """Decorator to mark an endpoint as requiring admin authentication.
-    
+
     This decorator:
     1. Registers the endpoint in the admin registry
     2. Marks it as having authentication
     3. Validates that the request has admin identity (set by middleware)
-    
+
     Usage:
         @app.get("/api/admin/some-endpoint")
         @require_admin_auth
         def some_endpoint():
             return {"status": "ok"}
-    
+
     Requirements:
     - 5.6: Require explicit authentication decorator for new endpoints
     """
@@ -92,7 +92,7 @@ def require_admin_auth(func: Callable) -> Callable:
                 if isinstance(value, Request):
                     request = value
                     break
-        
+
         # Verify admin identity is set by middleware
         if request and not hasattr(request.state, "admin_identity"):
             LOG.error(
@@ -103,7 +103,7 @@ def require_admin_auth(func: Callable) -> Callable:
                 status_code=401,
                 detail="Unauthorized: Admin authentication required"
             )
-        
+
         # Call the original function
         if hasattr(func, "__wrapped__"):
             # Handle already wrapped functions
@@ -114,7 +114,7 @@ def require_admin_auth(func: Callable) -> Callable:
             if hasattr(result, "__await__"):
                 return await result
             return result
-    
+
     @wraps(func)
     def sync_wrapper(*args, **kwargs):
         # Extract request from kwargs
@@ -128,7 +128,7 @@ def require_admin_auth(func: Callable) -> Callable:
                 if isinstance(value, Request):
                     request = value
                     break
-        
+
         # Verify admin identity is set by middleware
         if request and not hasattr(request.state, "admin_identity"):
             LOG.error(
@@ -139,32 +139,32 @@ def require_admin_auth(func: Callable) -> Callable:
                 status_code=401,
                 detail="Unauthorized: Admin authentication required"
             )
-        
+
         return func(*args, **kwargs)
-    
+
     # Determine if function is async
     import inspect
     if inspect.iscoroutinefunction(func):
         wrapper = async_wrapper
     else:
         wrapper = sync_wrapper
-    
+
     # Mark the wrapper so we can identify decorated endpoints
     wrapper._requires_admin_auth = True  # type: ignore
     wrapper._original_func = func  # type: ignore
-    
+
     return wrapper
 
 
 def auto_register_admin_endpoints(app: Any) -> None:
     """Automatically register all admin endpoints from FastAPI app routes.
-    
+
     This function scans all routes in the FastAPI app and registers
     any that start with /api/admin/.
-    
+
     Args:
         app: FastAPI application instance
-        
+
     Requirements:
     - 5.1: Maintain registry of all /api/admin/* endpoint paths
     """
@@ -178,9 +178,9 @@ def auto_register_admin_endpoints(app: Any) -> None:
                     if hasattr(route, "endpoint"):
                         endpoint = route.endpoint
                         has_auth = getattr(endpoint, "_requires_admin_auth", False)
-                    
+
                     register_admin_endpoint(path, method, has_auth)
-                    
+
                     if not has_auth:
                         LOG.warning(
                             f"Admin endpoint {method}:{path} does not have "

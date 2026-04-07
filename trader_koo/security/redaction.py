@@ -21,7 +21,7 @@ SECRET_PATTERNS = [
     "ALPHA_VANTAGE_API_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
-    
+
     # Passwords and tokens
     "PASSWORD",
     "PASS",
@@ -29,17 +29,17 @@ SECRET_PATTERNS = [
     "TOKEN",
     "JWT_SECRET_KEY",
     "HMAC_SECRET",
-    
+
     # SMTP credentials
     "SMTP_PASS",
     "SMTP_PASSWORD",
     "SMTP_USER",
-    
+
     # Database credentials
     "DATABASE_URL",
     "DB_PASSWORD",
     "POSTGRES_PASSWORD",
-    
+
     # Other sensitive data
     "PRIVATE_KEY",
     "CERTIFICATE",
@@ -56,44 +56,44 @@ REDACTED_VALUE = "[REDACTED]"
 
 def _is_secret_key(key: str) -> bool:
     """Check if a key name matches any secret pattern.
-    
+
     Args:
         key: The key name to check.
-        
+
     Returns:
         True if the key matches a secret pattern, False otherwise.
     """
     if not key:
         return False
-    
+
     key_upper = str(key).upper()
-    
+
     # Check exact matches and pattern matches
     for pattern in _SECRET_KEY_PATTERNS:
         if pattern.search(key_upper):
             return True
-    
+
     return False
 
 
 def redact_secrets(data: Any, max_depth: int = 10) -> Any:
     """Redact secret values from a data structure.
-    
+
     This function recursively traverses dictionaries, lists, and other data
     structures to find and redact values associated with secret keys.
-    
+
     Requirements: 6.2, 6.3
-    
+
     Args:
         data: The data structure to redact (dict, list, str, etc.).
         max_depth: Maximum recursion depth to prevent infinite loops.
-        
+
     Returns:
         A copy of the data structure with secret values replaced by [REDACTED].
     """
     if max_depth <= 0:
         return data
-    
+
     if isinstance(data, dict):
         redacted = {}
         for key, value in data.items():
@@ -102,11 +102,11 @@ def redact_secrets(data: Any, max_depth: int = 10) -> Any:
             else:
                 redacted[key] = redact_secrets(value, max_depth - 1)
         return redacted
-    
+
     elif isinstance(data, (list, tuple)):
         redacted_items = [redact_secrets(item, max_depth - 1) for item in data]
         return type(data)(redacted_items)
-    
+
     elif isinstance(data, str):
         # Check if the string itself looks like a secret (long alphanumeric strings)
         # This is a heuristic to catch secrets that might not be in a dict
@@ -116,7 +116,7 @@ def redact_secrets(data: Any, max_depth: int = 10) -> Any:
             if len(data) >= 40:
                 return REDACTED_VALUE
         return data
-    
+
     else:
         # For other types (int, float, bool, None, etc.), return as-is
         return data
@@ -124,28 +124,28 @@ def redact_secrets(data: Any, max_depth: int = 10) -> Any:
 
 def sanitize_error_response(error_data: dict[str, Any]) -> dict[str, Any]:
     """Sanitize error response to strip environment variables and config.
-    
+
     This function removes sensitive information from error responses including:
     - Environment variables
     - Configuration values
     - File paths that might reveal system structure
     - Stack traces containing secrets
-    
+
     Requirement: 6.4
-    
+
     Args:
         error_data: The error response dictionary.
-        
+
     Returns:
         Sanitized error response with sensitive data removed.
     """
     sanitized = {}
-    
+
     for key, value in error_data.items():
         # Skip environment and config keys entirely
         if key.lower() in {"env", "environment", "config", "configuration", "settings"}:
             continue
-        
+
         # Redact secrets in the value
         if isinstance(value, (dict, list)):
             sanitized[key] = redact_secrets(value)
@@ -160,7 +160,7 @@ def sanitize_error_response(error_data: dict[str, Any]) -> dict[str, Any]:
             sanitized[key] = redact_secrets(sanitized_value)
         else:
             sanitized[key] = value
-    
+
     return sanitized
 
 
@@ -181,16 +181,16 @@ def redact_url_tokens(text: str) -> str:
 
 def sanitize_stack_trace(stack_trace: str) -> str:
     """Sanitize a stack trace to remove sensitive information.
-    
+
     Args:
         stack_trace: The stack trace string.
-        
+
     Returns:
         Sanitized stack trace with secrets removed.
     """
     if not stack_trace:
         return stack_trace
-    
+
     # Remove environment variable values from stack traces
     # Pattern: ENV_VAR='value' or ENV_VAR="value"
     sanitized = re.sub(
@@ -198,7 +198,7 @@ def sanitize_stack_trace(stack_trace: str) -> str:
         lambda m: f'{m.group(1)}="{REDACTED_VALUE}"' if _is_secret_key(m.group(1)) else m.group(0),
         stack_trace
     )
-    
+
     # Remove potential API keys and tokens from URLs
     # Pattern: ?api_key=xxx or &token=xxx or token=xxx
     sanitized = re.sub(
@@ -207,5 +207,5 @@ def sanitize_stack_trace(stack_trace: str) -> str:
         sanitized,
         flags=re.IGNORECASE
     )
-    
+
     return sanitized

@@ -150,7 +150,7 @@ def _detect_bull_traps(
                             # Compare reversal bar volume to breakout bar volume
                             volume_breakout = float(df.iloc[i]["volume"])
                             volume_reversal = float(df.iloc[j]["volume"])
-                            
+
                             if volume_breakout > 0:
                                 volume_ratio = volume_reversal / volume_breakout
                                 # Higher volume on reversal increases confidence
@@ -243,7 +243,7 @@ def _detect_bear_traps(
                             # Compare reversal bar volume to breakdown bar volume
                             volume_breakdown = float(df.iloc[i]["volume"])
                             volume_reversal = float(df.iloc[j]["volume"])
-                            
+
                             if volume_breakdown > 0:
                                 volume_ratio = volume_reversal / volume_breakdown
                                 # Higher volume on reversal increases confidence
@@ -432,11 +432,11 @@ def get_pattern_glossary() -> dict[str, str]:
 
 def get_pattern_visual_markers() -> dict[str, dict[str, Any]]:
     """Return visual marker specifications for trap/reclaim patterns.
-    
+
     This provides styling information for frontend chart rendering.
-    
+
     Requirements: 14.7
-    
+
     Returns:
         Dictionary mapping pattern types to visual marker specifications with:
         - color: Hex color code for the marker

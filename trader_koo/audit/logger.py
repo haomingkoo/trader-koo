@@ -33,20 +33,20 @@ class AuditEventType(Enum):
 class AuditLogger:
     """
     Immutable append-only audit logger.
-    
+
     All log entries are write-only - no updates or deletes allowed
     except through retention policy cleanup.
     """
-    
+
     def __init__(self, conn: sqlite3.Connection):
         """
         Initialize audit logger with database connection.
-        
+
         Args:
             conn: SQLite database connection
         """
         self.conn = conn
-    
+
     def log_event(
         self,
         event_type: AuditEventType | str,
@@ -66,7 +66,7 @@ class AuditLogger:
     ) -> str:
         """
         Log an audit event (append-only, immutable).
-        
+
         Args:
             event_type: Type of event (from AuditEventType enum or string)
             user_id: User identifier (if applicable)
@@ -81,21 +81,21 @@ class AuditLogger:
             request_method: HTTP method (for API requests)
             request_path: Request path (for API requests)
             response_time_ms: Response time in milliseconds
-            
+
         Returns:
             Correlation ID for this event
         """
         # Convert enum to string if needed
         if isinstance(event_type, AuditEventType):
             event_type = event_type.value
-        
+
         # Generate correlation ID if not provided
         if correlation_id is None:
             correlation_id = str(uuid.uuid4())
-        
+
         # Serialize details to JSON
         details_json = json.dumps(details) if details else None
-        
+
         # Insert audit log entry (immutable - no UPDATE or DELETE)
         self.conn.execute(
             """
@@ -133,11 +133,11 @@ class AuditLogger:
                 response_time_ms,
             ),
         )
-        
+
         self.conn.commit()
-        
+
         return correlation_id
-    
+
     def log_auth_success(
         self,
         user_id: str,
@@ -156,7 +156,7 @@ class AuditLogger:
             user_agent=user_agent,
             details={"auth_method": auth_method},
         )
-    
+
     def log_auth_failure(
         self,
         username: str | None,
@@ -173,7 +173,7 @@ class AuditLogger:
             user_agent=user_agent,
             details={"reason": reason},
         )
-    
+
     def log_api_request(
         self,
         request_method: str,
@@ -204,7 +204,7 @@ class AuditLogger:
             response_time_ms=response_time_ms,
             details={"params": request_params} if request_params else None,
         )
-    
+
     def log_data_modification(
         self,
         table: str,
@@ -231,7 +231,7 @@ class AuditLogger:
                 "after": after_values,
             },
         )
-    
+
     def log_admin_action(
         self,
         action: str,
@@ -252,7 +252,7 @@ class AuditLogger:
             ip_address=ip_address,
             details=details,
         )
-    
+
     def query_logs(
         self,
         *,
@@ -267,7 +267,7 @@ class AuditLogger:
     ) -> list[dict[str, Any]]:
         """
         Query audit logs with filtering.
-        
+
         Args:
             start_date: Filter logs after this date (ISO format)
             end_date: Filter logs before this date (ISO format)
@@ -277,59 +277,59 @@ class AuditLogger:
             action: Filter by action
             limit: Maximum number of results
             offset: Offset for pagination
-            
+
         Returns:
             List of audit log entries
         """
         query = "SELECT * FROM audit_logs WHERE 1=1"
         params: list[Any] = []
-        
+
         if start_date:
             query += " AND timestamp >= ?"
             params.append(start_date)
-        
+
         if end_date:
             query += " AND timestamp <= ?"
             params.append(end_date)
-        
+
         if user_id:
             query += " AND user_id = ?"
             params.append(user_id)
-        
+
         if event_type:
             query += " AND event_type = ?"
             params.append(event_type)
-        
+
         if resource:
             query += " AND resource = ?"
             params.append(resource)
-        
+
         if action:
             query += " AND action = ?"
             params.append(action)
-        
+
         query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        
+
         cursor = self.conn.execute(query, params)
-        
+
         columns = [desc[0] for desc in cursor.description]
         results = []
-        
+
         for row in cursor.fetchall():
             entry = dict(zip(columns, row))
-            
+
             # Parse JSON details if present
             if entry.get("details"):
                 try:
                     entry["details"] = json.loads(entry["details"])
                 except json.JSONDecodeError:
                     pass
-            
+
             results.append(entry)
-        
+
         return results
-    
+
     def count_logs(
         self,
         *,
@@ -341,22 +341,22 @@ class AuditLogger:
         """Count audit logs matching filters."""
         query = "SELECT COUNT(*) FROM audit_logs WHERE 1=1"
         params: list[Any] = []
-        
+
         if start_date:
             query += " AND timestamp >= ?"
             params.append(start_date)
-        
+
         if end_date:
             query += " AND timestamp <= ?"
             params.append(end_date)
-        
+
         if user_id:
             query += " AND user_id = ?"
             params.append(user_id)
-        
+
         if event_type:
             query += " AND event_type = ?"
             params.append(event_type)
-        
+
         cursor = self.conn.execute(query, params)
         return cursor.fetchone()[0]

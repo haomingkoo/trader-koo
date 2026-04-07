@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TermStructure:
     """Term structure data with source tracking."""
-    
+
     vix_spot: float
     vix_3m: Optional[float]
     vix_6m: Optional[float]
@@ -28,7 +28,7 @@ class TermStructure:
     contango: bool
     slope: Optional[float]
     timestamp: dt.datetime
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -55,7 +55,7 @@ def _fetch_latest_close(conn: sqlite3.Connection, ticker: str) -> Optional[float
             """,
             (ticker,),
         ).fetchone()
-        
+
         if result and result[0]:
             return float(result[0])
         return None
@@ -69,30 +69,30 @@ def _calculate_synthetic_term_structure(
 ) -> Optional[float]:
     """
     Calculate synthetic term structure from VXX/UVXY when VIX3M and VIX6M unavailable.
-    
+
     VXX tracks 1-month VIX futures, UVXY tracks short-term VIX futures.
     We can estimate a 3-month forward VIX by analyzing the ratio.
     """
     try:
         vxx = _fetch_latest_close(conn, "VXX")
         uvxy = _fetch_latest_close(conn, "UVXY")
-        
+
         if not vxx or not uvxy or vxx <= 0 or uvxy <= 0:
             logger.info("VXX or UVXY data unavailable for synthetic calculation")
             return None
-        
+
         # Synthetic calculation: estimate 3M forward based on VXX premium
         # VXX typically trades at a premium to spot VIX due to contango
         # This is a simplified heuristic - in production, use futures curve
         vxx_premium_ratio = vxx / 20.0  # VXX baseline around 20
         synthetic_3m = vix_spot * (1.0 + (vxx_premium_ratio - 1.0) * 0.5)
-        
+
         logger.info(
             f"Calculated synthetic 3M: {synthetic_3m:.2f} "
             f"(VIX: {vix_spot:.2f}, VXX: {vxx:.2f}, UVXY: {uvxy:.2f})"
         )
         return synthetic_3m
-        
+
     except Exception as e:
         logger.error(f"Failed to calculate synthetic term structure: {e}")
         return None
@@ -101,17 +101,17 @@ def _calculate_synthetic_term_structure(
 def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
     """
     Calculate VIX term structure with multi-source fallback.
-    
+
     Fallback order:
     1. Try VIX3M (primary)
     2. Try VIX6M (secondary)
     3. Calculate synthetic from VXX/UVXY (tertiary)
     4. Return unavailable status
-    
+
     Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6
     """
     timestamp = dt.datetime.now(dt.timezone.utc)
-    
+
     # Fetch VIX spot (required)
     vix_spot = _fetch_latest_close(conn, "^VIX")
     if not vix_spot or vix_spot <= 0:
@@ -125,19 +125,19 @@ def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
             slope=None,
             timestamp=timestamp,
         )
-    
+
     # Try VIX3M first (Requirement 9.1)
     vix3m = _fetch_latest_close(conn, "^VIX3M") or _fetch_latest_close(conn, "VIX3M")
-    
+
     if vix3m and vix3m > 0:
         slope = (vix3m - vix_spot) / vix_spot
         contango = slope > 0.03  # 3% threshold
-        
+
         logger.info(
             f"Term structure from VIX3M: spot={vix_spot:.2f}, "
             f"3M={vix3m:.2f}, slope={slope:.4f}"
         )
-        
+
         return TermStructure(
             vix_spot=vix_spot,
             vix_3m=vix3m,
@@ -147,21 +147,21 @@ def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
             slope=slope,
             timestamp=timestamp,
         )
-    
+
     logger.warning("VIX3M unavailable, attempting VIX6M fallback")
-    
+
     # Try VIX6M fallback (Requirement 9.1)
     vix6m = _fetch_latest_close(conn, "^VIX6M") or _fetch_latest_close(conn, "VIX6M")
-    
+
     if vix6m and vix6m > 0:
         slope = (vix6m - vix_spot) / vix_spot
         contango = slope > 0.03
-        
+
         logger.info(
             f"Term structure from VIX6M: spot={vix_spot:.2f}, "
             f"6M={vix6m:.2f}, slope={slope:.4f}"
         )
-        
+
         return TermStructure(
             vix_spot=vix_spot,
             vix_3m=None,
@@ -171,21 +171,21 @@ def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
             slope=slope,
             timestamp=timestamp,
         )
-    
+
     logger.warning("VIX6M unavailable, attempting synthetic calculation")
-    
+
     # Calculate synthetic from VXX/UVXY (Requirement 9.2)
     synthetic_3m = _calculate_synthetic_term_structure(conn, vix_spot)
-    
+
     if synthetic_3m and synthetic_3m > 0:
         slope = (synthetic_3m - vix_spot) / vix_spot
         contango = slope > 0.03
-        
+
         logger.info(
             f"Term structure from synthetic: spot={vix_spot:.2f}, "
             f"synthetic_3M={synthetic_3m:.2f}, slope={slope:.4f}"
         )
-        
+
         return TermStructure(
             vix_spot=vix_spot,
             vix_3m=synthetic_3m,
@@ -195,10 +195,10 @@ def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
             slope=slope,
             timestamp=timestamp,
         )
-    
+
     # All sources failed (Requirement 9.5)
     logger.error("All term structure sources unavailable (VIX3M, VIX6M, synthetic)")
-    
+
     return TermStructure(
         vix_spot=vix_spot,
         vix_3m=None,
@@ -213,29 +213,29 @@ def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
 def format_term_structure_display(term_structure: TermStructure) -> str:
     """
     Format term structure for display with source labeling.
-    
+
     Requirements: 9.3, 9.6
     """
     if term_structure.source == "unavailable":
         return "Term structure unavailable"
-    
+
     lines = [
         f"VIX Spot: {term_structure.vix_spot:.2f}",
     ]
-    
+
     if term_structure.vix_3m:
         lines.append(f"VIX 3M: {term_structure.vix_3m:.2f}")
-    
+
     if term_structure.vix_6m:
         lines.append(f"VIX 6M: {term_structure.vix_6m:.2f}")
-    
+
     if term_structure.slope is not None:
         lines.append(f"Slope: {term_structure.slope:.2%}")
-    
+
     lines.append(f"State: {'Contango' if term_structure.contango else 'Backwardation/Flat'}")
     lines.append(f"Source: {term_structure.source}")
     lines.append(f"Timestamp: {term_structure.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    
+
     return "\n".join(lines)
 
 
@@ -504,4 +504,3 @@ def format_compression_thresholds_display(
     ]
 
     return "\n".join(lines)
-

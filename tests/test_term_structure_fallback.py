@@ -38,9 +38,9 @@ def test_vix3m_success(mock_conn):
         (15.5,),  # VIX spot
         (16.8,),  # VIX3M
     ]
-    
+
     result = calculate_term_structure(mock_conn)
-    
+
     assert result.vix_spot == 15.5
     assert result.vix_3m == 16.8
     assert result.vix_6m is None
@@ -59,9 +59,9 @@ def test_vix6m_fallback(mock_conn):
         None,     # VIX3M unavailable
         (15.9,),  # ^VIX6M
     ]
-    
+
     result = calculate_term_structure(mock_conn)
-    
+
     assert result.vix_spot == 14.2
     assert result.vix_3m is None
     assert result.vix_6m == 15.9
@@ -82,9 +82,9 @@ def test_synthetic_calculation(mock_conn):
         (22.5,),  # VXX
         (18.3,),  # UVXY
     ]
-    
+
     result = calculate_term_structure(mock_conn)
-    
+
     assert result.vix_spot == 13.5
     assert result.vix_3m is not None  # Synthetic value
     assert result.vix_6m is None
@@ -105,9 +105,9 @@ def test_complete_unavailability(mock_conn):
         None,     # VXX unavailable
         None,     # UVXY unavailable
     ]
-    
+
     result = calculate_term_structure(mock_conn)
-    
+
     assert result.vix_spot == 14.8
     assert result.vix_3m is None
     assert result.vix_6m is None
@@ -119,9 +119,9 @@ def test_complete_unavailability(mock_conn):
 def test_vix_spot_unavailable(mock_conn):
     """Test when VIX spot itself is unavailable."""
     mock_conn.execute.return_value.fetchone.return_value = None
-    
+
     result = calculate_term_structure(mock_conn)
-    
+
     assert result.vix_spot == 0.0
     assert result.source == "unavailable"
 
@@ -133,10 +133,10 @@ def test_source_labeling(mock_conn):
         (15.0,),  # VIX spot
         (16.5,),  # VIX3M
     ]
-    
+
     result = calculate_term_structure(mock_conn)
     result_dict = result.to_dict()
-    
+
     assert result_dict["source"] == "VIX3M"
     assert "source" in result_dict
     assert result_dict["vix_spot"] == 15.0
@@ -149,10 +149,10 @@ def test_timestamp_inclusion(mock_conn):
         (15.0,),  # VIX spot
         (16.5,),  # VIX3M
     ]
-    
+
     result = calculate_term_structure(mock_conn)
     result_dict = result.to_dict()
-    
+
     assert "timestamp" in result_dict
     assert isinstance(result.timestamp, datetime)
     # Verify ISO format
@@ -165,10 +165,10 @@ def test_format_display_with_vix3m(mock_conn):
         (15.0,),  # VIX spot
         (16.5,),  # VIX3M
     ]
-    
+
     result = calculate_term_structure(mock_conn)
     display = format_term_structure_display(result)
-    
+
     assert "VIX Spot: 15.00" in display
     assert "VIX 3M: 16.50" in display
     assert "Source: VIX3M" in display
@@ -182,10 +182,10 @@ def test_format_display_unavailable(mock_conn):
         (14.8,),  # VIX spot
         None, None, None, None, None, None,  # All sources unavailable
     ]
-    
+
     result = calculate_term_structure(mock_conn)
     display = format_term_structure_display(result)
-    
+
     assert display == "Term structure unavailable"
 
 
@@ -202,7 +202,7 @@ def test_contango_detection():
         timestamp=datetime.utcnow(),
     )
     assert ts_contango.contango is True
-    
+
     # Backwardation case
     ts_backwardation = TermStructure(
         vix_spot=18.0,
@@ -223,9 +223,9 @@ def test_logging_vix3m_success(mock_logger, mock_conn):
         (15.0,),  # VIX spot
         (16.5,),  # VIX3M
     ]
-    
+
     calculate_term_structure(mock_conn)
-    
+
     # Verify info log was called with VIX3M success
     mock_logger.info.assert_called()
     call_args = str(mock_logger.info.call_args)
@@ -241,9 +241,9 @@ def test_logging_vix6m_fallback(mock_logger, mock_conn):
         None,     # VIX3M unavailable
         (16.8,),  # ^VIX6M
     ]
-    
+
     calculate_term_structure(mock_conn)
-    
+
     # Verify warning log for VIX3M unavailable
     mock_logger.warning.assert_called()
     warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
@@ -259,9 +259,9 @@ def test_logging_synthetic_calculation(mock_logger, mock_conn):
         (22.5,),  # VXX
         (18.3,),  # UVXY
     ]
-    
+
     calculate_term_structure(mock_conn)
-    
+
     # Verify warning logs for fallback chain
     warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
     assert any("VIX6M unavailable" in call for call in warning_calls)
@@ -274,9 +274,9 @@ def test_logging_complete_unavailability(mock_logger, mock_conn):
         (15.0,),  # VIX spot
         None, None, None, None, None, None,  # All sources unavailable
     ]
-    
+
     calculate_term_structure(mock_conn)
-    
+
     # Verify error log for complete unavailability
     mock_logger.error.assert_called()
     error_calls = [str(call) for call in mock_logger.error.call_args_list]
@@ -290,9 +290,9 @@ def test_vix3m_with_caret_prefix(mock_conn):
         (15.0,),  # VIX spot
         (16.5,),  # ^VIX3M
     ]
-    
+
     result = calculate_term_structure(mock_conn)
-    
+
     assert result.source == "VIX3M"
     assert result.vix_3m == 16.5
 
@@ -305,8 +305,8 @@ def test_vix3m_fallback_to_no_caret(mock_conn):
         None,     # ^VIX3M unavailable
         (16.5,),  # VIX3M (no caret)
     ]
-    
+
     result = calculate_term_structure(mock_conn)
-    
+
     assert result.source == "VIX3M"
     assert result.vix_3m == 16.5

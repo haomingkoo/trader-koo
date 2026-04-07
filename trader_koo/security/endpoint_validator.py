@@ -21,22 +21,22 @@ def validate_response_no_secrets(
     max_depth: int = 10
 ) -> tuple[bool, list[str]]:
     """Validate that a response does not contain secret values.
-    
+
     This function recursively checks a response dictionary to ensure
     no secret keys or values are present.
-    
+
     Args:
         response_data: The response data to validate.
         endpoint: The endpoint name (for logging).
         max_depth: Maximum recursion depth.
-        
+
     Returns:
         Tuple of (is_valid, violations) where violations is a list of
         paths to secret keys found in the response.
     """
     violations = []
     _check_for_secrets(response_data, "", violations, max_depth)
-    
+
     if violations:
         LOG.error(
             "Endpoint %s exposes secrets at paths: %s",
@@ -44,7 +44,7 @@ def validate_response_no_secrets(
             ", ".join(violations)
         )
         return False, violations
-    
+
     return True, []
 
 
@@ -55,7 +55,7 @@ def _check_for_secrets(
     max_depth: int
 ) -> None:
     """Recursively check data structure for secret keys.
-    
+
     Args:
         data: The data to check.
         path: Current path in the data structure (for reporting).
@@ -64,11 +64,11 @@ def _check_for_secrets(
     """
     if max_depth <= 0:
         return
-    
+
     if isinstance(data, dict):
         for key, value in data.items():
             current_path = f"{path}.{key}" if path else key
-            
+
             # Check if the key itself is a secret
             # But exclude metadata fields that describe authentication
             # (e.g., "admin_api_key_required" is metadata, not a secret)
@@ -83,10 +83,10 @@ def _check_for_secrets(
                     pass
                 else:
                     violations.append(current_path)
-            
+
             # Recursively check the value
             _check_for_secrets(value, current_path, violations, max_depth - 1)
-    
+
     elif isinstance(data, (list, tuple)):
         for i, item in enumerate(data):
             current_path = f"{path}[{i}]"
@@ -95,18 +95,18 @@ def _check_for_secrets(
 
 def sanitize_public_response(response_data: dict[str, Any]) -> dict[str, Any]:
     """Sanitize a public endpoint response to ensure no secrets are exposed.
-    
+
     This function removes any keys that match secret patterns and replaces
     their values with [REDACTED].
-    
+
     Args:
         response_data: The response data to sanitize.
-        
+
     Returns:
         Sanitized response data.
     """
     sanitized = {}
-    
+
     for key, value in response_data.items():
         if _is_secret_key(key):
             # Replace secret values with redacted marker
@@ -120,5 +120,5 @@ def sanitize_public_response(response_data: dict[str, Any]) -> dict[str, Any]:
             ]
         else:
             sanitized[key] = value
-    
+
     return sanitized

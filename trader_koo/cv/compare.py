@@ -73,4 +73,3 @@ def compare_hybrid_vs_cv(
     for c in ["hybrid_confidence", "cv_confidence", "consensus_confidence", "confidence_gap"]:
         merged[c] = merged[c].round(2)
     return merged[COMPARE_COLUMNS].reset_index(drop=True)
-

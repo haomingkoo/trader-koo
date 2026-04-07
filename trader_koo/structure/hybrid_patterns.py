@@ -167,4 +167,3 @@ def score_hybrid_patterns(
     out = pd.DataFrame(out_rows).sort_values(["hybrid_confidence", "base_confidence"], ascending=[False, False])
     out = out.head(cfg.max_rows).reset_index(drop=True)
     return out[HYBRID_COLUMNS].copy()
-

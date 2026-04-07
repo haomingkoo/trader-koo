@@ -13,7 +13,7 @@ if [ ! -f "$DB_PATH" ]; then
     echo "[start.sh] DB not found at $DB_PATH — creating empty DB and starting server..."
     mkdir -p "$(dirname "$DB_PATH")"
     mkdir -p /data/logs
-    
+
     # Create empty database with schema (fast, <1 second)
     "$PYTHON" -c "
 import sqlite3
@@ -26,7 +26,7 @@ ensure_ohlcv_schema(conn)
 conn.close()
 print('[start.sh] Empty database created with schema')
 "
-    
+
     # Start background seeding (non-blocking)
     echo "[start.sh] Starting background data seed..."
     nohup "$PYTHON" trader_koo/scripts/update_market_db.py \
@@ -36,7 +36,7 @@ print('[start.sh] Empty database created with schema')
         --sleep-max 0.8 \
         --db-path "$DB_PATH" \
         > /data/logs/seed.log 2>&1 &
-    
+
     echo "[start.sh] Background seed started (PID $!). Check /data/logs/seed.log for progress."
 else
     # Database exists - check if it has data
@@ -51,7 +51,7 @@ try:
 except:
     print(0)
 " 2>/dev/null || echo "0")
-    
+
     echo "[start.sh] DB found at $DB_PATH with $RECORD_COUNT price records — skipping seed."
 fi
 

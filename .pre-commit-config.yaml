@@ -12,7 +12,3 @@ repos:
     rev: v8.24.3
     hooks:
       - id: gitleaks
-        args:
-          - protect
-          - --staged
-          - --redact

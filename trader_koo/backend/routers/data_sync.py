@@ -7,8 +7,6 @@ Provides admin-only endpoints for:
 
 All endpoints require X-API-Key authentication via the standard admin middleware.
 """
-from __future__ import annotations
-
 import io
 import logging
 import os

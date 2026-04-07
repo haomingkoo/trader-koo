@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/admin/ratelimit", tags=["admin", "ratelimit"])
 
 class RateLimitOverrideRequest(BaseModel):
     """Request to set rate limit override."""
-    
+
     key: str = Field(..., description="IP address or user_id to override")
     limit: int = Field(..., gt=0, description="New rate limit")
     window_seconds: int = Field(..., gt=0, description="Time window in seconds")
@@ -30,7 +30,7 @@ class RateLimitOverrideRequest(BaseModel):
 
 class RateLimitOverrideResponse(BaseModel):
     """Response after setting rate limit override."""
-    
+
     success: bool
     message: str
     key: str
@@ -41,7 +41,7 @@ class RateLimitOverrideResponse(BaseModel):
 
 class RateLimitStatusResponse(BaseModel):
     """Rate limit status for a key."""
-    
+
     key: str
     request_count: int
     oldest_request: Optional[str]
@@ -56,7 +56,7 @@ _rate_limiter: Optional[RateLimiter] = None
 
 def set_rate_limiter(limiter: RateLimiter) -> None:
     """Set the global rate limiter instance.
-    
+
     Args:
         limiter: RateLimiter instance to use for API endpoints
     """
@@ -67,10 +67,10 @@ def set_rate_limiter(limiter: RateLimiter) -> None:
 
 def get_rate_limiter() -> RateLimiter:
     """Get the global rate limiter instance.
-    
+
     Returns:
         RateLimiter instance
-        
+
     Raises:
         HTTPException: If rate limiter not initialized
     """
@@ -90,7 +90,7 @@ def get_rate_limiter() -> RateLimiter:
 )
 def get_all_status() -> List[RateLimitStatusResponse]:
     """Get rate limit status for all tracked keys.
-    
+
     Returns:
         List of rate limit status for all keys
     """
@@ -107,25 +107,25 @@ def get_all_status() -> List[RateLimitStatusResponse]:
 )
 def get_status(key: str) -> RateLimitStatusResponse:
     """Get rate limit status for a specific key.
-    
+
     Args:
         key: IP address or user_id (e.g., "ip:192.168.1.1" or "user:123")
-        
+
     Returns:
         Rate limit status for the key
-        
+
     Raises:
         HTTPException: If key not found
     """
     limiter = get_rate_limiter()
     status = limiter.get_status(key)
-    
+
     if status is None:
         raise HTTPException(
             status_code=404,
             detail=f"No rate limit data found for key: {key}",
         )
-    
+
     return RateLimitStatusResponse(**status)
 
 
@@ -137,25 +137,25 @@ def get_status(key: str) -> RateLimitStatusResponse:
 )
 def set_override(request: RateLimitOverrideRequest) -> RateLimitOverrideResponse:
     """Set temporary rate limit override for a specific key.
-    
+
     Allows admin to temporarily increase rate limits for specific users
     (Requirement 17.7).
-    
+
     Args:
         request: Override configuration
-        
+
     Returns:
         Confirmation of override being set
     """
     limiter = get_rate_limiter()
-    
+
     limiter.set_override(
         key=request.key,
         limit=request.limit,
         window=timedelta(seconds=request.window_seconds),
         duration=timedelta(seconds=request.duration_seconds),
     )
-    
+
     return RateLimitOverrideResponse(
         success=True,
         message=f"Rate limit override set for {request.key}",
@@ -173,22 +173,22 @@ def set_override(request: RateLimitOverrideRequest) -> RateLimitOverrideResponse
 )
 def remove_override(key: str) -> Dict[str, Any]:
     """Remove rate limit override for a specific key.
-    
+
     Args:
         key: IP address or user_id (e.g., "ip:192.168.1.1" or "user:123")
-        
+
     Returns:
         Confirmation of override removal
     """
     limiter = get_rate_limiter()
     removed = limiter.remove_override(key)
-    
+
     if not removed:
         raise HTTPException(
             status_code=404,
             detail=f"No override found for key: {key}",
         )
-    
+
     return {
         "success": True,
         "message": f"Rate limit override removed for {key}",
@@ -205,16 +205,16 @@ def cleanup_expired(
     max_age_hours: int = Query(24, gt=0, description="Remove entries older than this many hours"),
 ) -> Dict[str, Any]:
     """Clean up expired rate limit entries.
-    
+
     Args:
         max_age_hours: Remove entries older than this many hours
-        
+
     Returns:
         Number of entries removed
     """
     limiter = get_rate_limiter()
     removed = limiter.cleanup_expired(max_age=timedelta(hours=max_age_hours))
-    
+
     return {
         "success": True,
         "message": f"Cleaned up {removed} expired entries",

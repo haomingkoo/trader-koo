@@ -30,66 +30,66 @@ def clear_registry():
 
 class TestAdminEndpointRegistry:
     """Test admin endpoint registration and verification."""
-    
+
     def test_register_admin_endpoint(self):
         """Test registering an admin endpoint."""
         register_admin_endpoint("/api/admin/test", "GET", has_auth=True)
-        
+
         registry = get_admin_endpoint_registry()
         assert "GET:/api/admin/test" in registry
         assert registry["GET:/api/admin/test"]["path"] == "/api/admin/test"
         assert registry["GET:/api/admin/test"]["method"] == "GET"
         assert registry["GET:/api/admin/test"]["has_auth"] is True
-    
+
     def test_verify_all_protected(self):
         """Test verification when all endpoints are protected."""
         register_admin_endpoint("/api/admin/test1", "GET", has_auth=True)
         register_admin_endpoint("/api/admin/test2", "POST", has_auth=True)
-        
+
         all_protected, unprotected = verify_all_admin_endpoints_protected()
         assert all_protected is True
         assert len(unprotected) == 0
-    
+
     def test_verify_with_unprotected(self):
         """Test verification when some endpoints are unprotected."""
         register_admin_endpoint("/api/admin/test1", "GET", has_auth=True)
         register_admin_endpoint("/api/admin/test2", "POST", has_auth=False)
         register_admin_endpoint("/api/admin/test3", "PUT", has_auth=False)
-        
+
         all_protected, unprotected = verify_all_admin_endpoints_protected()
         assert all_protected is False
         assert len(unprotected) == 2
         assert "POST:/api/admin/test2" in unprotected
         assert "PUT:/api/admin/test3" in unprotected
-    
+
     def test_auto_register_from_app(self):
         """Test automatic registration from FastAPI app routes."""
         app = FastAPI()
-        
+
         @app.get("/api/admin/test1")
         @require_admin_auth
         def test1():
             return {"status": "ok"}
-        
+
         @app.post("/api/admin/test2")
         def test2():
             return {"status": "ok"}
-        
+
         @app.get("/api/public/test3")
         def test3():
             return {"status": "ok"}
-        
+
         auto_register_admin_endpoints(app)
-        
+
         registry = get_admin_endpoint_registry()
-        
+
         # Should register admin endpoints
         assert "GET:/api/admin/test1" in registry
         assert "POST:/api/admin/test2" in registry
-        
+
         # Should not register non-admin endpoints
         assert "GET:/api/public/test3" not in registry
-        
+
         # Should detect authentication decorator
         assert registry["GET:/api/admin/test1"]["has_auth"] is True
         assert registry["POST:/api/admin/test2"]["has_auth"] is False
@@ -97,50 +97,50 @@ class TestAdminEndpointRegistry:
 
 class TestRequireAdminAuthDecorator:
     """Test the @require_admin_auth decorator."""
-    
+
     def test_decorator_marks_function(self):
         """Test that decorator marks function with _requires_admin_auth attribute."""
         @require_admin_auth
         def test_func():
             return {"status": "ok"}
-        
+
         assert hasattr(test_func, "_requires_admin_auth")
         assert test_func._requires_admin_auth is True
-    
+
     def test_decorator_with_admin_identity(self):
         """Test that decorated endpoint works with admin identity."""
         app = FastAPI()
-        
+
         @app.get("/api/admin/test")
         @require_admin_auth
         def test_endpoint(request: Request):
             return {"status": "ok", "user": request.state.admin_identity}
-        
+
         client = TestClient(app)
-        
+
         # Mock the middleware by setting admin_identity
         def mock_middleware(request: Request, call_next):
             request.state.admin_identity = {"username": "admin", "mode": "api_key"}
             return call_next(request)
-        
+
         # This test verifies the decorator doesn't break when admin_identity is present
         # In real usage, the middleware sets this
         response = client.get("/api/admin/test")
         # Without middleware, this will fail with 401
         # This is expected behavior - the decorator requires middleware
         assert response.status_code == 401
-    
+
     def test_decorator_without_admin_identity(self):
         """Test that decorated endpoint rejects requests without admin identity."""
         app = FastAPI()
-        
+
         @app.get("/api/admin/test")
         @require_admin_auth
         def test_endpoint(request: Request):
             return {"status": "ok"}
-        
+
         client = TestClient(app)
-        
+
         # Request without admin_identity should be rejected
         response = client.get("/api/admin/test")
         assert response.status_code == 401
@@ -149,11 +149,11 @@ class TestRequireAdminAuthDecorator:
 
 class TestAdminEndpointAuthentication:
     """Integration tests for admin endpoint authentication.
-    
+
     Requirements:
     - 5.5: Include automated test coverage for authentication on every admin endpoint
     """
-    
+
     @pytest.mark.skipif(
         not __import__("pathlib").Path("/data").exists(),
         reason="Requires writable /data directory (Railway only)",
@@ -184,10 +184,10 @@ class TestAdminEndpointAuthentication:
                 if hasattr(route, "methods"):
                     for method in route.methods:
                         admin_routes.append((method, route.path))
-        
+
         # Verify we found admin routes
         assert len(admin_routes) > 0, "No admin routes found"
-        
+
         # Test each admin endpoint without authentication
         with TestClient(app) as client:
             for method, path in admin_routes:

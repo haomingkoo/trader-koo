@@ -1455,4 +1455,3 @@ def fetch_report_payload(
         return payload
     finally:
         conn.close()
-

@@ -41,4 +41,3 @@ export function biasVariant(
   if (b.includes("neutral") || b === "flat") return "amber";
   return "muted";
 }
-

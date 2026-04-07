@@ -4,9 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trader-koo"
-version = "0.1.0"
+version = "0.2.0"
+description = "Full-stack market analysis platform with ML-powered swing-trade research workflows."
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
+authors = [{ name = "Haoming Koo" }]
+
+[project.urls]
+Homepage = "https://trader.kooexperience.com"
+Repository = "https://github.com/haomingkoo/trader-koo"
+Documentation = "https://github.com/haomingkoo/trader-koo/blob/main/ARCHITECTURE.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["trader_koo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

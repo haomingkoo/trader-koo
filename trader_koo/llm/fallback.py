@@ -16,16 +16,16 @@ LOG = logging.getLogger("trader_koo.llm.fallback")
 def generate_template_narrative(context: dict[str, Any]) -> dict[str, str]:
     """
     Generate deterministic template-based narrative.
-    
+
     This is used as a fallback when LLM service fails or returns invalid output.
     Implements Requirements 2.6, 2.7.
-    
+
     Args:
         context: Context data including ticker, setup info, technical indicators
-    
+
     Returns:
         Dictionary with observation, action, and risk_note fields
-    
+
     Example:
         >>> context = {
         ...     "ticker": "AAPL",
@@ -43,24 +43,24 @@ def generate_template_narrative(context: dict[str, Any]) -> dict[str, str]:
     trend_state = context.get("trend_state", "unknown")
     level_context = context.get("level_context", "")
     yolo_pattern = context.get("yolo_pattern", "")
-    
+
     # Build observation from context
     observation_parts = [f"{ticker} shows {setup_tier} setup"]
-    
+
     if trend_state and trend_state != "unknown":
         observation_parts.append(f"in {trend_state}")
-    
+
     if signal_bias and signal_bias != "neutral":
         observation_parts.append(f"with {signal_bias} bias")
-    
+
     if yolo_pattern:
         observation_parts.append(f"Pattern: {yolo_pattern}")
-    
+
     if level_context:
         observation_parts.append(f"Level: {level_context}")
-    
+
     observation = " ".join(observation_parts) + "."
-    
+
     # Generate action based on bias
     if signal_bias == "bullish":
         action = (
@@ -80,14 +80,14 @@ def generate_template_narrative(context: dict[str, Any]) -> dict[str, str]:
             f"Wait for directional confirmation. "
             f"Avoid premature entries."
         )
-    
+
     # Generate risk note
     risk_note = (
         "Manage position size appropriately. "
         "Use stop losses. "
         "Monitor market conditions."
     )
-    
+
     LOG.info(
         "Generated template narrative fallback",
         extra={
@@ -96,7 +96,7 @@ def generate_template_narrative(context: dict[str, Any]) -> dict[str, str]:
             "signal_bias": signal_bias
         }
     )
-    
+
     return {
         "observation": observation,
         "action": action,
@@ -107,12 +107,12 @@ def generate_template_narrative(context: dict[str, Any]) -> dict[str, str]:
 def generate_rule_based_pattern_explanation(pattern_name: str) -> dict[str, Any]:
     """
     Generate rule-based pattern explanation.
-    
+
     Implements Requirements 2.6, 2.7.
-    
+
     Args:
         pattern_name: Name of the detected pattern
-    
+
     Returns:
         Dictionary with pattern explanation fields
     """
@@ -184,7 +184,7 @@ def generate_rule_based_pattern_explanation(pattern_name: str) -> dict[str, Any]
             ]
         },
     }
-    
+
     # Get template or use generic
     template = pattern_templates.get(
         pattern_name.lower().replace(" ", "_"),
@@ -197,7 +197,7 @@ def generate_rule_based_pattern_explanation(pattern_name: str) -> dict[str, Any]
             ]
         }
     )
-    
+
     return {
         "pattern_name": pattern_name,
         "explanation": template["explanation"],

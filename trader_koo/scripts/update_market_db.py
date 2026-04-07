@@ -602,13 +602,13 @@ def fetch_price_daily(
     retry_attempts: int = 3,
 ) -> tuple[pd.DataFrame, str]:
     """Fetch daily price data with multi-source redundancy.
-    
+
     Requirements:
     - 12.1: Implement yfinance as primary source
     - 12.2: Implement Alpha Vantage fallback
     - 12.3: Implement CSV fallback
     - 12.4: Add source logging
-    
+
     Args:
         ticker: Ticker symbol
         start: Start date (YYYY-MM-DD)
@@ -616,7 +616,7 @@ def fetch_price_daily(
         auto_adjust: Whether to auto-adjust prices
         timeout_sec: Request timeout in seconds
         retry_attempts: Number of retry attempts (used for yfinance)
-        
+
     Returns:
         Tuple of (DataFrame with columns: date, open, high, low, close, volume, data source name)
     """
@@ -640,24 +640,24 @@ def fetch_price_daily(
 
 
 def write_price_daily(
-    conn: sqlite3.Connection, 
-    ticker: str, 
+    conn: sqlite3.Connection,
+    ticker: str,
     df: pd.DataFrame,
     data_source: str = "yfinance",
     fetch_timestamp: Optional[str] = None,
 ) -> None:
     """Write price data to database with data source tracking.
-    
+
     Requirements:
     - 12.4: Add source logging
     - 12.7: Include source in API responses with data source and timestamp
     """
     if df.empty:
         return
-    
+
     if fetch_timestamp is None:
         fetch_timestamp = utc_now_iso()
-    
+
     rows = [
         (
             ticker,

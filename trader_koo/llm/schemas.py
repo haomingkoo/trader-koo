@@ -14,10 +14,10 @@ from pydantic import BaseModel, Field, field_validator
 
 class NarrativeGeneration(BaseModel):
     """Schema for narrative generation responses.
-    
+
     Validates Requirements 2.1, 2.2, 7.4, 7.5.
     """
-    
+
     observation: str = Field(
         ...,
         min_length=1,
@@ -35,7 +35,7 @@ class NarrativeGeneration(BaseModel):
         max_length=1000,
         description="Risk assessment summary"
     )
-    
+
     @field_validator("observation", "action", "risk_note")
     @classmethod
     def strip_whitespace(cls, v: str) -> str:
@@ -45,10 +45,10 @@ class NarrativeGeneration(BaseModel):
 
 class PatternExplanation(BaseModel):
     """Schema for pattern explanation responses.
-    
+
     Validates Requirements 2.1, 7.4, 7.5.
     """
-    
+
     pattern_name: str = Field(
         ...,
         min_length=1,
@@ -72,13 +72,13 @@ class PatternExplanation(BaseModel):
         max_length=10,
         description="List of key pattern characteristics"
     )
-    
+
     @field_validator("pattern_name", "explanation")
     @classmethod
     def strip_whitespace(cls, v: str) -> str:
         """Strip leading/trailing whitespace from text fields."""
         return v.strip() if v else ""
-    
+
     @field_validator("key_characteristics")
     @classmethod
     def validate_characteristics(cls, v: list[str]) -> list[str]:
@@ -88,10 +88,10 @@ class PatternExplanation(BaseModel):
 
 class RegimeAnalysis(BaseModel):
     """Schema for regime analysis responses.
-    
+
     Validates Requirements 2.1, 7.4, 7.5.
     """
-    
+
     regime_type: str = Field(
         ...,
         min_length=1,
@@ -119,13 +119,13 @@ class RegimeAnalysis(BaseModel):
         max_length=20,
         description="Key price levels"
     )
-    
+
     @field_validator("regime_type", "summary", "analysis")
     @classmethod
     def strip_whitespace(cls, v: str) -> str:
         """Strip leading/trailing whitespace from text fields."""
         return v.strip() if v else ""
-    
+
     @field_validator("key_levels")
     @classmethod
     def validate_levels(cls, v: list[float]) -> list[float]:
@@ -135,11 +135,11 @@ class RegimeAnalysis(BaseModel):
 
 class SetupRewrite(BaseModel):
     """Schema for setup copy rewrite responses.
-    
+
     Validates Requirements 2.1, 2.2, 7.4, 7.5.
     Used by existing maybe_rewrite_setup_copy function.
     """
-    
+
     observation: str = Field(
         ...,
         min_length=1,
@@ -157,7 +157,7 @@ class SetupRewrite(BaseModel):
         max_length=80,
         description="Rewritten risk note (max 80 chars)"
     )
-    
+
     @field_validator("observation", "action", "risk_note")
     @classmethod
     def strip_whitespace(cls, v: str) -> str:

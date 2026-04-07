@@ -152,7 +152,7 @@ def select_target_levels(levels: pd.DataFrame, last_close: float, cfg: LevelConf
     lv = lv[lv["dist"] <= cfg.max_dist_secondary_pct * last_close].copy()
     if lv.empty:
         return _empty_levels()
-    
+
     # Requirement 10.4: Prioritize pivot_cluster > ma_anchor > fallback
     # Add priority score for sorting
     source_priority = {"pivot_cluster": 0, "ma_anchor": 1, "fallback": 2}
@@ -163,7 +163,7 @@ def select_target_levels(levels: pd.DataFrame, last_close: float, cfg: LevelConf
         cond = cond & (lv["level"] <= last_close if is_support else lv["level"] >= last_close)
         # Sort by source priority first, then distance, touches, and recency
         pool = lv[cond].sort_values(
-            ["source_priority", "dist", "touches", "recency_score"], 
+            ["source_priority", "dist", "touches", "recency_score"],
             ascending=[True, True, False, False]
         )
         # If price is sitting at/near extremes, strict one-sided filtering can return empty.
@@ -176,7 +176,7 @@ def select_target_levels(levels: pd.DataFrame, last_close: float, cfg: LevelConf
             else:
                 near_cond = near_cond & (lv["level"] >= last_close * (1 - tol))
             pool = lv[near_cond].sort_values(
-                ["source_priority", "dist", "touches", "recency_score"], 
+                ["source_priority", "dist", "touches", "recency_score"],
                 ascending=[True, True, False, False]
             )
         if pool.empty:

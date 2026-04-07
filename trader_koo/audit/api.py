@@ -23,7 +23,7 @@ def query_audit_logs(
 ) -> dict[str, Any]:
     """
     Query audit logs with filtering and pagination.
-    
+
     Args:
         logger: AuditLogger instance
         start_date: Filter logs after this date (ISO format)
@@ -34,7 +34,7 @@ def query_audit_logs(
         action: Filter by action
         page: Page number (1-indexed)
         per_page: Results per page
-        
+
     Returns:
         Dictionary with logs and pagination info
     """
@@ -42,7 +42,7 @@ def query_audit_logs(
     page = max(1, page)
     per_page = min(max(1, per_page), 200)  # Cap at 200
     offset = (page - 1) * per_page
-    
+
     # Query logs
     logs = logger.query_logs(
         start_date=start_date,
@@ -54,7 +54,7 @@ def query_audit_logs(
         limit=per_page,
         offset=offset,
     )
-    
+
     # Get total count
     total = logger.count_logs(
         start_date=start_date,
@@ -62,9 +62,9 @@ def query_audit_logs(
         user_id=user_id,
         event_type=event_type,
     )
-    
+
     total_pages = (total + per_page - 1) // per_page
-    
+
     return {
         "logs": logs,
         "pagination": {
@@ -97,7 +97,7 @@ def export_audit_logs(
 ) -> dict[str, Any] | str:
     """
     Export audit logs in specified format.
-    
+
     Args:
         logger: AuditLogger instance
         start_date: Filter logs after this date
@@ -105,7 +105,7 @@ def export_audit_logs(
         user_id: Filter by user ID
         event_type: Filter by event type
         format: Export format (json or csv)
-        
+
     Returns:
         Exported data in requested format
     """
@@ -118,19 +118,19 @@ def export_audit_logs(
         limit=100000,  # Large limit for export
         offset=0,
     )
-    
+
     if format == "csv":
         # Convert to CSV format
         import csv
         import io
-        
+
         output = io.StringIO()
-        
+
         if logs:
             fieldnames = list(logs[0].keys())
             writer = csv.DictWriter(output, fieldnames=fieldnames)
             writer.writeheader()
-            
+
             for log in logs:
                 # Convert details dict to string for CSV
                 row = log.copy()
@@ -138,9 +138,9 @@ def export_audit_logs(
                     import json
                     row["details"] = json.dumps(row["details"])
                 writer.writerow(row)
-        
+
         return output.getvalue()
-    
+
     # Default to JSON
     return {
         "logs": logs,
@@ -158,53 +158,53 @@ def export_audit_logs(
 def get_audit_summary(logger: AuditLogger, days: int = 7) -> dict[str, Any]:
     """
     Get summary statistics for audit logs.
-    
+
     Args:
         logger: AuditLogger instance
         days: Number of days to include in summary
-        
+
     Returns:
         Summary statistics
     """
     start_date = (dt.datetime.now(dt.timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-    
+
     # Get all logs for the period
     logs = logger.query_logs(
         start_date=start_date,
         limit=100000,
     )
-    
+
     # Calculate statistics
     event_type_counts: dict[str, int] = {}
     user_activity: dict[str, int] = {}
     resource_access: dict[str, int] = {}
     hourly_activity: dict[int, int] = {}
-    
+
     for log in logs:
         # Count by event type
         event_type = log.get("event_type", "unknown")
         event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
-        
+
         # Count by user
         user_id = log.get("user_id")
         if user_id:
             user_activity[user_id] = user_activity.get(user_id, 0) + 1
-        
+
         # Count by resource
         resource = log.get("resource")
         if resource:
             resource_access[resource] = resource_access.get(resource, 0) + 1
-        
+
         # Count by hour
         timestamp = log.get("timestamp", "")
         if timestamp:
             try:
-                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                hour = dt.hour
+                parsed_ts = dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                hour = parsed_ts.hour
                 hourly_activity[hour] = hourly_activity.get(hour, 0) + 1
             except (ValueError, AttributeError):
                 pass
-    
+
     return {
         "period_days": days,
         "start_date": start_date,

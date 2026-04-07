@@ -4,10 +4,10 @@ Full-stack S&P 500 + crypto market analysis platform with ML-powered swing trade
 
 **Live**: [trader.kooexperience.com](https://trader.kooexperience.com)
 
-![Python 3.10](https://img.shields.io/badge/Python-3.10-blue)
+![CI](https://github.com/haomingkoo/trader-koo/actions/workflows/ci.yml/badge.svg)
+![Python >=3.10](https://img.shields.io/badge/Python-%3E%3D3.10-blue)
 ![React 19](https://img.shields.io/badge/React-19-61DAFB)
 ![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E)
-![Tests](https://img.shields.io/badge/tests-578%20passing-brightgreen)
 
 > For informational and educational purposes only. Not investment advice.
 
@@ -45,21 +45,30 @@ Full-stack S&P 500 + crypto market analysis platform with ML-powered swing trade
 ```bash
 git clone https://github.com/haomingkoo/trader-koo.git
 cd trader-koo
-python -m venv .venv && source .venv/bin/activate
-pip install -r trader_koo/requirements.txt && pip install -e .
 
 # Configure environment — see .env.example for all variables
 cp .env.example .env
+
+make backend-install
+make frontend-install
+make hooks-install
 
 # Backend
 uvicorn trader_koo.backend.main:app --reload --port 8000
 
 # Frontend (separate terminal)
-cd trader_koo/frontend-v2 && npm install && npm run dev
+cd trader_koo/frontend-v2 && npm run dev
 
-# Tests
-python -m pytest tests/ -v
+# Local CI parity
+make ci
 ```
+
+## Quality
+
+- GitHub Actions runs repo hygiene, backend tests, and frontend production builds on every push and pull request.
+- Dependabot is configured for Python, npm, and GitHub Actions dependency updates.
+- Pre-commit hooks enforce basic hygiene and secret scanning before code lands.
+- See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected local workflow.
 
 ## Architecture
 

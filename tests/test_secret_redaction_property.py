@@ -64,16 +64,16 @@ value_strategy = st.one_of(
 @given(secret_key=secret_key_strategy, value=value_strategy)
 def test_property_secret_keys_always_redacted(secret_key, value):
     """Property: Secret keys are always redacted regardless of value.
-    
+
     For any key that matches a secret pattern, the value should be
     replaced with [REDACTED] after redaction.
     """
     data = {secret_key: value}
     redacted = redact_secrets(data)
-    
+
     # The key should still exist
     assert secret_key in redacted
-    
+
     # The value should be redacted
     assert redacted[secret_key] == REDACTED_VALUE
 
@@ -81,16 +81,16 @@ def test_property_secret_keys_always_redacted(secret_key, value):
 @given(non_secret_key=non_secret_key_strategy, value=value_strategy)
 def test_property_non_secret_keys_preserved(non_secret_key, value):
     """Property: Non-secret keys preserve their values.
-    
+
     For any key that does NOT match a secret pattern, the value should
     remain unchanged after redaction.
     """
     data = {non_secret_key: value}
     redacted = redact_secrets(data)
-    
+
     # The key should still exist
     assert non_secret_key in redacted
-    
+
     # The value should be unchanged (unless it's a very long string that looks like a secret)
     if isinstance(value, str) and len(value) >= 40 and value.replace('_', '').replace('-', '').isalnum():
         # Very long alphanumeric strings might be redacted as potential secrets
@@ -109,7 +109,7 @@ def test_property_mixed_dict_partial_redaction(
     secret_key, non_secret_key, secret_value, non_secret_value
 ):
     """Property: Mixed dictionaries have only secret keys redacted.
-    
+
     For any dictionary containing both secret and non-secret keys,
     only the secret keys should be redacted.
     """
@@ -118,14 +118,14 @@ def test_property_mixed_dict_partial_redaction(
         non_secret_key: non_secret_value,
     }
     redacted = redact_secrets(data)
-    
+
     # Both keys should exist
     assert secret_key in redacted
     assert non_secret_key in redacted
-    
+
     # Secret key should be redacted
     assert redacted[secret_key] == REDACTED_VALUE
-    
+
     # Non-secret key should be preserved (unless it looks like a secret)
     if len(non_secret_value) >= 40 and non_secret_value.replace('_', '').replace('-', '').isalnum():
         # Very long alphanumeric strings might be redacted
@@ -141,7 +141,7 @@ def test_property_mixed_dict_partial_redaction(
 )
 def test_property_nested_secrets_redacted(depth, secret_key, value):
     """Property: Secrets are redacted at any nesting depth.
-    
+
     For any nested dictionary structure, secrets should be redacted
     regardless of how deeply they are nested.
     """
@@ -149,14 +149,14 @@ def test_property_nested_secrets_redacted(depth, secret_key, value):
     data = {secret_key: value}
     for _ in range(depth):
         data = {"nested": data}
-    
+
     redacted = redact_secrets(data)
-    
+
     # Navigate to the secret key
     current = redacted
     for _ in range(depth):
         current = current["nested"]
-    
+
     # The secret should be redacted
     assert current[secret_key] == REDACTED_VALUE
 
@@ -175,12 +175,12 @@ def test_property_nested_secrets_redacted(depth, secret_key, value):
 )
 def test_property_list_of_dicts_redacted(items):
     """Property: Secrets in lists of dictionaries are redacted.
-    
+
     For any list containing dictionaries, all secret keys in all
     dictionaries should be redacted.
     """
     redacted = redact_secrets(items)
-    
+
     # Check each item in the list
     for i, item in enumerate(items):
         for key, value in item.items():
@@ -215,7 +215,7 @@ def test_property_list_of_dicts_redacted(items):
 ))
 def test_property_arbitrary_structure_no_crash(data):
     """Property: Redaction never crashes on arbitrary data structures.
-    
+
     For any arbitrarily nested data structure, the redaction function
     should complete without raising an exception.
     """
@@ -235,15 +235,15 @@ def test_property_arbitrary_structure_no_crash(data):
 )
 def test_property_redaction_idempotent(key, value):
     """Property: Redaction is idempotent.
-    
+
     For any data structure, applying redaction multiple times should
     produce the same result as applying it once.
     """
     data = {key: value}
-    
+
     redacted_once = redact_secrets(data)
     redacted_twice = redact_secrets(redacted_once)
-    
+
     # Should be the same
     assert redacted_once == redacted_twice
 
@@ -254,16 +254,16 @@ def test_property_redaction_idempotent(key, value):
 )
 def test_property_redacted_value_never_original(secret_key, value):
     """Property: Redacted values never equal original secret values.
-    
+
     For any secret key, after redaction, the value should never be
     the same as the original value (unless it was already [REDACTED]).
     """
     data = {secret_key: value}
     redacted = redact_secrets(data)
-    
+
     # If the original value was not already [REDACTED], it should be different
     if value != REDACTED_VALUE:
         assert redacted[secret_key] != value
-    
+
     # The redacted value should always be [REDACTED]
     assert redacted[secret_key] == REDACTED_VALUE

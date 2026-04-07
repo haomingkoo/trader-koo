@@ -298,11 +298,11 @@ def _calculate_token_expiry(
     expiry_hours: int = 168  # 7 days default
 ) -> dt.datetime:
     """Calculate token expiration timestamp.
-    
+
     Args:
         created_ts: Token creation timestamp.
         expiry_hours: Hours until expiration (default: 168 = 7 days).
-        
+
     Returns:
         Expiration timestamp.
     """
@@ -314,11 +314,11 @@ def _is_token_expired(
     now_utc: dt.datetime | None = None
 ) -> bool:
     """Check if a token has expired.
-    
+
     Args:
         expires_ts: Token expiration timestamp.
         now_utc: Current time (defaults to now).
-        
+
     Returns:
         True if token is expired, False otherwise.
     """
@@ -515,10 +515,10 @@ def confirm_subscriber_token(
         ).fetchone()
         if row is None:
             return None
-        
+
         email = canonical_email(row["email"])
         expires_ts = _parse_iso(row["confirm_token_expires_ts"])
-        
+
         # Check if token has expired
         if _is_token_expired(expires_ts, now):
             return {
@@ -526,7 +526,7 @@ def confirm_subscriber_token(
                 "detail": "This confirmation link has expired. Please request a new one.",
                 "email": email,
             }
-        
+
         conn.execute(
             """
             UPDATE email_subscribers
@@ -789,4 +789,3 @@ def subscriber_counts(db_path: Path) -> dict[str, int]:
         }
     finally:
         conn.close()
-

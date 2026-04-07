@@ -212,7 +212,7 @@ class TestVisualMarkers:
 
     def test_visual_markers_contain_all_patterns(self):
         """Test that visual markers are defined for all pattern types.
-        
+
         Requirements: 14.7
         """
         markers = get_pattern_visual_markers()
@@ -227,7 +227,7 @@ class TestVisualMarkers:
         for pattern in required_patterns:
             assert pattern in markers, f"Visual markers should contain {pattern}"
             marker_spec = markers[pattern]
-            
+
             # Verify required fields
             assert "color" in marker_spec, f"Marker for {pattern} should have color"
             assert "symbol" in marker_spec, f"Marker for {pattern} should have symbol"
@@ -261,19 +261,19 @@ class TestVisualMarkers:
     def test_trap_markers_have_distinct_colors(self):
         """Test that bull and bear traps have different colors for clarity."""
         markers = get_pattern_visual_markers()
-        
+
         bull_trap_color = markers["bull_trap"]["color"]
         bear_trap_color = markers["bear_trap"]["color"]
-        
+
         assert bull_trap_color != bear_trap_color, "Bull trap and bear trap should have distinct colors"
 
     def test_reclaim_markers_have_distinct_colors(self):
         """Test that support and resistance reclaims have different colors."""
         markers = get_pattern_visual_markers()
-        
+
         support_color = markers["support_reclaim"]["color"]
         resistance_color = markers["resistance_reclaim"]["color"]
-        
+
         assert support_color != resistance_color, "Support and resistance reclaims should have distinct colors"
 
 
@@ -342,7 +342,7 @@ class TestEdgeCases:
 
 class TestConfidenceCalculation:
     """Test confidence scoring with volume and reversal speed.
-    
+
     Requirements: 14.3
     """
 
@@ -363,7 +363,7 @@ class TestConfidenceCalculation:
 
         patterns = detect_vix_trap_reclaim_patterns(data, levels)
         bull_traps = [p for p in patterns if p.pattern_type == "bull_trap"]
-        
+
         assert len(bull_traps) > 0, "Should detect bull trap"
         assert bull_traps[0].volume_factor is not None, "Should calculate volume factor"
         assert bull_traps[0].volume_factor >= 1.0, "Volume factor should be >= 1.0 for higher reversal volume"
@@ -384,7 +384,7 @@ class TestConfidenceCalculation:
 
         patterns = detect_vix_trap_reclaim_patterns(data, levels)
         bear_traps = [p for p in patterns if p.pattern_type == "bear_trap"]
-        
+
         assert len(bear_traps) > 0, "Should detect bear trap"
         assert bear_traps[0].volume_factor is not None, "Should calculate volume factor"
         assert bear_traps[0].volume_factor >= 2.0, "Volume factor should be high for 2.5x reversal volume"
@@ -401,7 +401,7 @@ class TestConfidenceCalculation:
                 "close": [15.2, 15.8, 16.2, 16.8, 17.5, 16.2, 15.8, 15.5, 15.3, 15.0],  # Bar 4 breaks, bar 5 reverses
             }
         )
-        
+
         # Slow reversal (3 bars) - breaks above 17.2, takes 3 bars to reverse below 17.0
         data_slow = pd.DataFrame(
             {
@@ -412,18 +412,18 @@ class TestConfidenceCalculation:
                 "close": [15.2, 15.8, 16.2, 16.8, 17.5, 17.2, 17.0, 16.7, 16.2, 16.0, 15.8, 15.5],  # Bar 4 breaks, bar 7 reverses
             }
         )
-        
+
         levels = [{"type": "resistance", "level": 17.0, "zone_high": 17.2}]
-        
+
         patterns_fast = detect_vix_trap_reclaim_patterns(data_fast, levels)
         patterns_slow = detect_vix_trap_reclaim_patterns(data_slow, levels)
-        
+
         bull_traps_fast = [p for p in patterns_fast if p.pattern_type == "bull_trap"]
         bull_traps_slow = [p for p in patterns_slow if p.pattern_type == "bull_trap"]
-        
+
         assert len(bull_traps_fast) > 0, "Should detect fast bull trap"
         assert len(bull_traps_slow) > 0, "Should detect slow bull trap"
-        
+
         # Fast reversal should have higher speed factor
         assert bull_traps_fast[0].reversal_speed_factor is not None
         assert bull_traps_slow[0].reversal_speed_factor is not None
@@ -446,7 +446,7 @@ class TestConfidenceCalculation:
 
         patterns = detect_vix_trap_reclaim_patterns(data, levels)
         bull_traps = [p for p in patterns if p.pattern_type == "bull_trap"]
-        
+
         assert len(bull_traps) > 0, "Should detect bull trap without volume data"
         assert bull_traps[0].volume_factor is None, "Volume factor should be None when no volume data"
         assert bull_traps[0].confidence > 0.5, "Should still have reasonable confidence without volume"

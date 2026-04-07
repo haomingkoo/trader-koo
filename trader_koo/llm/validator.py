@@ -26,14 +26,14 @@ T = TypeVar("T", bound=BaseModel)
 
 class ValidationResult:
     """Result of LLM output validation.
-    
+
     Attributes:
         is_valid: Whether validation succeeded
         data: Validated data (None if validation failed)
         errors: List of validation error messages
         fallback_used: Whether fallback was triggered
     """
-    
+
     def __init__(
         self,
         is_valid: bool,
@@ -55,17 +55,17 @@ def validate_llm_output(
 ) -> ValidationResult:
     """
     Validate LLM output against expected JSON schema.
-    
+
     Implements Requirements 2.1, 2.6, 2.7, 7.2, 7.3, 7.6, 7.7.
-    
+
     Args:
         output: Raw LLM output dictionary
         schema: Pydantic model class to validate against
         context: Optional context for logging (ticker, source, etc.)
-    
+
     Returns:
         ValidationResult with validation status and data or errors
-    
+
     Example:
         >>> result = validate_llm_output(
         ...     {"observation": "Market is bullish", "action": "Buy"},
@@ -75,7 +75,7 @@ def validate_llm_output(
         ...     print(result.data.observation)
     """
     context = context or {}
-    
+
     if not isinstance(output, dict):
         error_msg = f"LLM output is not a dictionary: {type(output).__name__}"
         LOG.warning(
@@ -87,11 +87,11 @@ def validate_llm_output(
             is_valid=False,
             errors=[error_msg]
         )
-    
+
     try:
         # Validate against schema
         validated_data = schema(**output)
-        
+
         LOG.debug(
             "LLM validation succeeded",
             extra={
@@ -100,12 +100,12 @@ def validate_llm_output(
                 "field_count": len(output)
             }
         )
-        
+
         return ValidationResult(
             is_valid=True,
             data=validated_data
         )
-        
+
     except ValidationError as e:
         # Extract validation errors
         errors = []
@@ -114,7 +114,7 @@ def validate_llm_output(
             error_type = error["type"]
             error_msg = error["msg"]
             errors.append(f"{field_path}: {error_msg} (type: {error_type})")
-        
+
         LOG.warning(
             "LLM validation failed: schema validation errors",
             extra={
@@ -125,12 +125,12 @@ def validate_llm_output(
                 "output_keys": list(output.keys()) if isinstance(output, dict) else None
             }
         )
-        
+
         return ValidationResult(
             is_valid=False,
             errors=errors
         )
-    
+
     except Exception as e:
         error_msg = f"Unexpected validation error: {type(e).__name__}: {str(e)}"
         LOG.error(
@@ -142,7 +142,7 @@ def validate_llm_output(
             },
             exc_info=True
         )
-        
+
         return ValidationResult(
             is_valid=False,
             errors=[error_msg]
@@ -152,12 +152,12 @@ def validate_llm_output(
 def generate_fallback_narrative(context: dict[str, Any]) -> dict[str, str]:
     """
     Generate deterministic rule-based narrative as fallback.
-    
+
     Implements Requirements 2.6, 2.7.
-    
+
     Args:
         context: Context data for narrative generation
-    
+
     Returns:
         Dictionary with observation, action, and risk_note fields
     """
@@ -165,7 +165,7 @@ def generate_fallback_narrative(context: dict[str, Any]) -> dict[str, str]:
     setup_tier = context.get("setup_tier", "unknown")
     signal_bias = context.get("signal_bias", "neutral")
     trend_state = context.get("trend_state", "unknown")
-    
+
     # Generate observation
     observation_parts = [f"{ticker} shows {setup_tier} setup"]
     if trend_state and trend_state != "unknown":
@@ -173,7 +173,7 @@ def generate_fallback_narrative(context: dict[str, Any]) -> dict[str, str]:
     if signal_bias and signal_bias != "neutral":
         observation_parts.append(f"with {signal_bias} bias")
     observation = " ".join(observation_parts) + "."
-    
+
     # Generate action
     if signal_bias == "bullish":
         action = f"Watch for entry above key resistance. Monitor volume confirmation."
@@ -181,10 +181,10 @@ def generate_fallback_narrative(context: dict[str, Any]) -> dict[str, str]:
         action = f"Watch for breakdown below support. Consider protective stops."
     else:
         action = f"Monitor price action at key levels. Wait for directional confirmation."
-    
+
     # Generate risk note
     risk_note = "Manage position size. Use stop losses. Monitor market conditions."
-    
+
     return {
         "observation": observation,
         "action": action,
@@ -195,12 +195,12 @@ def generate_fallback_narrative(context: dict[str, Any]) -> dict[str, str]:
 def generate_fallback_pattern_explanation(pattern_name: str) -> dict[str, Any]:
     """
     Generate rule-based pattern explanation as fallback.
-    
+
     Implements Requirements 2.6, 2.7.
-    
+
     Args:
         pattern_name: Name of the pattern
-    
+
     Returns:
         Dictionary with pattern explanation fields
     """
@@ -212,12 +212,12 @@ def generate_fallback_pattern_explanation(pattern_name: str) -> dict[str, Any]:
         "double_top": "A bearish reversal pattern showing resistance at similar price levels.",
         "double_bottom": "A bullish reversal pattern showing support at similar price levels.",
     }
-    
+
     explanation = explanations.get(
         pattern_name.lower(),
         f"Technical pattern detected: {pattern_name}. Monitor for confirmation."
     )
-    
+
     return {
         "pattern_name": pattern_name,
         "explanation": explanation,
@@ -233,12 +233,12 @@ def generate_fallback_pattern_explanation(pattern_name: str) -> dict[str, Any]:
 def generate_fallback_regime_analysis(vix_level: float | None = None) -> dict[str, Any]:
     """
     Generate rule-based regime analysis as fallback.
-    
+
     Implements Requirements 2.6, 2.7.
-    
+
     Args:
         vix_level: Current VIX level (optional)
-    
+
     Returns:
         Dictionary with regime analysis fields
     """
@@ -262,7 +262,7 @@ def generate_fallback_regime_analysis(vix_level: float | None = None) -> dict[st
         regime_type = "high_volatility"
         summary = "High volatility environment with VIX above 30."
         analysis = "Market in high volatility regime. Extreme caution advised. Consider defensive positioning. Wait for stabilization."
-    
+
     return {
         "regime_type": regime_type,
         "summary": summary,

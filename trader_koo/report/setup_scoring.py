@@ -2160,4 +2160,3 @@ def build_no_trade_conditions(report: dict[str, Any]) -> dict[str, Any]:
         "soft_flags": soft_count,
         "conditions": conditions,
     }
-

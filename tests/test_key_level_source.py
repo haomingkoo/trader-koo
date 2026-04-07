@@ -16,12 +16,12 @@ from trader_koo.structure.levels import (
 
 def test_pivot_cluster_source_labeling():
     """Test that pivot-based levels are labeled with 'pivot_cluster' source.
-    
+
     Requirement 10.1: Label each key level with source
     """
     # Create sample data with pivots that will cluster
     dates = pd.date_range("2024-01-01", periods=60, freq="D")
-    
+
     # Create a price pattern with clear support/resistance levels
     prices = []
     for i in range(60):
@@ -31,7 +31,7 @@ def test_pivot_cluster_source_labeling():
             prices.append(105 + np.sin(i / 3) * 2)
         else:
             prices.append(103 + np.sin(i / 3) * 2)
-    
+
     df = pd.DataFrame({
         "date": dates,
         "open": prices,
@@ -41,33 +41,33 @@ def test_pivot_cluster_source_labeling():
         "volume": [1000000] * 60,
         "atr": [2.0] * 60,
     })
-    
+
     # Add pivot columns - create multiple pivots at similar levels to form clusters
     df["pivot_high"] = False
     df["pivot_low"] = False
-    
+
     # Create support cluster around 98-99
     df.loc[5, "pivot_low"] = True
     df.loc[15, "pivot_low"] = True
     df.loc[25, "pivot_low"] = True
-    
+
     # Create resistance cluster around 106-107
     df.loc[10, "pivot_high"] = True
     df.loc[20, "pivot_high"] = True
     df.loc[30, "pivot_high"] = True
-    
+
     # Adjust the actual pivot prices to be close together
     df.loc[5, "low"] = 98.5
     df.loc[15, "low"] = 98.8
     df.loc[25, "low"] = 98.6
-    
+
     df.loc[10, "high"] = 106.5
     df.loc[20, "high"] = 106.8
     df.loc[30, "high"] = 106.6
-    
+
     cfg = LevelConfig(min_touches=2)  # Require at least 2 touches
     levels = build_levels_from_pivots(df, cfg)
-    
+
     # All levels from pivots should have source='pivot_cluster'
     if not levels.empty:
         assert "source" in levels.columns, "Levels should have 'source' column"
@@ -80,13 +80,13 @@ def test_pivot_cluster_source_labeling():
 
 def test_fallback_source_labeling():
     """Test that fallback levels are labeled with 'fallback' source.
-    
+
     Requirement 10.1: Label each key level with source
     """
     # Create sample data
     dates = pd.date_range("2024-01-01", periods=30, freq="D")
     prices = [100 + i * 0.5 for i in range(30)]
-    
+
     df = pd.DataFrame({
         "date": dates,
         "open": prices,
@@ -96,19 +96,19 @@ def test_fallback_source_labeling():
         "volume": [1000000] * 30,
         "atr": [2.0] * 30,
     })
-    
+
     # Empty levels dataframe (no pivot levels)
     empty_levels = pd.DataFrame(columns=[
         "type", "level", "zone_low", "zone_high", "touches",
         "last_touch_date", "recency_score", "dist", "tier", "source"
     ])
-    
+
     cfg = LevelConfig()
     last_close = prices[-1]
-    
+
     # Add fallback levels
     levels = add_fallback_levels(df, empty_levels, last_close, cfg)
-    
+
     # All fallback levels should have source='fallback'
     assert not levels.empty, "Should have added fallback levels"
     assert "source" in levels.columns, "Levels should have 'source' column"
@@ -119,7 +119,7 @@ def test_fallback_source_labeling():
 
 def test_source_prioritization():
     """Test that levels are prioritized: pivot_cluster > ma_anchor > fallback.
-    
+
     Requirement 10.4: Prioritize pivot_cluster > ma_anchor > fallback
     """
     # Create a mix of levels with different sources
@@ -173,15 +173,15 @@ def test_source_prioritization():
             "source": "pivot_cluster",
         },
     ])
-    
+
     cfg = LevelConfig()
     last_close = 105.0
-    
+
     # Select target levels - should prioritize pivot_cluster over fallback
     selected = select_target_levels(levels, last_close, cfg)
-    
+
     assert not selected.empty, "Should have selected some levels"
-    
+
     # Check that pivot_cluster levels are prioritized
     support_levels = selected[selected["type"] == "support"]
     if len(support_levels) > 0:
@@ -189,7 +189,7 @@ def test_source_prioritization():
         # even though fallback is closer (dist=5 vs dist=4)
         pivot_supports = support_levels[support_levels["source"] == "pivot_cluster"]
         assert len(pivot_supports) > 0, "Should have selected pivot_cluster support"
-    
+
     resistance_levels = selected[selected["type"] == "resistance"]
     if len(resistance_levels) > 0:
         # The pivot_cluster resistance should be selected
@@ -199,11 +199,11 @@ def test_source_prioritization():
 
 def test_source_in_level_columns():
     """Test that 'source' is included in LEVEL_COLUMNS.
-    
+
     Requirement 10.3: Include source field in level objects
     """
     from trader_koo.structure.levels import LEVEL_COLUMNS
-    
+
     assert "source" in LEVEL_COLUMNS, "LEVEL_COLUMNS should include 'source'"
 
 
@@ -212,7 +212,7 @@ def test_mixed_source_levels():
     # Create sample data with some pivots
     dates = pd.date_range("2024-01-01", periods=30, freq="D")
     prices = [100 + i * 0.5 + np.sin(i / 5) * 3 for i in range(30)]
-    
+
     df = pd.DataFrame({
         "date": dates,
         "open": prices,
@@ -222,26 +222,26 @@ def test_mixed_source_levels():
         "volume": [1000000] * 30,
         "atr": [2.0] * 30,
     })
-    
+
     # Add some pivots (but not enough for both support and resistance)
     df["pivot_high"] = False
     df["pivot_low"] = False
     df.loc[10, "pivot_high"] = True
     df.loc[20, "pivot_high"] = True
-    
+
     cfg = LevelConfig()
     last_close = prices[-1]
-    
+
     # Build pivot levels
     pivot_levels = build_levels_from_pivots(df, cfg)
-    
+
     # Add fallback levels
     all_levels = add_fallback_levels(df, pivot_levels, last_close, cfg)
-    
+
     # Should have both pivot_cluster and fallback sources
     sources = set(all_levels["source"].unique())
     assert "pivot_cluster" in sources or "fallback" in sources, "Should have at least one source type"
-    
+
     # Each level should have a valid source
     for source in all_levels["source"]:
         assert source in ["pivot_cluster", "ma_anchor", "fallback"], f"Invalid source: {source}"
@@ -249,7 +249,7 @@ def test_mixed_source_levels():
 
 def test_vix_level_source_in_report():
     """Test that VIX levels in report format include source field.
-    
+
     Requirement 10.3: Include source in API responses
     Requirement 10.6: Include source in reports
     """
@@ -265,7 +265,7 @@ def test_vix_level_source_in_report():
         "last_touch_date": "2024-01-15",
         "source": "pivot_cluster",
     }
-    
+
     # Verify all required fields are present
     assert "source" in level_data, "Level data should include 'source' field"
     assert level_data["source"] in ["pivot_cluster", "ma_anchor", "fallback"], "Source should be valid"
