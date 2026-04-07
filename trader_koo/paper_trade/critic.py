@@ -150,13 +150,23 @@ def _check_regime_alignment(
             return True, f"Long in high-vol but A-tier {score:.0f} — allowed"
         return False, f"Long blocked in high-vol VIX regime ({vix:.1f}). Need A-tier ≥80."
 
-    # Longs in non-bull regime need A-tier (data: B-tier longs 12.5% WR)
+    # Longs in non-bull regime: gate by family
+    # - Continuation longs in non-bull = fighting the tape → A-tier only
+    # - Reversal longs in non-bull = that's the point → allow B-tier ≥75
     if direction == "long" and not is_bull:
+        family = str(row.get("setup_family") or "").lower()
+        is_reversal = "reversal" in family
+        if is_reversal and score >= 75:
+            return True, (
+                f"Reversal long in non-bull regime ({regime}) with score {score:.0f} — "
+                "reversal family allowed at ≥75"
+            )
         if tier == "A" and score >= 75:
             return True, f"Long in non-bull regime but A-tier {score:.0f} — allowed"
         return False, (
             f"Long blocked in non-bull regime ({regime}). "
-            f"Tier {tier} score {score:.0f} insufficient. Need A-tier ≥75."
+            f"Tier {tier} score {score:.0f} {'(continuation family)' if not is_reversal else ''} "
+            "insufficient. Need A-tier ≥75 or reversal family ≥75."
         )
 
     if score >= 70:
