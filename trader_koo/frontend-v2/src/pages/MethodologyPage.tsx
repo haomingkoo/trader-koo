@@ -433,13 +433,13 @@ const PIPELINE_STEPS: PipelineStep[] = [
     icon: ShieldCheck,
     label: "Risk Gate",
     description:
-      "VIX regime, Fear/Greed composite, ATR position sizing, and drawdown breaker must all pass before trade entry.",
+      "Regime alignment, family edge, volatility-aware sizing, and portfolio drawdown controls must all pass before trade entry.",
   },
   {
     icon: Target,
     label: "Paper Trade",
     description:
-      "Setup opens a simulated trade with triple-barrier exit (2x ATR profit, 2x ATR stop, 10-day time). Full audit trail recorded.",
+      "Setup opens a simulated trade with an ATR-aware initial stop, target, trading-day expiry, and graduated trailing-stop management. Full audit trail recorded.",
   },
 ];
 
@@ -955,8 +955,8 @@ export default function MethodologyPage() {
           {[
             {
               Icon: Activity,
-              title: "VIX Regime (3-State HMM)",
-              desc: "Hidden Markov Model classifies the market into low-vol, normal, and high-vol regimes. High-vol regimes reduce position sizes and raise conviction thresholds.",
+              title: "Regime Alignment",
+              desc: "Simple trend plus VIX state define the base regime, while directional HMM can act as a tiebreaker. Counter-trend longs face stricter thresholds than aligned shorts.",
               delay: 0,
             },
             {
@@ -1031,12 +1031,13 @@ export default function MethodologyPage() {
               <div className="mb-2 flex items-center gap-2">
                 <TrendingUp size={14} className="text-[var(--red)]" />
                 <span className="text-sm font-semibold text-[var(--text)]">
-                  Exit (Triple-Barrier)
+                  Exit &amp; Management
                 </span>
               </div>
               <p className="text-xs leading-relaxed text-[var(--muted)]">
-                Profit target hit, stop loss hit, or time expiry at 10 days
-                &mdash; whichever comes first. All exit reasons are tracked.
+                Trades close on target, stop, or time expiry, and open winners
+                are managed with a graduated trailing stop rather than a single
+                static barrier rule. All exit reasons are tracked.
               </p>
             </VizPanel>
           </Reveal>

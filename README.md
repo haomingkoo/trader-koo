@@ -28,7 +28,7 @@ Full-stack S&P 500 + crypto market analysis platform with ML-powered swing trade
 **Trading**
 - Paper trading with full lifecycle ($1M simulated portfolio)
 - Debate engine: 5-role analyst panel + deterministic arbiter
-- ATR-based position sizing, mark-to-market, equity curve, family edge tracking
+- ATR-aware risk controls, critic review, graduated trailing stops, equity curve, family edge tracking
 
 **Frontend**
 - 10 pages: Guide, Report, VIX, Earnings, Chart, Opportunities, Paper Trades, Crypto, Polymarket, 404

@@ -84,11 +84,11 @@ export default function PaperTradePage() {
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">3. Critic Review</div>
-              <p className="mt-1">A 7-check critic bot plays devil's advocate: conviction grade, debate strength, risk/reward ratio, regime alignment, portfolio concentration, VIX environment, and caution flags. All checks must pass.</p>
+              <p className="mt-1">A 9-check critic layer plays devil&apos;s advocate: conviction grade, debate strength, risk/reward, regime alignment, portfolio concentration, VIX environment, caution flags, rolling expectancy, and family edge. All checks must pass.</p>
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">4. Position Management</div>
-              <p className="mt-1">Approved trades get ATR-based stops, volatility-scaled targets, and tier-adjusted sizing. Stops trail automatically: breakeven at +1R, trail at +1.5R. Max drawdown circuit breaker halts entries at -15%.</p>
+              <p className="mt-1">Approved trades get ATR-aware stops, tier-adjusted sizing, and nightly mark-to-market updates. Stops trail in stages: breakeven from +1.25R, wider profit protection at +1.5R, and tighter lock-in at +2R. Max drawdown circuit breaker halts entries at -15%.</p>
             </div>
           </div>
           <p className="text-[10px] italic">

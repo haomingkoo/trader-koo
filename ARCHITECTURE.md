@@ -547,22 +547,22 @@ The paper trading system simulates trades with full lifecycle tracking, used to 
 ### Decision pipeline
 
 ```
-Analyst Agent  →  Debate Agent  →  Risk Agent  →  Portfolio Agent
-   │                  │                │                │
-   │ Generate         │ Challenge      │ Size the       │ Final
-   │ trade thesis     │ the thesis     │ position       │ go/no-go
-   │ from signals     │ (bull vs bear) │ (ATR-based)    │ decision
+Signals  →  Debate / Decision  →  Critic Review  →  Position Plan  →  MTM
+   │              │                   │                 │               │
+   │ Score and    │ Approve /         │ Reject weak     │ Size, stop,   │ Trail,
+   │ classify     │ flag setups       │ setups with     │ target, risk  │ close,
+   │ setups       │                   │ portfolio/risk  │ budget        │ snapshot
 ```
 
-Each stage is LLM-driven (with structured output validation). The multi-agent debate format reduces single-point-of-failure reasoning.
+The debate layer contributes structured commentary and approval state, but the final paper-trade flow is rule-driven: critic checks, family-edge gating, regime alignment, and portfolio controls determine whether a trade is opened.
 
 ### Position sizing
 
-ATR-based position sizing ensures consistent risk per trade:
-- Risk per trade: fixed dollar amount (configurable)
-- Stop distance: `1.5 × ATR-14`
-- Position size: `risk_amount / stop_distance`
-- Maximum position: capped at percentage of portfolio
+Risk is set from the initial stop distance and tier-based sizing:
+- Initial stop: ATR-aware stop with support/resistance adjustments and minimum distance floor
+- Position size: tier-based notional with caution, volatility, and earnings haircuts
+- Risk budget: persisted per trade via `stop_distance_pct` / `risk_budget_pct`
+- Trailing: graduated stop logic at breakeven, mid, and tight-profit thresholds
 
 ### Performance tracking
 
