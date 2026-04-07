@@ -44,6 +44,13 @@ class PaperTradeConfig:
     commission_per_trade: float = 5.0  # $5 per side (IBKR-like for typical position)
     short_borrow_annual_pct: float = 3.0  # 3% annualized (conservative avg across S&P 500)
     max_adv_pct: float = 15.0  # max 15% of average daily volume per position
+    # Graduated trailing stop levels (R-multiples)
+    trail_breakeven_r: float = 1.25  # move stop to breakeven (was hardcoded 1.0)
+    trail_mid_r: float = 1.5  # threshold for mid-width trail
+    trail_mid_cushion_r: float = 1.0  # cushion from HWM in R units (was 0.5)
+    trail_tight_r: float = 2.0  # threshold for tight trail near target
+    trail_tight_cushion_r: float = 0.5  # cushion from HWM at tightest level
+    expiry_use_trading_days: bool = True  # count trading days, not calendar
 
 
 def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
@@ -67,4 +74,12 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
         "caution_position_scale": config.caution_position_scale,
         "high_vol_position_scale": config.high_vol_position_scale,
         "earnings_position_scale": config.earnings_position_scale,
+        "trailing_stop": {
+            "breakeven_r": config.trail_breakeven_r,
+            "mid_r": config.trail_mid_r,
+            "mid_cushion_r": config.trail_mid_cushion_r,
+            "tight_r": config.trail_tight_r,
+            "tight_cushion_r": config.trail_tight_cushion_r,
+        },
+        "expiry_use_trading_days": config.expiry_use_trading_days,
     }

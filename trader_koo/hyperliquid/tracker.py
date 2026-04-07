@@ -207,34 +207,99 @@ def fetch_wallet_history(
         return {"fills": [], "stats": {}, "by_coin": {}}
 
 
-def generate_counter_signals(snapshot: WalletSnapshot) -> list[dict[str, Any]]:
+def _estimate_position_age_hours(
+    conn: sqlite3.Connection | None,
+    wallet_label: str,
+    coin: str,
+    current_side: str,
+) -> float | None:
+    """Estimate how long a position has been open by scanning snapshot history.
+
+    Walks backward through snapshots to find the earliest consecutive one
+    where this coin+side appears. Returns hours since that snapshot, or None.
+    """
+    if conn is None:
+        return None
+    rows = conn.execute(
+        """
+        SELECT positions_json, snapshot_ts
+        FROM hyperliquid_snapshots
+        WHERE wallet_label = ?
+        ORDER BY snapshot_ts DESC
+        LIMIT 100
+        """,
+        (wallet_label,),
+    ).fetchall()
+    if not rows:
+        return None
+
+    earliest_ts: str | None = None
+    for positions_json, snapshot_ts in rows:
+        if not positions_json:
+            break
+        try:
+            positions = json.loads(positions_json)
+        except (json.JSONDecodeError, TypeError):
+            break
+        found = any(
+            p.get("coin") == coin and p.get("side") == current_side
+            for p in positions
+        )
+        if found:
+            earliest_ts = snapshot_ts
+        else:
+            break  # position wasn't present in this older snapshot
+
+    if earliest_ts is None:
+        return None
+    try:
+        earliest_dt = dt.datetime.fromisoformat(earliest_ts.replace("Z", "+00:00"))
+        now = dt.datetime.now(dt.timezone.utc)
+        return max(0, (now - earliest_dt).total_seconds() / 3600)
+    except (ValueError, TypeError):
+        return None
+
+
+# Minimum notional to promote a signal to COUNTER (study: <$5M he generally wins)
+_MIN_COUNTER_NOTIONAL_USD = 5_000_000
+
+
+def generate_counter_signals(
+    snapshot: WalletSnapshot,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, Any]]:
     """Generate counter-trade signals using expert panel validated logic.
 
     Scoring system from ML expert + quant + critic panel analysis
     of 575K fills over 216 trading days.
 
-    Key signals (ranked by strength):
-    - He is reducing/closing positions (76% WR, quant finding)
-    - High account leverage (overextended)
-    - Liquidation proximity (<5% = distress)
-    - Position notional vs account (concentration risk)
-    - Individual position leverage
+    Enhancements (v2):
+    - Position count discount: >8 positions halves scores, <=3 boosts 1.5x
+    - Position age: extended holds (+1 >24h, +2 >72h) — his worst win rate
+    - Notional gate: only COUNTER for positions >$5M
+    - Concentration boost: >70% in one position doubles concentration score
 
     Win rate is ~51% daily (coin flip). Edge comes from payoff
-    asymmetry - his losses are much bigger than his wins.
+    asymmetry — his losses are much bigger than his wins.
     Top 10 loss days = 105% of all returns.
     """
     total_notional = sum(p.notional_usd for p in snapshot.positions)
     account_leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
+    position_count = len(snapshot.positions)
 
-    # Detect reducing: more close fills than open fills in recent snapshot
-    total_size = sum(p.size for p in snapshot.positions)
+    # Position count multiplier: concentrated bets = stronger signal
+    if position_count > 8:
+        count_multiplier = 0.5
+    elif position_count <= 3:
+        count_multiplier = 1.5
+    else:
+        count_multiplier = 1.0
 
     signals: list[dict[str, Any]] = []
     for pos in snapshot.positions:
         counter_side = "short" if pos.side == "long" else "long"
 
-        # Scoring system (expert panel validated)
+        # Scoring system (expert panel validated + v2 enhancements)
         score = 0
         reasons: list[str] = []
 
@@ -246,10 +311,15 @@ def generate_counter_signals(snapshot: WalletSnapshot) -> list[dict[str, Any]]:
             score += 2
             reasons.append(f"high leverage {account_leverage:.0f}x")
 
-        # Position concentration: single position > 50% of total notional
-        if total_notional > 0 and pos.notional_usd / total_notional > 0.5:
-            score += 1
-            reasons.append(f"concentrated {pos.notional_usd/total_notional*100:.0f}% in {pos.coin}")
+        # Position concentration: enhanced with 70% extreme tier
+        if total_notional > 0:
+            concentration_pct = pos.notional_usd / total_notional * 100
+            if concentration_pct > 70:
+                score += 2
+                reasons.append(f"extreme concentration {concentration_pct:.0f}% in {pos.coin}")
+            elif concentration_pct > 50:
+                score += 1
+                reasons.append(f"concentrated {concentration_pct:.0f}% in {pos.coin}")
 
         # Liquidation proximity
         liq_distance_pct = None
@@ -286,18 +356,37 @@ def generate_counter_signals(snapshot: WalletSnapshot) -> list[dict[str, Any]]:
                 score += 1
                 reasons.append(f"underwater {loss_pct:.1f}%")
 
+        # Position age: extended holds have his worst win rate
+        age_hours: float | None = None
+        if conn is not None:
+            age_hours = _estimate_position_age_hours(
+                conn, snapshot.wallet_label, pos.coin, pos.side,
+            )
+            if age_hours is not None:
+                if age_hours > 72:
+                    score += 2
+                    reasons.append(f"held {age_hours / 24:.0f}d (stubborn)")
+                elif age_hours > 24:
+                    score += 1
+                    reasons.append(f"held {age_hours / 24:.0f}d")
+
+        # Apply position count multiplier
+        score = round(score * count_multiplier)
+
         # Convert score to confidence (30-95)
         confidence = round(min(95, max(30, 30 + score * 8)), 1)
 
-        # Action based on score
-        if score >= 6:
+        # Action based on score + notional gate
+        if score >= 6 and pos.notional_usd >= _MIN_COUNTER_NOTIONAL_USD:
             action = "COUNTER"
+        elif score >= 6:
+            # High score but small position — downgrade
+            action = "LEAN_COUNTER"
+            reasons.append(f"notional ${pos.notional_usd / 1e6:.1f}M < $5M gate")
         elif score >= 3:
             action = "LEAN_COUNTER"
         else:
             action = "MONITOR"
-
-        confidence = round(min(95, max(30, confidence)), 1)
 
         signals.append({
             "source": "hyperliquid_counter",
@@ -315,8 +404,10 @@ def generate_counter_signals(snapshot: WalletSnapshot) -> list[dict[str, Any]]:
             "score": score,
             "action": action,
             "reasons": reasons,
+            "position_age_hours": round(age_hours, 1) if age_hours is not None else None,
+            "position_count": position_count,
             "reasoning": (
-                f"[{action}] score={score} | {', '.join(reasons[:3])}"
+                f"[{action}] score={score} ({position_count} pos) | {', '.join(reasons[:4])}"
                 if reasons else f"[{action}] score={score}"
             ),
             "timestamp": snapshot.timestamp,
@@ -465,7 +556,7 @@ class PositionChange:
     """Describes how a position changed between two snapshots."""
 
     coin: str
-    change_type: str  # "new" | "closed" | "partial_close" | "increased" | "flipped" | "unchanged"
+    change_type: str  # "new" | "closed" | "partial_close" | "partial_liq" | "increased" | "flipped" | "unchanged"
     prev_side: str | None
     prev_size: float | None
     curr_side: str | None
@@ -506,8 +597,18 @@ def _diff_positions(
         elif old_size > 0:
             delta_pct = (pos.size - old_size) / old_size * 100
             if delta_pct < -5:
+                # Distinguish partial liquidation from voluntary close:
+                # partial liq = underwater + close to liquidation price
+                change = "partial_close"
+                if pos.unrealized_pnl < 0 and pos.liquidation_price:
+                    if pos.side == "long":
+                        liq_dist = (pos.mark_price - pos.liquidation_price) / pos.mark_price * 100 if pos.mark_price > 0 else 100
+                    else:
+                        liq_dist = (pos.liquidation_price - pos.mark_price) / pos.mark_price * 100 if pos.mark_price > 0 else 100
+                    if liq_dist < 5:
+                        change = "partial_liq"
                 changes.append(PositionChange(
-                    coin=pos.coin, change_type="partial_close",
+                    coin=pos.coin, change_type=change,
                     prev_side=old_side, prev_size=old_size,
                     curr_side=pos.side, curr_size=pos.size,
                     size_delta_pct=round(delta_pct, 1),
@@ -566,7 +667,7 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
         signals: list[dict[str, Any]] = []
         if track_mode == "counter" and snapshot.positions:
-            signals = generate_counter_signals(snapshot)
+            signals = generate_counter_signals(snapshot, conn=conn)
             saved = save_counter_signals(conn, signals)
             all_signals.extend(signals)
             LOG.info("HL counter signals: %d generated for %s", saved, label)
@@ -778,7 +879,10 @@ def _send_telegram_signal_alert(
     sig_by_coin = {s["coin"]: s for s in signals}
 
     lines = [f"<b>{snapshot.wallet_label}</b>"]
-    lines.append(f"Account ${snapshot.account_value:,.0f} | {acct_leverage:.0f}x leverage")
+    lines.append(
+        f"Account ${snapshot.account_value:,.0f} | {acct_leverage:.0f}x leverage"
+        f" | {len(snapshot.positions)} positions"
+    )
     lines.append("")
 
     # Position changes section
@@ -788,6 +892,7 @@ def _send_telegram_signal_alert(
                 "new": "\U0001f7e2",       # green circle
                 "closed": "\u274c",         # red X
                 "partial_close": "\U0001f4c9",  # chart decreasing
+                "partial_liq": "\U0001f4a5",    # explosion — suspected partial liquidation
                 "increased": "\U0001f4c8",  # chart increasing
                 "flipped": "\U0001f504",    # arrows
             }
@@ -795,9 +900,10 @@ def _send_telegram_signal_alert(
 
             if ch.change_type == "closed":
                 lines.append(f"{emoji} <b>{ch.coin}</b> CLOSED (was {ch.prev_side} {ch.prev_size:,.2f})")
-            elif ch.change_type == "partial_close":
+            elif ch.change_type in ("partial_close", "partial_liq"):
+                label = "PARTIAL LIQ" if ch.change_type == "partial_liq" else "PARTIAL CLOSE"
                 lines.append(
-                    f"{emoji} <b>{ch.coin}</b> PARTIAL CLOSE {ch.size_delta_pct:+.0f}%"
+                    f"{emoji} <b>{ch.coin}</b> {label} {ch.size_delta_pct:+.0f}%"
                     f" ({ch.prev_size:,.2f} \u2192 {ch.curr_size:,.2f} {ch.curr_side})"
                 )
             elif ch.change_type == "new":
@@ -850,7 +956,14 @@ def _send_telegram_signal_alert(
         lines.append(f"\U0001f6a8 <b>COUNTER signal</b> (score {best['score']})")
         for sig in critical_signals:
             reasons = sig.get("reasons", [])
-            lines.append(f"  {sig['counter_side'].upper()} {sig['coin']}: {', '.join(reasons[:3])}")
+            age_str = ""
+            age_h = sig.get("position_age_hours")
+            if age_h is not None and age_h > 1:
+                if age_h >= 24:
+                    age_str = f" [{age_h / 24:.0f}d held]"
+                else:
+                    age_str = f" [{age_h:.0f}h held]"
+            lines.append(f"  {sig['counter_side'].upper()} {sig['coin']}: {', '.join(reasons[:4])}{age_str}")
         lines.append("")
 
     lines.append("<i>NFA</i>")
