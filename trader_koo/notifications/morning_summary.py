@@ -100,7 +100,7 @@ def _fetch_fear_greed(conn: sqlite3.Connection) -> dict[str, Any] | None:
         from trader_koo.structure.fear_greed import compute_fear_greed_index
 
         result = compute_fear_greed_index(conn)
-        if isinstance(result, dict) and result.get("composite_score") is not None:
+        if isinstance(result, dict) and result.get("score") is not None:
             return result
     except Exception as exc:
         LOG.debug("Fear/greed computation failed (non-fatal): %s", exc)
@@ -479,10 +479,12 @@ def _fetch_counter_trade_signals(
             if "wallet_label" in columns
             else "'' AS wallet_label"
         )
+        # Deduplicate: only show latest signal per (coin, direction, wallet)
         rows = conn.execute(
             f"""
-            SELECT coin, {direction_expr}, {entry_expr}, signal_ts, {wallet_expr}
+            SELECT coin, {direction_expr}, {entry_expr}, MAX(signal_ts) AS signal_ts, {wallet_expr}
             FROM hyperliquid_counter_signals
+            GROUP BY coin, {wallet_expr}
             ORDER BY signal_ts DESC
             LIMIT ?
             """,
@@ -550,7 +552,7 @@ def generate_morning_summary(
 
         # Fear/Greed
         fg = _fetch_fear_greed(conn)
-        fg_score = int(fg.get("composite_score", 0)) if fg else None
+        fg_score = int(fg.get("score", 0)) if fg else None
         fg_label = _fear_greed_label(fg_score) if fg_score is not None else "N/A"
 
         # Top setups
