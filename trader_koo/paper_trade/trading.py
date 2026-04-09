@@ -396,14 +396,16 @@ def create_paper_trades_from_report(
             raw_entry = float(row["close"])
             entry_date_actual = report_date
 
-        # Apply entry slippage on top of open price
+        # Apply entry slippage on top of open price.
+        # Entry price must be computed FIRST — stops and targets are anchored
+        # to this actual fill price so stop distance reflects real trade risk.
         slip_mult = config.entry_slippage_bps / 10_000
         if direction == "long":
             entry_price = round(raw_entry * (1 + slip_mult), 4)
         else:
             entry_price = round(raw_entry * (1 - slip_mult), 4)
-        levels = compute_stop_and_target(row, direction, config=config)
-        plan = compute_position_plan(row, evaluation, levels, config=config, vix_level=_vix_level)
+        levels = compute_stop_and_target(row, direction, config=config, entry_price=entry_price)
+        plan = compute_position_plan(row, evaluation, levels, config=config, vix_level=_vix_level, entry_price=entry_price)
 
         # ADV liquidity check: reject if position > max_adv_pct of daily volume
         try:

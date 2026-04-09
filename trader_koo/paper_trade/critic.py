@@ -87,8 +87,8 @@ def _check_regime_alignment(
     regime = str(market_ctx.get("regime_state_at_entry") or "").lower()
     vix = market_ctx.get("vix_at_entry")
 
-    if not regime or regime == "unknown":
-        # Fail closed when VIX is elevated - don't let trades through without regime data
+    if not regime or "unknown" in regime:
+        # Fail closed when VIX is elevated — don't let trades through without regime data
         if isinstance(vix, (int, float)) and vix > 22:
             return False, f"Regime unknown but VIX={vix:.1f} elevated. Blocking without regime data."
         return True, "Regime unknown, low-vol environment — allowing"
@@ -116,7 +116,17 @@ def _check_regime_alignment(
     if direction == "long" and vix_regime == "low_vol":
         return True, f"Long in low-vol VIX regime ({vix:.1f}) — regime-appropriate"
 
-    # Check directional HMM regime (more precise than VIX-based regime)
+    # Hard block: longs are forbidden in high-vol environment (VIX > 25).
+    # No tier or score override — the regime must clear before taking longs.
+    if direction == "long" and vix_regime == "high_vol":
+        vix_str = f"{vix:.1f}" if isinstance(vix, (int, float)) else "elevated"
+        return False, (
+            f"Long blocked: VIX={vix_str} (high-vol regime). "
+            "No new longs until VIX drops below 25."
+        )
+
+    # Check directional HMM regime (more precise than VIX-based regime).
+    # Counter-trend trades are blocked unconditionally — no tier override.
     dir_regime = str(market_ctx.get("directional_regime_at_entry") or "").lower()
     if dir_regime:
         hmm_aligned = (
@@ -128,45 +138,29 @@ def _check_regime_alignment(
             or (direction == "short" and dir_regime == "bullish")
         )
         if hmm_counter:
-            # Hard block only for low-conviction counter-trend
-            tier = str(row.get("setup_tier") or "").upper()
-            score = float(row.get("score") or 0)
-            if tier == "A" and score >= 75:
-                return True, f"Counter-trend ({direction} vs HMM '{dir_regime}') but A-tier {score:.0f} — allowed"
             return False, (
-                f"Counter-trend: {direction} in HMM directional regime '{dir_regime}'. "
-                "Need A-tier ≥75 to override."
+                f"Counter-trend blocked: {direction} vs HMM directional regime '{dir_regime}'. "
+                "Trade with the regime — no tier override permitted."
             )
         if hmm_aligned:
             return True, f"{direction.title()} aligned with HMM directional regime '{dir_regime}'"
 
-    # Neutral/chop regime or no strong signal
-    tier = str(row.get("setup_tier") or "").upper()
+    # Neutral/chop regime or no strong HMM signal
     score = float(row.get("score") or 0)
 
-    # Block longs in high-vol unless A-tier with strong conviction
-    if direction == "long" and vix_regime == "high_vol":
-        if tier == "A" and score >= 80:
-            return True, f"Long in high-vol but A-tier {score:.0f} — allowed"
-        return False, f"Long blocked in high-vol VIX regime ({vix:.1f}). Need A-tier ≥80."
-
-    # Longs in non-bull regime: gate by family
-    # - Continuation longs in non-bull = fighting the tape → A-tier only
-    # - Reversal longs in non-bull = that's the point → allow B-tier ≥75
+    # Longs in non-bull regime: only high-conviction reversals allowed.
+    # Continuation longs in a non-bull tape = fighting the tape → blocked.
     if direction == "long" and not is_bull:
         family = str(row.get("setup_family") or "").lower()
         is_reversal = "reversal" in family
-        if is_reversal and score >= 75:
+        if is_reversal and score >= 80:
             return True, (
                 f"Reversal long in non-bull regime ({regime}) with score {score:.0f} — "
-                "reversal family allowed at ≥75"
+                "high-conviction reversal family allowed at ≥80"
             )
-        if tier == "A" and score >= 75:
-            return True, f"Long in non-bull regime but A-tier {score:.0f} — allowed"
         return False, (
             f"Long blocked in non-bull regime ({regime}). "
-            f"Tier {tier} score {score:.0f} {'(continuation family)' if not is_reversal else ''} "
-            "insufficient. Need A-tier ≥75 or reversal family ≥75."
+            f"Score {score:.0f} {'(reversal family — needs ≥80)' if is_reversal else '(continuation longs forbidden in non-bull)'}."
         )
 
     if score >= 70:
@@ -216,6 +210,23 @@ def _check_portfolio_concentration(
         same_family = sum(1 for r in open_trades if str(r[2] or "").lower() == family)
         if same_family >= 2:
             return False, f"Family clustering: already {same_family} trades from '{row.get('setup_family')}'. Diversify."
+
+    # Check sector concentration (max 1 open position per sector)
+    try:
+        from trader_koo.ml.sector_rotation import build_sector_map_from_db
+
+        sector_map = build_sector_map_from_db(conn)
+        new_sector = sector_map.get(ticker.upper())
+        if new_sector:
+            open_sectors = [sector_map.get(str(r[0]).upper()) for r in open_trades]
+            same_sector = sum(1 for s in open_sectors if s == new_sector)
+            if same_sector >= 1:
+                return False, (
+                    f"Sector overweight: already holding a position in '{new_sector}'. "
+                    "Diversify across sectors."
+                )
+    except Exception:
+        pass  # Fail open — sector check is best-effort
 
     return True, f"Portfolio OK: {open_count}/{max_open} open, {same_dir} {direction}"
 

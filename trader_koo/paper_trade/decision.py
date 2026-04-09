@@ -136,9 +136,18 @@ def compute_stop_and_target(
     direction: str,
     *,
     config: PaperTradeConfig,
+    entry_price: float | None = None,
 ) -> dict[str, float | None]:
-    """Compute stop_loss, target_price, and atr_at_entry from a setup row."""
-    entry = float(row["close"])
+    """Compute stop_loss, target_price, and atr_at_entry from a setup row.
+
+    Parameters
+    ----------
+    entry_price : float | None
+        Actual fill price (next-day open + slippage). When provided, stops and
+        targets are anchored to this value instead of the signal-day close so
+        that stop distance reflects the real trade risk, not a stale price.
+    """
+    entry = entry_price if entry_price is not None and entry_price > 0 else float(row["close"])
     atr_pct = row.get("atr_pct_14")
     support = row.get("support_level")
     resistance = row.get("resistance_level")
@@ -200,9 +209,22 @@ def compute_position_plan(
     *,
     config: PaperTradeConfig,
     vix_level: float | None = None,
+    entry_price: float | None = None,
 ) -> dict[str, float | str | None]:
-    """Build a simple sizing and execution plan for a paper trade."""
-    entry = float(row["close"])
+    """Build a sizing and execution plan for a paper trade.
+
+    Uses constant-dollar-risk sizing: every trade risks exactly
+    ``config.risk_per_trade_pct`` of capital regardless of stop distance.
+    The resulting notional is capped at the tier maximum to prevent
+    overleveraging on unusually tight stops.
+
+    Parameters
+    ----------
+    entry_price : float | None
+        Actual fill price (next-day open + slippage). Used to compute
+        stop_distance_pct from the real entry rather than the signal close.
+    """
+    entry = entry_price if entry_price is not None and entry_price > 0 else float(row["close"])
     direction = str(evaluation["direction"])
     tier = str(row.get("setup_tier") or "").strip().upper()
     score = float(row.get("score") or 0.0)
@@ -210,15 +232,46 @@ def compute_position_plan(
     atr_pct_num = float(atr_pct) if isinstance(atr_pct, (int, float)) else None
     risk_note = str(row.get("risk_note") or "").strip().lower()
 
-    base_position = {
+    # Tier notional caps (hard ceiling — never exceed regardless of stop size)
+    tier_notional_cap = {
         "A": config.tier_a_position_pct,
         "B": config.tier_b_position_pct,
         "C": config.tier_c_position_pct,
     }.get(tier, config.min_position_pct)
-    score_boost = _clamp((score - config.min_score) / 30.0, 0.0, 0.25)
-    position_size_pct = base_position * (1.0 + score_boost)
-    sizing_notes = [f"tier {tier or 'fallback'} base {base_position:.1f}%"]
+    sizing_notes = [f"tier {tier or 'fallback'} cap {tier_notional_cap:.1f}%"]
 
+    # Compute stop distance first — needed for risk-based sizing
+    stop_loss = levels.get("stop_loss")
+    target_price = levels.get("target_price")
+    stop_distance_pct: float | None = None
+    expected_reward_pct: float | None = None
+    expected_r_multiple: float | None = None
+
+    if isinstance(stop_loss, (int, float)) and entry > 0:
+        stop_distance_pct = abs(entry - float(stop_loss)) / entry * 100.0
+
+    if isinstance(target_price, (int, float)) and entry > 0:
+        expected_reward_pct = abs(float(target_price) - entry) / entry * 100.0
+
+    if (
+        isinstance(stop_distance_pct, (int, float))
+        and stop_distance_pct > 0
+        and isinstance(expected_reward_pct, (int, float))
+    ):
+        expected_r_multiple = expected_reward_pct / stop_distance_pct
+
+    # Risk-based sizing: size so that hitting the stop costs exactly risk_per_trade_pct
+    # position_size_pct × stop_distance_pct / 100 = risk_per_trade_pct
+    # ⟹ position_size_pct = risk_per_trade_pct / stop_distance_pct × 100
+    if isinstance(stop_distance_pct, (int, float)) and stop_distance_pct > 0:
+        position_size_pct = (config.risk_per_trade_pct / stop_distance_pct) * 100.0
+        sizing_notes.append(f"risk-based: {config.risk_per_trade_pct:.2f}% risk / {stop_distance_pct:.2f}% stop")
+    else:
+        # Fallback to tier base when stop distance is unavailable
+        position_size_pct = tier_notional_cap
+        sizing_notes.append("fallback to tier notional (no stop distance)")
+
+    # Apply risk-environment haircuts (reduce size in adverse conditions)
     if evaluation.get("decision_state") == "approved_with_flags":
         position_size_pct *= config.caution_position_scale
         sizing_notes.append("caution haircut applied")
@@ -245,30 +298,12 @@ def compute_position_plan(
         position_size_pct *= vix_scale
         sizing_notes.append(f"VIX={vix_level:.1f} scale={vix_scale:.2f}")
 
+    # Cap at tier notional ceiling (prevents overleveraging on very tight stops)
     position_size_pct = _clamp(
         position_size_pct,
         config.min_position_pct,
-        config.max_position_pct,
+        min(tier_notional_cap, config.max_position_pct),
     )
-
-    stop_loss = levels.get("stop_loss")
-    target_price = levels.get("target_price")
-    stop_distance_pct = None
-    expected_reward_pct = None
-    expected_r_multiple = None
-
-    if isinstance(stop_loss, (int, float)) and entry > 0:
-        stop_distance_pct = abs(entry - float(stop_loss)) / entry * 100.0
-
-    if isinstance(target_price, (int, float)) and entry > 0:
-        expected_reward_pct = abs(float(target_price) - entry) / entry * 100.0
-
-    if (
-        isinstance(stop_distance_pct, (int, float))
-        and stop_distance_pct > 0
-        and isinstance(expected_reward_pct, (int, float))
-    ):
-        expected_r_multiple = expected_reward_pct / stop_distance_pct
 
     risk_budget_pct = (
         position_size_pct * stop_distance_pct / 100.0

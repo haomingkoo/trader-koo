@@ -433,7 +433,8 @@ def paper_trade_summary(
 
     all_closed = conn.execute(
         """
-        SELECT pnl_pct, r_multiple, direction, setup_family, setup_tier, exit_reason
+        SELECT pnl_pct, r_multiple, direction, setup_family, setup_tier, exit_reason,
+               COALESCE(position_size_pct, 8.0) AS position_size_pct
         FROM paper_trades
         WHERE status != 'open' AND pnl_pct IS NOT NULL AND entry_date >= ?
         ORDER BY exit_date
@@ -485,13 +486,13 @@ def paper_trade_summary(
 
     # Portfolio value tracking
     STARTING_CAPITAL = config.starting_capital if config else 1_000_000.0
-    # Each closed trade's PnL is position_size_pct × pnl_pct / 100
-    # Default position size ~8% (tier B), so each trade risks ~8% of capital
+    # Each closed trade's P&L contribution = position_size_pct × pnl_pct / 100
+    # position_size_pct is read from the actual trade record (index 6 in the query).
     realized_pnl_dollars = 0.0
     for row in all_closed:
         trade_pnl_pct = float(row[0])
-        # Approximate: position_size defaults to 8% of capital
-        position_dollars = STARTING_CAPITAL * 0.08
+        pos_pct = float(row[6]) if row[6] is not None else 8.0
+        position_dollars = STARTING_CAPITAL * (pos_pct / 100.0)
         realized_pnl_dollars += position_dollars * (trade_pnl_pct / 100)
 
     # Unrealized P&L from open trades

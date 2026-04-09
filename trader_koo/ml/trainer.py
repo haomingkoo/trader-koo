@@ -382,6 +382,7 @@ def train_walk_forward(
     fold_start = min_date
     best_model = None
     best_auc = 0.0
+    best_train_medians: pd.Series | None = None  # medians from the best-AUC fold
 
     while True:
         train_end = fold_start + pd.Timedelta(days=train_days)
@@ -473,17 +474,21 @@ def train_walk_forward(
         if auc > best_auc:
             best_auc = auc
             best_model = model
+            best_train_medians = train_medians  # keep imputation medians from best fold
 
         fold_start += pd.Timedelta(days=step_days)
 
     if not folds:
         return {"ok": False, "error": "No valid folds produced", "folds": []}
 
-    # Save the last fold's model (most recent data) + training medians for imputation
-    model_path = _save_model(model, feature_cols, folds, train_medians=train_medians)
+    # Save the best-AUC fold's model (highest OOS performance), not the last fold.
+    # The last fold can have worse OOS AUC than an earlier fold when market regimes shift.
+    model_to_save = best_model if best_model is not None else model
+    medians_to_save = best_train_medians if best_train_medians is not None else train_medians
+    model_path = _save_model(model_to_save, feature_cols, folds, train_medians=medians_to_save)
 
-    # Feature importance from the last model
-    importance = dict(zip(feature_cols, model.feature_importances_.tolist()))
+    # Feature importance from the best model
+    importance = dict(zip(feature_cols, model_to_save.feature_importances_.tolist()))
     sorted_importance = dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
 
     # Aggregate metrics across folds

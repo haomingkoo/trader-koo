@@ -802,9 +802,10 @@ class TestRegimeAlignmentPolicy:
         assert "continuation" in reason.lower() or "non-bull" in reason.lower()
 
     def test_reversal_long_non_bull_b_tier_high_score_passes(self):
+        # Threshold tightened to ≥80 (was ≥75) — reversal longs need high conviction in non-bull
         passed, reason = self._check(
             direction="long", family="bullish_reversal",
-            tier="B", score=77.0,
+            tier="B", score=81.0,
         )
         assert passed
         assert "reversal" in reason.lower()

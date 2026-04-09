@@ -136,20 +136,26 @@ def generate_triple_barrier_labels(
                 future_close = float(close.iloc[future_idx])
                 days_held = future_idx - entry_idx
 
-                # Check HIGH for profit target (intraday touch counts —
-                # limit orders fill at barrier price in real trading)
+                # Check HIGH for profit target (intraday touch counts).
+                # Exit price = upper barrier: a limit order fills at the barrier
+                # price, not the day's close.  Using close caused return_pct to
+                # be negative for label=+1 rows when price pulled back, creating
+                # a target-leakage-adjacent mismatch between label and training
+                # target (return_pct > 0).
                 if future_high >= upper:
                     label = 1
                     exit_date = dates.iloc[future_idx]
                     exit_reason = "profit_target"
-                    exit_price = future_close
+                    exit_price = upper  # limit order fills exactly at barrier
                     break
-                # Check LOW for stop loss (intraday touch counts)
+                # Check LOW for stop loss (intraday touch counts).
+                # Exit price = lower barrier: stop-market order triggers at the
+                # barrier price (optimistic — ignores additional slippage).
                 elif future_low <= lower:
                     label = -1
                     exit_date = dates.iloc[future_idx]
                     exit_reason = "stop_loss"
-                    exit_price = future_close
+                    exit_price = lower  # stop triggers at barrier price
                     break
             else:
                 # Time expired — use last available price
