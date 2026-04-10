@@ -2,9 +2,57 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
+
+LOG = logging.getLogger(__name__)
+
+
+def _validate_stop_and_target(
+    direction: str,
+    entry: float,
+    stop_loss: float,
+    target_price: float,
+) -> None:
+    """Validate stop/target geometry. Raises ValueError on invariant violations.
+
+    Uses explicit raise (not assert) so it fires even under Python -O.
+    Called at the end of compute_stop_and_target() to catch anchor bugs early.
+    """
+    if entry <= 0:
+        raise ValueError(f"Entry price must be positive, got {entry}")
+
+    if direction == "long":
+        if stop_loss >= entry:
+            raise ValueError(
+                f"Long stop_loss {stop_loss:.4f} must be below entry {entry:.4f}"
+            )
+        if target_price <= entry:
+            raise ValueError(
+                f"Long target_price {target_price:.4f} must be above entry {entry:.4f}"
+            )
+    else:
+        if stop_loss <= entry:
+            raise ValueError(
+                f"Short stop_loss {stop_loss:.4f} must be above entry {entry:.4f}"
+            )
+        if target_price >= entry:
+            raise ValueError(
+                f"Short target_price {target_price:.4f} must be below entry {entry:.4f}"
+            )
+
+    risk = abs(entry - stop_loss)
+    reward = abs(target_price - entry)
+    if risk <= 0:
+        raise ValueError(f"Risk is zero (stop == entry = {entry:.4f})")
+    rr = reward / risk
+    if rr < 1.5:
+        LOG.warning(
+            "Low R:R %.2f (reward=%.4f risk=%.4f) on %s entry=%.4f — below 1.5 minimum",
+            rr, reward, risk, direction, entry,
+        )
 
 
 def direction_from_row(row: dict[str, Any]) -> str:
@@ -191,9 +239,18 @@ def compute_stop_and_target(
     elif direction == "short" and (stop_loss - entry) < min_stop_distance:
         stop_loss = round(entry + min_stop_distance, 2)
 
+    stop_loss = round(stop_loss, 2)
+    target_price = round(target_price, 2)
+
+    try:
+        _validate_stop_and_target(direction, entry, stop_loss, target_price)
+    except ValueError as exc:
+        LOG.error("Stop/target validation failed: %s — levels may be unreliable", exc)
+        raise
+
     return {
-        "stop_loss": round(stop_loss, 2),
-        "target_price": round(target_price, 2),
+        "stop_loss": stop_loss,
+        "target_price": target_price,
         "atr_at_entry": round(float(atr_pct), 2) if isinstance(atr_pct, (int, float)) else None,
     }
 
