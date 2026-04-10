@@ -597,6 +597,57 @@ def _run_derivatives_snapshot() -> None:
         LOG.error("Derivatives snapshot failed: %s", exc)
 
 
+def _run_calibration_pulse(trigger: str = "scheduled") -> None:
+    """Mon/Wed/Fri 23:15 UTC: recompute per-family score adjustments + blocks."""
+    import sqlite3
+
+    _append_run_log("CALIB_PULSE", f"Calibration pulse started (trigger={trigger})")
+    LOG.info("Scheduler: starting calibration pulse (trigger=%s)", trigger)
+    if not DB_PATH.exists():
+        _append_run_log("CALIB_PULSE", "Skipped — DB not found")
+        return
+    try:
+        from trader_koo.report.calibration_pulse import (
+            run_calibration_pulse,
+            build_telegram_message,
+        )
+
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            summary = run_calibration_pulse(conn, trigger=trigger)
+        finally:
+            conn.close()
+
+        n_changes = len(summary.get("changes") or [])
+        blocks = summary.get("blocks_added") or []
+        lifts = summary.get("blocks_lifted") or []
+        _append_run_log(
+            "CALIB_PULSE",
+            f"Done: families={summary.get('families_updated', 0)} changes={n_changes} "
+            f"blocks_added={blocks} blocks_lifted={lifts}",
+        )
+        LOG.info(
+            "Calibration pulse complete: families=%d changes=%d blocks_added=%s blocks_lifted=%s",
+            summary.get("families_updated", 0),
+            n_changes,
+            blocks,
+            lifts,
+        )
+
+        # Send Telegram summary if configured
+        try:
+            from trader_koo.notifications.telegram import send_message, is_configured
+            if is_configured():
+                msg = build_telegram_message(summary)
+                send_message(msg)
+        except Exception as exc:
+            LOG.debug("Calibration pulse Telegram notification failed: %s", exc)
+
+    except Exception as exc:
+        _append_run_log("CALIB_PULSE", f"Failed: {exc}")
+        LOG.error("Calibration pulse failed: %s", exc)
+
+
 def _run_memory_cleanup() -> None:
     """Every 10 min: prune expired entries from in-memory dicts.
 
@@ -773,6 +824,17 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     LOG.info("Derivatives snapshot job registered: every 1h")
+
+    # Calibration pulse — Mon/Wed/Fri at 23:15 UTC (75 min after nightly report)
+    # Recomputes per-(family, direction) score adjustments and blocks from combined
+    # setup_call_evaluations + paper_trades outcomes. Sends Telegram summary.
+    scheduler.add_job(
+        _run_calibration_pulse,
+        CronTrigger(hour=23, minute=15, day_of_week="mon,wed,fri", timezone="UTC"),
+        id="calibration_pulse",
+        replace_existing=True,
+    )
+    LOG.info("Calibration pulse job registered: Mon/Wed/Fri 23:15 UTC")
 
     # Memory cleanup — prune admin auth state + rate limiter storage
     scheduler.add_job(
