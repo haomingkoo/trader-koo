@@ -15,6 +15,38 @@ from typing import Any
 
 LOG = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Critic thresholds — all bare score/tier numbers live here.
+# Changing a threshold requires: (1) update the constant, (2) update the
+# parametrized tests in tests/test_critic.py, (3) PR body must include
+# trade count impact on last 20+ closed trades. Never mix threshold changes
+# with logic changes in the same commit.
+# ---------------------------------------------------------------------------
+
+CONVICTION_A_HIGH: float = 75.0       # A-tier high conviction — passes outright
+CONVICTION_A_MIN: float = 65.0        # A-tier minimum acceptable
+CONVICTION_B_HIGH: float = 75.0       # B-tier strong conviction — passes outright
+CONVICTION_B_MIN: float = 70.0        # B-tier minimum (requires approved decision_state)
+DEBATE_CONSENSUS_STRONG: float = 75.0  # Strong debate agreement — passes outright
+DEBATE_CONSENSUS_MIN: float = 60.0    # Minimum acceptable debate agreement
+MIN_REWARD_R: float = 2.0             # Minimum R:R required by critic
+GOOD_REWARD_R: float = 2.5            # R:R considered excellent
+REGIME_VIX_HIGH_VOL: float = 25.0     # VIX above this = high-vol regime (block new longs)
+REGIME_VIX_ELEVATED: float = 30.0     # VIX above this = elevated (log warning)
+REGIME_VIX_EXTREME: float = 35.0      # VIX above this = extreme (block ALL entries)
+REGIME_VIX_UNKNOWN_BLOCK: float = 22.0  # Block if regime unknown and VIX above this
+REGIME_REVERSAL_MIN_SCORE: float = 80.0  # Min score for reversal long in non-bull regime
+REGIME_AMBIGUOUS_MIN_SCORE: float = 70.0  # Min score to pass in ambiguous regime
+FAMILY_EDGE_BLOCK_WINRATE: float = 0.0   # Win rate at or below this → block (0 = 0%)
+FAMILY_EDGE_WEAK_WINRATE: float = 25.0   # Win rate below this → require A-tier
+FAMILY_EDGE_MIN_SAMPLE: int = 4          # Minimum closed trades before edge check applies
+FAMILY_EDGE_BLOCK_SAMPLE: int = 5        # Minimum trades required for 0% win-rate block
+CAUTION_FLAGS_HARD_BLOCK: int = 3        # Block if risk_flags count >= this
+CAUTION_FLAGS_WARN: int = 2              # Log warning if risk_flags count >= this
+ROLLING_EXPECTANCY_MIN: float = -0.2     # Block new entries if avg PnL below this %
+ROLLING_EXPECTANCY_MIN_SAMPLE: int = 5   # Minimum trades needed for expectancy check
+CONVICTION_A_GRADE_SCORE: float = 80.0  # Score threshold for A+ vs A grade
+
 
 # ---------------------------------------------------------------------------
 # Critic checks — each returns (pass: bool, reason: str)
@@ -28,21 +60,24 @@ def _check_conviction_grade(
     tier = str(row.get("setup_tier") or "").upper().strip()
     score = float(row.get("score") or 0)
 
-    if tier == "A" and score >= 75:
+    if tier == "A" and score >= CONVICTION_A_HIGH:
         return True, f"A-tier with score {score:.0f} — high conviction"
-    if tier == "A" and score >= 65:
+    if tier == "A" and score >= CONVICTION_A_MIN:
         return True, f"A-tier with score {score:.0f} — acceptable conviction"
 
-    # B-tier passes with solid score (70+). Most actionable setups land here.
-    if tier == "B" and score >= 75:
+    # B-tier passes with solid score. Most actionable setups land here.
+    if tier == "B" and score >= CONVICTION_B_HIGH:
         return True, f"B-tier with score {score:.0f} — good conviction"
-    if tier == "B" and score >= 70:
+    if tier == "B" and score >= CONVICTION_B_MIN:
         decision = evaluation.get("decision_state", "")
         if decision in ("approved", "approved_with_flags"):
             return True, f"B-tier with score {score:.0f} — adequate conviction ({decision})"
         return False, f"B-tier score {score:.0f} OK but decision_state='{decision}' needs approval"
 
-    return False, f"Conviction too low: tier={tier}, score={score:.0f}. Need A-tier ≥65 or B-tier ≥70 with approval."
+    return False, (
+        f"Conviction too low: tier={tier}, score={score:.0f}. "
+        f"Need A-tier ≥{CONVICTION_A_MIN:.0f} or B-tier ≥{CONVICTION_B_MIN:.0f} with approval."
+    )
 
 
 def _check_debate_strength(
@@ -52,12 +87,12 @@ def _check_debate_strength(
     """Strong debate agreement required — no contested trades."""
     agreement = float(row.get("debate_agreement_score") or 0)
 
-    if agreement >= 75:
+    if agreement >= DEBATE_CONSENSUS_STRONG:
         return True, f"Strong debate consensus ({agreement:.0f}%)"
-    if agreement >= 60:
+    if agreement >= DEBATE_CONSENSUS_MIN:
         return True, f"Adequate debate consensus ({agreement:.0f}%)"
 
-    return False, f"Debate consensus too weak ({agreement:.0f}%). Critic requires ≥60% agreement."
+    return False, f"Debate consensus too weak ({agreement:.0f}%). Critic requires ≥{DEBATE_CONSENSUS_MIN:.0f}% agreement."
 
 
 def _check_risk_reward(
@@ -66,12 +101,12 @@ def _check_risk_reward(
     """Minimum 2R expected reward for a concentrated portfolio."""
     expected_r = float(plan.get("expected_r_multiple") or 0)
 
-    if expected_r >= 2.5:
+    if expected_r >= GOOD_REWARD_R:
         return True, f"Excellent risk/reward ({expected_r:.1f}R)"
-    if expected_r >= 2.0:
+    if expected_r >= MIN_REWARD_R:
         return True, f"Good risk/reward ({expected_r:.1f}R)"
 
-    return False, f"Risk/reward insufficient ({expected_r:.1f}R). Critic requires ≥2.0R for concentrated portfolio."
+    return False, f"Risk/reward insufficient ({expected_r:.1f}R). Critic requires ≥{MIN_REWARD_R:.1f}R for concentrated portfolio."
 
 
 def _check_regime_alignment(
@@ -89,7 +124,7 @@ def _check_regime_alignment(
 
     if not regime or "unknown" in regime:
         # Fail closed when VIX is elevated — don't let trades through without regime data
-        if isinstance(vix, (int, float)) and vix > 22:
+        if isinstance(vix, (int, float)) and vix > REGIME_VIX_UNKNOWN_BLOCK:
             return False, f"Regime unknown but VIX={vix:.1f} elevated. Blocking without regime data."
         return True, "Regime unknown, low-vol environment — allowing"
 
@@ -99,31 +134,31 @@ def _check_regime_alignment(
     # VIX regime context — high vol favors shorts, low vol favors longs
     vix_regime = "normal"
     if isinstance(vix, (int, float)):
-        if vix > 25:
+        if vix > REGIME_VIX_HIGH_VOL:
             vix_regime = "high_vol"
         elif vix < 16:
             vix_regime = "low_vol"
 
-    # Aligned trades always pass
-    if direction == "long" and is_bull:
-        return True, f"Long in {regime} — aligned with trend"
-    if direction == "short" and is_bear:
-        return True, f"Short in {regime} — aligned with trend"
-
-    # VIX regime alignment (shorts in high vol, longs in low vol)
-    if direction == "short" and vix_regime == "high_vol":
-        return True, f"Short in high-vol VIX regime ({vix:.1f}) — regime-appropriate"
-    if direction == "long" and vix_regime == "low_vol":
-        return True, f"Long in low-vol VIX regime ({vix:.1f}) — regime-appropriate"
-
-    # Hard block: longs are forbidden in high-vol environment (VIX > 25).
+    # Hard block: longs are forbidden in high-vol environment.
+    # This check is unconditional — even bull-regime alignment does NOT override it.
+    # A VIX spike inside a longer-term bull trend is a warning sign, not clearance.
     # No tier or score override — the regime must clear before taking longs.
     if direction == "long" and vix_regime == "high_vol":
         vix_str = f"{vix:.1f}" if isinstance(vix, (int, float)) else "elevated"
         return False, (
             f"Long blocked: VIX={vix_str} (high-vol regime). "
-            "No new longs until VIX drops below 25."
+            f"No new longs until VIX drops below {REGIME_VIX_HIGH_VOL:.0f}."
         )
+
+    # Aligned trades pass (VIX was checked above — safe to allow)
+    if direction == "long" and is_bull:
+        return True, f"Long in {regime} — aligned with trend"
+    if direction == "short" and is_bear:
+        return True, f"Short in {regime} — aligned with trend"
+
+    # VIX regime alignment (shorts in high vol already handled above)
+    if direction == "long" and vix_regime == "low_vol":
+        return True, f"Long in low-vol VIX regime ({vix:.1f}) — regime-appropriate"
 
     # Check directional HMM regime (more precise than VIX-based regime).
     # Counter-trend trades are blocked unconditionally — no tier override.
@@ -153,22 +188,23 @@ def _check_regime_alignment(
     if direction == "long" and not is_bull:
         family = str(row.get("setup_family") or "").lower()
         is_reversal = "reversal" in family
-        if is_reversal and score >= 80:
+        if is_reversal and score >= REGIME_REVERSAL_MIN_SCORE:
             return True, (
                 f"Reversal long in non-bull regime ({regime}) with score {score:.0f} — "
-                "high-conviction reversal family allowed at ≥80"
+                f"high-conviction reversal family allowed at ≥{REGIME_REVERSAL_MIN_SCORE:.0f}"
             )
         return False, (
             f"Long blocked in non-bull regime ({regime}). "
-            f"Score {score:.0f} {'(reversal family — needs ≥80)' if is_reversal else '(continuation longs forbidden in non-bull)'}."
+            f"Score {score:.0f} "
+            f"{'(reversal family — needs ≥' + str(int(REGIME_REVERSAL_MIN_SCORE)) + ')' if is_reversal else '(continuation longs forbidden in non-bull)'}."
         )
 
-    if score >= 70:
+    if score >= REGIME_AMBIGUOUS_MIN_SCORE:
         return True, f"No strong regime signal, score {score:.0f} adequate — allowing"
 
     return False, (
         f"Counter-trend: {direction} in {regime} with score {score:.0f}. "
-        "Need score ≥70 in ambiguous regime."
+        f"Need score ≥{REGIME_AMBIGUOUS_MIN_SCORE:.0f} in ambiguous regime."
     )
 
 
@@ -239,9 +275,9 @@ def _check_volatility_environment(
     if vix is None:
         return True, "VIX data unavailable — no vol check"
 
-    if vix > 35:
+    if vix > REGIME_VIX_EXTREME:
         return False, f"VIX at {vix:.1f} — extreme volatility. Critic blocks all new entries."
-    if vix > 30:
+    if vix > REGIME_VIX_ELEVATED:
         return True, f"VIX at {vix:.1f} — elevated but allowing A-tier trades"
 
     return True, f"VIX at {vix:.1f} — environment acceptable"
@@ -257,10 +293,10 @@ def _check_caution_flags(
     if decision_state == "approved":
         return True, "Clean approval — no flags"
 
-    if len(risk_flags) >= 3:
-        return False, f"Too many risk flags ({len(risk_flags)}): {', '.join(risk_flags[:3])}. Critic rejects."
+    if len(risk_flags) >= CAUTION_FLAGS_HARD_BLOCK:
+        return False, f"Too many risk flags ({len(risk_flags)}): {', '.join(risk_flags[:CAUTION_FLAGS_HARD_BLOCK])}. Critic rejects."
 
-    if len(risk_flags) >= 2:
+    if len(risk_flags) >= CAUTION_FLAGS_WARN:
         return True, f"Approved with {len(risk_flags)} flags — marginal, allowing"
 
     return True, f"Approved with flags: {len(risk_flags)} — acceptable"
@@ -289,19 +325,19 @@ def _check_family_edge(
         (family, direction),
     ).fetchall()
 
-    if len(rows) < 4:
+    if len(rows) < FAMILY_EDGE_MIN_SAMPLE:
         return True, f"Family '{family}' {direction}: only {len(rows)} trades — insufficient for edge check"
 
     wins = sum(1 for r in rows if float(r[0]) > 0)
     win_rate = wins / len(rows) * 100
 
-    if win_rate == 0 and len(rows) >= 5:
+    if win_rate <= FAMILY_EDGE_BLOCK_WINRATE and len(rows) >= FAMILY_EDGE_BLOCK_SAMPLE:
         return False, (
             f"Family '{family}' {direction} has 0% win rate over {len(rows)} trades. "
             "Blocking until edge recovers."
         )
 
-    if win_rate < 25:
+    if win_rate < FAMILY_EDGE_WEAK_WINRATE:
         tier = str(row.get("setup_tier") or "").upper()
         if tier != "A":
             return False, (
@@ -324,10 +360,10 @@ def _check_rolling_expectancy(
         "WHERE status != 'open' AND pnl_pct IS NOT NULL "
         "ORDER BY exit_date DESC LIMIT 20",
     ).fetchall()
-    if len(rows) < 5:
+    if len(rows) < ROLLING_EXPECTANCY_MIN_SAMPLE:
         return True, f"Insufficient history ({len(rows)} trades) for expectancy check"
     avg_pnl = sum(float(r[0]) for r in rows) / len(rows)
-    if avg_pnl < -0.2:
+    if avg_pnl < ROLLING_EXPECTANCY_MIN:
         return False, f"Rolling expectancy negative ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
     return True, f"Rolling expectancy OK ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
 
@@ -405,7 +441,7 @@ def critic_review(
     elif passed_count == total:
         tier = str(row.get("setup_tier") or "").upper()
         score = float(row.get("score") or 0)
-        if tier == "A" and score >= 80:
+        if tier == "A" and score >= CONVICTION_A_GRADE_SCORE:
             grade = "A+"
         elif tier == "A":
             grade = "A"

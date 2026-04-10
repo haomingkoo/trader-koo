@@ -7,6 +7,10 @@ import sqlite3
 import pytest
 
 from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.decision import (
+    compute_stop_and_target as _compute_stop_and_target_decision,
+    compute_position_plan as _compute_position_plan_decision,
+)
 from trader_koo.paper_trades import (
     _compute_pnl,
     _compute_r_multiple,
@@ -211,6 +215,110 @@ class TestComputeStopAndTarget:
         # Min stop floor: max(3.0 * 1.5 / 100, 0.025) = 4.5% = $95.50
         assert result["stop_loss"] == 95.5
         assert result["atr_at_entry"] is None
+
+    def test_stop_anchored_to_entry_price_not_close(self):
+        """Stop must be below the actual fill price, not the signal-day close.
+
+        Scenario: signal close=100, next-day open=105 (5% gap up).
+        With entry_price=105, the stop should be below 105, not below 100.
+        Without entry_price, stop would be computed from close=100 and
+        could be above the actual fill — a meaningless stop.
+        """
+        config = PaperTradeConfig(
+            bot_version="v1", min_tier="B", min_score=60.0, max_open=20,
+            expiry_days=10, stop_atr_mult=1.5, default_stop_pct=3.0,
+            qualifying_tiers=frozenset({"A", "B"}),
+            qualifying_actionability=frozenset({"higher-probability"}),
+            qualifying_directions=frozenset({"long", "short"}),
+            tier_rank={"A": 1, "B": 2}, decision_version="v1",
+            debate_caution_agreement=60.0, high_vol_atr_pct=6.0,
+            min_reward_r_multiple=1.5, min_position_pct=2.0, max_position_pct=14.0,
+            tier_a_position_pct=12.0, tier_b_position_pct=8.0, tier_c_position_pct=5.0,
+            caution_position_scale=0.65, high_vol_position_scale=0.75,
+            earnings_position_scale=0.60,
+        )
+        row = _make_setup_row(close=100.0, atr_pct_14=2.0, support_level=None, resistance_level=None)
+
+        result_with_fill = _compute_stop_and_target_decision(row, "long", config=config, entry_price=105.0)
+        result_without_fill = _compute_stop_and_target_decision(row, "long", config=config)
+
+        # With entry_price: stop must be below the actual fill
+        assert result_with_fill["stop_loss"] < 105.0
+        # Without entry_price: stop is anchored to close
+        assert result_without_fill["stop_loss"] < 100.0
+        # The two stops are in different places — entry_price shifts the anchor
+        assert result_with_fill["stop_loss"] > result_without_fill["stop_loss"]
+
+    def test_position_size_proportional_to_stop_width(self):
+        """Wider stop → smaller position size (constant dollar risk).
+
+        Uses stops wide enough that neither hits the tier notional cap,
+        so the risk-based formula is the active constraint in both cases.
+        risk_per_trade_pct=0.5, tier_a cap=12%:
+          stop 5% → size=10% (under cap) → risk_budget=0.5%
+          stop 8% → size=6.25% (under cap) → risk_budget=0.5%
+        """
+        config = PaperTradeConfig(
+            bot_version="v1", min_tier="B", min_score=60.0, max_open=20,
+            expiry_days=10, stop_atr_mult=1.5, default_stop_pct=3.0,
+            qualifying_tiers=frozenset({"A", "B"}),
+            qualifying_actionability=frozenset({"higher-probability"}),
+            qualifying_directions=frozenset({"long", "short"}),
+            tier_rank={"A": 1, "B": 2}, decision_version="v1",
+            debate_caution_agreement=60.0, high_vol_atr_pct=6.0,
+            min_reward_r_multiple=1.5, min_position_pct=2.0, max_position_pct=14.0,
+            tier_a_position_pct=12.0, tier_b_position_pct=8.0, tier_c_position_pct=5.0,
+            caution_position_scale=0.65, high_vol_position_scale=0.75,
+            earnings_position_scale=0.60, risk_per_trade_pct=0.5,
+        )
+        evaluation = {"direction": "long", "decision_state": "approved", "risk_flags": []}
+
+        # Both use atr_pct_14=3.0 (below high_vol_atr_pct=6.0) to avoid haircut.
+        # Tight stop: entry=100, stop=95 → 5% distance → size=0.5/5*100=10% (under 12% cap)
+        tight_levels = {"stop_loss": 95.0, "target_price": 110.0}
+        plan_tight = _compute_position_plan_decision(
+            _make_setup_row(close=100.0, atr_pct_14=3.0), evaluation, tight_levels,
+            config=config, entry_price=100.0,
+        )
+
+        # Wide stop: entry=100, stop=92 → 8% distance → size=0.5/8*100=6.25% (under 12% cap)
+        wide_levels = {"stop_loss": 92.0, "target_price": 116.0}
+        plan_wide = _compute_position_plan_decision(
+            _make_setup_row(close=100.0, atr_pct_14=3.0), evaluation, wide_levels,
+            config=config, entry_price=100.0,
+        )
+
+        # Wide stop → smaller position (constant dollar risk)
+        assert plan_wide["position_size_pct"] < plan_tight["position_size_pct"]
+        # Risk budget should be approximately constant (both ~0.5%)
+        assert plan_tight["risk_budget_pct"] == pytest.approx(0.5, abs=0.1)
+        assert plan_wide["risk_budget_pct"] == pytest.approx(0.5, abs=0.1)
+
+
+# ── ML Configuration ─────────────────────────────────────────────
+
+class TestMLConfig:
+    def test_ml_disabled_by_default(self):
+        """ML gating is off by default — AUC ~0.52 adds no edge.
+
+        This test guards against accidentally re-enabling ML. Any change to
+        ml_enabled=True requires verifying: AUC > 0.55 on ≥5 walk-forward folds,
+        calibration curve reasonable, ml_predicted_win_prob populated on recent trades.
+        """
+        config = PaperTradeConfig(
+            bot_version="v1", min_tier="B", min_score=60.0, max_open=20,
+            expiry_days=10, stop_atr_mult=1.5, default_stop_pct=3.0,
+            qualifying_tiers=frozenset({"A", "B"}),
+            qualifying_actionability=frozenset({"higher-probability"}),
+            qualifying_directions=frozenset({"long", "short"}),
+            tier_rank={"A": 1, "B": 2}, decision_version="v1",
+            debate_caution_agreement=60.0, high_vol_atr_pct=6.0,
+            min_reward_r_multiple=1.5, min_position_pct=2.0, max_position_pct=14.0,
+            tier_a_position_pct=12.0, tier_b_position_pct=8.0, tier_c_position_pct=5.0,
+            caution_position_scale=0.65, high_vol_position_scale=0.75,
+            earnings_position_scale=0.60,
+        )
+        assert config.ml_enabled is False
 
 
 # ── PnL Computation ──────────────────────────────────────────────
