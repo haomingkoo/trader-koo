@@ -742,3 +742,55 @@ def admin_ws_health() -> dict[str, Any]:
         "crypto_ws": get_crypto_ws_health(),
         "equity_ws": get_equity_ws_health(),
     }
+
+
+@router.post("/api/admin/calibration/run-pulse")
+@require_admin_auth
+def admin_run_calibration_pulse() -> dict[str, Any]:
+    """Manually trigger the calibration pulse.
+
+    Normally runs Mon/Wed/Fri 23:15 UTC. Use this to force an immediate
+    recompute — e.g. after a large batch of paper trades closes, or when
+    investigating why a family is/isn't being demoted.
+    """
+    from trader_koo.report.calibration_pulse import run_calibration_pulse, ensure_calibration_schema
+
+    conn = get_conn()
+    try:
+        ensure_calibration_schema(conn)
+        summary = run_calibration_pulse(conn, trigger="manual")
+        LOG.info(
+            "Admin manual calibration pulse: families=%d changes=%d",
+            summary.get("families_updated", 0),
+            len(summary.get("changes") or []),
+        )
+        return summary
+    finally:
+        conn.close()
+
+
+@router.get("/api/admin/calibration/state")
+@require_admin_auth
+def admin_calibration_state() -> dict[str, Any]:
+    """Return the current calibration_state table — all family score adjustments and blocks."""
+    conn = get_conn()
+    try:
+        if not table_exists(conn, "calibration_state"):
+            return {"ok": True, "rows": [], "detail": "calibration_state table not yet created"}
+        rows = conn.execute(
+            """
+            SELECT family, direction, score_adjustment, block_new_entries,
+                   hit_rate_pct, expectancy_pct, combined_sample_count,
+                   eval_sample_count, paper_sample_count, last_updated, notes
+            FROM calibration_state
+            ORDER BY expectancy_pct ASC NULLS LAST
+            """
+        ).fetchall()
+        return {
+            "ok": True,
+            "count": len(rows),
+            "rows": [dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
+

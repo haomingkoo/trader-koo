@@ -1378,11 +1378,17 @@ def fetch_report_payload(
                     window_days=SETUP_EVAL_WINDOW_DAYS,
                     min_sample=SETUP_EVAL_MIN_SAMPLE,
                 )
+                try:
+                    from trader_koo.report.calibration_pulse import load_calibration_state
+                    _calib_state = load_calibration_state(conn)
+                except Exception:
+                    _calib_state = {}
                 calibration = _apply_setup_eval_fields(
                     setup_rows_ref,
                     reliability_lookup=reliability_lookup,
                     min_sample=SETUP_EVAL_MIN_SAMPLE,
                     hit_threshold_pct=SETUP_EVAL_HIT_THRESHOLD_PCT,
+                    calibration_state=_calib_state,
                 )
                 setup_rows_ref.sort(
                     key=lambda r: (

@@ -1757,15 +1757,25 @@ def _apply_setup_eval_fields(
     reliability_lookup: dict[tuple[str, str], dict[str, Any]],
     min_sample: int,
     hit_threshold_pct: float,
+    calibration_state: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Apply calibration adjustments to setup scores.
+
+    If ``calibration_state`` is provided (loaded from the calibration_state table
+    written by the calibration pulse), its pre-computed ``score_adjustment`` takes
+    precedence over the inline computation when the calibration sample is larger
+    and the pulse ran within the last 7 days.
+    """
     adjusted_calls = 0
     adjustments: list[float] = []
+    calib = calibration_state or {}
+
     for row in setup_rows or []:
         if not isinstance(row, dict):
             continue
         call_direction = _setup_call_direction(row)
         validity_days = _setup_validity_days(row)
-        family = str(row.get("setup_family") or "").strip().lower()
+        family = str(row.get("setup_family") or "").strip().lower().replace(" ", "_")
         stat = reliability_lookup.get((family, call_direction))
         row["call_direction"] = call_direction
         row["validity_days"] = int(validity_days)
@@ -1780,12 +1790,22 @@ def _apply_setup_eval_fields(
             )
         else:
             row["reliability_label"] = "insufficient history"
+
         raw_score = float(row.get("score") or 0.0)
-        adjustment = _setup_eval_score_adjustment(
-            stat,
-            min_sample=min_sample,
-            hit_threshold_pct=hit_threshold_pct,
-        )
+
+        # Use calibration pulse adjustment when available — it incorporates both
+        # setup_call_evaluations and paper_trades and runs on a broader time window.
+        calib_entry = calib.get((family, call_direction))
+        if calib_entry is not None:
+            adjustment = float(calib_entry.get("score_adjustment") or 0.0)
+            row["reliability_label"] += " (calibrated)"
+        else:
+            adjustment = _setup_eval_score_adjustment(
+                stat,
+                min_sample=min_sample,
+                hit_threshold_pct=hit_threshold_pct,
+            )
+
         adjusted_score = round(_clamp(raw_score + adjustment, 0.0, 100.0), 1)
         row["setup_score_raw"] = round(raw_score, 1)
         row["setup_score_adjustment"] = adjustment

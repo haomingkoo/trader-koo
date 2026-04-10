@@ -293,6 +293,12 @@ async def lifespan(_app: FastAPI):
             LOG.info("Audit logging schema initialized")
             ensure_paper_trade_schema(conn)
             LOG.info("Paper trade schema initialized")
+            try:
+                from trader_koo.report.calibration_pulse import ensure_calibration_schema
+                ensure_calibration_schema(conn)
+                LOG.info("Calibration state schema initialized")
+            except Exception as exc:
+                LOG.warning("Calibration state schema init failed (non-fatal): %s", exc)
             ensure_crypto_schema(conn)
             LOG.info("Crypto bars schema initialized")
             ensure_pipeline_runs_schema(conn)

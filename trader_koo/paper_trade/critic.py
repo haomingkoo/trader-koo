@@ -307,16 +307,39 @@ def _check_family_edge(
     row: dict[str, Any],
     evaluation: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Block families with proven negative edge from recent closed trades.
+    """Block families with proven negative edge.
 
-    If a (family, direction) pair has 0% win rate over 5+ closed trades,
-    reject. If win rate is under 25% over 4+ trades, require A-tier.
+    Two-layer check:
+    1. calibration_state (persistent, updated every 3 sessions) — blocks on sustained
+       negative expectancy over a combined eval + paper sample.
+    2. paper_trades recent win rate — blocks on 0% WR over FAMILY_EDGE_BLOCK_SAMPLE trades.
     """
     family = str(row.get("setup_family") or "").lower().replace(" ", "_")
     direction = str(evaluation.get("direction") or "").lower()
     if not family or not direction:
         return True, "No family/direction — skipping family edge check"
 
+    # Layer 1: check calibration_state (broad sample, pre-computed every 3 sessions)
+    try:
+        calib = conn.execute(
+            "SELECT block_new_entries, score_adjustment, hit_rate_pct, expectancy_pct, "
+            "combined_sample_count FROM calibration_state "
+            "WHERE family = ? AND direction = ?",
+            (family, direction),
+        ).fetchone()
+        if calib is not None and int(calib[0]) == 1:
+            exp = calib[3]
+            n = calib[4]
+            hr = calib[2]
+            return False, (
+                f"Family '{family}' {direction} blocked by calibration pulse: "
+                f"expectancy {exp:.1f}% | hit {hr:.0f}% | {n} combined samples. "
+                "Will restore when edge recovers to ≥0%."
+            )
+    except Exception:
+        pass  # Table not yet created — fail open and fall through
+
+    # Layer 2: recent paper_trades win rate (real-time, smaller sample)
     rows = conn.execute(
         "SELECT pnl_pct FROM paper_trades "
         "WHERE status != 'open' AND pnl_pct IS NOT NULL "
