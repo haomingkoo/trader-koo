@@ -251,6 +251,26 @@ class TestRunCalibrationPulse:
         count = conn.execute("SELECT COUNT(*) FROM calibration_state").fetchone()[0]
         assert count == 1  # not doubled
 
+    def test_paper_stats_per_family_not_dominated_by_active_family(self):
+        """A high-volume family must not crowd out another family's recent trades."""
+        conn = _make_conn()
+        # dominant family: 60 very recent trades (all losses)
+        _seed_paper(conn, "dominant_family", "long", [-5.0] * 60)
+        # quiet family: only 5 trades but should still appear
+        _seed_paper(conn, "quiet_family", "long", [2.0] * MIN_PAPER_SAMPLE)
+        # Both need eval samples to be written to calibration_state
+        _seed_eval(conn, "dominant_family", "long", [-1.0] * MIN_EVAL_SAMPLE)
+        _seed_eval(conn, "quiet_family", "long", [1.0] * MIN_EVAL_SAMPLE)
+
+        run_calibration_pulse(conn, trigger="test")
+
+        quiet_row = conn.execute(
+            "SELECT paper_sample_count FROM calibration_state "
+            "WHERE family='quiet_family' AND direction='long'"
+        ).fetchone()
+        assert quiet_row is not None
+        assert quiet_row[0] == MIN_PAPER_SAMPLE  # all 5 quiet trades captured
+
 
 # ---------------------------------------------------------------------------
 # build_telegram_message

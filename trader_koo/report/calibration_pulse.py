@@ -153,21 +153,32 @@ def _paper_stats(
     *,
     lookback: int,
 ) -> dict[tuple[str, str], dict[str, Any]]:
-    """Read closed paper trades for the last N trades per family."""
+    """Read the N most-recent closed paper trades per (family, direction).
+
+    Uses a window function to correctly rank within each family so that a
+    high-volume family cannot crowd out recent data from other families.
+    """
     if not _table_exists(conn, "paper_trades"):
         return {}
     rows = conn.execute(
         """
+        WITH ranked AS (
+            SELECT setup_family, direction, pnl_pct,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY setup_family, direction
+                       ORDER BY exit_date DESC
+                   ) AS rn
+            FROM paper_trades
+            WHERE status != 'open'
+              AND pnl_pct IS NOT NULL
+              AND setup_family IS NOT NULL
+              AND direction IN ('long', 'short')
+        )
         SELECT setup_family, direction, pnl_pct
-        FROM paper_trades
-        WHERE status != 'open'
-          AND pnl_pct IS NOT NULL
-          AND setup_family IS NOT NULL
-          AND direction IN ('long', 'short')
-        ORDER BY exit_date DESC
-        LIMIT ?
+        FROM ranked
+        WHERE rn <= ?
         """,
-        (lookback * 10,),  # over-fetch then slice per family
+        (lookback,),
     ).fetchall()
 
     buckets: dict[tuple[str, str], list[float]] = {}
@@ -177,14 +188,12 @@ def _paper_stats(
 
     out: dict[tuple[str, str], dict[str, Any]] = {}
     for key, returns in buckets.items():
-        # Cap per-family lookback to avoid distant history dominating
-        recent = returns[:lookback]
-        n = len(recent)
-        wins = sum(1 for r in recent if r > 0)
+        n = len(returns)
+        wins = sum(1 for r in returns if r > 0)
         out[key] = {
             "sample": n,
             "hit_rate_pct": wins / n * 100.0 if n else 0.0,
-            "expectancy_pct": sum(recent) / n if n else 0.0,
+            "expectancy_pct": sum(returns) / n if n else 0.0,
         }
     return out
 
@@ -246,7 +255,11 @@ def _combined_expectancy(
     combined_exp = sum(all_returns) / combined_n
 
     return {
-        "combined_sample": eval_n + paper_n,  # actual trades (not weighted)
+        # combined_sample is the actual trade count (unweighted) — used for block
+        # threshold to reflect observed data volume, not fictitious weight units.
+        # expectancy_pct is computed from the weighted list to give paper trades
+        # more influence, since they represent real capital decisions.
+        "combined_sample": eval_n + paper_n,
         "eval_sample": eval_n,
         "paper_sample": paper_n,
         "hit_rate_pct": round(combined_hr, 1),
