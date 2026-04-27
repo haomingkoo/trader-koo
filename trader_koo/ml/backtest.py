@@ -2,14 +2,14 @@
 
 Simulates what would happen if you followed the model's predictions:
 - Each week, score the universe
-- Pick the top N tickers by predicted win probability
+- Pick the top N tickers by model probability
 - Enter long OR short positions with position sizing
 - Apply triple-barrier exits (profit target, stop loss, time expiry)
 - Track portfolio equity curve vs SPY buy-and-hold
 
 Direction logic:
-- prob > long_threshold (default 0.55) -> long signal (model confident price rises)
-- prob < short_threshold (default 0.45) -> short signal (model confident price falls)
+- prob > long_threshold (default 0.55) -> long signal
+- prob < short_threshold (default 0.45) -> short signal for directional target modes only
 - between thresholds -> skip (no edge)
 
 NO LOOK-AHEAD: the model used for each week is trained only on data
@@ -30,11 +30,9 @@ import pandas as pd
 
 from trader_koo.ml.features import (
     FEATURE_COLUMNS,
-    FEATURE_COLUMNS_FULL,
     extract_features_for_universe,
 )
-from trader_koo.ml.labels import generate_triple_barrier_labels
-from trader_koo.ml.trainer import LGBM_PARAMS, build_dataset
+from trader_koo.ml.trainer import LGBM_PARAMS, _apply_target_mode, build_dataset
 
 LOG = logging.getLogger(__name__)
 
@@ -169,6 +167,8 @@ def run_backtest(
     min_win_prob: float = 0.55,
     short_threshold: float = DEFAULT_SHORT_THRESHOLD,
     initial_capital: float = DEFAULT_INITIAL_CAPITAL,
+    tickers: list[str] | None = None,
+    target_mode: str = "barrier",
 ) -> dict[str, Any]:
     """Run a full walk-forward backtest.
 
@@ -208,6 +208,14 @@ def run_backtest(
         Must be < min_win_prob (dead zone between them = no trade).
     initial_capital : float
         Starting portfolio value.
+    tickers : list[str] | None
+        Optional universe restriction for fast leak-check smoke runs. Leave
+        unset for the full production universe.
+    target_mode : str
+        Training target mode. ``return_sign`` and ``rank`` are directional and
+        can support long/short inference. ``barrier`` is the default because it
+        performed best in the local walk-forward retest; it predicts whether a
+        long profit target is hit, so low probabilities are not short signals.
     """
     if short_threshold >= min_win_prob:
         return {
@@ -255,10 +263,28 @@ def run_backtest(
 
     LOG.info(
         "Backtest: %s to %s, %d rebalance dates, max %d positions, "
-        "long>%.2f short<%.2f",
+        "long>%.2f short<%.2f target_mode=%s",
         start_date, end_date, len(rebalance_dates), max_positions,
-        min_win_prob, short_threshold,
+        min_win_prob, short_threshold, target_mode,
     )
+    supports_shorts = target_mode in {"return_sign", "rank"}
+
+    # The rolling training windows begin before the first rebalance date. Bulk
+    # prefetch FRED once so the walk-forward loop does not make hundreds of
+    # repeated per-date network calls.
+    try:
+        from trader_koo.ml.external_data import prefetch_fred_series_bulk
+
+        fred_start = (
+            pd.Timestamp(start_date) - pd.Timedelta(days=train_window_days + max_holding_days + 10)
+        ).strftime("%Y-%m-%d")
+        prefetch_fred_series_bulk(
+            ["DFF", "T10Y2Y", "BAMLH0A0HYM2"],
+            fred_start,
+            end_date,
+        )
+    except Exception as exc:
+        LOG.warning("FRED bulk prefetch failed for backtest: %s", exc)
 
     for rebalance_idx, rebalance_date in enumerate(rebalance_dates):
         rebalance_ts = pd.Timestamp(rebalance_date)
@@ -347,7 +373,11 @@ def run_backtest(
                 start_date=train_start,
                 end_date=train_end_date,
                 sample_frequency=10,  # must match trainer.py to avoid label overlap
+                tickers=tickers,
+                drop_time_expired=False,
             )
+            if not dataset.empty:
+                dataset = _apply_target_mode(dataset, target_mode)
             if len(dataset) < 50:
                 equity_curve.append({"date": rebalance_date, "portfolio": round(portfolio_value, 2),
                                       "positions": len(open_positions), "note": "insufficient_data"})
@@ -386,7 +416,12 @@ def run_backtest(
             continue
 
         try:
-            features = extract_features_for_universe(conn, as_of_date=rebalance_date, strict=True)
+            features = extract_features_for_universe(
+                conn,
+                as_of_date=rebalance_date,
+                tickers=tickers,
+                strict=True,
+            )
             if features.empty:
                 continue
             # Use same training medians for imputation (consistent with training)
@@ -403,15 +438,25 @@ def run_backtest(
             longs["signal_strength"] = longs["prob"]
             longs = longs.sort_values("signal_strength", ascending=False)
 
-            # Short candidates: low win probability (model says price will DROP)
-            shorts = scored[scored["prob"] <= short_threshold].copy()
-            shorts["direction"] = "short"
-            # Rank by inverse probability (lowest prob = strongest short signal)
-            shorts["signal_strength"] = 1.0 - shorts["prob"]
-            shorts = shorts.sort_values("signal_strength", ascending=False)
+            # Short candidates only make sense for directional targets.
+            # For barrier mode, a low probability means "unlikely to hit the
+            # long target", not necessarily "good short".
+            if supports_shorts:
+                shorts = scored[scored["prob"] <= short_threshold].copy()
+                shorts["direction"] = "short"
+                # Rank by inverse probability (lowest prob = strongest short signal)
+                shorts["signal_strength"] = 1.0 - shorts["prob"]
+                shorts = shorts.sort_values("signal_strength", ascending=False)
+            else:
+                shorts = pd.DataFrame(columns=[*scored.columns, "direction", "signal_strength"])
 
-            # Merge and rank all candidates by signal strength
-            candidates = pd.concat([longs, shorts], ignore_index=True)
+            # Merge and rank all candidates by signal strength.
+            parts = [part for part in (longs, shorts) if not part.empty]
+            candidates = (
+                pd.concat(parts, ignore_index=True)
+                if parts
+                else pd.DataFrame(columns=[*scored.columns, "direction", "signal_strength"])
+            )
             candidates = candidates.sort_values(
                 "signal_strength", ascending=False,
             )
@@ -585,5 +630,8 @@ def run_backtest(
             "stop_mult": stop_mult,
             "min_win_prob": min_win_prob,
             "short_threshold": short_threshold,
+            "target_mode": target_mode,
+            "shorts_enabled": supports_shorts,
+            "tickers": tickers,
         },
     }

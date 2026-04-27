@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 
+from trader_koo.config import env_int
 from trader_koo.notifications.telegram import send_price_alert
 
 LOG = logging.getLogger("trader_koo.notifications.alert_engine")
@@ -33,8 +34,11 @@ DEFAULT_COOLDOWN_SEC = 4 * 3600
 # Proximity threshold: fire when price is within this % of a level
 DEFAULT_PROXIMITY_PCT = 0.01
 
-# REST poll interval: 2 minutes (10 tickers = 5 calls/min, within 60/min)
-POLL_INTERVAL_SEC = 120
+# REST poll interval: 1 minute by default. With 10 report tickers plus the
+# always-watch list, this stays comfortably below Finnhub's common 60/min limit.
+POLL_INTERVAL_SEC = env_int(
+    "TRADER_KOO_PRICE_ALERT_POLL_SEC", 60, min_value=30, max_value=300
+)
 
 # How often the engine reloads setups from the daily report (seconds)
 SETUP_REFRESH_INTERVAL_SEC = 6 * 3600  # every 6 hours
@@ -100,7 +104,7 @@ class AlertEngine:
     """Polls Finnhub REST API and fires Telegram price alerts.
 
     Monitors the top 10 setup tickers from the nightly report against
-    their support/resistance levels.  Polls every 2 minutes during US
+    their support/resistance levels.  Polls every minute by default during US
     market hours (9:30-16:00 ET, Mon-Fri).
 
     Parameters
@@ -473,8 +477,8 @@ class AlertEngine:
     async def run(self) -> None:
         """Long-running async task — polls REST API and fires alerts.
 
-        Polls Finnhub REST every 2 minutes during US market hours.
-        10 tickers x every 2 min = 5 calls/min (within 60/min free cap).
+        Polls Finnhub REST during US market hours. Duplicate Telegram pages
+        remain gated by per-ticker/level cooldowns.
         Exits cleanly when ``self._running`` is set to ``False``.
         """
         self._running = True

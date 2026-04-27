@@ -5,7 +5,7 @@ Full-stack S&P 500 + crypto market analysis platform with ML-powered swing trade
 **Live**: [trader.kooexperience.com](https://trader.kooexperience.com)
 
 ![CI](https://github.com/haomingkoo/trader-koo/actions/workflows/ci.yml/badge.svg)
-![Python >=3.10](https://img.shields.io/badge/Python-%3E%3D3.10-blue)
+![Python >=3.11](https://img.shields.io/badge/Python-%3E%3D3.11-blue)
 ![React 19](https://img.shields.io/badge/React-19-61DAFB)
 ![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E)
 
@@ -67,7 +67,7 @@ make ci
 ## Quality
 
 - GitHub Actions runs repo hygiene, backend tests, and frontend production builds on every push and pull request.
-- Dependabot is configured for Python, npm, and GitHub Actions dependency updates.
+- Dependabot is configured for weekly Python, npm, Railway runtime, and GitHub Actions dependency updates.
 - Pre-commit hooks enforce basic hygiene and secret scanning before code lands.
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected local workflow.
 

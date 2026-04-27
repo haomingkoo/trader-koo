@@ -1,48 +1,21 @@
 import { NavLink } from "react-router-dom";
 import { useState, useEffect } from "react";
 import {
-  BookOpen,
-  FileText,
-  Thermometer,
-  Calendar,
-  TrendingUp,
-  Bitcoin,
-  Search,
-  Wallet,
-  BarChart3,
-  Layers,
-  Bell,
-  Fish,
   ChevronLeft,
   ChevronRight,
   X,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { navRoutes, routePreloaders } from "../../routes/routeConfig";
 
-interface NavItem {
-  to: string;
-  label: string;
-  Icon: LucideIcon;
+const preloadedRoutes = new Set<string>();
+
+function preloadRoute(path: string) {
+  if (preloadedRoutes.has(path)) return;
+  preloadedRoutes.add(path);
+  void routePreloaders[path]?.().catch(() => {
+    preloadedRoutes.delete(path);
+  });
 }
-
-const navItems: NavItem[] = [
-  // Core (daily use)
-  { to: "/report", label: "Report", Icon: FileText },
-  { to: "/chart", label: "Chart", Icon: TrendingUp },
-  { to: "/alerts", label: "Alerts", Icon: Bell },
-  { to: "/paper-trades", label: "Paper Trades", Icon: Wallet },
-  // Analysis
-  { to: "/vix", label: "VIX Analysis", Icon: Thermometer },
-  { to: "/earnings", label: "Calendar", Icon: Calendar },
-  { to: "/opportunities", label: "Opportunities", Icon: Search },
-  // Crypto
-  { to: "/crypto", label: "Crypto", Icon: Bitcoin },
-  { to: "/hyperliquid", label: "Hyperliquid", Icon: Fish },
-  // Other
-  { to: "/markets", label: "Pred Markets", Icon: BarChart3 },
-  { to: "/methodology", label: "Methodology", Icon: Layers },
-  { to: "/", label: "Guide", Icon: BookOpen },
-];
 
 export default function Sidebar({
   mobileOpen,
@@ -78,7 +51,7 @@ export default function Sidebar({
             href="https://kooexperience.com"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs font-semibold tracking-wider text-[var(--muted)] transition-colors hover:text-[var(--accent)]"
+            className="text-xs font-semibold text-[var(--muted)] transition-colors hover:text-[var(--accent)]"
           >
             kooexperience.com
           </a>
@@ -98,18 +71,21 @@ export default function Sidebar({
           <X size={16} />
         </button>
       </div>
-      <nav className="flex flex-1 flex-col gap-0.5 p-2">
-        {navItems.map((item) => (
+      <nav className="flex flex-1 flex-col gap-1 p-2">
+        {navRoutes.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             end={item.to === "/"}
             onClick={onMobileClose}
+            onFocus={() => preloadRoute(item.to)}
+            onMouseEnter={() => preloadRoute(item.to)}
+            onTouchStart={() => preloadRoute(item.to)}
             className={({ isActive }) =>
               `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
                 isActive
-                  ? "bg-[var(--panel-hover)] text-[var(--accent)]"
-                  : "text-[var(--muted)] hover:bg-[var(--panel-hover)] hover:text-[var(--text)]"
+                  ? "border border-[var(--line)] bg-[var(--surface-subtle)] text-[var(--accent)]"
+                  : "border border-transparent text-[var(--muted)] hover:border-[var(--line)] hover:bg-[var(--panel-hover)] hover:text-[var(--text)]"
               }`
             }
           >
@@ -127,7 +103,7 @@ export default function Sidebar({
   return (
     <>
       <aside
-        className={`hidden md:flex flex-col border-r border-[var(--line)] bg-[var(--panel)] transition-all duration-200 ${collapsed ? "w-14" : "w-52"}`}
+        className={`hidden md:flex flex-col border-r border-[var(--line)] bg-[var(--chrome)] transition-all duration-200 ${collapsed ? "w-14" : "w-52"}`}
       >
         {sidebarContent}
       </aside>
@@ -141,7 +117,7 @@ export default function Sidebar({
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-52 flex-col border-r border-[var(--line)] bg-[var(--panel)] transition-transform duration-200 md:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-52 flex-col border-r border-[var(--line)] bg-[var(--chrome)] transition-transform duration-200 md:hidden ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >

@@ -3,7 +3,7 @@
 ## Local Setup
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 make backend-install
 make frontend-install
@@ -31,6 +31,14 @@ That currently covers:
 - Full backend test suite
 - Frontend production build
 - Pre-commit hygiene and secret scanning
+
+To inspect dependency freshness locally:
+
+```bash
+PYTHON=.venv/bin/python make dependency-status
+```
+
+That runs `pip check`, lists outdated Python packages, and reports outdated frontend npm packages. Dependabot also opens weekly PRs for root Python dependencies, Railway runtime dependencies, frontend npm packages, and GitHub Actions.
 
 ## Pull Requests
 

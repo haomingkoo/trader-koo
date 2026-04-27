@@ -2,32 +2,43 @@
 
 /* Dark theme (default) */
 :root, [data-theme="dark"] {
-  --bg: #0b0f16;
-  --panel: #121927;
-  --panel-hover: #1a2236;
-  --muted: #8ea0bd;
-  --text: #e9eef8;
-  --line: #25334f;
-  --green: #38d39f;
-  --red: #ff6b6b;
-  --amber: #f8c24e;
-  --blue: #6aa9ff;
-  --accent: #4a9eff;
+  --bg: #0f1115;
+  --chrome: #111419;
+  --panel: #171a20;
+  --panel-hover: #20242b;
+  --surface-subtle: #13171d;
+  --muted: #98a2ad;
+  --text: #eef2f4;
+  --line: #2a3139;
+  --green: #41d692;
+  --red: #ff6b72;
+  --amber: #e8b85b;
+  --blue: #7fb7ff;
+  --accent: #82d4aa;
+  --shadow-soft: 0 18px 48px rgba(0, 0, 0, 0.22);
 }
 
 /* Light theme */
 [data-theme="light"] {
-  --bg: #f5f7fa;
+  --bg: #f7f8fb;
+  --chrome: #ffffff;
   --panel: #ffffff;
-  --panel-hover: #f0f2f5;
-  --muted: #6b7280;
-  --text: #111827;
-  --line: #e5e7eb;
-  --green: #059669;
-  --red: #dc2626;
-  --amber: #d97706;
-  --blue: #2563eb;
-  --accent: #3b82f6;
+  --panel-hover: #eef2f6;
+  --surface-subtle: #f1f4f8;
+  --muted: #667085;
+  --text: #141922;
+  --line: #dbe2ea;
+  --green: #05885f;
+  --red: #c8323c;
+  --amber: #b87516;
+  --blue: #2e6fd8;
+  --accent: #16735b;
+  --shadow-soft: 0 18px 48px rgba(19, 31, 48, 0.08);
+}
+
+.rounded-xl,
+.rounded-2xl {
+  border-radius: 0.5rem;
 }
 
 /* Standardized label utilities */
@@ -35,7 +46,7 @@
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -43,7 +54,7 @@
   font-size: 12px;
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -52,7 +63,14 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: "Inter", system-ui, -apple-system, sans-serif;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--text);
 }
 
 /* Focus-visible outlines for keyboard navigation */

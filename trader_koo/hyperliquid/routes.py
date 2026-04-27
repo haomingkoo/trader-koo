@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 
 from fastapi import APIRouter
@@ -15,6 +16,7 @@ from trader_koo.hyperliquid.tracker import (
     _recent_reload_context,
     fetch_wallet_state,
     generate_counter_signals,
+    get_counter_signal_config,
     poll_all_wallets,
     seed_default_wallets,
 )
@@ -94,10 +96,14 @@ def get_live_wallet(label: str) -> dict[str, Any]:
                     "leverage": f"{p.leverage_value}x {p.leverage_type}",
                     "notional_usd": p.notional_usd,
                     "liquidation_price": p.liquidation_price,
+                    "mark_price_source": p.mark_price_source,
+                    "notional_source": p.notional_source,
+                    "data_warnings": list(p.data_warnings),
                 }
                 for p in snapshot.positions
             ],
             "counter_signals": counter_signals,
+            "config": get_counter_signal_config(),
         }
     finally:
         conn.close()
@@ -202,22 +208,26 @@ def get_counter_signals(limit: int = 50) -> dict[str, Any]:
         seed_default_wallets(conn)
         rows = conn.execute(
             "SELECT wallet_label, coin, counter_side, their_side, their_size, "
-            "their_leverage, their_notional_usd, confidence, reasoning, signal_ts "
+            "their_leverage, their_notional_usd, confidence, reasoning, signal_ts, "
+            "action, score, reasons_json "
             "FROM hyperliquid_counter_signals ORDER BY signal_ts DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return {
-            "ok": True,
-            "signals": [
-                {
-                    "wallet": r[0], "coin": r[1], "counter_side": r[2],
-                    "their_side": r[3], "their_size": r[4], "their_leverage": r[5],
-                    "their_notional_usd": r[6], "confidence": r[7],
-                    "reasoning": r[8], "timestamp": r[9],
-                }
-                for r in rows
-            ],
-        }
+        signals: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                reasons = json.loads(r[12]) if r[12] else []
+            except json.JSONDecodeError:
+                reasons = []
+            signals.append({
+                "wallet": r[0], "coin": r[1], "counter_side": r[2],
+                "their_side": r[3], "their_size": r[4], "their_leverage": r[5],
+                "their_notional_usd": r[6], "confidence": r[7],
+                "reasoning": r[8], "timestamp": r[9],
+                "action": r[10], "score": r[11],
+                "reasons": reasons if isinstance(reasons, list) else [],
+            })
+        return {"ok": True, "signals": signals}
     finally:
         conn.close()
 

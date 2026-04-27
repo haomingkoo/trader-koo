@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     open-pull-requests-limit: 3
     groups:
       python-dependencies:
@@ -13,10 +13,24 @@ updates:
       - "dependencies"
       - "python"
 
+  - package-ecosystem: "pip"
+    directory: "/trader_koo"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      railway-runtime-dependencies:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "python"
+      - "runtime"
+
   - package-ecosystem: "npm"
     directory: "/trader_koo/frontend-v2"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     open-pull-requests-limit: 3
     groups:
       frontend-runtime:
@@ -41,7 +55,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     open-pull-requests-limit: 2
     groups:
       github-actions:

@@ -59,6 +59,7 @@ LGBM_PARAMS = {
     "reg_alpha": 0.1,
     "reg_lambda": 1.0,
     "random_state": 42,
+    "n_jobs": -1,
     "verbose": -1,
     "importance_type": "gain",
     "is_unbalance": True,
@@ -93,6 +94,8 @@ def build_dataset(
     end_date: str,
     sample_frequency: int = 5,
     feature_columns: list[str] | None = None,
+    tickers: list[str] | None = None,
+    drop_time_expired: bool = False,
 ) -> pd.DataFrame:
     """Build a labeled feature dataset for training.
 
@@ -110,6 +113,13 @@ def build_dataset(
     feature_columns : list[str] | None
         Which feature set to extract. Defaults to FEATURE_COLUMNS (slim).
         Pass FEATURE_COLUMNS_FULL for the full set.
+    tickers : list[str] | None
+        Optional universe restriction for faster research/backtest smoke runs.
+        Production training should leave this as None.
+    drop_time_expired : bool
+        If True, remove ``label == 0`` rows before target construction. Leave
+        False for ``return_sign`` and ``rank`` targets so they learn from the
+        full realized outcome distribution, including time-expired trades.
     """
     trading_dates = _get_trading_dates(conn, start_date, end_date)
     if not trading_dates:
@@ -126,9 +136,10 @@ def build_dataset(
     all_features: list[pd.DataFrame] = []
     all_labels: list[pd.DataFrame] = []
 
-    for date in sampled_dates:
+    for idx, date in enumerate(sampled_dates, start=1):
+        LOG.info("Feature extraction %d/%d as_of=%s", idx, len(sampled_dates), date)
         features = extract_features_for_universe(
-            conn, as_of_date=date, strict=True,
+            conn, as_of_date=date, tickers=tickers, strict=True,
             feature_columns=feature_columns,
         )
         if features.empty:
@@ -167,19 +178,19 @@ def build_dataset(
         how="inner",
     )
 
-    # 3d. Filter out label=0 (time expiry) samples — these are noise
-    before_filter = len(dataset)
-    dataset = dataset[dataset["label"] != 0].reset_index(drop=True)
-    filtered_count = before_filter - len(dataset)
-    if filtered_count > 0:
-        LOG.info(
-            "Filtered %d time-expiry samples (label=0), %d remaining (%.1f%% removed)",
-            filtered_count, len(dataset), filtered_count / before_filter * 100,
-        )
+    if drop_time_expired:
+        before_filter = len(dataset)
+        dataset = dataset[dataset["label"] != 0].reset_index(drop=True)
+        filtered_count = before_filter - len(dataset)
+        if filtered_count > 0:
+            LOG.info(
+                "Filtered %d time-expiry samples (label=0), %d remaining (%.1f%% removed)",
+                filtered_count, len(dataset), filtered_count / before_filter * 100,
+            )
 
-    if dataset.empty:
-        LOG.warning("All samples were time-expiry; no clean labels remain")
-        return pd.DataFrame()
+        if dataset.empty:
+            LOG.warning("All samples were time-expiry; no clean labels remain")
+            return pd.DataFrame()
 
     # 3c. Feature correlation audit — log highly correlated pairs
     feat_cols = [c for c in (feature_columns or FEATURE_COLUMNS) if c in dataset.columns]
@@ -256,6 +267,17 @@ def _apply_target_mode(dataset: pd.DataFrame, mode: str) -> pd.DataFrame:
     return dataset
 
 
+def _target_description(mode: str) -> str:
+    """Human-readable target meaning for saved model metadata."""
+    if mode == "barrier":
+        return "probability_long_profit_target_hit_before_stop_or_expiry"
+    if mode == "rank":
+        return "probability_top_quintile_forward_return_vs_same_day_universe"
+    if mode == "return_sign":
+        return "probability_positive_forward_return_at_time_exit"
+    return "unknown_binary_target"
+
+
 def train_walk_forward(
     conn: sqlite3.Connection,
     *,
@@ -267,7 +289,7 @@ def train_walk_forward(
     embargo_days: int = 15,  # Must be >= max_holding_days (10) + buffer
     feature_columns: list[str] | None = None,
     backfill_sentiment: bool = False,
-    target_mode: str = "return_sign",
+    target_mode: str = "barrier",
 ) -> dict[str, Any]:
     """Train LightGBM with walk-forward validation.
 
@@ -291,8 +313,8 @@ def train_walk_forward(
         but avoids per-ticker API calls during feature extraction.
     target_mode : str
         How to define the binary target.  One of:
-        ``"return_sign"`` (default) — 1 if return_pct > 0, else 0.
-        ``"barrier"`` — original triple-barrier (label == +1).
+        ``"barrier"`` (default) — original triple-barrier (label == +1).
+        ``"return_sign"`` — 1 if return_pct > 0, else 0.
         ``"rank"`` — cross-sectional top/bottom quintile.
 
     Returns training report with per-fold metrics.
@@ -348,6 +370,7 @@ def train_walk_forward(
         conn, start_date=start_date, end_date=end_date,
         sample_frequency=max_holding_days,
         feature_columns=use_features,
+        drop_time_expired=False,
     )
     if dataset.empty or len(dataset) < 100:
         return {
@@ -485,7 +508,13 @@ def train_walk_forward(
     # The last fold can have worse OOS AUC than an earlier fold when market regimes shift.
     model_to_save = best_model if best_model is not None else model
     medians_to_save = best_train_medians if best_train_medians is not None else train_medians
-    model_path = _save_model(model_to_save, feature_cols, folds, train_medians=medians_to_save)
+    model_path = _save_model(
+        model_to_save,
+        feature_cols,
+        folds,
+        train_medians=medians_to_save,
+        target_mode=target_mode,
+    )
 
     # Feature importance from the best model
     importance = dict(zip(feature_cols, model_to_save.feature_importances_.tolist()))
@@ -543,6 +572,7 @@ def _save_model(
     folds: list[dict[str, Any]],
     *,
     train_medians: pd.Series | None = None,
+    target_mode: str = "barrier",
 ) -> Path:
     """Save model + metadata to disk."""
     model_dir = _model_dir()
@@ -567,7 +597,8 @@ def _save_model(
     meta = {
         "model_type": "lightgbm",
         "task": "binary_classification",
-        "target": "triple_barrier_profit",
+        "target_mode": target_mode,
+        "target": _target_description(target_mode),
         "feature_columns": feature_cols,
         "lgbm_params": LGBM_PARAMS,
         "folds": folds,

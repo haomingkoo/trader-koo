@@ -27,6 +27,20 @@ _backtest_result: dict[str, Any] | None = None
 _retrain_thread: threading.Thread | None = None
 _retrain_result: dict[str, Any] | None = None
 
+VALID_TARGET_MODES = {"return_sign", "barrier", "rank"}
+
+
+def _target_mode_error(target_mode: str) -> dict[str, Any] | None:
+    if target_mode in VALID_TARGET_MODES:
+        return None
+    return {
+        "ok": False,
+        "error": (
+            f"Invalid target_mode '{target_mode}'. "
+            "Choose from: 'return_sign', 'barrier', 'rank'."
+        ),
+    }
+
 
 @router.post("/api/admin/train-ml-model")
 @require_admin_auth
@@ -34,25 +48,20 @@ def train_ml_model(
     request: Request,
     start_date: str = Query(default="2025-06-01"),
     end_date: str = Query(default=None),
-    target_mode: str = Query(default="return_sign"),
+    target_mode: str = Query(default="barrier"),
 ) -> dict[str, Any]:
     """Train the swing-trade LightGBM model in a background thread.
 
     The model trains asynchronously because it can take several minutes.
     Use GET /api/admin/ml-model-status to check progress and results.
 
-    target_mode: "return_sign" (default), "barrier", or "rank".
+    target_mode: "barrier" (default), "return_sign", or "rank".
     """
     global _ml_train_thread, _ml_train_result
 
-    if target_mode not in {"return_sign", "barrier", "rank"}:
-        return {
-            "ok": False,
-            "error": (
-                f"Invalid target_mode '{target_mode}'. "
-                "Choose from: 'return_sign', 'barrier', 'rank'."
-            ),
-        }
+    error = _target_mode_error(target_mode)
+    if error:
+        return error
 
     if _ml_train_thread and _ml_train_thread.is_alive():
         return {
@@ -131,7 +140,7 @@ def ml_score_universe(
     date: str = Query(default=None),
     top_n: int = Query(default=20),
 ) -> dict[str, Any]:
-    """Score the full universe and return top N tickers by predicted win probability."""
+    """Score the full universe and return top N tickers by model probability."""
     try:
         from trader_koo.ml.scorer import score_universe
 
@@ -223,9 +232,14 @@ def run_backtest_endpoint(
     max_positions: int = Query(default=5),
     min_win_prob: float = Query(default=0.55),
     short_threshold: float = Query(default=0.45),
+    target_mode: str = Query(default="barrier"),
 ) -> dict[str, Any]:
     """Run a walk-forward backtest in background. Check /api/admin/backtest-result."""
     global _backtest_thread, _backtest_result
+
+    error = _target_mode_error(target_mode)
+    if error:
+        return error
 
     if _backtest_thread and _backtest_thread.is_alive():
         return {
@@ -250,6 +264,7 @@ def run_backtest_endpoint(
                     max_positions=max_positions,
                     min_win_prob=min_win_prob,
                     short_threshold=short_threshold,
+                    target_mode=target_mode,
                 )
             finally:
                 conn.close()
@@ -268,9 +283,10 @@ def run_backtest_endpoint(
     return {
         "ok": True,
         "message": (
-            "Backtest started in background. "
+            f"Backtest started in background (target_mode={target_mode}). "
             "Check /api/admin/backtest-result."
         ),
+        "target_mode": target_mode,
     }
 
 
@@ -450,7 +466,7 @@ def _send_retrain_notification(result: dict[str, Any]) -> None:
 def retrain_ml_model(
     request: Request,
     start_date: str = Query(default="2025-01-01"),
-    target_mode: str = Query(default="return_sign"),
+    target_mode: str = Query(default="barrier"),
     notify: bool = Query(default=True),
 ) -> dict[str, Any]:
     """Retrain the LightGBM model using current prod DB data.
@@ -466,20 +482,15 @@ def retrain_ml_model(
     start_date : str
         Training start date (default: 2025-01-01).
     target_mode : str
-        Binary target strategy: "return_sign", "barrier", or "rank".
+        Binary target strategy: "barrier" (default), "return_sign", or "rank".
     notify : bool
         Send Telegram notification on completion (default: True).
     """
     global _retrain_thread, _retrain_result
 
-    if target_mode not in {"return_sign", "barrier", "rank"}:
-        return {
-            "ok": False,
-            "error": (
-                f"Invalid target_mode '{target_mode}'. "
-                "Choose from: 'return_sign', 'barrier', 'rank'."
-            ),
-        }
+    error = _target_mode_error(target_mode)
+    if error:
+        return error
 
     if _retrain_thread and _retrain_thread.is_alive():
         return {

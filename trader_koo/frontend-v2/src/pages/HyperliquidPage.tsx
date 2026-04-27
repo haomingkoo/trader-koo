@@ -19,6 +19,9 @@ interface Position {
   leverage: string;
   notional_usd: number;
   liquidation_price: number | null;
+  mark_price_source: string;
+  notional_source: string;
+  data_warnings: string[];
 }
 
 interface ReloadContext {
@@ -75,6 +78,14 @@ interface WalletLive {
   };
   positions: Position[];
   counter_signals: CounterSignal[];
+  config: {
+    min_counter_notional_usd: number;
+    skip_counter_coins: string[];
+    reload_signal_boost: number;
+    reload_lookback_hours: number;
+    crowd_ratio_threshold: number;
+    crowd_funding_threshold: number;
+  };
 }
 
 interface TrackedWallet {
@@ -235,6 +246,7 @@ function PositionsTable({ positions }: { positions: Position[] }) {
               const liqDist = p.liquidation_price && p.mark_price > 0
                 ? Math.abs(p.mark_price - p.liquidation_price) / p.mark_price * 100
                 : null;
+              const hasDataWarning = p.data_warnings.length > 0 || p.mark_price_source === "missing";
 
               return (
                 <tr key={`${p.coin}-${p.side}`} className="border-b border-[var(--line)]/30">
@@ -246,7 +258,20 @@ function PositionsTable({ positions }: { positions: Position[] }) {
                   </td>
                   <td className="py-2 text-right tabular-nums text-[var(--text)]">{fmt(p.size, 2)}</td>
                   <td className="py-2 text-right tabular-nums text-[var(--muted)]">${fmt(p.entry_price, 2)}</td>
-                  <td className="py-2 text-right tabular-nums text-[var(--text)]">${fmt(p.mark_price, 2)}</td>
+                  <td className="py-2 text-right tabular-nums text-[var(--text)]">
+                    <div className="flex items-center justify-end gap-1">
+                      <span>{p.mark_price > 0 ? `$${fmt(p.mark_price, 2)}` : "-"}</span>
+                      {hasDataWarning ? (
+                        <Badge
+                          variant="amber"
+                          className="px-1 py-0 text-[9px]"
+                          title={[p.mark_price_source, ...p.data_warnings].join(", ")}
+                        >
+                          check
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className={`py-2 text-right tabular-nums font-bold ${pnlColor(p.unrealized_pnl)}`}>
                     {p.unrealized_pnl >= 0 ? "+" : ""}{fmtUsd(p.unrealized_pnl)}
                   </td>
@@ -393,16 +418,13 @@ export default function HyperliquidPage() {
 
   const { data: walletList } = useTrackedWallets();
   const activeWallets = (walletList?.wallets || []).filter((w) => w.active);
+  const selectedWallet =
+    activeWallets.length && !activeWallets.some((w) => w.label === wallet)
+      ? activeWallets[0].label
+      : wallet;
 
-  useEffect(() => {
-    if (!activeWallets.length) return;
-    if (!activeWallets.some((w) => w.label === wallet)) {
-      setWallet(activeWallets[0].label);
-    }
-  }, [activeWallets, wallet]);
-
-  const { data: live, isLoading: liveLoading } = useWalletLive(wallet);
-  const { data: history, isLoading: historyLoading } = useWalletHistory(wallet, historyDays);
+  const { data: live, isLoading: liveLoading } = useWalletLive(selectedWallet);
+  const { data: history, isLoading: historyLoading } = useWalletHistory(selectedWallet, historyDays);
 
   if (liveLoading) return <Spinner />;
 
@@ -427,7 +449,7 @@ export default function HyperliquidPage() {
           <label className="flex items-center gap-2 text-[10px] text-[var(--muted)]">
             Wallet
             <select
-              value={wallet}
+              value={selectedWallet}
               onChange={(e) => setWallet(e.target.value)}
               className="rounded-md border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-xs text-[var(--text)]"
             >
@@ -476,7 +498,7 @@ export default function HyperliquidPage() {
       {/* Counter-Trade Research Study */}
       <div className="border-t border-[var(--line)] pt-6 mt-6">
         <h2 className="text-lg font-bold text-[var(--text)] mb-4">Counter-Trade Research</h2>
-        <CounterTradeStudy wallet="machibro" />
+        <CounterTradeStudy wallet={selectedWallet} />
       </div>
 
       <p className="text-[9px] text-[var(--muted)]">

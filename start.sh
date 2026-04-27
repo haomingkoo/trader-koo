@@ -7,6 +7,19 @@ set -euo pipefail
 PYTHON=/opt/venv/bin/python
 UVICORN=/opt/venv/bin/uvicorn
 
+# Nixpacks exposes some compiled Python dependencies, but the runtime shell can
+# start with LD_LIBRARY_PATH=/usr/lib only. Add the Nix runtime libs NumPy needs.
+RUNTIME_LIB_DIRS=()
+for dir in /nix/store/*-gcc-*-lib/lib /nix/store/*-zlib-*/lib; do
+    if [ -d "$dir" ]; then
+        RUNTIME_LIB_DIRS+=("$dir")
+    fi
+done
+if [ "${#RUNTIME_LIB_DIRS[@]}" -gt 0 ]; then
+    RUNTIME_LIB_PATH="$(IFS=:; echo "${RUNTIME_LIB_DIRS[*]}")"
+    export LD_LIBRARY_PATH="${RUNTIME_LIB_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 DB_PATH="${TRADER_KOO_DB_PATH:-/data/trader_koo.db}"
 
 if [ ! -f "$DB_PATH" ]; then

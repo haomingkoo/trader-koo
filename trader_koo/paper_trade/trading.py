@@ -345,7 +345,9 @@ def create_paper_trades_from_report(
     try:
         _vix_row = conn.execute(
             "SELECT CAST(close AS REAL) FROM price_daily "
-            "WHERE ticker = '^VIX' AND close IS NOT NULL ORDER BY date DESC LIMIT 1"
+            "WHERE ticker = '^VIX' AND close IS NOT NULL AND date <= ? "
+            "ORDER BY date DESC LIMIT 1",
+            (report_date,),
         ).fetchone()
         if _vix_row and _vix_row[0] is not None:
             _vix_level = float(_vix_row[0])
@@ -447,7 +449,8 @@ def create_paper_trades_from_report(
             continue
 
         # ML score — OBSERVATION MODE: score trades but never reject.
-        # The model's AUC (0.5235) is too low to gate trades reliably.
+        # The current best local model is a barrier model, so the probability
+        # means "long target-hit likelihood" rather than a generic short signal.
         # Scores are recorded on the trade for post-hoc analysis so we
         # can evaluate when the model improves enough to re-enable filtering.
         ml_prediction: dict[str, Any] = {}
@@ -463,10 +466,12 @@ def create_paper_trades_from_report(
                     and ml_score.get("predicted_win_prob") is not None
                 ):
                     ml_prediction = ml_score
+                    prediction_label = ml_score.get("prediction_label") or "model_probability"
                     LOG.info(
-                        "ML observation: %s %s win_prob=%.2f (threshold %.2f, NOT filtering)",
+                        "ML observation: %s %s %s=%.2f (threshold %.2f, NOT filtering)",
                         direction.upper(),
                         ticker,
+                        prediction_label,
                         ml_score["predicted_win_prob"],
                         config.ml_min_win_prob,
                     )
@@ -481,7 +486,7 @@ def create_paper_trades_from_report(
         # Capture market context at entry (VIX, regime, HMM state)
         from trader_koo.paper_trade.context import capture_market_context
 
-        market_ctx = capture_market_context(conn)
+        market_ctx = capture_market_context(conn, as_of_date=report_date)
         market_ctx["bot_version"] = config.bot_version
 
         # Critic review — devil's advocate that kills low-conviction trades
@@ -513,7 +518,11 @@ def create_paper_trades_from_report(
                 critic["checks_total"],
             )
         except Exception as exc:
-            LOG.warning("Critic check failed (allowing trade): %s", exc)
+            if config.critic_fail_open:
+                LOG.warning("Critic check failed (allowing trade by explicit config): %s", exc)
+            else:
+                LOG.warning("Critic check failed (rejecting trade): %s", exc)
+                continue
 
         before_changes = conn.total_changes
         conn.execute(

@@ -4,6 +4,7 @@ import type {
   PaperTrade,
   PaperTradeBenchmarks,
   PaperTradeDirectionStats,
+  PaperTradeFeedbackItem,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
 } from "../../api/types";
@@ -332,12 +333,14 @@ export function PaperTradeEquityCurve({
 function BenchmarkColumn({
   label,
   returnPct,
+  metricLabel = "return",
   winRate,
   subtext,
   highlight = false,
 }: {
   label: string;
   returnPct: number | null | undefined;
+  metricLabel?: string;
   winRate?: number | null;
   subtext?: string;
   highlight?: boolean;
@@ -362,7 +365,7 @@ function BenchmarkColumn({
           ? `${returnPct > 0 ? "+" : ""}${returnPct.toFixed(2)}%`
           : "\u2014"}
       </div>
-      <div className="mt-0.5 text-[10px] text-[var(--muted)]">avg return</div>
+      <div className="mt-0.5 text-[10px] text-[var(--muted)]">{metricLabel}</div>
       {winRate != null && (
         <div className="mt-2 text-sm text-[var(--text)]">
           {winRate.toFixed(1)}% win rate
@@ -389,8 +392,20 @@ export function PaperTradeBenchmarkComparison({
     return null;
   }
 
-  const pipelineReturn = overall.avg_pnl_pct;
+  const pipelinePortfolioReturn = overall.total_return_pct;
+  const pipelineAvgReturn = overall.avg_pnl_pct;
   const pipelineWinRate = overall.win_rate_pct;
+  const fixedHoldLabel = unfiltered?.label ?? (
+    unfiltered?.method === "same_entries_fixed_hold"
+      ? "Same Entries Fixed Hold"
+      : "All Report Setups"
+  );
+  const fixedHoldUnit =
+    unfiltered?.method === "same_entries_fixed_hold" ? "entries" : "setups";
+  const fixedHoldDays =
+    typeof unfiltered?.hold_days === "number"
+      ? `${unfiltered.hold_days}d avg hold`
+      : "fixed hold";
 
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
@@ -403,52 +418,125 @@ export function PaperTradeBenchmarkComparison({
         </span>
       </div>
       <p className="mt-1 text-[10px] text-[var(--muted)]">
-        Compares your filtered pipeline results against naive baselines.
-        SPY buy-and-hold shows passive market return over the same period.
-        Unfiltered baseline shows what happens if every qualifying setup is
-        taken without ML or critic gating (5-day hold).
+        Compares portfolio return against SPY over the same window, then compares
+        average trade return against a broad setup baseline when available.
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
         <BenchmarkColumn
           label="Your Pipeline"
-          returnPct={pipelineReturn}
+          returnPct={pipelinePortfolioReturn}
+          metricLabel="portfolio return"
           winRate={pipelineWinRate}
-          subtext={`${overall.total_trades} closed trades`}
+          subtext={
+            typeof pipelineAvgReturn === "number"
+              ? `${overall.total_trades} closed, ${pipelineAvgReturn > 0 ? "+" : ""}${pipelineAvgReturn.toFixed(2)}% avg/trade`
+              : `${overall.total_trades} closed trades`
+          }
           highlight
         />
         {spy && (
           <BenchmarkColumn
             label="SPY Buy & Hold"
             returnPct={spy.return_pct}
+            metricLabel="period return"
             subtext={`${spy.period_days}d period`}
           />
         )}
         {unfiltered && (
           <BenchmarkColumn
-            label="All Setups (No Filter)"
+            label={fixedHoldLabel}
             returnPct={unfiltered.return_pct}
+            metricLabel="avg setup return"
             winRate={unfiltered.win_rate}
-            subtext={`${unfiltered.trades} setups, 5-day hold`}
+            subtext={`${unfiltered.trades} ${fixedHoldUnit}, ${fixedHoldDays}`}
           />
         )}
       </div>
-      {spy && typeof pipelineReturn === "number" && (
-        <div className="mt-3 text-xs text-[var(--muted)]">
-          {pipelineReturn > spy.return_pct ? (
+      {spy && typeof pipelinePortfolioReturn === "number" && (
+        <div className="mt-3 text-xs">
+          {pipelinePortfolioReturn > spy.return_pct ? (
             <span className="text-[var(--green)]">
-              Pipeline outperforms SPY by{" "}
-              {(pipelineReturn - spy.return_pct).toFixed(2)}pp per trade avg
+              Portfolio outperforms SPY by{" "}
+              {(pipelinePortfolioReturn - spy.return_pct).toFixed(2)}pp over the same window
             </span>
-          ) : pipelineReturn < spy.return_pct ? (
+          ) : pipelinePortfolioReturn < spy.return_pct ? (
             <span className="text-[var(--red)]">
-              Pipeline underperforms SPY by{" "}
-              {(spy.return_pct - pipelineReturn).toFixed(2)}pp — review filter thresholds
+              Portfolio trails SPY by{" "}
+              {(spy.return_pct - pipelinePortfolioReturn).toFixed(2)}pp over the same window
             </span>
           ) : (
-            <span>Pipeline matches SPY</span>
+            <span className="text-[var(--muted)]">Portfolio matches SPY over the same window</span>
           )}
         </div>
       )}
+      {unfiltered && typeof pipelineAvgReturn === "number" && typeof unfiltered.return_pct === "number" && (
+        <div className="mt-1 text-xs">
+          {pipelineAvgReturn > unfiltered.return_pct ? (
+            <span className="text-[var(--green)]">
+              Taken trades beat the setup baseline by{" "}
+              {(pipelineAvgReturn - unfiltered.return_pct).toFixed(2)}pp per trade on average
+            </span>
+          ) : pipelineAvgReturn < unfiltered.return_pct ? (
+            <span className="text-[var(--amber)]">
+              Taken trades trail the setup baseline by{" "}
+              {(unfiltered.return_pct - pipelineAvgReturn).toFixed(2)}pp per trade on average
+            </span>
+          ) : (
+            <span className="text-[var(--muted)]">Taken trades match the setup baseline on average</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Actionable Feedback ── */
+const feedbackTone = (severity: string): string => {
+  const key = severity.toLowerCase();
+  if (key === "green") return "border-[var(--green)]/35 bg-[var(--green)]/5";
+  if (key === "high") return "border-[var(--red)]/35 bg-[var(--red)]/5";
+  return "border-[var(--amber)]/35 bg-[var(--amber)]/5";
+};
+
+export function PaperTradeFeedbackPanel({
+  feedback,
+}: {
+  feedback?: PaperTradeFeedbackItem[];
+}) {
+  const items = (feedback ?? []).filter((item) => item.title || item.detail || item.action);
+  if (items.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-[var(--text)]">Actionable Review</div>
+        <span className="text-[10px] text-[var(--muted)]">{items.length} signal(s)</span>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        {items.map((item, index) => (
+          <div
+            key={`${item.kind}-${item.title}-${index}`}
+            className={`rounded-lg border px-3 py-3 ${feedbackTone(item.severity)}`}
+          >
+            <div className="flex items-center gap-2">
+              <Badge
+                variant={
+                  item.severity === "green"
+                    ? "green"
+                    : item.severity === "high"
+                      ? "red"
+                      : "amber"
+                }
+              >
+                {item.kind}
+              </Badge>
+              <div className="text-xs font-semibold text-[var(--text)]">{item.title}</div>
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">{item.detail}</p>
+            <p className="mt-2 text-xs font-medium text-[var(--text)]">{item.action}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -669,8 +757,8 @@ export function PaperTradeMLCalibration({
         <span className="text-xs text-[var(--muted)]">{totalScored} scored trades</span>
       </div>
       <p className="mt-1 text-[10px] text-[var(--muted)]">
-        Compares ML predicted win probability buckets to actual outcomes. A well-calibrated model
-        shows actual win rates rising with predicted probability.
+        Compares ML probability buckets to actual outcomes. For barrier models, this is target-hit
+        likelihood for long setups and low probability is not a short signal.
       </p>
       <div className="mt-3 overflow-x-auto rounded-lg border border-[var(--line)]">
         <table className="w-full text-left text-xs">
@@ -758,7 +846,7 @@ function escapeCsvField(value: unknown): string {
   return str;
 }
 
-export function exportTradesToCsv(trades: PaperTrade[]): void {
+function exportTradesToCsv(trades: PaperTrade[]): void {
   const header = CSV_COLUMNS.join(",");
   const rows = trades.map((trade) =>
     CSV_COLUMNS.map((col) =>
@@ -834,7 +922,7 @@ export function PaperTradeFilters({
 }
 
 /* ── Closed Trades Table ── */
-export const tradeColumns = [
+const tradeColumns = [
   {
     key: "ticker" as const,
     label: "Ticker",

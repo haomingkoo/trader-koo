@@ -8,6 +8,7 @@ import {
   PaperTradeOpenPositions,
   PaperTradeEquityCurve,
   PaperTradeBenchmarkComparison,
+  PaperTradeFeedbackPanel,
   PaperTradePerformanceAttribution,
   PaperTradeMLCalibration,
   PaperTradeFilters,
@@ -79,8 +80,8 @@ export default function PaperTradePage() {
               <p className="mt-1">Every market night, the pipeline scans 500+ S&P tickers for technical setups using YOLOv8 pattern detection, support/resistance levels, and multi-angle debate scoring.</p>
             </div>
             <div>
-              <div className="font-semibold text-[var(--text)]">2. ML Filtering</div>
-              <p className="mt-1">A LightGBM model (54 features, walk-forward trained) scores each setup. Trades with predicted win probability below 55% are rejected. The model uses momentum, volatility, macro, and sentiment features.</p>
+              <div className="font-semibold text-[var(--text)]">2. ML Observation</div>
+              <p className="mt-1">A LightGBM model records predicted win probabilities for post-trade calibration only. It does not reject trades until walk-forward AUC, hit-rate lift, and calibration improve enough to justify gating.</p>
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">3. Critic Review</div>
@@ -105,6 +106,8 @@ export default function PaperTradePage() {
         overall={overall}
         benchmarks={summary?.benchmarks}
       />
+
+      <PaperTradeFeedbackPanel feedback={summary?.feedback} />
 
       {summary && (
         <PaperTradePerformanceAttribution summary={summary} />

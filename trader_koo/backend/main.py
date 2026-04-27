@@ -59,6 +59,7 @@ from trader_koo.ratelimit.integration import initialize_rate_limiting
 # ---------------------------------------------------------------------------
 
 from trader_koo.backend.services.database import DB_PATH
+from trader_koo.backend.frontend_routes import SPA_ROUTE_PATHS
 from trader_koo.backend.utils import client_ip as _client_ip
 from trader_koo.backend.services.scheduler import create_scheduler
 from trader_koo.backend.services.pipeline import (
@@ -81,6 +82,7 @@ from trader_koo.backend.routers.system import router as system_router
 from trader_koo.backend.routers.dashboard import router as dashboard_router
 from trader_koo.backend.routers.report import router as report_router
 from trader_koo.backend.routers.opportunities import router as opportunities_router
+from trader_koo.backend.routers.options import router as options_router
 from trader_koo.backend.routers.paper_trades import router as paper_trades_router
 from trader_koo.backend.routers.email import router as email_router
 from trader_koo.backend.routers.usage import router as usage_router
@@ -706,6 +708,7 @@ app.include_router(system_router)
 app.include_router(dashboard_router)
 app.include_router(report_router)
 app.include_router(opportunities_router)
+app.include_router(options_router)
 app.include_router(paper_trades_router)
 app.include_router(email_router)
 app.include_router(usage_router)
@@ -731,10 +734,7 @@ LOG.info("Logos static mount: %s", _LOGOS_DIR)
 # ---------------------------------------------------------------------------
 
 # SPA routes at root level
-_SPA_ROUTES = {
-    "report", "vix", "earnings", "chart", "crypto",
-    "opportunities", "paper-trades", "markets", "hyperliquid",
-}
+_SPA_ROUTES = SPA_ROUTE_PATHS
 
 # Ensure .js files are served with correct MIME type (some Linux systems lack this)
 import mimetypes

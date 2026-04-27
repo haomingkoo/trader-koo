@@ -17,8 +17,10 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import sqlite3
+from html import escape
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 LOG = logging.getLogger("trader_koo.notifications.market_monitor")
 
@@ -366,6 +368,11 @@ def _format_price(price: float) -> str:
     return f"${price:.4f}"
 
 
+def _html(value: Any) -> str:
+    """Escape external text before inserting it into Telegram HTML."""
+    return escape(str(value), quote=False)
+
+
 def _format_polymarket_alert(spike: dict[str, Any]) -> str:
     """Format a single Polymarket spike as a Telegram message."""
     arrow = "\u2b06\ufe0f" if spike["direction"] == "up" else "\u2b07\ufe0f"
@@ -468,8 +475,8 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
     try:
         poly_spikes = detect_polymarket_spikes(db_path)
         for spike in poly_spikes:
-            slug = spike.get("event_slug", "")
-            question = spike.get("question", spike.get("event_title", "?"))
+            slug = str(spike.get("event_slug") or "")
+            question = str(spike.get("question") or spike.get("event_title") or "?")
             direction = spike.get("direction", "up")
             new_p = spike.get("new_prob", 0)
             key = f"{slug}:{question[:60]}"
@@ -481,10 +488,10 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             old_p = spike.get("old_prob", 0)
             change = spike.get("change_pct", 0)
             vol = _format_volume(spike.get("volume", 0))
-            poly_link = f"https://polymarket.com/event/{slug}" if slug else ""
+            poly_link = f"https://polymarket.com/event/{quote(slug, safe='')}" if slug else ""
             link_html = f'\n   <a href="{poly_link}">View on Polymarket</a>' if slug else ""
             all_lines.append(
-                f"{arrow} <b>{question}</b>\n"
+                f"{arrow} <b>{_html(question)}</b>\n"
                 f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | {vol}"
                 f"{link_html}"
             )
@@ -496,7 +503,7 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
     try:
         crypto_spikes = detect_crypto_spikes(db_path)
         for spike in crypto_spikes:
-            sym = spike.get("symbol", "?")
+            sym = str(spike.get("symbol") or "?")
             direction = spike.get("direction", "up" if spike.get("price_change_pct", 0) > 0 else "down")
             new_price = spike.get("new_price", 0)
             key = f"crypto:{sym}"
@@ -507,7 +514,7 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             arrow = "\U0001F4C8" if direction == "up" else "\U0001F4C9"
             price_chg = spike.get("price_change_pct", 0)
             oi_chg = spike.get("oi_change_pct")
-            parts = [f"{arrow} {sym}: {price_chg:+.1f}%"]
+            parts = [f"{arrow} {_html(sym)}: {price_chg:+.1f}%"]
             if oi_chg is not None and spike.get("oi_spike"):
                 parts.append(f"OI {oi_chg:+.0f}%")
             all_lines.append(" | ".join(parts))

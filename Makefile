@@ -2,7 +2,7 @@ PYTHON ?= python3
 PIP ?= $(PYTHON) -m pip
 FRONTEND_DIR := trader_koo/frontend-v2
 
-.PHONY: backend-install frontend-install hooks-install backend-check test frontend-build precommit ci
+.PHONY: backend-install frontend-install hooks-install backend-check test frontend-build dependency-status precommit ci
 
 backend-install:
 	$(PIP) install --upgrade pip
@@ -26,6 +26,11 @@ test:
 
 frontend-build:
 	npm run build --prefix $(FRONTEND_DIR)
+
+dependency-status:
+	$(PYTHON) -m pip check
+	$(PYTHON) -m pip list --outdated
+	npm outdated --prefix $(FRONTEND_DIR) || true
 
 precommit:
 	pre-commit run --all-files

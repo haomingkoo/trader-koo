@@ -33,15 +33,19 @@ from trader_koo.report.pattern_analysis import (
 )
 from trader_koo.report.setup_scoring import (
     DEBATE_ENGINE_ENABLED,
+    OPTIONS_RESEARCH_ENABLED,
     SETUP_EVAL_ENABLED,
     SETUP_EVAL_HIT_THRESHOLD_PCT,
     SETUP_EVAL_MIN_SAMPLE,
+    SETUP_NEWS_ENABLED,
     SETUP_EVAL_TRACK_LIMIT,
     SETUP_EVAL_WINDOW_DAYS,
     _apply_agreement_tier_adjustment,
     _apply_debate_guardrails,
     _apply_debate_payload,
     _apply_llm_narrative_overrides,
+    _apply_news_research_context,
+    _apply_options_research_context,
     _apply_setup_eval_fields,
     _describe_setup,
     _persist_setup_call_candidates,
@@ -58,6 +62,7 @@ from trader_koo.report.setup_scoring import (
     build_tonight_key_changes,
     ensure_setup_call_eval_schema,
 )
+from trader_koo.report.suggestions import build_suggestions
 from trader_koo.report.utils import (
     _clamp,
     _normalize_report_kind,
@@ -941,6 +946,32 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         )
         signals["sector_heatmap"] = sector_rows
 
+        options_annotated = _apply_options_research_context(conn, setup_rows)
+        signals["options_research"] = {
+            "enabled": OPTIONS_RESEARCH_ENABLED,
+            "annotated": options_annotated,
+            "source": "yfinance_options_iv",
+            "note": (
+                "Yahoo/yfinance option-chain snapshots; delayed/unofficial. "
+                "Used for IV/OI rank context, not real-time sweeps or net premium."
+            ),
+        }
+
+        setup_rows.sort(
+            key=lambda r: (
+                float(r.get("score") or 0.0),
+                float(r.get("pct_change") or 0.0),
+                float(r.get("discount_pct") or -999.0),
+            ),
+            reverse=True,
+        )
+        latest_price_row = conn.execute("SELECT MAX(date) FROM price_daily").fetchone()
+        setup_news_as_of = str(latest_price_row[0]) if latest_price_row and latest_price_row[0] else None
+        signals["setup_news_context"] = _apply_news_research_context(
+            setup_rows,
+            as_of_date=setup_news_as_of,
+            conn=conn,
+        )
         setup_rows.sort(
             key=lambda r: (
                 float(r.get("score") or 0.0),
@@ -1039,6 +1070,22 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     readout = _describe_setup(row)
                     row.update(readout)
 
+                options_annotated = _apply_options_research_context(conn, setup_rows)
+                signals["options_research"] = {
+                    "enabled": OPTIONS_RESEARCH_ENABLED,
+                    "annotated": options_annotated,
+                    "source": "yfinance_options_iv",
+                    "note": (
+                        "Yahoo/yfinance option-chain snapshots; delayed/unofficial. "
+                        "Used for IV/OI rank context, not real-time sweeps or net premium."
+                    ),
+                }
+                signals["setup_news_context"] = _apply_news_research_context(
+                    setup_rows,
+                    as_of_date=str(latest_date) if latest_date else None,
+                    conn=conn,
+                )
+
                 _apply_debate_payload(setup_rows)
                 # Apply agreement score tier adjustment after debate payload, before guardrails
                 for row in setup_rows:
@@ -1058,6 +1105,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
 
                 _apply_llm_narrative_overrides(setup_rows, source="daily_report")
                 signals["setup_quality_top"] = setup_rows[:40]
+                signals["suggestions"] = build_suggestions(signals["setup_quality_top"])
                 signals["watchlist_candidates"] = [
                     {
                         "ticker": r.get("ticker"),
@@ -1111,6 +1159,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                             "yolo_age_days",
                             "yolo_timeframe",
                             "yolo_recency",
+                            "yolo_score_eligible",
                             "yolo_direction_conflict",
                             "yolo_conflict_strength",
                             "debate_v1",
@@ -1119,6 +1168,11 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                             "debate_agreement_score",
                             "debate_disagreement_count",
                             "debate_safety_adjustment",
+                            "calibrated_hit_prob",
+                            "probability_label",
+                            "probability_source",
+                            "probability_sample_size",
+                            "probability_baseline_pct",
                             "trend_state",
                             "level_context",
                             "support_level",
@@ -1130,6 +1184,16 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                             "candle_pattern",
                             "candle_bias",
                             "candle_confidence",
+                            "news_context",
+                            "news_sentiment_score",
+                            "macro_news_score",
+                            "options_context",
+                            "options_iv_rank_pct",
+                            "options_oi_rank_pct",
+                            "options_put_call_oi_ratio",
+                            "options_underpriced_score",
+                            "options_positioning_signal",
+                            "options_positioning_skew",
                         )
                     }
                     for row in setup_rows
@@ -1388,6 +1452,7 @@ def fetch_report_payload(
                     reliability_lookup=reliability_lookup,
                     min_sample=SETUP_EVAL_MIN_SAMPLE,
                     hit_threshold_pct=SETUP_EVAL_HIT_THRESHOLD_PCT,
+                    baseline_hit_rate_pct=(summary.get("overall") or {}).get("hit_rate_pct") if isinstance(summary, dict) else None,
                     calibration_state=_calib_state,
                 )
                 setup_rows_ref.sort(
@@ -1400,6 +1465,7 @@ def fetch_report_payload(
                     reverse=True,
                 )
                 _refresh_setup_eval_surfaces(signals_ref)
+                signals_ref["suggestions"] = build_suggestions(setup_rows_ref)
                 eval_summary = summary or {"enabled": True}
                 eval_summary["tracked_this_run"] = int(min(len(setup_rows_ref), SETUP_EVAL_TRACK_LIMIT))
                 eval_summary["inserted_calls"] = int(inserted_calls)

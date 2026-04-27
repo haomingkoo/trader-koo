@@ -14,16 +14,19 @@ interface LivePosition {
   unrealized_pnl: number;
   leverage: string;
   liquidation_price: number | null;
+  mark_price_source: string;
+  notional_source: string;
+  data_warnings: string[];
 }
 
 interface LiveData {
   ok: boolean;
   wallet: { account_value: number; margin_ratio: number };
   positions: LivePosition[];
+  config: {
+    min_counter_notional_usd: number;
+  };
 }
-
-const REF_NOTIONAL = 10_000_000;
-const REF_ETH = 4400;
 
 function LiveSignalPanel({ wallet }: { wallet: string }) {
   const { data } = useQuery<LiveData>({
@@ -34,8 +37,7 @@ function LiveSignalPanel({ wallet }: { wallet: string }) {
 
   if (!data?.ok || !data.positions?.length) return null;
 
-  const ethPrice = data.positions.find((p) => p.coin === "ETH")?.mark_price || 2100;
-  const threshold = REF_NOTIONAL * (ethPrice / REF_ETH);
+  const threshold = data.config.min_counter_notional_usd;
   const totalNotional = data.positions.reduce((s, p) => s + p.notional_usd, 0);
   const acctLeverage = data.wallet.account_value > 0 ? totalNotional / data.wallet.account_value : 0;
   const counterPositions = data.positions.filter((p) => p.notional_usd >= threshold);
@@ -67,7 +69,7 @@ function LiveSignalPanel({ wallet }: { wallet: string }) {
           <div className={`font-semibold ${acctLeverage > 10 ? "text-[var(--red)]" : "text-[var(--text)]"}`}>{acctLeverage.toFixed(0)}x</div>
         </div>
         <div>
-          <div className="text-[var(--muted)]">Threshold</div>
+          <div className="text-[var(--muted)]">Research Threshold</div>
           <div className="font-semibold text-[var(--text)]">{formatUsd(threshold)}</div>
         </div>
       </div>
@@ -99,7 +101,7 @@ function LiveSignalPanel({ wallet }: { wallet: string }) {
             </div>
             {above && (
               <div className="mt-1 text-[10px] text-[var(--green)]">
-                {(p.notional_usd / threshold).toFixed(1)}x above threshold - counter-trade opportunity (backtest: 63.6% WR)
+                {(p.notional_usd / threshold).toFixed(1)}x above research threshold - review study before acting
               </div>
             )}
           </div>
@@ -155,6 +157,25 @@ interface StrategyRule {
   counter_edge: number;
 }
 
+interface EquityPoint {
+  date: string;
+  equity: number;
+  coin?: string;
+  our_pnl?: number;
+}
+
+interface BacktestStrategy {
+  trades: number;
+  wins: number;
+  win_rate_pct: number;
+  total_pnl: number;
+  return_pct: number;
+  max_drawdown_pct: number;
+  final_equity: number;
+  description?: string;
+  equity_curve: EquityPoint[];
+}
+
 interface StudyData {
   ok: boolean;
   wallet: string;
@@ -175,16 +196,7 @@ interface StudyData {
     after_streak_3plus: { count: number; win_rate_pct: number; avg_pnl: number; total_pnl: number } | Record<string, never>;
     normal: { count: number; win_rate_pct: number; avg_pnl: number } | Record<string, never>;
   };
-  backtest: Record<string, {
-    trades: number;
-    wins: number;
-    win_rate_pct: number;
-    total_pnl: number;
-    return_pct: number;
-    max_drawdown_pct: number;
-    final_equity: number;
-    equity_curve: { date: string; equity: number; coin?: string; our_pnl?: number }[];
-  } | { date: string; equity: number }[]>;
+  backtest: Record<string, BacktestStrategy | EquityPoint[]>;
   strategy: {
     name: string;
     description: string;
@@ -212,6 +224,42 @@ function formatUsd(n: number): string {
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
   if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
   return `$${n.toFixed(0)}`;
+}
+
+function isBacktestStrategy(value: unknown): value is BacktestStrategy {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "trades" in value &&
+    "wins" in value &&
+    "equity_curve" in value
+  );
+}
+
+function strategyDisplayName(key: string, strategy?: BacktestStrategy): string {
+  if (strategy?.description) return strategy.description;
+  const labels: Record<string, string> = {
+    counter_25m: "Counter >$25M",
+    counter_25m_extended: "Counter >$25M extended",
+    counter_5m: "Counter >$5M",
+  };
+  return labels[key] || key.replaceAll("_", " ");
+}
+
+function preferredBacktestStrategy(backtest: StudyData["backtest"]): { key: string; strategy: BacktestStrategy } | null {
+  for (const key of ["counter_25m_extended", "counter_25m", "counter_5m"]) {
+    const strategy = backtest[key];
+    if (isBacktestStrategy(strategy)) return { key, strategy };
+  }
+  const firstKey = Object.keys(backtest).find((key) => isBacktestStrategy(backtest[key]));
+  if (!firstKey) return null;
+  return { key: firstKey, strategy: backtest[firstKey] as BacktestStrategy };
+}
+
+function formatDateRange(range: StudyData["overview"]["date_range"]): string {
+  if (!range?.start || !range?.end) return "study window";
+  return `${range.start} to ${range.end}`;
 }
 
 export default function CounterTradeStudy({ wallet }: { wallet: string }) {
@@ -413,16 +461,16 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
 
       {/* Strategy Comparison Table */}
       {backtest ? (() => {
-        const stratKeys = Object.keys(backtest).filter(k => k !== "trader_equity_curve" && typeof backtest[k] === "object" && "trades" in (backtest[k] as Record<string, unknown>));
+        const stratKeys = Object.keys(backtest).filter((key) => isBacktestStrategy(backtest[key]));
         if (!stratKeys.length) return null;
-        type StratData = { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; description?: string; equity_curve: { date: string; equity: number }[] };
-        const strats = stratKeys.map(k => ({ key: k, ...(backtest[k] as unknown as StratData) }));
+        const strats = stratKeys.map((key) => ({ key, strategy: backtest[key] as BacktestStrategy }));
+        const dateRange = formatDateRange(overview.date_range);
         return (
           <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
             <h4 className="text-sm font-bold text-[var(--text)] mb-3">Strategy Backtest Comparison</h4>
             <p className="text-xs text-[var(--muted)] mb-4">
               All strategies: 1x leverage, 5% position sizing, max $50K per trade, realistic costs.
-              $100K starting capital, Jul 2025 - Nov 2025.
+              $100K starting capital, {dateRange}.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -436,13 +484,15 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {strats.map((s) => (
-                    <tr key={s.key} className="border-b border-[var(--line)]/50">
-                      <td className="py-2 text-[var(--text)]">{(s as StratData & { key: string }).description || s.key}</td>
-                      <td className="py-2 text-right text-[var(--muted)]">{s.trades}</td>
-                      <td className={`py-2 text-right font-medium ${s.win_rate_pct >= 75 ? "text-[var(--green)]" : s.win_rate_pct >= 60 ? "text-[var(--text)]" : "text-[var(--amber)]"}`}>{s.win_rate_pct}%</td>
-                      <td className="py-2 text-right font-medium text-[var(--green)]">+{s.return_pct}%</td>
-                      <td className="py-2 text-right text-[var(--muted)]">{s.max_drawdown_pct}%</td>
+                  {strats.map(({ key, strategy }) => (
+                    <tr key={key} className="border-b border-[var(--line)]/50">
+                      <td className="py-2 text-[var(--text)]">{strategyDisplayName(key, strategy)}</td>
+                      <td className="py-2 text-right text-[var(--muted)]">{strategy.trades}</td>
+                      <td className={`py-2 text-right font-medium ${strategy.win_rate_pct >= 75 ? "text-[var(--green)]" : strategy.win_rate_pct >= 60 ? "text-[var(--text)]" : "text-[var(--amber)]"}`}>{strategy.win_rate_pct}%</td>
+                      <td className={`py-2 text-right font-medium ${strategy.return_pct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+                        {strategy.return_pct >= 0 ? "+" : ""}{strategy.return_pct}%
+                      </td>
+                      <td className="py-2 text-right text-[var(--muted)]">{strategy.max_drawdown_pct}%</td>
                     </tr>
                   ))}
                 </tbody>
@@ -454,16 +504,21 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
 
       {/* Backtest Equity Curve */}
       {backtest ? (() => {
-        const strat = (backtest.counter_25m_held_7d || backtest.counter_25m) as { trades: number; wins: number; win_rate_pct: number; total_pnl: number; return_pct: number; max_drawdown_pct: number; final_equity: number; equity_curve: { date: string; equity: number }[] } | undefined;
-        const traderCurve = backtest.trader_equity_curve as { date: string; equity: number }[] | undefined;
+        const selected = preferredBacktestStrategy(backtest);
+        if (!selected) return null;
+        const { key, strategy: strat } = selected;
+        const traderCurve = Array.isArray(backtest.trader_equity_curve)
+          ? backtest.trader_equity_curve
+          : undefined;
         if (!strat?.equity_curve?.length) return null;
+        const label = strategyDisplayName(key, strat);
         return (
           <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
             <h4 className="text-sm font-bold text-[var(--text)] mb-1">
               Equity Curve: Best Strategy vs Trader
             </h4>
             <p className="text-xs text-[var(--muted)] mb-3">
-              {"Counter >$25M held >7 days (88.9% WR). Both normalized to $100K, 1x leverage, 5% sizing."}
+              {label} ({strat.win_rate_pct}% WR, {strat.trades} trades). Both normalized to $100K, 1x leverage, 5% sizing.
             </p>
 
             {/* Stats row */}
@@ -506,7 +561,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                     mode: "lines+markers" as const,
                     x: strat.equity_curve.map((p) => p.date),
                     y: strat.equity_curve.map((p) => p.equity),
-                    name: "Counter >$25M",
+                    name: label,
                     line: { color: "#38d39f", width: 2.5 },
                     marker: { size: 6 },
                   },
@@ -607,15 +662,16 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       )}
 
       {/* Tilt Detection */}
-      {tilt_analysis?.after_streak_3plus?.count > 0 && (
+      {tilt_analysis?.after_streak_3plus?.count > 0 && (() => {
+        const tiltCounterPnl = -tilt_analysis.after_streak_3plus.total_pnl;
+        return (
         <div className="rounded-xl border border-[var(--red)]/30 bg-[var(--red)]/5 p-4 sm:p-6">
           <h4 className="text-sm font-bold text-[var(--red)] mb-3">
             Tilt Detection Signal
           </h4>
           <p className="text-xs text-[var(--muted)] mb-4">
-            After 3 or more consecutive losses, his behavior changes dramatically. Classic martingale
-            pattern: position sizing increases after consecutive losses, leading to worse outcomes. This is the highest-confidence
-            counter-trade window.
+            After 3 or more consecutive losses, this sample stays negative in aggregate but is only
+            {` ${tilt_analysis.after_streak_3plus.count} cycles`}. Treat it as research context, not a standalone trigger.
           </p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-3">
@@ -633,15 +689,16 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
               <div className="text-[10px] text-[var(--muted)]">{tilt_analysis.after_streak_3plus.count} trades</div>
             </div>
             <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-3">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Tilt PnL Impact</div>
-              <div className="text-xl font-bold text-[var(--red)]">
-                {formatUsd(tilt_analysis.after_streak_3plus.total_pnl)}
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Counter PnL Impact</div>
+              <div className={`text-xl font-bold ${tiltCounterPnl >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+                {formatUsd(tiltCounterPnl)}
               </div>
               <div className="text-[10px] text-[var(--muted)]">opposite side P&L</div>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Coin Breakdown */}
       {coin_analysis.length > 0 && (
@@ -725,14 +782,15 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
 
       {/* Statistical Review - Critic Panel */}
       {(() => {
-        const rec = backtest.after_1_loss_day_recommended;
-        const recStats = rec && "trades" in rec ? rec : null;
+        const selected = preferredBacktestStrategy(backtest);
+        const recStats = selected?.strategy ?? null;
         const trades = recStats?.trades ?? 0;
         const wins = recStats?.wins ?? 0;
         const wr = recStats?.win_rate_pct ?? 0;
-        const days = overview.total_cycles;
-        const dateStart = overview.date_range.start;
-        const dateEnd = overview.date_range.end;
+        const cycles = overview.total_cycles;
+        const dateStart = overview.date_range?.start ?? "unknown";
+        const dateEnd = overview.date_range?.end ?? "unknown";
+        const selectedLabel = selected ? strategyDisplayName(selected.key, selected.strategy) : "No strategy";
         // Binomial test: p-value for WR > 50% with n trades and k wins
         // Using normal approximation: z = (k - n*0.5) / sqrt(n*0.25)
         const z = trades > 0 ? (wins - trades * 0.5) / Math.sqrt(trades * 0.25) : 0;
@@ -743,12 +801,12 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
         // Wilson CI
         const zCI = 1.96;
         const pHat = trades > 0 ? wins / trades : 0;
-        const denom = 1 + zCI * zCI / trades;
-        const center = (pHat + zCI * zCI / (2 * trades)) / denom;
+        const denom = trades > 0 ? 1 + zCI * zCI / trades : 1;
+        const center = trades > 0 ? (pHat + zCI * zCI / (2 * trades)) / denom : 0;
         const margin = trades > 0 ? (zCI * Math.sqrt(pHat * (1 - pHat) / trades + zCI * zCI / (4 * trades * trades))) / denom : 0;
         const ciLow = Math.max(0, (center - margin) * 100).toFixed(1);
         const ciHigh = Math.min(100, (center + margin) * 100).toFixed(1);
-        const ciIncludesFifty = parseFloat(ciLow) <= 50;
+        const ciIncludesFifty = trades === 0 || parseFloat(ciLow) <= 50;
 
         return (
           <div className="rounded-xl border border-[var(--red)]/20 bg-[var(--panel)] p-4 sm:p-6">
@@ -763,10 +821,10 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                 <span className="rounded px-2 py-0.5 text-[10px] font-bold text-black" style={{ backgroundColor: verdictColor }}>{verdictLabel}</span>
                 <span className="text-[var(--muted)]">
                   {isSignificant
-                    ? `z = ${z.toFixed(2)}, p < 0.01. Statistically significant edge with ${trades} trades over ${days} days.`
+                    ? `${selectedLabel}: z = ${z.toFixed(2)}, p < 0.01. Statistically significant edge with ${trades} trades over ${cycles} analyzed cycles.`
                     : isBorderline
-                      ? `z = ${z.toFixed(2)}. Near-significant at alpha = 0.05. ${trades} trades over ${days} days.`
-                      : `z = ${z.toFixed(2)}. ${wr}% WR across ${trades} trades over ${days} days (${dateStart} to ${dateEnd}).`
+                      ? `${selectedLabel}: z = ${z.toFixed(2)}. Near-significant at alpha = 0.05. ${trades} trades over ${cycles} analyzed cycles.`
+                      : `${selectedLabel}: z = ${z.toFixed(2)}. ${wr}% WR across ${trades} trades over ${cycles} analyzed cycles (${dateStart} to ${dateEnd}).`
                   }
                 </span>
               </div>
@@ -792,17 +850,17 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                       </td>
                     </tr>
                     <tr className="border-b border-[var(--line)]/50">
-                      <td className="py-1.5">Daily snapshot analysis</td>
-                      <td className="py-1.5 text-right">{days} trading days</td>
+                      <td className="py-1.5">Study sample</td>
+                      <td className="py-1.5 text-right">{cycles} cycles</td>
                       <td className="py-1.5 text-right">-</td>
                       <td className="py-1.5 text-right text-[var(--green)]">Full dataset</td>
                     </tr>
                     <tr className="border-b border-[var(--line)]/50">
                       <td className="py-1.5">95% CI (Wilson)</td>
-                      <td className="py-1.5 text-right">[{ciLow}%, {ciHigh}%]</td>
+                      <td className="py-1.5 text-right">{trades > 0 ? `[${ciLow}%, ${ciHigh}%]` : "n/a"}</td>
                       <td className="py-1.5 text-right">-</td>
                       <td className={`py-1.5 text-right ${ciIncludesFifty ? "text-[var(--amber)]" : "text-[var(--green)]"}`}>
-                        {ciIncludesFifty ? "Includes 50%" : "Above 50%"}
+                        {trades > 0 ? (ciIncludesFifty ? "Includes 50%" : "Above 50%") : "No sample"}
                       </td>
                     </tr>
                     <tr>
@@ -822,11 +880,11 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                 <div className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">Known Risks</div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {[
-                    { label: "Sample size", severity: trades >= 90 ? "medium" : "critical", detail: `${trades} trades over ${days} days. Need 78-90 for 80% power.` },
+                    { label: "Sample size", severity: trades >= 90 ? "medium" : "critical", detail: `${trades} qualifying trades over ${cycles} analyzed cycles. Need roughly 78-90 for 80% power.` },
                     { label: "Selection bias", severity: "critical", detail: "Target selected after observing PnL history. Forward performance unproven." },
-                    { label: "Regime dependency", severity: "critical", detail: "Bear market only (BTC $95K->$70K). Untested in bull." },
-                    { label: "Data coverage", severity: "high", detail: `Data: ${dateStart} to ${dateEnd}. Missing his $50M peak era.` },
-                    { label: "Execution latency", severity: "medium", detail: "He scales in over 2K+ fills per cycle. Entry timing unclear." },
+                    { label: "Regime dependency", severity: "critical", detail: "One historical window only; not validated across multiple crypto regimes." },
+                    { label: "Data coverage", severity: "high", detail: `Study sample covers ${dateStart} to ${dateEnd}; verify fill collection is complete before using live.` },
+                    { label: "Execution latency", severity: "medium", detail: "Wallet entries and exits can scale across many fills. Entry timing can materially change results." },
                     { label: "Single point of failure", severity: "medium", detail: "Strategy dies if he stops trading or changes behavior." },
                   ].map((risk) => (
                     <div
@@ -859,7 +917,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
                   What would make this conclusive
                 </div>
                 <ul className="space-y-0.5 text-[var(--muted)]">
-                  {trades < 90 && <li>- {90 - trades}+ more counter-trade signals at &gt;$1M notional (currently {trades})</li>}
+                  {trades < 90 && <li>- {90 - trades}+ more qualifying signals for {selectedLabel} (currently {trades})</li>}
                   <li>- Positive results through a bull market regime change</li>
                   <li>- Out-of-sample validation on other whales (not pre-selected by PnL)</li>
                   <li>- Live paper trading for 6+ months before real capital</li>

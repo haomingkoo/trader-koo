@@ -19,6 +19,7 @@ from trader_koo.backend.routers.system import router as system_router
 from trader_koo.backend.routers.dashboard import router as dashboard_router
 from trader_koo.backend.routers.report import router as report_router
 from trader_koo.backend.routers.opportunities import router as opportunities_router
+from trader_koo.backend.routers.options import router as options_router
 from trader_koo.backend.routers.paper_trades import router as paper_trades_router
 from trader_koo.backend.routers.email import router as email_router
 from trader_koo.backend.routers.usage import router as usage_router
@@ -270,6 +271,7 @@ def test_app(tmp_path: Path, seeded_conn: sqlite3.Connection):
     app.include_router(dashboard_router)
     app.include_router(report_router)
     app.include_router(opportunities_router)
+    app.include_router(options_router)
     app.include_router(paper_trades_router)
     app.include_router(email_router)
     app.include_router(usage_router)
@@ -286,6 +288,7 @@ def test_app(tmp_path: Path, seeded_conn: sqlite3.Connection):
         patch("trader_koo.backend.routers.dashboard.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.report.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.opportunities.get_conn", _fake_get_conn),
+        patch("trader_koo.backend.routers.options.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.paper_trades.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.usage.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.usage.DB_PATH", tmp_db_file),

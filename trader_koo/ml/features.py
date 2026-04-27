@@ -136,6 +136,27 @@ FEATURE_COLUMNS_RANKED = [
 # Switch to FEATURE_COLUMNS_FULL for ablation experiments.
 FEATURE_COLUMNS = FEATURE_COLUMNS_SLIM
 
+# Symbols ingested for market regime/context should not be default ML trade
+# candidates. Keep them available when explicitly requested for charts or
+# diagnostics, but exclude them from full-universe model training/scoring.
+ML_CONTEXT_TICKERS = {
+    "SPY",
+    "QQQ",
+    "DIA",
+    "IWM",
+    "SVIX",
+    "GLD",
+    "USO",
+    "UUP",
+    "SLV",
+    "^VIX",
+    "^GSPC",
+    "^DJI",
+    "^TNX",
+    "^VIX3M",
+    "^VIX6M",
+}
+
 
 def _safe_pct_change(series: pd.Series, periods: int) -> pd.Series:
     shifted = series.shift(periods)
@@ -225,6 +246,12 @@ def _get_news_sentiment_scores(
             LOG.debug("Sentiment cache lookup failed (non-fatal): %s", exc)
 
     if not uncached_tickers:
+        return scores
+
+    # Historical training must not call a live news API for old dates. If a
+    # point-in-time cache exists, use it; otherwise leave the feature as NaN.
+    today_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    if as_of_date < today_str:
         return scores
 
     # --- Step 2: Fall back to live Finnhub API for cache misses ---
@@ -514,6 +541,24 @@ def extract_features_for_universe(
         Pass FEATURE_COLUMNS_FULL for the full 51-feature set.
     """
     output_cols = feature_columns if feature_columns is not None else FEATURE_COLUMNS
+    requested_cols = set(output_cols)
+    needs_yolo = bool({"has_yolo_pattern", "yolo_confidence"} & requested_cols)
+    needs_earnings = bool({"days_to_next_earnings", "is_earnings_week"} & requested_cols)
+    needs_macro = any(col.startswith("macro_") for col in requested_cols)
+    needs_fred = any(col.startswith("fred_") for col in requested_cols)
+    needs_sector = bool(
+        {
+            "sector_rank",
+            "sector_momentum_5d",
+            "sector_momentum_21d",
+            "leading_sector_momentum",
+            "lagging_sector_momentum",
+            "sector_dispersion",
+        }
+        & requested_cols
+    )
+    needs_news = "news_sentiment_score" in requested_cols
+    needs_polymarket = any(col.startswith("polymarket_") for col in requested_cols)
     cutoff_start = pd.Timestamp(as_of_date) - pd.Timedelta(days=lookback_days)
     ticker_clause = ""
     params: list[Any] = [cutoff_start.strftime("%Y-%m-%d"), as_of_date]
@@ -521,6 +566,14 @@ def extract_features_for_universe(
         placeholders = ",".join("?" * len(tickers))
         ticker_clause = f"AND ticker IN ({placeholders})"
         params.extend(tickers)
+    else:
+        excluded = sorted(ML_CONTEXT_TICKERS)
+        placeholders = ",".join("?" * len(excluded))
+        ticker_clause = (
+            f"AND ticker NOT LIKE '^%' "
+            f"AND ticker NOT IN ({placeholders})"
+        )
+        params.extend(excluded)
 
     df = pd.read_sql_query(
         f"""
@@ -568,12 +621,15 @@ def extract_features_for_universe(
     if len(vix_df) >= 6:
         vix_ret_5d = float((vix_df["vix_close"].iloc[-1] - vix_df["vix_close"].iloc[-6]) / vix_df["vix_close"].iloc[-6])
 
-    # YOLO data
     all_tickers = sorted(df["ticker"].unique().tolist())
-    yolo_data = _get_yolo_data(conn, all_tickers, as_of_date)
+    yolo_data = _get_yolo_data(conn, all_tickers, as_of_date) if needs_yolo else {}
 
     # Earnings proximity (days to next earnings report)
-    earnings_proximity = _get_earnings_proximity(conn, all_tickers, as_of_date)
+    earnings_proximity = (
+        _get_earnings_proximity(conn, all_tickers, as_of_date)
+        if needs_earnings
+        else {}
+    )
 
     # Seasonality from as_of_date
     dow = as_of_ts.dayofweek
@@ -713,185 +769,190 @@ def extract_features_for_universe(
                     feat_df.loc[valid, col].rank(pct=True)
                 )
 
-    # Merge macro features (same for all tickers on this date)
-    try:
-        from trader_koo.ml.macro_features import extract_macro_features, MACRO_FEATURE_COLUMNS
+    if needs_macro:
+        # Merge macro features (same for all tickers on this date)
+        try:
+            from trader_koo.ml.macro_features import extract_macro_features, MACRO_FEATURE_COLUMNS
 
-        macro = extract_macro_features(conn, as_of_date=as_of_date, lookback_days=lookback_days)
-        for col_name in MACRO_FEATURE_COLUMNS:
-            macro_col = f"macro_{col_name}"
-            if macro_col in FEATURE_COLUMNS_FULL:
-                feat_df[macro_col] = macro.get(col_name, np.nan)
-    except (sqlite3.OperationalError, KeyError, ValueError) as exc:
-        LOG.warning("Macro feature extraction failed: %s", exc)
-    except ImportError:
-        LOG.warning("macro_features module not available; skipping macro features")
-    except Exception as exc:
-        if strict:
-            raise
-        LOG.warning("Macro feature extraction failed (non-fatal): %s", exc)
+            macro = extract_macro_features(conn, as_of_date=as_of_date, lookback_days=lookback_days)
+            for col_name in MACRO_FEATURE_COLUMNS:
+                macro_col = f"macro_{col_name}"
+                if macro_col in FEATURE_COLUMNS_FULL:
+                    feat_df[macro_col] = macro.get(col_name, np.nan)
+        except (sqlite3.OperationalError, KeyError, ValueError) as exc:
+            LOG.warning("Macro feature extraction failed: %s", exc)
+        except ImportError:
+            LOG.warning("macro_features module not available; skipping macro features")
+        except Exception as exc:
+            if strict:
+                raise
+            LOG.warning("Macro feature extraction failed (non-fatal): %s", exc)
 
     # FRED macro data (yield curve, credit stress, rates)
     # NOTE: FRED data is fetched as of as_of_date to prevent data leakage.
     # During training, as_of_date is in the past, so we must NOT use today's values.
     # Tries bulk-prefetched data first (fast O(1) lookup); falls back to per-date
     # API call only if bulk data isn't available.
-    try:
-        from trader_koo.ml.external_data import fetch_fred_series, lookup_fred_value
+    if needs_fred:
+        try:
+            from trader_koo.ml.external_data import fetch_fred_series, lookup_fred_value
 
-        for series_id, col_name in [
-            ("T10Y2Y", "fred_yield_curve_10y2y"),
-            ("BAMLH0A0HYM2", "fred_high_yield_oas"),
-            ("DFF", "fred_fed_funds_rate"),
-        ]:
-            # Fast path: lookup from bulk-prefetched data
-            bulk_value = lookup_fred_value(series_id, as_of_date)
-            if bulk_value is not None:
-                feat_df[col_name] = bulk_value
-                continue
+            for series_id, col_name in [
+                ("T10Y2Y", "fred_yield_curve_10y2y"),
+                ("BAMLH0A0HYM2", "fred_high_yield_oas"),
+                ("DFF", "fred_fed_funds_rate"),
+            ]:
+                # Fast path: lookup from bulk-prefetched data
+                bulk_value = lookup_fred_value(series_id, as_of_date)
+                if bulk_value is not None:
+                    feat_df[col_name] = bulk_value
+                    continue
 
-            # Slow path: per-date API call (fallback for non-training use)
-            rows = fetch_fred_series(series_id, lookback_days=90, as_of_date=as_of_date)
-            value = np.nan
-            for r in reversed(rows):
-                if r["date"] <= as_of_date:
-                    value = r["value"]
-                    break
-            feat_df[col_name] = value
+                # Slow path: per-date API call (fallback for non-training use)
+                rows = fetch_fred_series(series_id, lookback_days=90, as_of_date=as_of_date)
+                value = np.nan
+                for r in reversed(rows):
+                    if r["date"] <= as_of_date:
+                        value = r["value"]
+                        break
+                feat_df[col_name] = value
 
-        # Credit spread velocity: 5d and 21d change in high-yield OAS.
-        # Widening OAS = rising credit stress = risk-off signal.
-        # Use bulk-prefetched data when available (training path).
-        from trader_koo.ml.external_data import _fred_bulk_store
-        with __import__("threading").Lock():
-            hy_df = _fred_bulk_store.get("BAMLH0A0HYM2")
+            # Credit spread velocity: 5d and 21d change in high-yield OAS.
+            # Widening OAS = rising credit stress = risk-off signal.
+            # Use bulk-prefetched data when available (training path).
+            from trader_koo.ml.external_data import _fred_bulk_store
+            with __import__("threading").Lock():
+                hy_df = _fred_bulk_store.get("BAMLH0A0HYM2")
 
-        if hy_df is not None and not hy_df.empty:
-            # Fast path: lookup from bulk store
-            mask = hy_df["date"] <= as_of_date
-            hy_subset = hy_df.loc[mask]
-            if len(hy_subset) >= 6:
-                feat_df["fred_hy_oas_change_5d"] = (
-                    float(hy_subset["value"].iloc[-1]) - float(hy_subset["value"].iloc[-6])
-                )
+            if hy_df is not None and not hy_df.empty:
+                # Fast path: lookup from bulk store
+                mask = hy_df["date"] <= as_of_date
+                hy_subset = hy_df.loc[mask]
+                if len(hy_subset) >= 6:
+                    feat_df["fred_hy_oas_change_5d"] = (
+                        float(hy_subset["value"].iloc[-1]) - float(hy_subset["value"].iloc[-6])
+                    )
+                else:
+                    feat_df["fred_hy_oas_change_5d"] = np.nan
+                if len(hy_subset) >= 22:
+                    feat_df["fred_hy_oas_change_21d"] = (
+                        float(hy_subset["value"].iloc[-1]) - float(hy_subset["value"].iloc[-22])
+                    )
+                else:
+                    feat_df["fred_hy_oas_change_21d"] = np.nan
             else:
-                feat_df["fred_hy_oas_change_5d"] = np.nan
-            if len(hy_subset) >= 22:
-                feat_df["fred_hy_oas_change_21d"] = (
-                    float(hy_subset["value"].iloc[-1]) - float(hy_subset["value"].iloc[-22])
+                # Slow path: per-date API call (fallback for live scoring)
+                hy_rows = fetch_fred_series(
+                    "BAMLH0A0HYM2", lookback_days=90, as_of_date=as_of_date,
                 )
-            else:
-                feat_df["fred_hy_oas_change_21d"] = np.nan
-        else:
-            # Slow path: per-date API call (fallback for live scoring)
-            hy_rows = fetch_fred_series(
-                "BAMLH0A0HYM2", lookback_days=90, as_of_date=as_of_date,
-            )
-            hy_values = [r for r in hy_rows if r["date"] <= as_of_date]
-            if len(hy_values) >= 6:
-                feat_df["fred_hy_oas_change_5d"] = (
-                    hy_values[-1]["value"] - hy_values[-6]["value"]
-                )
-            else:
-                feat_df["fred_hy_oas_change_5d"] = np.nan
-            if len(hy_values) >= 22:
-                feat_df["fred_hy_oas_change_21d"] = (
-                    hy_values[-1]["value"] - hy_values[-22]["value"]
-                )
-            else:
-                feat_df["fred_hy_oas_change_21d"] = np.nan
-    except (KeyError, ValueError, urllib.error.URLError) as exc:
-        LOG.warning("FRED feature extraction failed: %s", exc)
-    except ImportError:
-        LOG.warning("external_data module not available; skipping FRED features")
-    except Exception as exc:
-        if strict:
-            raise
-        LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
+                hy_values = [r for r in hy_rows if r["date"] <= as_of_date]
+                if len(hy_values) >= 6:
+                    feat_df["fred_hy_oas_change_5d"] = (
+                        hy_values[-1]["value"] - hy_values[-6]["value"]
+                    )
+                else:
+                    feat_df["fred_hy_oas_change_5d"] = np.nan
+                if len(hy_values) >= 22:
+                    feat_df["fred_hy_oas_change_21d"] = (
+                        hy_values[-1]["value"] - hy_values[-22]["value"]
+                    )
+                else:
+                    feat_df["fred_hy_oas_change_21d"] = np.nan
+        except (KeyError, ValueError, urllib.error.URLError) as exc:
+            LOG.warning("FRED feature extraction failed: %s", exc)
+        except ImportError:
+            LOG.warning("external_data module not available; skipping FRED features")
+        except Exception as exc:
+            if strict:
+                raise
+            LOG.warning("FRED feature extraction failed (non-fatal): %s", exc)
 
     # Sector rotation features (cached — one DB query per date, not per ticker)
-    try:
-        from trader_koo.ml.sector_rotation import compute_sector_features
+    if needs_sector:
+        try:
+            from trader_koo.ml.sector_rotation import compute_sector_features
 
-        # This call caches the date-level sector data (1 batch query)
-        market_sector = compute_sector_features(conn, as_of_date=as_of_date)
-        for k in ["leading_sector_momentum", "lagging_sector_momentum", "sector_dispersion"]:
-            if k in FEATURE_COLUMNS_FULL:
-                feat_df[k] = market_sector.get(k, np.nan)
+            # This call caches the date-level sector data (1 batch query)
+            market_sector = compute_sector_features(conn, as_of_date=as_of_date)
+            for k in ["leading_sector_momentum", "lagging_sector_momentum", "sector_dispersion"]:
+                if k in FEATURE_COLUMNS_FULL:
+                    feat_df[k] = market_sector.get(k, np.nan)
 
-        # Per-ticker lookup from cache — no additional DB queries
-        ticker_list = feat_df["ticker"].tolist() if "ticker" in feat_df.columns else feat_df.index.tolist()
-        sector_ranks = []
-        sector_mom_5d = []
-        sector_mom_21d = []
-        for tkr in ticker_list:
-            s = compute_sector_features(conn, as_of_date=as_of_date, ticker=str(tkr))
-            sector_ranks.append(s.get("sector_rank", np.nan))
-            sector_mom_5d.append(s.get("sector_momentum_5d", np.nan))
-            sector_mom_21d.append(s.get("sector_momentum_21d", np.nan))
-        feat_df["sector_rank"] = sector_ranks
-        feat_df["sector_momentum_5d"] = sector_mom_5d
-        feat_df["sector_momentum_21d"] = sector_mom_21d
-    except (sqlite3.OperationalError, KeyError, ValueError) as exc:
-        LOG.warning("Sector feature extraction failed: %s", exc)
-    except ImportError:
-        LOG.warning("sector_rotation module not available; skipping sector features")
-    except Exception as exc:
-        if strict:
-            raise
-        LOG.warning("Sector feature extraction failed (non-fatal): %s", exc)
+            # Per-ticker lookup from cache — no additional DB queries
+            ticker_list = feat_df["ticker"].tolist() if "ticker" in feat_df.columns else feat_df.index.tolist()
+            sector_ranks = []
+            sector_mom_5d = []
+            sector_mom_21d = []
+            for tkr in ticker_list:
+                s = compute_sector_features(conn, as_of_date=as_of_date, ticker=str(tkr))
+                sector_ranks.append(s.get("sector_rank", np.nan))
+                sector_mom_5d.append(s.get("sector_momentum_5d", np.nan))
+                sector_mom_21d.append(s.get("sector_momentum_21d", np.nan))
+            feat_df["sector_rank"] = sector_ranks
+            feat_df["sector_momentum_5d"] = sector_mom_5d
+            feat_df["sector_momentum_21d"] = sector_mom_21d
+        except (sqlite3.OperationalError, KeyError, ValueError) as exc:
+            LOG.warning("Sector feature extraction failed: %s", exc)
+        except ImportError:
+            LOG.warning("sector_rotation module not available; skipping sector features")
+        except Exception as exc:
+            if strict:
+                raise
+            LOG.warning("Sector feature extraction failed (non-fatal): %s", exc)
 
     # News sentiment per ticker (Finnhub company-news + lexicon scoring)
     # NOTE: Uses only articles published on or before as_of_date — no data leakage.
     # Falls back to NaN when FINNHUB_API_KEY is not set or API is unreachable.
-    try:
-        ticker_list = feat_df["ticker"].tolist() if "ticker" in feat_df.columns else []
-        sentiment_scores = _get_news_sentiment_scores(ticker_list, as_of_date, conn=conn)
-        if sentiment_scores:
-            feat_df["news_sentiment_score"] = feat_df["ticker"].map(
-                lambda t: sentiment_scores.get(t, np.nan)
-            )
-        else:
-            feat_df["news_sentiment_score"] = np.nan
-    except (KeyError, ValueError, urllib.error.URLError) as exc:
-        LOG.warning("News sentiment feature extraction failed: %s", exc)
-    except Exception as exc:
-        if strict:
-            raise
-        LOG.warning("News sentiment feature extraction failed (non-fatal): %s", exc)
+    if needs_news:
+        try:
+            ticker_list = feat_df["ticker"].tolist() if "ticker" in feat_df.columns else []
+            sentiment_scores = _get_news_sentiment_scores(ticker_list, as_of_date, conn=conn)
+            if sentiment_scores:
+                feat_df["news_sentiment_score"] = feat_df["ticker"].map(
+                    lambda t: sentiment_scores.get(t, np.nan)
+                )
+            else:
+                feat_df["news_sentiment_score"] = np.nan
+        except (KeyError, ValueError, urllib.error.URLError) as exc:
+            LOG.warning("News sentiment feature extraction failed: %s", exc)
+        except Exception as exc:
+            if strict:
+                raise
+            LOG.warning("News sentiment feature extraction failed (non-fatal): %s", exc)
 
     # Polymarket prediction market probabilities (date-level, same for all tickers)
     # NOTE: These are LIVE market prices — only meaningful for forward scoring.
     # During historical training (as_of_date in the past), the API still returns
     # current prices, which would be data leakage. We only populate these when
     # as_of_date is today (live scoring); otherwise they stay NaN.
-    try:
-        today_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-        is_live_scoring = as_of_date >= today_str
+    if needs_polymarket:
+        try:
+            today_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+            is_live_scoring = as_of_date >= today_str
 
-        if is_live_scoring:
-            from trader_koo.ml.external_data import get_polymarket_macro_probabilities
+            if is_live_scoring:
+                from trader_koo.ml.external_data import get_polymarket_macro_probabilities
 
-            poly_probs = get_polymarket_macro_probabilities()
-            for col_name, value in poly_probs.items():
-                if col_name in FEATURE_COLUMNS_FULL:
-                    feat_df[col_name] = value
-        else:
-            # Historical date — Polymarket data would be leakage, fill NaN
-            for col_name in [
-                "polymarket_fed_cut_prob",
-                "polymarket_recession_prob",
-                "polymarket_macro_sentiment",
-            ]:
-                feat_df[col_name] = np.nan
-    except (KeyError, ValueError, urllib.error.URLError) as exc:
-        LOG.warning("Polymarket feature extraction failed: %s", exc)
-    except ImportError:
-        LOG.warning("external_data module not available; skipping Polymarket features")
-    except Exception as exc:
-        if strict:
-            raise
-        LOG.warning("Polymarket feature extraction failed (non-fatal): %s", exc)
+                poly_probs = get_polymarket_macro_probabilities()
+                for col_name, value in poly_probs.items():
+                    if col_name in FEATURE_COLUMNS_FULL:
+                        feat_df[col_name] = value
+            else:
+                # Historical date — Polymarket data would be leakage, fill NaN
+                for col_name in [
+                    "polymarket_fed_cut_prob",
+                    "polymarket_recession_prob",
+                    "polymarket_macro_sentiment",
+                ]:
+                    feat_df[col_name] = np.nan
+        except (KeyError, ValueError, urllib.error.URLError) as exc:
+            LOG.warning("Polymarket feature extraction failed: %s", exc)
+        except ImportError:
+            LOG.warning("external_data module not available; skipping Polymarket features")
+        except Exception as exc:
+            if strict:
+                raise
+            LOG.warning("Polymarket feature extraction failed (non-fatal): %s", exc)
 
     # Ensure all expected columns exist (compute full set, return requested subset)
     for col in FEATURE_COLUMNS_FULL:

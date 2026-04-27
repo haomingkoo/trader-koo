@@ -29,10 +29,69 @@ class TestCreateScheduler:
 
         assert job is not None
 
+    def test_has_options_iv_snapshot_job_by_default(self):
+        scheduler = create_scheduler()
+        job = scheduler.get_job("options_iv_snapshot")
+
+        assert job is not None
+
     def test_scheduler_not_running_on_create(self):
         scheduler = create_scheduler()
 
         assert not scheduler.running
+
+    def test_default_fast_monitor_intervals(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+
+        scheduler = create_scheduler()
+
+        assert (
+            scheduler.get_job("polymarket_snapshot").trigger.interval.total_seconds()
+            == 5 * 60
+        )
+        assert scheduler.get_job("spike_alerts").trigger.interval.total_seconds() == 5 * 60
+        assert scheduler.get_job("macro_alert").trigger.interval.total_seconds() == 10 * 60
+        assert (
+            scheduler.get_job("hyperliquid_poll").trigger.interval.total_seconds()
+            == 5 * 60
+        )
+        assert (
+            scheduler.get_job("site_health_check").trigger.interval.total_seconds()
+            == 10 * 60
+        )
+        assert (
+            scheduler.get_job("crypto_health_check").trigger.interval.total_seconds()
+            == 15 * 60
+        )
+        assert (
+            scheduler.get_job("derivatives_snapshot").trigger.interval.total_seconds()
+            == 15 * 60
+        )
+
+    def test_options_iv_snapshot_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("TRADER_KOO_OPTIONS_SNAPSHOT_ENABLED", "0")
+
+        scheduler = create_scheduler()
+
+        assert scheduler.get_job("options_iv_snapshot") is None
+
+    def test_monitor_intervals_can_be_overridden(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("TRADER_KOO_POLYMARKET_SNAPSHOT_MINUTES", "7")
+        monkeypatch.setenv("TRADER_KOO_SPIKE_ALERT_MINUTES", "11")
+        monkeypatch.setenv("TRADER_KOO_HYPERLIQUID_POLL_MINUTES", "13")
+
+        scheduler = create_scheduler()
+
+        assert (
+            scheduler.get_job("polymarket_snapshot").trigger.interval.total_seconds()
+            == 7 * 60
+        )
+        assert scheduler.get_job("spike_alerts").trigger.interval.total_seconds() == 11 * 60
+        assert (
+            scheduler.get_job("hyperliquid_poll").trigger.interval.total_seconds()
+            == 13 * 60
+        )
 
 
 class TestNormalizeUpdateMode:

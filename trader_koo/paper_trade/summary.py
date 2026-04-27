@@ -14,6 +14,14 @@ from trader_koo.paper_trade.schema import decode_json_list, ensure_paper_trade_s
 LOG = logging.getLogger(__name__)
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
 def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
     """Compute and persist daily portfolio metrics."""
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
@@ -128,7 +136,8 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
                position_size_pct, risk_budget_pct, stop_distance_pct,
                expected_reward_pct, expected_r_multiple,
                entry_plan, exit_plan, sizing_summary,
-               review_status, review_summary
+               review_status, review_summary,
+               ml_predicted_win_prob, ml_confidence, ml_signal, notes
         FROM paper_trades
         ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC
         LIMIT ?
@@ -145,6 +154,7 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
         "expected_reward_pct", "expected_r_multiple",
         "entry_plan", "exit_plan", "sizing_summary",
         "review_status", "review_summary",
+        "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
     ]
     return [dict(zip(keys, row)) for row in rows]
 
@@ -304,45 +314,88 @@ def _compute_spy_benchmark(
         return None
 
 
+def _baseline_stats(
+    pnls: list[float],
+    *,
+    hold_days: float | int | None,
+    method: str,
+    label: str,
+) -> dict[str, Any] | None:
+    if not pnls:
+        return None
+
+    total = len(pnls)
+    wins = sum(1 for p in pnls if p > 0)
+    total_return = round(sum(pnls), 2)
+    avg_return = round(total_return / total, 2)
+    win_rate = round(wins / total * 100.0, 1)
+
+    sharpe: float | None = None
+    if total > 1:
+        mean_p = sum(pnls) / total
+        var_p = sum((p - mean_p) ** 2 for p in pnls) / (total - 1)
+        std_p = math.sqrt(var_p) if var_p > 0 else 0
+        sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
+
+    return {
+        "trades": total,
+        "win_rate": win_rate,
+        "return_pct": avg_return,
+        "total_return_pct": total_return,
+        "sharpe": sharpe,
+        "hold_days": hold_days,
+        "method": method,
+        "label": label,
+    }
+
+
 def _compute_unfiltered_baseline(
     conn: sqlite3.Connection,
     *,
     cutoff: str,
 ) -> dict[str, Any] | None:
-    """Estimate what would happen if every qualifying setup was traded.
+    """Return the broad setup baseline when available.
 
-    Uses the setup evaluation scores stored in daily reports to count
-    ALL setups with tier A or B that had a direction (long/short),
-    regardless of ML filter or critic review.  The actual outcome is
-    approximated by looking up the signed return from price_daily
-    (entry close vs close 5 trading days later).
+    Prefer ``setup_call_evaluations`` because it tracks all report setup calls,
+    including ones that did not become paper trades.  Fall back to a same-entry
+    fixed-hold baseline when that table is unavailable or has no scored calls.
     """
     try:
-        # All paper trades that were ever created (both approved and
-        # rejected setups are not stored -- only approved ones).
-        # Instead, count all setups that had qualifying tier+direction
-        # from the report that were in the same window, then compare
-        # with actually-taken trades.
-        #
-        # Simpler approach: gather all paper_trades in the window
-        # (which already passed the basic qualify gate) and compute
-        # stats *without* filtering by ML or critic.  The trades
-        # table only contains approved+taken trades, so the "unfiltered"
-        # view is the same data -- we cannot reconstruct rejected setups.
-        #
-        # Best available: use setup_evaluation scored calls from
-        # the report system if available.  Fall back to computing
-        # a naive "all-entries" return using price_daily for the
-        # tickers that had any paper trade considered.
-        #
-        # Pragmatic approach: Query *all* paper trades (they already
-        # passed the basic tier/score gate but might have been filtered
-        # by critic/ML). Since we only have the taken trades, we report
-        # the "pre-filter" baseline as the total set of taken trades
-        # PLUS compute a simulated "always-enter" return for each
-        # ticker/date pair using a fixed 5-day hold.
+        if _table_exists(conn, "setup_call_evaluations"):
+            try:
+                setup_rows = conn.execute(
+                    """
+                    SELECT signed_return_pct, validity_days
+                    FROM setup_call_evaluations
+                    WHERE status = 'scored'
+                      AND asof_date >= ?
+                      AND call_direction IN ('long', 'short')
+                      AND signed_return_pct IS NOT NULL
+                    """,
+                    (cutoff,),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                LOG.debug("Setup-call baseline unavailable, using fallback: %s", exc)
+                setup_rows = []
+            if setup_rows:
+                pnls = [round(float(row[0]), 2) for row in setup_rows]
+                hold_values = [
+                    int(row[1]) for row in setup_rows
+                    if row[1] is not None and int(row[1]) > 0
+                ]
+                avg_hold = (
+                    round(sum(hold_values) / len(hold_values), 1)
+                    if hold_values else None
+                )
+                return _baseline_stats(
+                    pnls,
+                    hold_days=avg_hold,
+                    method="setup_call_evaluations",
+                    label="All Report Setups",
+                )
 
-        # Get all entry points (ticker + entry_date) from paper trades
+        # Fallback: same accepted entries, fixed hold. This does not claim to
+        # include rejected ML/critic candidates.
         entries = conn.execute(
             """
             SELECT ticker, direction, entry_date, entry_price
@@ -353,11 +406,6 @@ def _compute_unfiltered_baseline(
             (cutoff,),
         ).fetchall()
 
-        if not entries:
-            return None
-
-        # For each entry, compute the forward return matching expiry_days
-        # (default 10 trading days, consistent with paper trade expiry)
         baseline_hold_days = 10
         pnls: list[float] = []
         for ticker, direction, entry_date, entry_price in entries:
@@ -390,31 +438,12 @@ def _compute_unfiltered_baseline(
                 pnl = (exit_price / ep - 1.0) * 100.0
             pnls.append(round(pnl, 2))
 
-        if not pnls:
-            return None
-
-        total = len(pnls)
-        wins = sum(1 for p in pnls if p > 0)
-        total_return = round(sum(pnls), 2)
-        avg_return = round(total_return / total, 2)
-        win_rate = round(wins / total * 100.0, 1)
-
-        # Sharpe (per-trade, not annualised)
-        sharpe: float | None = None
-        if total > 1:
-            mean_p = sum(pnls) / total
-            var_p = sum((p - mean_p) ** 2 for p in pnls) / (total - 1)
-            std_p = math.sqrt(var_p) if var_p > 0 else 0
-            sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
-
-        return {
-            "trades": total,
-            "win_rate": win_rate,
-            "return_pct": avg_return,
-            "total_return_pct": total_return,
-            "sharpe": sharpe,
-            "hold_days": baseline_hold_days,
-        }
+        return _baseline_stats(
+            pnls,
+            hold_days=baseline_hold_days,
+            method="same_entries_fixed_hold",
+            label="Same Entries Fixed Hold",
+        )
     except Exception as exc:
         LOG.warning("Unfiltered baseline computation failed: %s", exc)
         return None
@@ -715,7 +744,8 @@ def list_paper_trades(
                position_size_pct, risk_budget_pct, stop_distance_pct,
                expected_reward_pct, expected_r_multiple,
                entry_plan, exit_plan, sizing_summary,
-               review_status, review_summary
+               review_status, review_summary,
+               ml_predicted_win_prob, ml_confidence, ml_signal, notes
         FROM paper_trades
         WHERE {where}
         ORDER BY entry_date DESC, id DESC
@@ -737,6 +767,7 @@ def list_paper_trades(
         "expected_reward_pct", "expected_r_multiple",
         "entry_plan", "exit_plan", "sizing_summary",
         "review_status", "review_summary",
+        "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
     ]
     trades: list[dict[str, Any]] = []
     for row in rows:

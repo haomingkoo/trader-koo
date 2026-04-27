@@ -8,7 +8,7 @@ interface CardProps {
   glass?: boolean;
 }
 
-const SOLID_BASE = "rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4";
+const SOLID_BASE = "rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow-soft)]";
 
 export default function Card({ label, value, children, className = "", glass = false }: CardProps) {
   const base = glass ? GLASS_BASE : SOLID_BASE;
@@ -17,7 +17,7 @@ export default function Card({ label, value, children, className = "", glass = f
       className={`${base} ${className}`}
     >
       {label && (
-        <div className="mb-1 text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+        <div className="label-sm mb-1">
           {label}
         </div>
       )}

@@ -55,6 +55,10 @@ class PaperTradeConfig:
     trail_tight_r: float = 2.0  # threshold for tight trail near target
     trail_tight_cushion_r: float = 0.5  # cushion from HWM at tightest level
     expiry_use_trading_days: bool = True  # count trading days, not calendar
+    # Safety default: if the critic infrastructure errors, reject new entries.
+    # This prevents hidden fail-open behavior from creating paper trades when
+    # risk checks are unavailable.
+    critic_fail_open: bool = False
 
 
 def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
@@ -86,4 +90,5 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
             "tight_cushion_r": config.trail_tight_cushion_r,
         },
         "expiry_use_trading_days": config.expiry_use_trading_days,
+        "critic_fail_open": config.critic_fail_open,
     }

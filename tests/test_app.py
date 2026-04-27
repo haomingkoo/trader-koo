@@ -44,6 +44,7 @@ class TestAppFactory:
             "/api/tickers",
             "/api/daily-report",
             "/api/opportunities",
+            "/api/options/premium",
             "/api/paper-trades",
             "/api/email/subscribe",
             "/api/vix-glossary",

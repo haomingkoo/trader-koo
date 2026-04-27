@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+from trader_koo.config import env_bool, env_int, env_optional_float
 
 
 def _utc_now() -> dt.datetime:
@@ -31,78 +32,55 @@ def _parse_iso(value: Any) -> dt.datetime | None:
     return ts.astimezone(dt.timezone.utc)
 
 
-def _as_bool(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def llm_alert_enabled() -> bool:
-    return _as_bool(os.getenv("TRADER_KOO_LLM_FAIL_ALERT_ENABLED", "1"))
+    return env_bool("TRADER_KOO_LLM_FAIL_ALERT_ENABLED", True)
 
 
 def llm_alert_cooldown_min() -> int:
-    raw = str(os.getenv("TRADER_KOO_LLM_FAIL_ALERT_COOLDOWN_MIN", "180") or "").strip()
-    try:
-        return max(5, min(24 * 60, int(raw)))
-    except ValueError:
-        return 180
+    return env_int(
+        "TRADER_KOO_LLM_FAIL_ALERT_COOLDOWN_MIN",
+        180,
+        min_value=5,
+        max_value=24 * 60,
+    )
 
 
 def llm_failure_event_cooldown_sec() -> int:
-    raw = str(os.getenv("TRADER_KOO_LLM_FAILURE_EVENT_COOLDOWN_SEC", "300") or "").strip()
-    try:
-        return max(30, min(24 * 3600, int(raw)))
-    except ValueError:
-        return 300
+    return env_int(
+        "TRADER_KOO_LLM_FAILURE_EVENT_COOLDOWN_SEC",
+        300,
+        min_value=30,
+        max_value=24 * 3600,
+    )
 
 
 def llm_degraded_threshold() -> int:
-    raw = str(os.getenv("TRADER_KOO_LLM_DEGRADED_FAILS", "3") or "").strip()
-    try:
-        return max(1, min(50, int(raw)))
-    except ValueError:
-        return 3
+    return env_int("TRADER_KOO_LLM_DEGRADED_FAILS", 3, min_value=1, max_value=50)
 
 
 def llm_disable_seconds_on_fail() -> int:
-    raw = str(os.getenv("TRADER_KOO_LLM_DISABLE_SEC_ON_FAIL", "300") or "").strip()
-    try:
-        return max(0, min(24 * 3600, int(raw)))
-    except ValueError:
-        return 300
+    return env_int(
+        "TRADER_KOO_LLM_DISABLE_SEC_ON_FAIL",
+        300,
+        min_value=0,
+        max_value=24 * 3600,
+    )
 
 
 def llm_health_max_events() -> int:
-    raw = str(os.getenv("TRADER_KOO_LLM_HEALTH_MAX_EVENTS", "5000") or "").strip()
-    try:
-        return max(200, min(200_000, int(raw)))
-    except ValueError:
-        return 5000
+    return env_int("TRADER_KOO_LLM_HEALTH_MAX_EVENTS", 5000, min_value=200, max_value=200_000)
 
 
 def llm_usage_max_rows() -> int:
-    raw = str(os.getenv("TRADER_KOO_LLM_USAGE_MAX_ROWS", "20000") or "").strip()
-    try:
-        return max(500, min(2_000_000, int(raw)))
-    except ValueError:
-        return 20000
-
-
-def _env_float(name: str, default: float = 0.0) -> float:
-    raw = str(os.getenv(name, "") or "").strip()
-    if not raw:
-        return float(default)
-    try:
-        return float(raw)
-    except ValueError:
-        return float(default)
+    return env_int("TRADER_KOO_LLM_USAGE_MAX_ROWS", 20000, min_value=500, max_value=2_000_000)
 
 
 def llm_cost_input_per_1m() -> float:
-    return max(0.0, _env_float("TRADER_KOO_LLM_COST_INPUT_PER_1M", 0.0))
+    return env_optional_float("TRADER_KOO_LLM_COST_INPUT_PER_1M", 0.0, min_value=0.0)
 
 
 def llm_cost_output_per_1m() -> float:
-    return max(0.0, _env_float("TRADER_KOO_LLM_COST_OUTPUT_PER_1M", 0.0))
+    return env_optional_float("TRADER_KOO_LLM_COST_OUTPUT_PER_1M", 0.0, min_value=0.0)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
