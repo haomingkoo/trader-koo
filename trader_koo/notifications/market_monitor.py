@@ -151,14 +151,15 @@ def detect_polymarket_spikes(
         now = dt.datetime.now(dt.timezone.utc)
         cutoff = (now - dt.timedelta(hours=lookback_hours)).isoformat()
 
-        # Get latest snapshot per market
+        # Get latest snapshot per market (de-duplicated by slug+question).
+        # Using SQLite "bare columns" + MAX(snapshot_ts) returns the row
+        # corresponding to the max for each group, so we never double-count
+        # markets that appear in multiple rows at the same snapshot_ts.
         latest_rows = conn.execute("""
             SELECT event_slug, event_title, market_question,
-                   probability, volume, snapshot_ts
+                   probability, volume, MAX(snapshot_ts) AS snapshot_ts
             FROM polymarket_snapshots
-            WHERE snapshot_ts = (
-                SELECT MAX(snapshot_ts) FROM polymarket_snapshots
-            )
+            GROUP BY event_slug, market_question
         """).fetchall()
 
         if not latest_rows:
@@ -203,6 +204,7 @@ def detect_polymarket_spikes(
                     "direction": direction,
                     "volume": volume,
                     "lookback_hours": lookback_hours,
+                    "snapshot_ts": row["snapshot_ts"],
                 })
 
         spikes.sort(key=lambda s: abs(s["change_pct"]), reverse=True)
@@ -425,8 +427,20 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
     # Collect all spikes, filter out already-alerted ones, send ONE message
     all_lines: list[str] = []
 
-    # Cooldown: track which events we already alerted (by slug+direction)
-    # Only re-alert if direction CHANGES or probability moves another 5+ pts
+    # Cooldown rules (suppress repeat alerts of the same spike):
+    #   - After alerting key K, suppress for COOLDOWN_HOURS regardless of
+    #     small probability fluctuations (this is the core anti-spam guard).
+    #   - Within the cooldown, re-alert only if probability extended the
+    #     spike by >= RE_ALERT_PTS in the SAME direction (e.g. 76% -> 88% up).
+    #     Cooling off (76% -> 70%) does NOT re-alert.
+    #   - After the cooldown expires, a fresh >=5pt move re-alerts.
+    #   - Direction reversal (up -> down) always counts as a new event.
+    #   - If we've already alerted on the exact snapshot_ts, suppress
+    #     (guards against scheduler running faster than the snapshot job).
+    COOLDOWN_HOURS = 6.0
+    RE_ALERT_PTS = 10.0
+    now_dt = dt.datetime.now(dt.timezone.utc)
+
     conn_cd = sqlite3.connect(str(db_path))
     try:
         conn_cd.execute("""
@@ -434,33 +448,75 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
                 event_key TEXT PRIMARY KEY,
                 direction TEXT,
                 last_prob REAL,
-                alerted_at TEXT
+                alerted_at TEXT,
+                snapshot_ts TEXT
             )
         """)
+        # Migration: add snapshot_ts column if upgrading from older schema.
+        try:
+            conn_cd.execute(
+                "ALTER TABLE spike_alert_cooldown ADD COLUMN snapshot_ts TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn_cd.commit()
     except Exception:
         pass
 
-    def _should_alert(key: str, direction: str, new_prob: float) -> bool:
-        """Only alert if direction changed or prob moved 5+ pts since last alert."""
+    def _should_alert(
+        key: str, direction: str, new_prob: float, snapshot_ts: str | None,
+    ) -> bool:
+        """Decide whether this spike should fire a fresh Telegram alert."""
         row = conn_cd.execute(
-            "SELECT direction, last_prob FROM spike_alert_cooldown WHERE event_key = ?",
+            "SELECT direction, last_prob, alerted_at, snapshot_ts "
+            "FROM spike_alert_cooldown WHERE event_key = ?",
             (key,),
         ).fetchone()
         if row is None:
             return True  # never alerted
-        old_dir, old_prob = row
-        if old_dir != direction:
-            return True  # direction reversed
-        if abs(new_prob - (old_prob or 0)) >= 5.0:
-            return True  # moved another 5+ pts
-        return False  # same direction, small move — skip
 
-    def _mark_alerted(key: str, direction: str, prob: float) -> None:
-        now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+        old_dir, old_prob, alerted_at, last_snapshot_ts = row
+        old_prob = old_prob or 0.0
+
+        # Same snapshot we already alerted on -> always suppress.
+        if snapshot_ts and last_snapshot_ts and snapshot_ts == last_snapshot_ts:
+            return False
+
+        # Direction reversal is a new event -> always alert.
+        if old_dir != direction:
+            return True
+
+        # Within cooldown window: only allow re-alert if the spike extended
+        # significantly in the SAME direction. This is the anti-spam core.
+        if alerted_at:
+            try:
+                alerted_dt = dt.datetime.fromisoformat(alerted_at)
+                age_hours = (now_dt - alerted_dt).total_seconds() / 3600.0
+            except Exception:
+                age_hours = COOLDOWN_HOURS + 1  # treat unparseable as expired
+            if age_hours < COOLDOWN_HOURS:
+                if direction == "up" and (new_prob - old_prob) >= RE_ALERT_PTS:
+                    return True
+                if direction == "down" and (old_prob - new_prob) >= RE_ALERT_PTS:
+                    return True
+                return False  # cooling off or small drift -> suppress
+
+        # Past cooldown: require a meaningful same-direction move (>=5 pts).
+        if direction == "up" and (new_prob - old_prob) >= 5.0:
+            return True
+        if direction == "down" and (old_prob - new_prob) >= 5.0:
+            return True
+        return False
+
+    def _mark_alerted(
+        key: str, direction: str, prob: float, snapshot_ts: str | None,
+    ) -> None:
+        now_iso = now_dt.isoformat()
         conn_cd.execute(
-            "INSERT OR REPLACE INTO spike_alert_cooldown VALUES (?, ?, ?, ?)",
-            (key, direction, prob, now_iso),
+            "INSERT OR REPLACE INTO spike_alert_cooldown "
+            "(event_key, direction, last_prob, alerted_at, snapshot_ts) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (key, direction, prob, now_iso, snapshot_ts),
         )
         conn_cd.commit()
 
@@ -472,10 +528,11 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             question = spike.get("question", spike.get("event_title", "?"))
             direction = spike.get("direction", "up")
             new_p = spike.get("new_prob", 0)
+            snap_ts = spike.get("snapshot_ts")
             key = f"{slug}:{question[:60]}"
 
-            if not _should_alert(key, direction, new_p):
-                continue  # already alerted, same direction, small move
+            if not _should_alert(key, direction, new_p, snap_ts):
+                continue  # within cooldown / cooling off / same snapshot
 
             arrow = "\u2B06\uFE0F" if direction == "up" else "\u2B07\uFE0F"
             old_p = spike.get("old_prob", 0)
@@ -488,7 +545,7 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
                 f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | {vol}"
                 f"{link_html}"
             )
-            _mark_alerted(key, direction, new_p)
+            _mark_alerted(key, direction, new_p, snap_ts)
     except Exception as exc:
         LOG.error("Polymarket spike alerting failed: %s", exc)
 
@@ -500,8 +557,9 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             direction = spike.get("direction", "up" if spike.get("price_change_pct", 0) > 0 else "down")
             new_price = spike.get("new_price", 0)
             key = f"crypto:{sym}"
-
-            if not _should_alert(key, direction, new_price):
+            # Crypto bars don't carry a stable per-event snapshot_ts here, so
+            # we rely solely on the time-based cooldown for these.
+            if not _should_alert(key, direction, new_price, None):
                 continue
 
             arrow = "\U0001F4C8" if direction == "up" else "\U0001F4C9"
@@ -511,7 +569,7 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             if oi_chg is not None and spike.get("oi_spike"):
                 parts.append(f"OI {oi_chg:+.0f}%")
             all_lines.append(" | ".join(parts))
-            _mark_alerted(key, direction, new_price)
+            _mark_alerted(key, direction, new_price, None)
     except Exception as exc:
         LOG.error("Crypto spike alerting failed: %s", exc)
 

@@ -427,6 +427,181 @@ class TestSendSpikeAlerts:
 
 
 # ---------------------------------------------------------------------------
+# Cooldown / anti-spam tests
+# ---------------------------------------------------------------------------
+
+def _seed_two_snapshot_rows(
+    db_path: Path,
+    old_prob: float,
+    new_prob: float,
+    *,
+    slug: str = "test-slug",
+    question: str = "Will it?",
+    hours_ago: int = 8,
+) -> str:
+    """Insert two snapshots and return the new snapshot_ts."""
+    conn = sqlite3.connect(str(db_path))
+    now = dt.datetime.now(dt.timezone.utc)
+    old_ts = (now - dt.timedelta(hours=hours_ago)).isoformat()
+    new_ts = now.isoformat()
+    conn.execute(
+        "INSERT INTO polymarket_snapshots "
+        "(event_slug, event_title, market_question, probability, volume, snapshot_ts) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (slug, "Test Event", question, old_prob, 1_000_000, old_ts),
+    )
+    conn.execute(
+        "INSERT INTO polymarket_snapshots "
+        "(event_slug, event_title, market_question, probability, volume, snapshot_ts) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (slug, "Test Event", question, new_prob, 1_200_000, new_ts),
+    )
+    conn.commit()
+    conn.close()
+    return new_ts
+
+
+def _replace_latest_snapshot(
+    db_path: Path,
+    new_prob: float,
+    *,
+    slug: str = "test-slug",
+    question: str = "Will it?",
+) -> str:
+    """Insert a fresh snapshot a moment after the existing latest."""
+    conn = sqlite3.connect(str(db_path))
+    fresh_ts = (
+        dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=1)
+    ).isoformat()
+    conn.execute(
+        "INSERT INTO polymarket_snapshots "
+        "(event_slug, event_title, market_question, probability, volume, snapshot_ts) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (slug, "Test Event", question, new_prob, 1_200_000, fresh_ts),
+    )
+    conn.commit()
+    conn.close()
+    return fresh_ts
+
+
+class TestSpikeAlertCooldown:
+    """Regression tests for the anti-spam cooldown logic."""
+
+    @patch("trader_koo.notifications.telegram.is_configured")
+    @patch("trader_koo.notifications.telegram.send_message")
+    def test_repeat_same_snapshot_is_suppressed(
+        self,
+        mock_send: MagicMock,
+        mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        """Calling send_spike_alerts twice in a row must not re-alert."""
+        mock_configured.return_value = True
+        mock_send.return_value = True
+
+        _seed_two_snapshot_rows(db_path, old_prob=65.0, new_prob=76.0)
+
+        first = send_spike_alerts(db_path, Path("/tmp"))
+        second = send_spike_alerts(db_path, Path("/tmp"))
+
+        assert first == 1
+        assert second == 0
+        assert mock_send.call_count == 1
+
+    @patch("trader_koo.notifications.telegram.is_configured")
+    @patch("trader_koo.notifications.telegram.send_message")
+    def test_cooling_off_does_not_re_alert(
+        self,
+        mock_send: MagicMock,
+        mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        """User-reported case: 65->76 then 65->70 (same direction, smaller)
+        should NOT spam a second alert."""
+        mock_configured.return_value = True
+        mock_send.return_value = True
+
+        _seed_two_snapshot_rows(db_path, old_prob=65.0, new_prob=76.0)
+        first = send_spike_alerts(db_path, Path("/tmp"))
+        assert first == 1
+
+        # Probability cools off to 70 — still a +5pt spike vs the 6h-old
+        # baseline, but we already alerted on a bigger move.
+        _replace_latest_snapshot(db_path, new_prob=70.0)
+        second = send_spike_alerts(db_path, Path("/tmp"))
+        assert second == 0
+
+    @patch("trader_koo.notifications.telegram.is_configured")
+    @patch("trader_koo.notifications.telegram.send_message")
+    def test_extension_in_same_direction_re_alerts(
+        self,
+        mock_send: MagicMock,
+        mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        """If the spike extends 10+ pts further in the same direction,
+        a fresh alert is allowed even within the cooldown window."""
+        mock_configured.return_value = True
+        mock_send.return_value = True
+
+        _seed_two_snapshot_rows(db_path, old_prob=65.0, new_prob=76.0)
+        first = send_spike_alerts(db_path, Path("/tmp"))
+        assert first == 1
+
+        _replace_latest_snapshot(db_path, new_prob=88.0)
+        second = send_spike_alerts(db_path, Path("/tmp"))
+        assert second == 1
+
+    @patch("trader_koo.notifications.telegram.is_configured")
+    @patch("trader_koo.notifications.telegram.send_message")
+    def test_direction_reversal_re_alerts(
+        self,
+        mock_send: MagicMock,
+        mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        """A genuine direction flip (up spike -> down spike) is a new event."""
+        mock_configured.return_value = True
+        mock_send.return_value = True
+
+        _seed_two_snapshot_rows(db_path, old_prob=65.0, new_prob=76.0)
+        first = send_spike_alerts(db_path, Path("/tmp"))
+        assert first == 1
+
+        # Latest probability dives below the 6h-old baseline.
+        _replace_latest_snapshot(db_path, new_prob=55.0)
+        second = send_spike_alerts(db_path, Path("/tmp"))
+        assert second == 1
+
+    def test_latest_rows_dedup_by_slug_and_question(
+        self, db_path: Path,
+    ) -> None:
+        """Duplicate rows at the same snapshot_ts must not double-count."""
+        conn = sqlite3.connect(str(db_path))
+        now = dt.datetime.now(dt.timezone.utc)
+        old_ts = (now - dt.timedelta(hours=8)).isoformat()
+        new_ts = now.isoformat()
+        for prob, ts in [
+            (65.0, old_ts),
+            (76.0, new_ts),
+            (76.0, new_ts),  # duplicate row at same snapshot_ts
+        ]:
+            conn.execute(
+                "INSERT INTO polymarket_snapshots "
+                "(event_slug, event_title, market_question, probability, "
+                "volume, snapshot_ts) VALUES (?, ?, ?, ?, ?, ?)",
+                ("dup-slug", "Dup", "Will dup?", prob, 1.0, ts),
+            )
+        conn.commit()
+        conn.close()
+
+        spikes = detect_polymarket_spikes(
+            db_path, lookback_hours=6, threshold_pct=5.0,
+        )
+        assert len(spikes) == 1
+
+
+# ---------------------------------------------------------------------------
 # Recent spikes query tests
 # ---------------------------------------------------------------------------
 
