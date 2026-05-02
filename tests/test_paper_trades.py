@@ -321,6 +321,43 @@ class TestMLConfig:
         assert config.ml_enabled is False
 
 
+# ── bot_version resolution (cohort tagging) ─────────────────────
+
+class TestResolveBotVersion:
+    """``_resolve_bot_version`` decides which version tag is stamped on every
+    new paper trade. Cohort analysis depends on this returning a value that
+    actually changes between deploys, so the static "v1.0.0" fallback that
+    existed previously is gone."""
+
+    def _reload_module(self, monkeypatch):
+        import importlib
+        import trader_koo.paper_trades as pt_mod
+        return importlib.reload(pt_mod)
+
+    def test_explicit_env_var_wins(self, monkeypatch):
+        monkeypatch.setenv("TRADER_KOO_PAPER_TRADE_BOT_VERSION", "custom-tag")
+        monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "should-be-ignored")
+        pt_mod = self._reload_module(monkeypatch)
+        assert pt_mod._resolve_bot_version() == "custom-tag"
+
+    def test_railway_sha_used_when_no_explicit_override(self, monkeypatch):
+        monkeypatch.delenv("TRADER_KOO_PAPER_TRADE_BOT_VERSION", raising=False)
+        monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abcdef1234567890fakehash")
+        pt_mod = self._reload_module(monkeypatch)
+        assert pt_mod._resolve_bot_version() == "abcdef12"
+
+    def test_git_sha_fallback_when_no_env_vars(self, monkeypatch):
+        monkeypatch.delenv("TRADER_KOO_PAPER_TRADE_BOT_VERSION", raising=False)
+        monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA", raising=False)
+        pt_mod = self._reload_module(monkeypatch)
+        version = pt_mod._resolve_bot_version()
+        # Should resolve to either a short git SHA or "unknown" (if git
+        # unavailable). Never the legacy "v1.0.0".
+        assert version != "v1.0.0"
+        assert isinstance(version, str)
+        assert len(version) > 0
+
+
 # ── PnL Computation ──────────────────────────────────────────────
 
 class TestComputePnl:
@@ -818,7 +855,10 @@ class TestPaperTradeSummary:
         assert result["overall"]["total_trades"] == 0
         assert result["by_direction"] == {}
         assert result["equity_curve"] == []
-        assert result["policy"]["bot_version"] == "v1.0.0"
+        # bot_version is auto-derived from git SHA at startup (was static
+        # "v1.0.0"); just assert it's a non-empty string.
+        assert isinstance(result["policy"]["bot_version"], str)
+        assert result["policy"]["bot_version"]
         assert result["policy"]["decision_version"] == "paper-trade-eval-v1"
         assert result["feedback"] == []
 

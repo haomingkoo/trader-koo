@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
+import subprocess
+from pathlib import Path
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
@@ -27,9 +30,50 @@ from trader_koo.paper_trade.trading import (
     mark_to_market as _mark_to_market_impl,
 )
 
+
+def _resolve_bot_version() -> str:
+    """Resolve the bot_version tag stamped on every new paper trade.
+
+    Resolution order:
+      1. ``TRADER_KOO_PAPER_TRADE_BOT_VERSION`` env var (explicit override)
+      2. ``RAILWAY_GIT_COMMIT_SHA`` env var (Railway deploy metadata)
+      3. ``git rev-parse --short HEAD`` from the repo (local dev)
+      4. Fallback string ``"unknown"``
+
+    A short SHA is preferred over a static ``v1.0.0`` so cohort analysis
+    can attribute trade outcomes to the exact deployed code.
+    """
+    explicit = os.getenv("TRADER_KOO_PAPER_TRADE_BOT_VERSION")
+    if explicit:
+        return explicit
+
+    railway_sha = os.getenv("RAILWAY_GIT_COMMIT_SHA")
+    if railway_sha:
+        return railway_sha[:8]
+
+    git = shutil.which("git")
+    if git:
+        try:
+            repo_root = Path(__file__).resolve().parent.parent
+            result = subprocess.run(
+                [git, "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            sha = result.stdout.strip()
+            if result.returncode == 0 and sha:
+                return sha
+        except Exception:
+            pass
+
+    return "unknown"
+
+
 # ── Configuration (env vars) ────────────────────────────────────────
 PAPER_TRADE_ENABLED = os.getenv("TRADER_KOO_PAPER_TRADE_ENABLED", "1") == "1"
-PAPER_TRADE_BOT_VERSION = os.getenv("TRADER_KOO_PAPER_TRADE_BOT_VERSION", "v1.0.0")
+PAPER_TRADE_BOT_VERSION = _resolve_bot_version()
 PAPER_TRADE_MIN_TIER = os.getenv("TRADER_KOO_PAPER_TRADE_MIN_TIER", "B")
 PAPER_TRADE_MIN_SCORE = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_SCORE", "60.0"))
 PAPER_TRADE_MAX_OPEN = int(os.getenv("TRADER_KOO_PAPER_TRADE_MAX_OPEN", "20"))
