@@ -14,6 +14,9 @@ from trader_koo.backend.routers.admin.alert_quality import (
 from trader_koo.backend.routers.admin.backups import (
     router as backups_router,
 )
+from trader_koo.backend.routers.admin.cohort_stats import (
+    router as cohort_stats_router,
+)
 from trader_koo.backend.routers.admin.crypto import (
     router as crypto_router,
 )
@@ -45,5 +48,6 @@ router.include_router(telegram_router)
 router.include_router(backups_router)
 router.include_router(market_monitor_router)
 router.include_router(crypto_router)
+router.include_router(cohort_stats_router)
 
 __all__ = ["router"]
