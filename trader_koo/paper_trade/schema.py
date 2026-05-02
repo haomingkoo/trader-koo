@@ -121,6 +121,15 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "notes", "notes TEXT DEFAULT ''")
     _ensure_column(conn, "paper_trades", "directional_regime_at_entry", "directional_regime_at_entry TEXT")
     _ensure_column(conn, "paper_trades", "directional_regime_confidence", "directional_regime_confidence REAL")
+    # Score contribution from the YOLOv8 chart-pattern detector. Captured per
+    # trade so we can audit whether YOLO-boosted trades outperform unboosted
+    # ones — input to the kill-or-keep decision on YOLO. 0.0 means no
+    # qualifying pattern at entry.
+    _ensure_column(conn, "paper_trades", "yolo_boost_pts", "yolo_boost_pts REAL DEFAULT 0.0")
+    # Fraction of book notional deployed at the moment this trade was opened
+    # (0.0–1.0). Lets us compute a cash-adjusted return-on-deployed-capital
+    # benchmark instead of comparing raw portfolio % against SPY.
+    _ensure_column(conn, "paper_trades", "deployed_capital_pct", "deployed_capital_pct REAL")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bot_versions (

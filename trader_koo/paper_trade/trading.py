@@ -536,7 +536,8 @@ def create_paper_trades_from_report(
                 bot_version, vix_at_entry, vix_percentile_at_entry,
                 regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry,
                 directional_regime_at_entry, directional_regime_confidence,
-                ml_predicted_win_prob, ml_confidence, ml_signal
+                ml_predicted_win_prob, ml_confidence, ml_signal,
+                yolo_boost_pts, deployed_capital_pct
             ) VALUES (
                 ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -555,7 +556,8 @@ def create_paper_trades_from_report(
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?,
-                ?, ?, ?
+                ?, ?, ?,
+                ?, ?
             )
             ON CONFLICT(report_date, ticker, direction) DO NOTHING
             """,
@@ -613,6 +615,8 @@ def create_paper_trades_from_report(
                 ml_prediction.get("predicted_win_prob"),
                 ml_prediction.get("confidence"),
                 ml_prediction.get("signal"),
+                row.get("yolo_boost_pts") or 0.0,
+                market_ctx.get("deployed_capital_pct"),
             ),
         )
         if conn.total_changes > before_changes:

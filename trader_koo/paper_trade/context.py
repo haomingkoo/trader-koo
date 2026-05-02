@@ -42,7 +42,23 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
         "hmm_confidence_at_entry": None,
         "directional_regime_at_entry": None,
         "directional_regime_confidence": None,
+        "deployed_capital_pct": None,
     }
+
+    # Capture % of book already deployed by open positions BEFORE this trade.
+    # Used downstream for a cash-adjusted return-on-deployed-capital benchmark
+    # (raw portfolio % vs SPY is misleading when most capital sits in cash).
+    try:
+        deployed_row = conn.execute(
+            "SELECT COALESCE(SUM(position_size_pct), 0.0) "
+            "FROM paper_trades WHERE status = 'open'",
+        ).fetchone()
+        deployed_total = float(_value(deployed_row, 0, 0) or 0.0)
+        # position_size_pct is stored as percent (e.g. 8.0 means 8% of book),
+        # so divide by 100 to get a 0–1 fraction.
+        ctx["deployed_capital_pct"] = round(deployed_total / 100.0, 4)
+    except Exception as exc:
+        LOG.debug("deployed_capital_pct capture skipped: %s", exc)
 
     try:
         # VIX latest close

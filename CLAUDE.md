@@ -61,7 +61,7 @@ Order: raw LLM response → `sanitize_llm_output(field_limits=...)` → `validat
 
 ## Scheduling (Production Railway)
 - **Daily Mon–Fri 22:00 UTC**: `daily_update.sh` (market ingest → YOLO → report), ~14–15 min
-- **Saturday 00:30 UTC**: YOLO-only full seed (daily + weekly timeframes)
+- **Saturday 00:30 UTC**: YOLO weekly-timeframe pass only (`--timeframe weekly`); Mon–Fri already covers daily, so Saturday is not a redundant full seed
 - On first deploy: seeds 365d price history if DB missing
 
 ## Admin API (X-API-Key required)

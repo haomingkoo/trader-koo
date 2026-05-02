@@ -218,15 +218,16 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         confirmations_bear += 1
         contradictions_bull += 1
 
+    yolo_boost_pts = 0.0
     if yolo_bias == "bullish" and yolo_age_factor > 0.0:
-        boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
-        bull_score += boost
+        yolo_boost_pts = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
+        bull_score += yolo_boost_pts
         if yolo_age_factor >= 0.5:
             confirmations_bull += 1
         contradictions_bear += 1
     elif yolo_bias == "bearish" and yolo_age_factor > 0.0:
-        boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
-        bear_score += boost
+        yolo_boost_pts = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
+        bear_score += yolo_boost_pts
         if yolo_age_factor >= 0.5:
             confirmations_bear += 1
         contradictions_bull += 1
@@ -581,6 +582,7 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         "yolo_bias": yolo_bias or "neutral",
         "yolo_direction_conflict": yolo_direction_conflict,
         "yolo_conflict_strength": yolo_conflict_strength,
+        "yolo_boost_pts": round(yolo_boost_pts, 2),
         "score_margin": round(score_margin, 1),
     }
 
