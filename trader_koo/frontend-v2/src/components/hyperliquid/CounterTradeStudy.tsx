@@ -241,7 +241,7 @@ function strategyDisplayName(key: string, strategy?: BacktestStrategy): string {
   if (strategy?.description) return strategy.description;
   const labels: Record<string, string> = {
     counter_25m: "Counter >$25M",
-    counter_25m_extended: "Counter >$25M extended",
+    counter_25m_extended: "Counter >$25M (extended sample)",
     counter_5m: "Counter >$5M",
   };
   return labels[key] || key.replaceAll("_", " ");
@@ -512,32 +512,79 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
           : undefined;
         if (!strat?.equity_curve?.length) return null;
         const label = strategyDisplayName(key, strat);
+        const traderFinalEquity = Array.isArray(traderCurve) && traderCurve.length > 0
+          ? traderCurve[traderCurve.length - 1]?.equity ?? null
+          : null;
+        const traderReturnPct = traderFinalEquity != null
+          ? (traderFinalEquity - 100_000) / 1000
+          : null;
+        const spreadPct = traderReturnPct != null
+          ? strat.return_pct - traderReturnPct
+          : null;
+        const smallSample = strat.trades < 30;
         return (
           <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
             <h4 className="text-sm font-bold text-[var(--text)] mb-1">
-              Equity Curve: Best Strategy vs Trader
+              Counter strategy vs target trader
             </h4>
             <p className="text-xs text-[var(--muted)] mb-3">
-              {label} ({strat.win_rate_pct}% WR, {strat.trades} trades). Both normalized to $100K, 1x leverage, 5% sizing.
+              {label}: {strat.return_pct >= 0 ? "+" : ""}{strat.return_pct}% over {strat.trades} qualifying trades.
+              {traderReturnPct != null && (
+                <> Target trader: {traderReturnPct >= 0 ? "+" : ""}{traderReturnPct.toFixed(1)}% over the same window.</>
+              )}
+              {" "}Both curves normalized to $100K, 1× leverage, 5% sizing per trade.
             </p>
 
-            {/* Stats row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-              <div className="rounded-lg border border-[var(--green)]/30 bg-[var(--green)]/5 p-2">
-                <div className="text-[9px] uppercase text-[var(--green)]">Counter Return</div>
-                <div className="text-lg font-bold text-[var(--green)]">+{strat.return_pct}%</div>
+            {/* Stats row — only Spread is highlighted; Counter/Trader Return keep neutral
+                chrome with colored value text to reduce visual noise */}
+            <div className="grid grid-cols-2 gap-3 mb-4 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
+                <div className="text-[9px] uppercase tracking-wider text-[var(--muted)]">Counter Return</div>
+                <div className={`text-lg font-bold tabular-nums ${strat.return_pct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+                  {strat.return_pct >= 0 ? "+" : ""}{strat.return_pct}%
+                </div>
               </div>
               <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
-                <div className="text-[9px] uppercase text-[var(--muted)]">Win Rate</div>
-                <div className="text-lg font-bold text-[var(--text)]">{strat.win_rate_pct}%</div>
+                <div className="text-[9px] uppercase tracking-wider text-[var(--muted)]">Trader Return</div>
+                <div className={`text-lg font-bold tabular-nums ${
+                  traderReturnPct == null
+                    ? "text-[var(--muted)]"
+                    : traderReturnPct >= 0
+                      ? "text-[var(--green)]"
+                      : "text-[var(--red)]"
+                }`}>
+                  {traderReturnPct != null
+                    ? `${traderReturnPct >= 0 ? "+" : ""}${traderReturnPct.toFixed(1)}%`
+                    : "—"}
+                </div>
+              </div>
+              {spreadPct != null && (
+                <div className={`rounded-lg border-2 p-2 ${
+                  spreadPct >= 0
+                    ? "border-[var(--green)]/50 bg-[var(--green)]/10"
+                    : "border-[var(--red)]/50 bg-[var(--red)]/10"
+                }`}>
+                  <div className={`text-[9px] uppercase tracking-wider ${spreadPct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+                    Spread
+                  </div>
+                  <div className={`text-lg font-bold tabular-nums ${spreadPct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+                    {spreadPct >= 0 ? "+" : ""}{spreadPct.toFixed(1)}pp
+                  </div>
+                </div>
+              )}
+              <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
+                <div className="text-[9px] uppercase tracking-wider text-[var(--muted)]">Win Rate</div>
+                <div className="text-lg font-bold tabular-nums text-[var(--text)]">{strat.win_rate_pct}%</div>
               </div>
               <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
-                <div className="text-[9px] uppercase text-[var(--muted)]">Trades</div>
-                <div className="text-lg font-bold text-[var(--text)]">{strat.trades}</div>
+                <div className="text-[9px] uppercase tracking-wider text-[var(--muted)]">
+                  Trades{smallSample && <span className="text-[var(--amber)]"> · small n</span>}
+                </div>
+                <div className="text-lg font-bold tabular-nums text-[var(--text)]">{strat.trades}</div>
               </div>
               <div className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2">
-                <div className="text-[9px] uppercase text-[var(--muted)]">Max Drawdown</div>
-                <div className="text-lg font-bold text-[var(--text)]">{strat.max_drawdown_pct}%</div>
+                <div className="text-[9px] uppercase tracking-wider text-[var(--muted)]">Max Drawdown</div>
+                <div className="text-lg font-bold tabular-nums text-[var(--text)]">{strat.max_drawdown_pct}%</div>
               </div>
             </div>
 

@@ -453,7 +453,7 @@ export default function MethodologyPage() {
     PIPELINE_STEPS.map(() => "idle"),
   );
   const [pipelineDesc, setPipelineDesc] = useState(
-    'Click "Replay Pipeline" to watch the trading decision flow.',
+    'Click "Replay Pipeline" to step through the stages.',
   );
   const [pipelinePlaying, setPipelinePlaying] = useState(false);
   const pipelineRef = useRef<HTMLDivElement>(null);
@@ -574,8 +574,7 @@ export default function MethodologyPage() {
                 className="mt-0.5 shrink-0 text-[var(--amber)]"
               />
               <p className="text-xs leading-relaxed text-[var(--muted)]">
-                For informational and educational purposes only. Not financial
-                advice. Past performance does not guarantee future results.
+                Informational only. Not financial advice. Past performance does not guarantee future results.
               </p>
             </div>
           </div>
@@ -682,7 +681,7 @@ export default function MethodologyPage() {
                   }`}
                 >
                   <Play size={14} />
-                  {pipelinePlaying ? "Playing..." : "Replay Pipeline"}
+                  {pipelinePlaying ? "Playing…" : "Replay Pipeline"}
                 </button>
               </div>
             </div>
@@ -805,8 +804,25 @@ export default function MethodologyPage() {
           step={3}
           icon={Brain}
           title="ML Pipeline"
-          subtitle="A LightGBM classifier trained with walk-forward validation filters false positives from pattern detection."
+          subtitle="A LightGBM observation layer that records predicted win probabilities for every setup. Currently inactive — it does not gate any trade decision until the activation criteria below are met."
         />
+
+        <Reveal delay={50}>
+          <div className="mt-6 mb-2 rounded-xl border border-[var(--amber)]/40 bg-[rgba(248,194,78,0.06)] px-5 py-3.5 max-w-[640px]">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle
+                size={16}
+                className="mt-0.5 shrink-0 text-[var(--amber)]"
+              />
+              <p className="text-xs leading-relaxed text-[var(--muted)]">
+                <strong className="text-[var(--amber)]">Status: observation only.</strong>{" "}
+                The components below describe what the model records and how it&apos;s
+                built. None currently gate trade entries.
+              </p>
+            </div>
+          </div>
+        </Reveal>
+
         <div className="grid gap-4 sm:grid-cols-2 mt-8">
           <Reveal delay={0}>
             <VizPanel className="h-full">
@@ -864,16 +880,51 @@ export default function MethodologyPage() {
         </div>
 
         <Reveal delay={400}>
-          <div className="mt-6 rounded-xl border border-[var(--amber)]/30 bg-[rgba(248,194,78,0.04)] p-5">
-            <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-              <span className="font-bold font-mono text-[var(--amber)]">
-                AUC: {stats ? stats.ml_auc : "0.52\u20130.53"}
-              </span>{" "}
-              &mdash; The model is deliberately used as an observation filter
-              (reject low-confidence setups) rather than a standalone signal
-              generator. Honest assessment: the edge is marginal, but even
-              slight filtering accuracy compounds over many trades.
+          <div className="mt-6 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-5">
+            <div className="mb-3 flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold uppercase tracking-[1.5px] text-[var(--text)]">
+                Activation Criteria
+              </span>
+              <span className="rounded-full bg-[var(--amber)]/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--amber)]">
+                Not Met
+              </span>
+              <span className="font-mono text-[10px] text-[var(--muted)]">
+                AUC {stats ? stats.ml_auc : "0.52\u20130.53"}
+              </span>
+            </div>
+            <p className="text-xs leading-relaxed text-[var(--muted)] mb-4">
+              Before this layer is allowed to influence position sizing or
+              veto setups, all six criteria below must clear. Until then it
+              runs in observation mode and is logged for post-hoc
+              calibration only.
             </p>
+            <ul className="space-y-2 text-[12px]">
+              {[
+                { label: "AUC > 0.55 across 5+ walk-forward folds", current: `currently ${stats ? stats.ml_auc : "0.52\u20130.53"}`, status: "fail" as const },
+                { label: "\u2265 20 closed trades with predictions populated", current: "currently 0", status: "fail" as const },
+                { label: "ml_enabled config flag flipped on", current: "currently False", status: "fail" as const },
+                { label: "Calibration: 60% predicted \u2248 60% actual win rate", current: "needs sample", status: "pending" as const },
+                { label: "Feature audit: macro_sp500_ret_63d not top feature", current: "untested", status: "pending" as const },
+                { label: "No-leakage audit: FRED vintage + OOS meta-model", current: "untested", status: "pending" as const },
+              ].map((row) => (
+                <li key={row.label} className="flex items-start gap-2.5">
+                  <span
+                    className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-bold ${
+                      row.status === "fail"
+                        ? "bg-[var(--red)]/15 text-[var(--red)]"
+                        : "bg-[var(--line)] text-[var(--muted)]"
+                    }`}
+                    aria-label={row.status === "fail" ? "Failed" : "Pending evidence"}
+                  >
+                    {row.status === "fail" ? "\u2715" : "\u2013"}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="text-[var(--text)]">{row.label}</span>
+                    <span className="ml-2 text-[10px] text-[var(--muted)]">({row.current})</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
         </Reveal>
       </section>
@@ -1021,8 +1072,8 @@ export default function MethodologyPage() {
               </div>
               <p className="text-xs leading-relaxed text-[var(--muted)]">
                 Setup passes all gates (pattern + ML filter + debate consensus +
-                risk checks) and a paper trade is opened at the next available
-                price.
+                risk checks) and a paper trade is opened at the next-day open
+                with realistic slippage and commission costs.
               </p>
             </VizPanel>
           </Reveal>
@@ -1035,9 +1086,9 @@ export default function MethodologyPage() {
                 </span>
               </div>
               <p className="text-xs leading-relaxed text-[var(--muted)]">
-                Trades close on target, stop, or time expiry, and open winners
-                are managed with a graduated trailing stop rather than a single
-                static barrier rule. All exit reasons are tracked.
+                Trades close on target, stop, or time expiry. Open winners are
+                managed with a graduated trailing stop that tightens as profit
+                grows. All exit reasons are tracked.
               </p>
             </VizPanel>
           </Reveal>

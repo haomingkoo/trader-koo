@@ -442,7 +442,7 @@ export default function HyperliquidPage() {
         <div>
           <h1 className="text-lg font-bold text-[var(--text)]">Hyperliquid Whale Tracker</h1>
           <p className="text-[10px] text-[var(--muted)]">
-            Counter-trade signals from tracked wallets, reload behavior, and free Binance crowd context
+            Counter-trade signals against tracked Hyperliquid whales, with reload-window detection and Binance long/short crowd context.
           </p>
         </div>
         {activeWallets.length > 0 ? (

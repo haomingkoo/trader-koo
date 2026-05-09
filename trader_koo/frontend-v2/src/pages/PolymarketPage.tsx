@@ -439,16 +439,14 @@ export default function PolymarketPage() {
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
-        <strong>For informational and educational purposes only.</strong> Prediction market
-        probabilities reflect crowd consensus, not certainty.
+        <strong>Informational only.</strong> Polymarket prices are crowd consensus, not forecasts.
       </div>
 
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold tracking-tight">Prediction Markets</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            Finance-relevant events from Polymarket, sorted by trading volume.
-            Useful as a macro regime signal — when odds shift, markets follow.
+            Finance-relevant events from Polymarket, ranked by trading volume. Crowd pricing as a macro and event-risk reference.
           </p>
         </div>
         <a
@@ -463,7 +461,7 @@ export default function PolymarketPage() {
 
       {events.length === 0 ? (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-8 text-center text-sm text-[var(--muted)]">
-          No finance-relevant prediction markets found. Check back later.
+          No finance-relevant Polymarket events available right now.
         </div>
       ) : (
         <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">

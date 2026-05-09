@@ -66,8 +66,7 @@ export default function VixPage() {
       <VixPrimaryPanels vix={vix} metrics={metrics} />
 
       <p className="text-[10px] text-[var(--muted)]">
-        Position sizing recommendations are for educational purposes only and
-        should not be construed as financial advice.
+        Sizing guidance is research-only, not financial advice.
       </p>
 
       {metrics && <VixMetricCardsGrid metrics={metrics} />}
