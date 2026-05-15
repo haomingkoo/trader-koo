@@ -86,7 +86,7 @@ def _build_side_levels(
     if points.empty:
         return _empty_levels()
 
-    latest_date = piv["date"].max()
+    latest_date = pd.to_datetime(piv["date"]).max()
     rows: list[dict] = []
     for cluster in _cluster_points(points, tol=tol):
         touches = len(cluster)

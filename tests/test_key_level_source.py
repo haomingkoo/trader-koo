@@ -78,6 +78,30 @@ def test_pivot_cluster_source_labeling():
         pass
 
 
+def test_pivot_levels_accept_string_dates():
+    """Regression: regime context may pass ISO date strings from SQLite."""
+    dates = [f"2024-01-{day:02d}" for day in range(1, 31)]
+    prices = [100 + np.sin(i / 2) for i in range(30)]
+    df = pd.DataFrame({
+        "date": dates,
+        "open": prices,
+        "high": [p + 1 for p in prices],
+        "low": [p - 1 for p in prices],
+        "close": prices,
+        "volume": [1000000] * 30,
+        "atr": [1.5] * 30,
+        "pivot_high": [False] * 30,
+        "pivot_low": [False] * 30,
+    })
+    df.loc[[5, 12, 20], "pivot_low"] = True
+    df.loc[[5, 12, 20], "low"] = [98.4, 98.6, 98.5]
+
+    levels = build_levels_from_pivots(df, LevelConfig(min_touches=2))
+
+    assert not levels.empty
+    assert levels.iloc[0]["last_touch_date"] == "2024-01-21"
+
+
 def test_fallback_source_labeling():
     """Test that fallback levels are labeled with 'fallback' source.
 

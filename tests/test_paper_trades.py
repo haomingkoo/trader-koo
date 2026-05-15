@@ -11,6 +11,9 @@ from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_decision,
     compute_position_plan as _compute_position_plan_decision,
 )
+from trader_koo.paper_trade.trading import (
+    create_paper_trades_from_report as _create_paper_trades_from_report_impl,
+)
 from trader_koo.paper_trades import (
     _compute_pnl,
     _compute_r_multiple,
@@ -412,6 +415,7 @@ class TestCreatePaperTrades:
         for idx in range(25):
             date = (dt.date(2026, 2, 18) + dt.timedelta(days=idx)).isoformat()
             _seed_price(conn, "^VIX", 16.0 + (idx % 5), date=date)
+        _seed_price(conn, "^VIX", 99.0, date="2026-03-20")
         for idx, close in enumerate(range(500, 550), start=1):
             conn.execute(
                 "INSERT OR REPLACE INTO price_daily (ticker, date, close) VALUES (?, ?, ?)",
@@ -492,6 +496,39 @@ class TestCreatePaperTrades:
         )
 
         assert inserted == 0
+
+    def test_critic_infrastructure_error_rejects_by_default(self, conn, monkeypatch):
+        def _boom(*args, **kwargs):
+            raise RuntimeError("critic infra down")
+
+        monkeypatch.setattr("trader_koo.paper_trade.critic.critic_review", _boom)
+
+        inserted = create_paper_trades_from_report(
+            conn,
+            setup_rows=[_make_setup_row()],
+            report_date="2026-03-14",
+            generated_ts="ts",
+        )
+
+        assert inserted == 0
+        assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+    def test_critic_fail_open_requires_explicit_config(self, conn, monkeypatch):
+        def _boom(*args, **kwargs):
+            raise RuntimeError("critic infra down")
+
+        monkeypatch.setattr("trader_koo.paper_trade.critic.critic_review", _boom)
+        cfg = _default_trail_config(critic_fail_open=True)
+
+        inserted = _create_paper_trades_from_report_impl(
+            conn,
+            setup_rows=[_make_setup_row()],
+            report_date="2026-03-14",
+            generated_ts="ts",
+            config=cfg,
+        )
+
+        assert inserted == 1
 
 
 # ── Mark to Market ───────────────────────────────────────────────
@@ -808,6 +845,28 @@ class TestListPaperTrades:
         assert len(result) == 1
         assert result[0]["ticker"] == "AAPL"
 
+    def test_returns_notes_and_ml_fields_for_frontend(self, conn):
+        conn.execute(
+            """INSERT INTO paper_trades (
+                   report_date, ticker, direction, entry_price, entry_date,
+                   status, current_price, generated_ts, notes,
+                   ml_predicted_win_prob, ml_confidence, ml_signal
+               )
+               VALUES (
+                   '2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14',
+                   'closed', 155.0, 'ts', 'Review breakout quality',
+                   0.62, 0.71, 'bullish'
+               )""",
+        )
+        conn.commit()
+
+        result = list_paper_trades(conn, ticker="AAPL")
+
+        assert result[0]["notes"] == "Review breakout quality"
+        assert result[0]["ml_predicted_win_prob"] == pytest.approx(0.62)
+        assert result[0]["ml_confidence"] == pytest.approx(0.71)
+        assert result[0]["ml_signal"] == "bullish"
+
 
 # ── Summary ──────────────────────────────────────────────────────
 
@@ -844,6 +903,78 @@ class TestPaperTradeSummary:
         assert result["overall"]["total_pnl_pct"] == 10.0
         assert result["policy"]["min_tier"] == "B"
         assert result["feedback"] == []
+
+    def test_summary_uses_setup_call_evaluations_for_broad_baseline(self, conn):
+        from trader_koo.report.setup_scoring import ensure_setup_call_eval_schema
+
+        ensure_setup_call_eval_schema(conn)
+        base_date = dt.date.today() - dt.timedelta(days=30)
+        entry_date = base_date.isoformat()
+        conn.execute(
+            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+               status, pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts)
+            VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 3.0, 0.6, ?, 'expired', 103.0, 'ts')""",
+            (entry_date, entry_date, (base_date + dt.timedelta(days=5)).isoformat()),
+        )
+        conn.executemany(
+            """INSERT INTO setup_call_evaluations (
+                   asof_date, ticker, call_direction, validity_days,
+                   setup_family, setup_tier, signal_bias, actionability,
+                   score, close_asof, status, evaluated_date,
+                   close_evaluated, raw_return_pct, signed_return_pct, direction_hit
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scored', ?, ?, ?, ?, ?)""",
+            [
+                (
+                    entry_date, "AAA", "long", 5, "bullish_continuation",
+                    "A", "bullish", "higher-probability", 82.0, 100.0,
+                    (base_date + dt.timedelta(days=5)).isoformat(), 104.0, 4.0, 4.0, 1,
+                ),
+                (
+                    entry_date, "BBB", "short", 7, "bearish_reversal",
+                    "B", "bearish", "conditional", 74.0, 100.0,
+                    (base_date + dt.timedelta(days=7)).isoformat(), 102.0, 2.0, -2.0, 0,
+                ),
+            ],
+        )
+        conn.commit()
+
+        result = paper_trade_summary(conn)
+        baseline = result["benchmarks"]["unfiltered_setups"]
+
+        assert baseline["method"] == "setup_call_evaluations"
+        assert baseline["label"] == "All Report Setups"
+        assert baseline["trades"] == 2
+        assert baseline["return_pct"] == pytest.approx(1.0)
+        assert baseline["win_rate"] == pytest.approx(50.0)
+        assert baseline["hold_days"] == pytest.approx(6.0)
+
+    def test_summary_falls_back_to_same_entry_fixed_hold_baseline(self, conn):
+        base_date = dt.date.today() - dt.timedelta(days=30)
+        entry_date = base_date.isoformat()
+        for idx in range(1, 11):
+            _seed_price(
+                conn,
+                "AAPL",
+                100.0 + idx,
+                date=(base_date + dt.timedelta(days=idx)).isoformat(),
+            )
+        conn.execute(
+            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+               status, pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts)
+            VALUES (?, 'AAPL', 'long', 100.0, ?, 'closed', 2.0, 0.4, ?, 'expired', 102.0, 'ts')""",
+            (entry_date, entry_date, (base_date + dt.timedelta(days=5)).isoformat()),
+        )
+        conn.commit()
+
+        result = paper_trade_summary(conn)
+        baseline = result["benchmarks"]["unfiltered_setups"]
+
+        assert baseline["method"] == "same_entries_fixed_hold"
+        assert baseline["label"] == "Same Entries Fixed Hold"
+        assert baseline["hold_days"] == 10
+        assert baseline["trades"] == 1
+        assert baseline["return_pct"] == pytest.approx(10.0)
 
     def test_summary_includes_edge_tables(self, conn):
         base_date = dt.date.today() - dt.timedelta(days=20)

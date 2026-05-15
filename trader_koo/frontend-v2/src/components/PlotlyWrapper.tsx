@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, memo, Suspense } from "react";
 import Spinner from "./ui/Spinner";
 
 type PlotComponentModule = {
@@ -42,7 +42,7 @@ interface PlotlyWrapperProps {
  * Consistent wrapper around react-plotly.js that handles lazy loading
  * and provides a Suspense fallback spinner.
  */
-export default function PlotlyWrapper({
+function PlotlyWrapper({
   data,
   layout,
   config,
@@ -71,3 +71,5 @@ export default function PlotlyWrapper({
     </Suspense>
   );
 }
+
+export default memo(PlotlyWrapper);

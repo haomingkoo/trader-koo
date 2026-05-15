@@ -24,10 +24,16 @@ def _value(row: Any, key: str, index: int) -> Any:
             return None
 
 
-def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
+def capture_market_context(
+    conn: sqlite3.Connection,
+    *,
+    as_of_date: str | None = None,
+) -> dict[str, Any]:
     """Return a dict of market-context fields to store alongside a paper trade.
 
-    Reads from the same DB that the ingest pipeline writes to:
+    Reads from the same DB that the ingest pipeline writes to, capped at
+    ``as_of_date`` when provided so historical/backfilled trades cannot see
+    future market data:
     - ``^VIX`` latest close → ``vix_at_entry``
     - VIX percentile (rank vs 252-day history) → ``vix_percentile_at_entry``
     - Simple regime label from VIX + SPY momentum → ``regime_state_at_entry``
@@ -45,14 +51,19 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
     try:
+        date_clause = "AND date <= ?" if as_of_date else ""
+        date_params: tuple[str, ...] = (as_of_date,) if as_of_date else ()
+
         # VIX latest close
         vix_row = conn.execute(
-            """
+            f"""
             SELECT CAST(close AS REAL) AS close
             FROM price_daily
             WHERE ticker = '^VIX' AND close IS NOT NULL
+              {date_clause}
             ORDER BY date DESC LIMIT 1
             """,
+            date_params,
         ).fetchone()
         vix_close_raw = _value(vix_row, "close", 0)
         if vix_row and vix_close_raw is not None:
@@ -61,12 +72,14 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
 
             # VIX percentile (rank within last 252 trading days)
             vix_history = conn.execute(
-                """
+                f"""
                 SELECT CAST(close AS REAL) AS close
                 FROM price_daily
                 WHERE ticker = '^VIX' AND close IS NOT NULL
+                  {date_clause}
                 ORDER BY date DESC LIMIT 252
                 """,
+                date_params,
             ).fetchall()
             if len(vix_history) >= 20:
                 below = sum(1 for r in vix_history if float(_value(r, "close", 0)) <= vix)
@@ -88,12 +101,14 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
 
         # SPY momentum (above/below 50-day MA)
         spy_rows = conn.execute(
-            """
+            f"""
             SELECT CAST(close AS REAL) AS close
             FROM price_daily
             WHERE ticker = 'SPY' AND close IS NOT NULL
+              {date_clause}
             ORDER BY date DESC LIMIT 50
             """,
+            date_params,
         ).fetchall()
         if len(spy_rows) >= 50:
             spy_current = float(_value(spy_rows[0], "close", 0))
@@ -111,12 +126,14 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
             from trader_koo.structure.hmm_regime import predict_regimes
 
             spy_ohlcv = conn.execute(
-                """
+                f"""
                 SELECT date, open, high, low, close, volume
                 FROM price_daily
                 WHERE ticker = 'SPY' AND close IS NOT NULL
+                  {date_clause}
                 ORDER BY date ASC
                 """,
+                date_params,
             ).fetchall()
             if len(spy_ohlcv) >= 60:
                 import pandas as pd
@@ -143,7 +160,8 @@ def capture_market_context(conn: sqlite3.Connection) -> dict[str, Any]:
                 spy_ohlcv_dir = conn.execute(
                     "SELECT date, open, high, low, close, volume "
                     "FROM price_daily WHERE ticker = 'SPY' AND close IS NOT NULL "
-                    "ORDER BY date ASC",
+                    f"{date_clause} ORDER BY date ASC",
+                    date_params,
                 ).fetchall()
                 if len(spy_ohlcv_dir) >= 60:
                     import pandas as pd

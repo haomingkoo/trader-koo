@@ -199,12 +199,18 @@ export interface SetupRow {
   yolo_pattern: string | null;
   yolo_recency: string | null;
   yolo_bias: string | null;
+  yolo_score_eligible?: boolean | null;
   yolo_direction_conflict: boolean;
   level_context: string | null;
   debate_consensus_state: string | null;
   debate_agreement_score: number | null;
   debate_consensus_bias: string | null;
   debate_disagreement_count: number | null;
+  calibrated_hit_prob?: number | null;
+  probability_label?: string | null;
+  probability_source?: string | null;
+  probability_sample_size?: number | null;
+  probability_baseline_pct?: number | null;
   narrative_source: string | null;
   discount_pct: number | null;
   peg: number | null;
@@ -212,7 +218,42 @@ export interface SetupRow {
   earnings_within_5d?: boolean;
   earnings_date?: string | null;
   days_to_earnings?: number | null;
+  news_context?: Record<string, unknown> | null;
+  news_sentiment_score?: number | null;
+  macro_news_score?: number | null;
+  options_context?: Record<string, unknown> | null;
+  options_iv_rank_pct?: number | null;
+  options_oi_rank_pct?: number | null;
+  options_put_call_oi_ratio?: number | null;
+  options_underpriced_score?: number | null;
+  options_positioning_signal?: string | null;
+  options_positioning_skew?: string | null;
   [key: string]: unknown;
+}
+
+export interface ReportSuggestion {
+  ticker: string;
+  action: string;
+  direction: string;
+  conviction: string;
+  quality_score: number | null;
+  probability_pct: number | null;
+  sample_size: number;
+  persona: string;
+  title: string;
+  why: string[];
+  risk: string;
+  invalidation: string;
+  data_gaps: string[];
+  source_tier?: string | null;
+  setup_family?: string | null;
+}
+
+export interface ReportSuggestions {
+  version: string;
+  count: number;
+  items: ReportSuggestion[];
+  note: string;
 }
 
 export interface RegimeContext {
@@ -283,6 +324,7 @@ export interface ReportSignals {
   regime_context: RegimeContext | null;
   setup_quality_top: SetupRow[];
   setup_evaluation: SetupEvaluation | Record<string, never>;
+  suggestions?: ReportSuggestions;
   volatility_context?: Record<string, unknown>;
   market_breadth?: Record<string, unknown>;
   sector_heatmap?: SectorHeatmapRow[];
@@ -489,7 +531,7 @@ export interface ChartCommentary {
   yolo_direction_conflict: boolean;
   yolo_conflict_strength: number | null;
   debate_v1?: {
-    version: number;
+    version: string | number;
     consensus: {
       consensus_state: string;
       consensus_bias: string;
@@ -649,6 +691,68 @@ export interface OpportunitiesPayload {
     overvalued_threshold: number;
     limit: number;
   };
+}
+
+/* -- Options Premium Proxy -- */
+export interface OptionsPremiumRow {
+  ticker: string;
+  snapshot_ts: string | null;
+  historical_snapshots: number;
+  contracts: number;
+  expirations: number | null;
+  avg_iv_pct: number | null;
+  call_open_interest: number;
+  put_open_interest: number;
+  put_call_oi_ratio: number | null;
+  call_volume: number;
+  put_volume: number;
+  total_volume: number;
+  call_volume_premium: number | null;
+  put_volume_premium: number | null;
+  net_volume_premium: number | null;
+  gross_volume_premium: number | null;
+  volume_skew_pct: number | null;
+  volume_premium_direction: string;
+  call_oi_premium: number | null;
+  put_oi_premium: number | null;
+  net_oi_premium: number | null;
+  gross_oi_premium: number | null;
+  oi_skew_pct: number | null;
+  oi_premium_direction: string;
+  premium_bias: string;
+  primary_premium_source: string;
+  volume_rank_pct?: number | null;
+  oi_rank_pct?: number | null;
+  liquidity_score?: number | null;
+  iv_value_score?: number | null;
+  flow_quality_score?: number | null;
+  smart_score?: number | null;
+  smart_signal?: string | null;
+  smart_tags?: string[];
+}
+
+export interface OptionsPremiumPayload {
+  available: boolean;
+  source: string;
+  source_note: string;
+  premium_proxy_note: string;
+  latest_snapshot_ts: string | null;
+  count: number;
+  eligible_count: number;
+  rows: OptionsPremiumRow[];
+  totals: {
+    call_volume_premium?: number | null;
+    put_volume_premium?: number | null;
+    net_volume_premium?: number | null;
+    call_oi_premium?: number | null;
+    put_oi_premium?: number | null;
+    net_oi_premium?: number | null;
+  };
+  filters?: {
+    limit: number;
+    sort_by: string;
+  };
+  detail?: string;
 }
 
 /* ── Earnings ── */
@@ -903,6 +1007,9 @@ export interface UnfilteredSetupsBenchmark {
   return_pct: number;
   total_return_pct: number;
   sharpe: number | null;
+  hold_days?: number | null;
+  method?: "setup_call_evaluations" | "same_entries_fixed_hold" | string;
+  label?: string;
 }
 
 export interface PaperTradeBenchmarks {

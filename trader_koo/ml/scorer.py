@@ -33,6 +33,57 @@ _cached_model: lgb.Booster | None = None
 _cached_meta: dict[str, Any] | None = None
 
 
+def _target_mode(meta: dict[str, Any] | None) -> str:
+    """Return the trained target mode, or ``unknown`` for legacy metadata."""
+    if not meta:
+        return "unknown"
+    mode = meta.get("target_mode")
+    if mode in {"return_sign", "barrier", "rank"}:
+        return str(mode)
+    return "unknown"
+
+
+def _prediction_label(target_mode: str) -> str:
+    """Short label for what the probability means."""
+    if target_mode == "barrier":
+        return "target_hit_probability"
+    if target_mode == "rank":
+        return "top_quintile_probability"
+    if target_mode == "return_sign":
+        return "positive_return_probability"
+    return "model_probability"
+
+
+def _signal_from_probability(prob: float, target_mode: str) -> str:
+    """Convert probability to a non-misleading coarse signal label.
+
+    Barrier models only predict whether a long setup hits its profit target.
+    A low probability is not evidence for a short, so keep it neutral.
+    """
+    if prob > 0.55:
+        return "bullish"
+    if prob < 0.45 and target_mode in {"return_sign", "rank"}:
+        return "bearish"
+    return "neutral"
+
+
+def _as_probability(values: Any) -> np.ndarray:
+    """Normalize LightGBM outputs to probabilities.
+
+    ``Booster.predict`` for a binary objective returns probabilities by default.
+    Older code applied a sigmoid again, which distorted calibration by pulling
+    bearish probabilities above 0.5.  Keep in-range outputs as-is and only apply
+    sigmoid if a caller/model explicitly returns raw margins outside [0, 1].
+    """
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return arr
+    finite = arr[np.isfinite(arr)]
+    if finite.size and float(finite.min()) >= 0.0 and float(finite.max()) <= 1.0:
+        return np.clip(arr, 0.0, 1.0)
+    return 1.0 / (1.0 + np.exp(-arr))
+
+
 def _find_latest_model() -> tuple[Path | None, Path | None]:
     """Find the latest model files on disk."""
     for model_dir in _MODEL_DIRS:
@@ -76,14 +127,17 @@ def score_universe(
     tickers: list[str] | None = None,
     top_n: int = 20,
 ) -> list[dict[str, Any]]:
-    """Score all tickers and return the top N by predicted win probability.
+    """Score all tickers and return the top N by model probability.
 
-    Returns a list of dicts with ticker, predicted_win_prob, and features.
+    ``predicted_win_prob`` is kept as the storage/API field for compatibility.
+    Use ``prediction_label`` to interpret what the probability means.
     """
     model, meta = load_model()
     if model is None:
         return []
 
+    target_mode = _target_mode(meta)
+    prediction_label = _prediction_label(target_mode)
     feature_cols = meta.get("feature_columns", FEATURE_COLUMNS) if meta else FEATURE_COLUMNS
     features = extract_features_for_universe(conn, as_of_date=as_of_date, tickers=tickers)
     if features.empty:
@@ -98,10 +152,7 @@ def score_universe(
     X = X.fillna(0.0)  # fallback for any remaining NaN
 
     try:
-        # Booster.predict() returns raw margins, need to convert to probabilities
-        raw = model.predict(X.values)
-        # Sigmoid to convert log-odds to probability
-        probs = 1.0 / (1.0 + np.exp(-raw))
+        probs = _as_probability(model.predict(X.values))
     except Exception as exc:
         LOG.warning("Model prediction failed: %s", exc)
         return []
@@ -111,6 +162,8 @@ def score_universe(
         results.append({
             "ticker": str(ticker),
             "predicted_win_prob": round(float(probs[i]), 4),
+            "target_mode": target_mode,
+            "prediction_label": prediction_label,
             "as_of_date": as_of_date,
         })
 
@@ -132,9 +185,13 @@ def score_single_ticker(
             "ticker": ticker,
             "model_available": False,
             "predicted_win_prob": None,
+            "target_mode": None,
+            "prediction_label": None,
             "confidence": None,
         }
 
+    target_mode = _target_mode(meta)
+    prediction_label = _prediction_label(target_mode)
     feature_cols = meta.get("feature_columns", FEATURE_COLUMNS) if meta else FEATURE_COLUMNS
     features = extract_features_for_universe(
         conn,
@@ -147,6 +204,8 @@ def score_single_ticker(
             "ticker": ticker,
             "model_available": True,
             "predicted_win_prob": None,
+            "target_mode": target_mode,
+            "prediction_label": prediction_label,
             "confidence": None,
             "note": "Insufficient data for feature extraction",
         }
@@ -160,13 +219,14 @@ def score_single_ticker(
     X = X.fillna(0.0)  # fallback for any remaining NaN
 
     try:
-        raw = float(model.predict(X.values)[0])
-        prob = 1.0 / (1.0 + np.exp(-raw))  # sigmoid for Booster
+        prob = float(_as_probability(model.predict(X.values))[0])
     except Exception as exc:
         return {
             "ticker": ticker,
             "model_available": True,
             "predicted_win_prob": None,
+            "target_mode": target_mode,
+            "prediction_label": prediction_label,
             "confidence": None,
             "note": f"Prediction error: {exc}",
         }
@@ -178,8 +238,10 @@ def score_single_ticker(
         "ticker": ticker,
         "model_available": True,
         "predicted_win_prob": round(prob, 4),
+        "target_mode": target_mode,
+        "prediction_label": prediction_label,
         "confidence": round(confidence, 4),
-        "signal": "bullish" if prob > 0.55 else ("bearish" if prob < 0.45 else "neutral"),
+        "signal": _signal_from_probability(prob, target_mode),
     }
 
 
@@ -198,6 +260,9 @@ def model_status() -> dict[str, Any]:
     return {
         "loaded": True,
         "trained_at": meta.get("trained_at") if meta else None,
+        "target_mode": _target_mode(meta),
+        "prediction_label": _prediction_label(_target_mode(meta)),
+        "target": meta.get("target") if meta else None,
         "feature_columns": meta.get("feature_columns", []) if meta else [],
         "feature_count": len(meta.get("feature_columns", [])) if meta else 0,
         "fold_count": len(meta.get("folds", [])) if meta else 0,

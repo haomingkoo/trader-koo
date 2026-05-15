@@ -793,4 +793,3 @@ def admin_calibration_state() -> dict[str, Any]:
         }
     finally:
         conn.close()
-

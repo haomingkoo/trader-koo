@@ -15,28 +15,36 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from trader_koo.config import (
+    DEFAULT_DB_PATH,
+    DEFAULT_LOG_DIR,
+    DEFAULT_REPORT_DIR,
+    PACKAGE_DIR,
+    ConfigError,
+    env_int,
+    env_path,
+    get_options_config,
+)
+
 if TYPE_CHECKING:
     from apscheduler.schedulers.background import BackgroundScheduler
+    from trader_koo.config import OptionsConfig
 
 LOG = logging.getLogger("trader_koo.services.scheduler")
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+PROJECT_DIR = PACKAGE_DIR
 SCRIPTS_DIR = PROJECT_DIR / "scripts"
-DEFAULT_DB_PRIMARY = (PROJECT_DIR / "data" / "trader_koo.db").resolve()
-DB_PATH = Path(os.getenv("TRADER_KOO_DB_PATH", str(DEFAULT_DB_PRIMARY)))
-
-REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
+DB_PATH = env_path("TRADER_KOO_DB_PATH", DEFAULT_DB_PATH)
+REPORT_DIR = env_path("TRADER_KOO_REPORT_DIR", DEFAULT_REPORT_DIR)
 
 
 def _resolve_log_dir() -> Path:
-    requested = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
+    requested = env_path("TRADER_KOO_LOG_DIR", DEFAULT_LOG_DIR)
     try:
         requested.mkdir(parents=True, exist_ok=True)
         return requested
-    except OSError:
-        fallback = (PROJECT_DIR / "data" / "logs").resolve()
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+    except OSError as exc:
+        raise ConfigError(f"TRADER_KOO_LOG_DIR is not writable: {requested}") from exc
 
 
 LOG_DIR = _resolve_log_dir()
@@ -422,6 +430,70 @@ def _run_polymarket_snapshot() -> None:
         LOG.error("Scheduler: Polymarket snapshot failed: %s", exc)
 
 
+def _run_options_iv_snapshot(options_config: "OptionsConfig | None" = None) -> None:
+    """Nightly bounded job: archive yfinance option-chain snapshots."""
+    config = options_config or get_options_config()
+    snapshot_config = config.snapshot
+    script = SCRIPTS_DIR / "snapshot_options_iv.py"
+    latest_report = snapshot_config.latest_report_path
+    log_file = snapshot_config.log_path
+    started = dt.datetime.now(dt.timezone.utc)
+    _append_run_log("OPTIONS_IV", "Options IV snapshot job started")
+    LOG.info("Scheduler: starting options IV snapshot (db=%s)", DB_PATH)
+    cmd = [
+        sys.executable,
+        str(script),
+        "--db-path",
+        str(DB_PATH),
+        "--latest-report",
+        str(latest_report),
+        "--log-file",
+        str(log_file),
+        "--max-tickers",
+        str(snapshot_config.max_tickers),
+        "--max-expiries",
+        str(snapshot_config.max_expiries),
+        "--min-moneyness",
+        str(snapshot_config.min_moneyness),
+        "--max-moneyness",
+        str(snapshot_config.max_moneyness),
+        "--min-interval-hours",
+        str(snapshot_config.min_interval_hours),
+        "--sleep",
+        str(snapshot_config.sleep_sec),
+    ]
+    if snapshot_config.tickers:
+        cmd.extend(["--tickers", snapshot_config.tickers])
+    with RUN_LOG_PATH.open("a", encoding="utf-8") as run_log:
+        result = subprocess.run(
+            cmd,
+            stdout=run_log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+    if result.returncode == 0:
+        _append_run_log("OPTIONS_IV", f"Options IV snapshot completed rc=0 sec={elapsed:.1f}")
+        LOG.info("Scheduler: options IV snapshot completed OK (sec=%.1f)", elapsed)
+        if config.digest.enabled:
+            try:
+                from trader_koo.notifications.options_digest import send_options_digest
+
+                sent = send_options_digest(DB_PATH, limit=config.digest.limit)
+                _append_run_log("OPTIONS_IV", f"Options digest {'sent' if sent else 'skipped'}")
+            except Exception as exc:
+                _append_run_log("OPTIONS_IV", f"Options digest failed: {exc}")
+                LOG.warning("Scheduler: options digest failed: %s", exc)
+    else:
+        _append_run_log("OPTIONS_IV", f"Options IV snapshot failed rc={result.returncode} sec={elapsed:.1f}")
+        LOG.error(
+            "Scheduler: options IV snapshot failed (rc=%d, sec=%.1f, log=%s)",
+            result.returncode,
+            elapsed,
+            log_file,
+        )
+
+
 def _run_spike_alerts() -> None:
     """Periodic job: detect spikes and send Telegram alerts."""
     from trader_koo.notifications.market_monitor import send_spike_alerts
@@ -711,6 +783,29 @@ def create_scheduler() -> BackgroundScheduler:
             "misfire_grace_time": 3600,
         },
     )
+    polymarket_snapshot_minutes = env_int(
+        "TRADER_KOO_POLYMARKET_SNAPSHOT_MINUTES", 5, min_value=1, max_value=60
+    )
+    spike_alert_minutes = env_int(
+        "TRADER_KOO_SPIKE_ALERT_MINUTES", 5, min_value=1, max_value=60
+    )
+    macro_alert_minutes = env_int(
+        "TRADER_KOO_MACRO_ALERT_MINUTES", 10, min_value=5, max_value=60
+    )
+    hyperliquid_poll_minutes = env_int(
+        "TRADER_KOO_HYPERLIQUID_POLL_MINUTES", 5, min_value=1, max_value=60
+    )
+    site_health_minutes = env_int(
+        "TRADER_KOO_SITE_HEALTH_MINUTES", 10, min_value=5, max_value=60
+    )
+    crypto_health_minutes = env_int(
+        "TRADER_KOO_CRYPTO_HEALTH_MINUTES", 15, min_value=5, max_value=60
+    )
+    derivatives_minutes = env_int(
+        "TRADER_KOO_DERIVATIVES_SNAPSHOT_MINUTES", 15, min_value=5, max_value=60
+    )
+    options_config = get_options_config()
+
     scheduler.add_job(
         _run_daily_update,
         CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="UTC"),
@@ -743,14 +838,39 @@ def create_scheduler() -> BackgroundScheduler:
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — morning summary job not registered")
 
-    # Polymarket snapshot + spike detection — every 15 min, 24/7
+    # Polymarket snapshot + spike detection — frequent snapshots, cooldown-gated alerts.
     scheduler.add_job(
         _run_polymarket_snapshot,
-        IntervalTrigger(minutes=15),
+        IntervalTrigger(minutes=polymarket_snapshot_minutes),
         id="polymarket_snapshot",
         replace_existing=True,
     )
-    LOG.info("Polymarket snapshot job registered: every 15min (24/7)")
+    LOG.info(
+        "Polymarket snapshot job registered: every %dmin (24/7)",
+        polymarket_snapshot_minutes,
+    )
+
+    if options_config.snapshot.enabled:
+        scheduler.add_job(
+            _run_options_iv_snapshot,
+            CronTrigger(
+                hour=options_config.snapshot.hour_utc,
+                minute=options_config.snapshot.minute_utc,
+                day_of_week="mon-fri",
+                timezone="UTC",
+            ),
+            args=[options_config],
+            id="options_iv_snapshot",
+            replace_existing=True,
+        )
+        LOG.info(
+            "Options IV snapshot job registered: Mon-Fri %02d:%02d UTC digest=%s",
+            options_config.snapshot.hour_utc,
+            options_config.snapshot.minute_utc,
+            options_config.digest.enabled,
+        )
+    else:
+        LOG.info("Options IV snapshot job disabled by TRADER_KOO_OPTIONS_SNAPSHOT_ENABLED")
 
     # Storage cleanup — daily at 04:00 UTC (after pipeline completes)
     scheduler.add_job(
@@ -761,69 +881,70 @@ def create_scheduler() -> BackgroundScheduler:
     )
     LOG.info("Storage cleanup job registered: daily 04:00 UTC")
 
-    # Crypto health check — every 30 min
+    # Crypto health check — faster detection, Telegram cooldown remains separate.
     scheduler.add_job(
         _run_crypto_health_check,
-        IntervalTrigger(minutes=30),
+        IntervalTrigger(minutes=crypto_health_minutes),
         id="crypto_health_check",
         replace_existing=True,
     )
-    LOG.info("Crypto health check job registered: every 30min")
+    LOG.info("Crypto health check job registered: every %dmin", crypto_health_minutes)
 
-    # Spike alerts — every 15 min (only sends if Telegram configured)
+    # Spike alerts — only sends when movement crosses alert thresholds/cooldowns.
     if telegram_configured:
         scheduler.add_job(
             _run_spike_alerts,
-            IntervalTrigger(minutes=15),
+            IntervalTrigger(minutes=spike_alert_minutes),
             id="spike_alerts",
             replace_existing=True,
         )
-        LOG.info("Spike alert job registered: every 15min")
+        LOG.info("Spike alert job registered: every %dmin", spike_alert_minutes)
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — spike alert job not registered")
 
-    # Macro monitor — every 15 min during US market hours (Mon-Fri)
+    # Macro monitor — threshold/cooldown-gated, so polling can be reasonably frequent.
     if telegram_configured:
         scheduler.add_job(
             _run_macro_alert,
-            IntervalTrigger(minutes=15),
+            IntervalTrigger(minutes=macro_alert_minutes),
             id="macro_alert",
             replace_existing=True,
         )
         LOG.info(
-            "Macro alert job registered: every 15min during US market hours "
-            "(14:00-21:00 UTC, Mon-Fri)"
+            "Macro alert job registered: every %dmin during US market hours "
+            "(14:00-21:00 UTC, Mon-Fri)",
+            macro_alert_minutes,
         )
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — macro alert job not registered")
 
-    # Hyperliquid whale tracker — hourly poll of tracked wallets
+    # Hyperliquid whale tracker — position changes can matter quickly; alerts are cooldown-gated.
     scheduler.add_job(
         _run_hyperliquid_poll,
-        IntervalTrigger(hours=1),
+        IntervalTrigger(minutes=hyperliquid_poll_minutes),
         id="hyperliquid_poll",
         replace_existing=True,
     )
-    LOG.info("Hyperliquid poll job registered: every 1h")
+    LOG.info("Hyperliquid poll job registered: every %dmin", hyperliquid_poll_minutes)
 
     # Site health check — every 30 min, alerts via Telegram on consecutive failures
     if telegram_configured:
         scheduler.add_job(
             _run_site_health_check,
-            IntervalTrigger(minutes=30),
+            IntervalTrigger(minutes=site_health_minutes),
             id="site_health_check",
             replace_existing=True,
         )
-        LOG.info("Site health check job registered: every 30min")
+        LOG.info("Site health check job registered: every %dmin", site_health_minutes)
 
-    # Crypto derivatives — funding rates, L/S ratio, F&G every hour
+    # Crypto derivatives — funding, L/S ratio, and F&G context.
     scheduler.add_job(
         _run_derivatives_snapshot,
-        IntervalTrigger(hours=1),
+        IntervalTrigger(minutes=derivatives_minutes),
         id="derivatives_snapshot",
         replace_existing=True,
     )
-    LOG.info("Derivatives snapshot job registered: every 1h")
+    LOG.info("Derivatives snapshot job registered: every %dmin", derivatives_minutes)
 
     # Calibration pulse — Mon/Wed/Fri at 23:15 UTC (75 min after nightly report)
     # Recomputes per-(family, direction) score adjustments and blocks from combined

@@ -96,6 +96,7 @@ def _build_config() -> PaperTradeConfig:
         trail_tight_r=PAPER_TRADE_TRAIL_TIGHT_R,
         trail_tight_cushion_r=PAPER_TRADE_TRAIL_TIGHT_CUSHION_R,
         expiry_use_trading_days=PAPER_TRADE_EXPIRY_USE_TRADING_DAYS,
+        critic_fail_open=os.getenv("TRADER_KOO_PAPER_TRADE_CRITIC_FAIL_OPEN", "0") == "1",
     )
 
 

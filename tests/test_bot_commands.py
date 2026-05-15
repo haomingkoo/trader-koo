@@ -43,6 +43,7 @@ class TestHelpCommand:
         assert "/status" in result
         assert "/top" in result
         assert "/price" in result
+        assert "/options" in result
         assert "/vix" in result
         assert "/alerts" in result
         assert "/help" in result
@@ -226,6 +227,29 @@ class TestUpdateDispatch:
             assert "/status" in mock_reply.call_args[0][0]
 
     @pytest.mark.asyncio
+    async def test_dispatches_options_command(
+        self,
+        handler: TelegramCommandHandler,
+    ) -> None:
+        update = {
+            "update_id": 105,
+            "message": {
+                "chat": {"id": 12345},
+                "text": "/options",
+            },
+        }
+        with (
+            patch(
+                "trader_koo.notifications.options_digest.generate_options_digest",
+                return_value="Options Premium Proxy\nAMD",
+            ),
+            patch.object(handler, "_send_reply", new_callable=AsyncMock) as mock_reply,
+        ):
+            await handler._handle_update(update)
+            mock_reply.assert_called_once()
+            assert "AMD" in mock_reply.call_args[0][0]
+
+    @pytest.mark.asyncio
     async def test_ignores_non_command_text(
         self,
         handler: TelegramCommandHandler,
@@ -266,3 +290,42 @@ class TestTopCommand:
                 or "no signals" in result.lower()
                 or "no top setups" in result.lower()
             )
+
+    @pytest.mark.asyncio
+    async def test_top_prefers_research_suggestions(
+        self,
+        handler: TelegramCommandHandler,
+    ) -> None:
+        payload = {
+            "generated_ts": "2026-03-25T12:00:00Z",
+            "signals": {
+                "suggestions": {
+                    "items": [
+                        {
+                            "ticker": "AAPL",
+                            "action": "Paper Long",
+                            "conviction": "Medium",
+                            "probability_pct": 61.2,
+                            "sample_size": 9,
+                            "why": ["Strong *setup* [external] confirmation."],
+                            "invalidation": "Invalid below support near 180.00.",
+                        }
+                    ]
+                },
+                "setup_quality_top": [
+                    {"ticker": "OLD", "setup_tier": "A", "signal_bias": "bullish"}
+                ],
+            },
+        }
+        with patch(
+            "trader_koo.backend.services.report_loader.latest_daily_report_json",
+            return_value=("2026-03-25", payload),
+        ):
+            result = await handler._cmd_top()
+
+        assert "Top Research Suggestions" in result
+        assert "Research only. Not financial advice." in result
+        assert "AAPL" in result
+        assert "61% n=9" in result
+        assert "Strong setup (external) confirmation." in result
+        assert "OLD" not in result

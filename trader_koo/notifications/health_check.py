@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from html import escape
 from typing import Any
 
 import httpx
@@ -113,10 +114,13 @@ def _send_health_alert(failures: list[dict], all_results: list[dict]) -> None:
         status = f.get("status", 0)
         error = f.get("error", "")
         count = _failure_counts.get(f["name"], 0)
+        name = escape(str(f.get("name", "?")), quote=False)
         if status > 0:
-            lines.append(f"  {f['name']}: HTTP {status} ({count} consecutive)")
+            lines.append(f"  {name}: HTTP {status} ({count} consecutive)")
         else:
-            lines.append(f"  {f['name']}: {error} ({count} consecutive)")
+            lines.append(
+                f"  {name}: {escape(str(error), quote=False)} ({count} consecutive)"
+            )
 
     ok_count = sum(1 for r in all_results if r["ok"])
     lines.append("")

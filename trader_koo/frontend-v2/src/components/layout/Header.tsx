@@ -31,7 +31,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   const { theme, toggle: toggleTheme } = useTheme();
 
   return (
-    <header className="border-b border-[var(--line)] px-4 pb-2 pt-2 [padding-top:max(0.5rem,env(safe-area-inset-top))]">
+    <header className="border-b border-[var(--line)] bg-[var(--chrome)]/95 px-4 pb-2.5 pt-2.5 [padding-top:max(0.625rem,env(safe-area-inset-top))]">
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-3">
           <button
@@ -53,11 +53,11 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
           </button>
           <a
             href="https://kooexperience.com/"
-            className="text-lg font-bold tracking-wide text-[var(--text)] transition-colors hover:text-[var(--accent)] md:text-base"
+            className="text-lg font-bold text-[var(--text)] transition-colors hover:text-[var(--accent)] md:text-base"
           >
             HK
           </a>
-          <span className="text-[10px] font-medium tracking-wider text-[var(--muted)]">
+          <span className="text-[10px] font-medium text-[var(--muted)]">
             Trader Koo
           </span>
           <div className="ml-auto flex items-center gap-3">
@@ -71,7 +71,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
             </button>
             <a
               href="https://kooexperience.com/"
-              className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] transition-colors hover:text-[var(--accent)]"
+              className="flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted)] transition-colors hover:text-[var(--accent)]"
             >
               Portfolio <ArrowUpRight size={12} />
             </a>

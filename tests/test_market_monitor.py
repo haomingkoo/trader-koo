@@ -417,6 +417,46 @@ class TestSendSpikeAlerts:
         mock_send.assert_called_once()
 
     @patch("trader_koo.notifications.telegram.is_configured")
+    @patch("trader_koo.notifications.telegram.send_message")
+    def test_escapes_external_html_in_alert_message(
+        self,
+        mock_send: MagicMock,
+        mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        mock_configured.return_value = True
+        mock_send.return_value = True
+
+        conn = sqlite3.connect(str(db_path))
+        now = dt.datetime.now(dt.timezone.utc)
+        old_ts = (now - dt.timedelta(hours=8)).isoformat()
+        new_ts = now.isoformat()
+        slug = 'bad" onmouseover="x'
+        question = "Will <i>bad</i> & win?"
+        conn.executemany(
+            """
+            INSERT INTO polymarket_snapshots
+                (event_slug, event_title, market_question, probability, volume, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (slug, "Test Event", question, 10.0, 1_000_000, old_ts),
+                (slug, "Test Event", question, 25.0, 1_200_000, new_ts),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        result = send_spike_alerts(db_path, Path("/tmp"))
+
+        assert result == 1
+        text = mock_send.call_args.args[0]
+        assert "Will &lt;i&gt;bad&lt;/i&gt; &amp; win?" in text
+        assert "Will <i>bad</i> & win?" not in text
+        assert 'href="https://polymarket.com/event/bad%22%20onmouseover%3D%22x"' in text
+        assert 'href="https://polymarket.com/event/bad" onmouseover="x"' not in text
+
+    @patch("trader_koo.notifications.telegram.is_configured")
     def test_skips_when_telegram_not_configured(
         self, mock_configured: MagicMock, db_path: Path,
     ) -> None:

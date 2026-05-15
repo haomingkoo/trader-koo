@@ -2,6 +2,7 @@ interface BadgeProps {
   children: React.ReactNode;
   variant?: "default" | "green" | "red" | "amber" | "blue" | "muted";
   className?: string;
+  title?: string;
 }
 
 const variantStyles: Record<string, string> = {
@@ -28,9 +29,10 @@ export function tierVariant(tier: string | null | undefined): BadgeProps["varian
   return "default";
 }
 
-export default function Badge({ children, variant = "default", className = "" }: BadgeProps) {
+export default function Badge({ children, variant = "default", className = "", title }: BadgeProps) {
   return (
     <span
+      title={title}
       className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${variantStyles[variant]} ${className}`}
     >
       {children}

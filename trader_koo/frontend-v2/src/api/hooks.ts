@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
+import { OPTIONS_PREMIUM_CONFIG } from "./optionsConfig";
+import type { OptionsPremiumSort } from "./optionsConfig";
 import type {
   DailyReportPayload,
   DashboardQuickPayload,
@@ -7,6 +9,7 @@ import type {
   PaperTradeSummary,
   PaperTradeList,
   OpportunitiesPayload,
+  OptionsPremiumPayload,
   EarningsPayload,
   MarketSummary,
   PipelineStatus,
@@ -96,6 +99,21 @@ export function useOpportunities(params: {
     queryKey: ["opportunities", params],
     queryFn: () => apiFetch<OpportunitiesPayload>(`/api/opportunities?${qs.toString()}`),
     staleTime: 2 * 60 * 1000,
+  });
+}
+
+export function useOptionsPremium(params: {
+  limit?: number;
+  sort_by?: OptionsPremiumSort;
+}) {
+  const qs = new URLSearchParams({
+    limit: String(params.limit ?? OPTIONS_PREMIUM_CONFIG.defaultLimit),
+    sort_by: params.sort_by ?? OPTIONS_PREMIUM_CONFIG.defaultSort,
+  });
+  return useQuery({
+    queryKey: ["options-premium", params],
+    queryFn: () => apiFetch<OptionsPremiumPayload>(`${OPTIONS_PREMIUM_CONFIG.endpoint}?${qs.toString()}`),
+    staleTime: OPTIONS_PREMIUM_CONFIG.staleTimeMs,
   });
 }
 

@@ -14,7 +14,9 @@ from trader_koo.hyperliquid.tracker import (
     _check_reload,
     _diff_positions,
     _recent_reload_context,
+    _send_telegram_signal_alert,
     ensure_hyperliquid_schema,
+    fetch_wallet_state,
     generate_counter_signals,
     save_counter_signals,
     save_snapshot,
@@ -86,6 +88,94 @@ class TestWalletConfig:
         assert "bad" not in wallets
         assert wallets["good"] == "0x2222222222222222222222222222222222222222"
 
+    def test_invalid_json_logs_warning_and_keeps_defaults(self, monkeypatch, caplog):
+        monkeypatch.setenv(
+            "TRADER_KOO_HL_TRACKED_WALLETS",
+            '{"broken": "0x1111111111111111111111111111111111111111"',
+        )
+        wallets = get_tracked_wallets()
+        assert wallets["machibro"].startswith("0x020c")
+        assert "Invalid TRADER_KOO_HL_TRACKED_WALLETS JSON" in caplog.text
+
+
+class TestWalletStateParsing:
+    def test_derives_mark_price_from_position_value(self, monkeypatch):
+        class FakeInfo:
+            def user_state(self, address):
+                return {
+                    "marginSummary": {
+                        "accountValue": "1000",
+                        "totalMarginUsed": "200",
+                    },
+                    "assetPositions": [
+                        {
+                            "position": {
+                                "coin": "BTC",
+                                "szi": "2",
+                                "entryPx": "100",
+                                "positionValue": "220",
+                                "unrealizedPnl": "20",
+                                "leverage": {"type": "cross", "value": "10"},
+                                "liquidationPx": "80",
+                            }
+                        }
+                    ],
+                }
+
+        monkeypatch.setattr(
+            "trader_koo.hyperliquid.tracker._get_info_client",
+            lambda: FakeInfo(),
+        )
+
+        snapshot = fetch_wallet_state("0xabc", wallet_label="test")
+
+        assert snapshot is not None
+        assert snapshot.account_value == 1000.0
+        assert snapshot.margin_ratio == 0.2
+        assert len(snapshot.positions) == 1
+        pos = snapshot.positions[0]
+        assert pos.mark_price == 110.0
+        assert pos.notional_usd == 220.0
+        assert pos.mark_price_source == "positionValue"
+        assert pos.notional_source == "positionValue"
+        assert pos.data_warnings == ()
+
+    def test_missing_mark_and_position_value_are_reported(self, monkeypatch):
+        class FakeInfo:
+            def user_state(self, address):
+                return {
+                    "marginSummary": {
+                        "accountValue": "1000",
+                        "totalMarginUsed": "200",
+                    },
+                    "assetPositions": [
+                        {
+                            "position": {
+                                "coin": "ETH",
+                                "szi": "3",
+                                "entryPx": "100",
+                                "unrealizedPnl": "0",
+                                "leverage": {"type": "cross", "value": "5"},
+                            }
+                        }
+                    ],
+                }
+
+        monkeypatch.setattr(
+            "trader_koo.hyperliquid.tracker._get_info_client",
+            lambda: FakeInfo(),
+        )
+
+        snapshot = fetch_wallet_state("0xabc", wallet_label="test")
+
+        assert snapshot is not None
+        pos = snapshot.positions[0]
+        assert pos.mark_price == 0.0
+        assert pos.notional_usd == 0.0
+        assert pos.mark_price_source == "missing"
+        assert pos.notional_source == "missing"
+        assert pos.data_warnings == ("missing_mark_price", "missing_position_value")
+
 
 class TestCounterSignals:
     def _make_snapshot(self, side="long", leverage=25, size=5000.0, upnl=-50000.0):
@@ -136,6 +226,61 @@ class TestCounterSignals:
         large = generate_counter_signals(self._make_snapshot(size=10000.0))
         # Larger positions have higher concentration → higher score
         assert large[0]["score"] >= small[0]["score"]
+
+    def test_telegram_alert_escapes_external_html(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+        posted: dict[str, Any] = {}
+
+        def fake_post(url, json, timeout):
+            posted["url"] = url
+            posted["json"] = json
+            posted["timeout"] = timeout
+
+        monkeypatch.setattr("httpx.post", fake_post)
+
+        snapshot = WalletSnapshot(
+            wallet_label="machi<b>bad</b>",
+            wallet_address="0x020c",
+            account_value=500000.0,
+            total_margin_used=400000.0,
+            margin_ratio=0.8,
+            positions=[
+                WalletPosition(
+                    wallet_label="machi<b>bad</b>",
+                    wallet_address="0x020c",
+                    coin="ETH<script>",
+                    side="long",
+                    size=5000.0,
+                    entry_price=2100.0,
+                    mark_price=2000.0,
+                    unrealized_pnl=-50000.0,
+                    leverage_type="cross",
+                    leverage_value=25,
+                    notional_usd=10_000_000.0,
+                    liquidation_price=1850.0,
+                )
+            ],
+            timestamp="2026-03-24T00:00:00Z",
+        )
+        _send_telegram_signal_alert(
+            snapshot,
+            [{
+                "coin": "ETH<script>",
+                "action": "COUNTER",
+                "score": "9</b><b>",
+                "counter_side": "SHORT",
+                "reasons": ["<b>fake</b> & reason"],
+            }],
+        )
+
+        text = posted["json"]["text"]
+        assert "machi&lt;b&gt;bad&lt;/b&gt;" in text
+        assert "ETH&lt;script&gt;" in text
+        assert "&lt;b&gt;fake&lt;/b&gt; &amp; reason" in text
+        assert "9&lt;/b&gt;&lt;b&gt;" in text
+        assert "machi<b>bad</b>" not in text
+        assert "<b>fake</b>" not in text
 
 
 class TestPersistence:
@@ -457,3 +602,26 @@ class TestReloadAndCrowdContext:
         assert signal["market_context"]["aligns_with_counter"] is True
         assert signal["market_context"]["score_boost"] == 2
         assert any("funding" in reason.lower() or "binance top traders" in reason.lower() for reason in signal["reasons"])
+
+
+class TestWalletSeedUpdates:
+    def test_seed_default_wallets_updates_existing_address(self, conn, monkeypatch):
+        conn.execute(
+            """
+            INSERT INTO hyperliquid_wallets (label, address, track_mode, notes, active)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("james_wynn", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "counter", "existing", 1),
+        )
+        conn.commit()
+
+        monkeypatch.setenv(
+            "TRADER_KOO_HL_TRACKED_WALLETS",
+            json.dumps({"james_wynn": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}),
+        )
+        seed_default_wallets(conn)
+
+        row = conn.execute(
+            "SELECT address, track_mode, notes, active FROM hyperliquid_wallets WHERE label = 'james_wynn'"
+        ).fetchone()
+        assert row == ("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "counter", "existing", 1)

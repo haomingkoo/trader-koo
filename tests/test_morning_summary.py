@@ -89,6 +89,9 @@ def db_path(tmp_path: Path) -> Path:
             their_notional_usd REAL,
             confidence REAL,
             reasoning TEXT,
+            action TEXT,
+            score REAL,
+            reasons_json TEXT,
             signal_ts TEXT NOT NULL,
             created_ts TEXT DEFAULT CURRENT_TIMESTAMP
         );
@@ -154,13 +157,14 @@ def populated_conn(conn: sqlite3.Connection) -> sqlite3.Connection:
         """
         INSERT INTO hyperliquid_counter_signals
             (wallet_label, coin, counter_side, their_side, their_size, their_leverage,
-             their_notional_usd, confidence, reasoning, signal_ts)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             their_notional_usd, confidence, reasoning, action, score, reasons_json, signal_ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("machibro", "BTC", "short", "long", 1.2, 25, 88_000, 82.0, "counter BTC long", now_ts),
-            ("machibro", "ETH", "long", "short", 12.0, 15, 2_050, 71.0, "counter ETH short", now_ts),
-            ("machibro", "SOL", "short", "long", 100.0, 20, 180, 76.0, "counter SOL long", old_ts),  # older than 24h
+            ("machibro", "BTC", "short", "long", 1.2, 25, 88_000, 82.0, "[COUNTER] score=8", "COUNTER", 8, '["large notional"]', now_ts),
+            ("machibro", "ETH", "long", "short", 12.0, 15, 2_050, 71.0, "[COUNTER] score=7", "COUNTER", 7, '["crowded shorts"]', now_ts),
+            ("machibro", "DOGE", "short", "long", 10.0, 5, 200, 30.0, "[SKIP] score=0", "SKIP", 0, '["skip list"]', now_ts),
+            ("machibro", "SOL", "short", "long", 100.0, 20, 180, 76.0, "[COUNTER] score=8", "COUNTER", 8, '["old"]', old_ts),  # older than 24h
         ],
     )
 
@@ -288,6 +292,7 @@ class TestFetchCounterTradeSignals:
         coins = {s["coin"] for s in signals}
         assert "BTC" in coins
         assert "ETH" in coins
+        assert "DOGE" not in coins
         assert "SOL" not in coins
 
     def test_signal_fields(self, populated_conn: sqlite3.Connection) -> None:
@@ -297,6 +302,9 @@ class TestFetchCounterTradeSignals:
         assert btc["direction"] == "short"
         assert btc["entry_price"] is None
         assert btc["wallet"] == "machibro"
+        assert btc["action"] == "COUNTER"
+        assert btc["score"] == 8
+        assert btc["reasons"] == ["large notional"]
 
     def test_legacy_schema_still_supported(self, conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE hyperliquid_counter_signals")
@@ -427,10 +435,65 @@ class TestGenerateMorningSummary:
         assert "NVDA" in message
 
         # Counter-trade signals
-        assert "Counter-Trade" in message
+        assert "Hyperliquid Research Signals" in message
+        assert "Research only" in message
 
         # Market open time
         assert "US market opens in" in message
+
+    @patch("trader_koo.notifications.morning_summary._fetch_fear_greed", return_value=None)
+    @patch("trader_koo.notifications.morning_summary._fetch_economic_events_today", return_value=[])
+    def test_summary_prefers_compact_research_suggestions(
+        self,
+        mock_econ: MagicMock,
+        mock_fg: MagicMock,
+        db_path: Path,
+        populated_conn: sqlite3.Connection,
+        tmp_path: Path,
+    ) -> None:
+        populated_conn.close()
+        report_dir = tmp_path / "reports"
+        report_dir.mkdir()
+        report = {
+            "signals": {
+                "suggestions": {
+                    "items": [
+                        {
+                            "ticker": "AAPL",
+                            "action": "Paper Long",
+                            "conviction": "Medium",
+                            "probability_pct": 61.2,
+                            "sample_size": 9,
+                            "why": ["Strong *setup* [external] confirmation."],
+                            "invalidation": "Invalid below support near 180.00.",
+                        }
+                    ],
+                    "note": "Research suggestions only, not financial advice.",
+                },
+                "setup_quality_top": [
+                    {
+                        "ticker": "OLD",
+                        "setup_tier": "A",
+                        "signal_bias": "bullish",
+                    }
+                ],
+            }
+        }
+
+        with patch(
+            "trader_koo.backend.services.report_loader.latest_daily_report_json",
+            return_value=("2026-03-25", report),
+        ):
+            message = generate_morning_summary(db_path, report_dir)
+
+        assert "Top Research Suggestions" in message
+        assert "Research only. Not financial advice." in message
+        assert "AAPL" in message
+        assert "61% n=9" in message
+        assert "Strong setup (external) confirmation." in message
+        assert "Invalid below support near 180.00." in message
+        assert "Top 1 Setups Today" not in message
+        assert "OLD" not in message
 
     @patch("trader_koo.notifications.morning_summary._fetch_fear_greed", return_value=None)
     @patch("trader_koo.notifications.morning_summary._fetch_economic_events_today", return_value=[])

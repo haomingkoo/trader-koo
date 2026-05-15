@@ -18,11 +18,13 @@ Public API
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
 
+from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
 from trader_koo.notifications.telegram import is_configured, send_message
 
 LOG = logging.getLogger("trader_koo.notifications.morning_summary")
@@ -148,6 +150,47 @@ def _extract_top_setups(
             "tier": tier,
             "bias": bias,
             "level": level_str,
+        })
+    return out
+
+
+def _extract_suggestions(
+    report: dict[str, Any],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Pull compact research suggestions from ``signals.suggestions``."""
+    signals = report.get("signals")
+    if not isinstance(signals, dict):
+        return []
+    payload = signals.get("suggestions")
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        ticker = _md_safe(item.get("ticker"), max_len=12).upper()
+        if not ticker:
+            continue
+        why_raw = item.get("why")
+        why = [
+            _md_safe(line, max_len=120)
+            for line in why_raw
+            if str(line or "").strip()
+        ] if isinstance(why_raw, list) else []
+        out.append({
+            "ticker": ticker,
+            "action": _md_safe(item.get("action") or "Watch", max_len=24),
+            "conviction": _md_safe(item.get("conviction") or "Low", max_len=16),
+            "probability_pct": item.get("probability_pct"),
+            "sample_size": item.get("sample_size"),
+            "why": why[:2],
+            "risk": _md_safe(item.get("risk"), max_len=120),
+            "invalidation": _md_safe(item.get("invalidation"), max_len=120),
         })
     return out
 
@@ -452,7 +495,7 @@ def _fetch_counter_trade_signals(
     conn: sqlite3.Connection,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
-    """Fetch recent active counter-trade signals from Hyperliquid tracker."""
+    """Fetch recent actionable Hyperliquid counter-trade research signals."""
     signals: list[dict[str, Any]] = []
     try:
         columns = {
@@ -479,18 +522,23 @@ def _fetch_counter_trade_signals(
             if "wallet_label" in columns
             else "'' AS wallet_label"
         )
-        # Deduplicate: only show latest signal per (coin, direction, wallet)
+        action_expr = "action" if "action" in columns else "NULL AS action"
+        score_expr = "score" if "score" in columns else "NULL AS score"
+        reasoning_expr = "reasoning" if "reasoning" in columns else "NULL AS reasoning"
+        reasons_expr = "reasons_json" if "reasons_json" in columns else "NULL AS reasons_json"
+
         rows = conn.execute(
             f"""
-            SELECT coin, {direction_expr}, {entry_expr}, MAX(signal_ts) AS signal_ts, {wallet_expr}
+            SELECT coin, {direction_expr}, {entry_expr}, signal_ts, {wallet_expr},
+                   {action_expr}, {score_expr}, {reasoning_expr}, {reasons_expr}
             FROM hyperliquid_counter_signals
-            GROUP BY coin, {wallet_expr}
             ORDER BY signal_ts DESC
             LIMIT ?
             """,
-            (limit,),
+            (limit * 5,),
         ).fetchall()
         now_utc = dt.datetime.now(dt.timezone.utc)
+        seen: set[tuple[str, str, str]] = set()
         for row in rows:
             # Only include signals from the last 24 hours
             try:
@@ -503,12 +551,46 @@ def _fetch_counter_trade_signals(
                     continue
             except Exception:
                 pass
+
+            coin = str(row["coin"])
+            direction = str(row["direction"])
+            wallet = str(row["wallet_label"] or "")
+            key = (coin, direction, wallet)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            action = str(row["action"] or "").upper()
+            reasoning = str(row["reasoning"] or "")
+            if not action and reasoning.startswith("["):
+                action = reasoning.split("]", 1)[0].lstrip("[").upper()
+            has_action_column = "action" in columns
+            if has_action_column and action != "COUNTER":
+                continue
+
+            reasons: list[str] = []
+            raw_reasons = row["reasons_json"]
+            if raw_reasons:
+                try:
+                    parsed = json.loads(str(raw_reasons))
+                    if isinstance(parsed, list):
+                        reasons = [str(item) for item in parsed[:4]]
+                except json.JSONDecodeError:
+                    reasons = []
+
+            score = row["score"]
             signals.append({
-                "coin": str(row["coin"]),
-                "direction": str(row["direction"]),
+                "coin": coin,
+                "direction": direction,
                 "entry_price": float(row["entry_price"]) if row["entry_price"] is not None else None,
-                "wallet": str(row["wallet_label"] or ""),
+                "wallet": wallet,
+                "action": action or "COUNTER",
+                "score": float(score) if score is not None else None,
+                "reasoning": reasoning,
+                "reasons": reasons,
             })
+            if len(signals) >= limit:
+                break
     except Exception as exc:
         LOG.debug("Counter-trade signals fetch failed: %s", exc)
     return signals
@@ -555,7 +637,8 @@ def generate_morning_summary(
         fg_score = int(fg.get("score", 0)) if fg else None
         fg_label = _fear_greed_label(fg_score) if fg_score is not None else "N/A"
 
-        # Top setups
+        # Top suggestions / setups
+        suggestions = _extract_suggestions(report, limit=3)
         setups = _extract_top_setups(report, limit=5)
 
         # Paper trades: summary stats + individual open positions
@@ -651,8 +734,33 @@ def generate_morning_summary(
             lines.append("  |  ".join(pair))
         lines.append("")
 
-    # Top Setups
-    if setups:
+    # Top Research Suggestions.  When present, these replace the raw setup
+    # list so the morning push stays compact instead of becoming another feed.
+    if suggestions:
+        lines.append("\U0001f3af *Top Research Suggestions*")
+        lines.append("_Research only. Not financial advice._")
+        for idx, s in enumerate(suggestions, 1):
+            prob = s.get("probability_pct")
+            prob_part = ""
+            if isinstance(prob, (int, float)):
+                prob_part = f" | {float(prob):.0f}%"
+                sample = s.get("sample_size")
+                if isinstance(sample, (int, float)) and int(sample) > 0:
+                    prob_part += f" n={int(sample)}"
+            lines.append(
+                f"{idx}. {s['ticker']} \u2014 {s['action']} | "
+                f"{s['conviction']}{prob_part}"
+            )
+            why = s.get("why") or []
+            if why:
+                lines.append(f"   Why: {why[0]}")
+            invalidation = s.get("invalidation")
+            if invalidation:
+                lines.append(f"   Invalid: {invalidation}")
+        lines.append("")
+
+    # Fallback: raw setup list for reports generated before suggestions.
+    elif setups:
         lines.append(f"\U0001f3af *Top {len(setups)} Setups Today*")
         for idx, s in enumerate(setups, 1):
             lines.append(
@@ -701,9 +809,10 @@ def generate_morning_summary(
             lines.append(f"  {impact_icon} {ev['event']} ({ev['date'][:10]})")
         lines.append("")
 
-    # Counter-Trade Signals (Hyperliquid)
+    # Counter-Trade Research Signals (Hyperliquid)
     if counter_signals:
-        lines.append("\u2694\ufe0f *Active Counter-Trade Signals*")
+        lines.append("\u2694\ufe0f *Hyperliquid Research Signals*")
+        lines.append("_Research only; verify the study and live context before acting._")
         for sig in counter_signals:
             direction_icon = "\U0001f7e2" if sig["direction"] == "long" else "\U0001f534"
             line = f"  {direction_icon} {sig['coin']} {sig['direction'].upper()}"
@@ -711,7 +820,12 @@ def generate_morning_summary(
                 line += f" @ ${sig['entry_price']:,.2f}"
             if sig.get("wallet"):
                 line += f" ({sig['wallet']})"
+            if sig.get("score") is not None:
+                line += f" score {sig['score']:.0f}"
             lines.append(line)
+            reasons = sig.get("reasons") or []
+            if reasons:
+                lines.append(f"    {reasons[0]}")
         lines.append("")
 
     # Alerts watching

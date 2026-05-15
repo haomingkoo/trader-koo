@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+
+LOG = logging.getLogger(__name__)
 
 DEFAULT_TRACKED_WALLETS: dict[str, str] = {
     "machibro": "0x020ca66c30bec2c4fe3861a94e4db4a498a35872",
@@ -32,15 +35,18 @@ def _parse_wallet_mapping(raw: str) -> dict[str, str]:
     if text.startswith("{"):
         try:
             payload = json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            LOG.warning("Invalid TRADER_KOO_HL_TRACKED_WALLETS JSON: %s", exc)
             return {}
         if not isinstance(payload, dict):
+            LOG.warning("TRADER_KOO_HL_TRACKED_WALLETS JSON must be an object mapping labels to addresses")
             return {}
         items = payload.items()
     else:
         items = []
         for part in text.split(","):
             if "=" not in part:
+                LOG.warning("Ignoring invalid tracked wallet entry without '=': %s", part.strip())
                 continue
             label, address = part.split("=", 1)
             items.append((label, address))
@@ -49,6 +55,7 @@ def _parse_wallet_mapping(raw: str) -> dict[str, str]:
         label = _normalise_label(str(raw_label))
         address = str(raw_address).strip()
         if not label or not _is_valid_address(address):
+            LOG.warning("Ignoring invalid tracked wallet mapping: %s=%s", raw_label, raw_address)
             continue
         parsed[label] = address.lower()
 

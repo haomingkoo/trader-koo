@@ -20,11 +20,20 @@ from typing import Any
 
 import httpx
 
+from trader_koo.config import env_int
+from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
+
 LOG = logging.getLogger("trader_koo.notifications.bot_commands")
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
-POLL_INTERVAL_SEC = 10
-LONG_POLL_TIMEOUT_SEC = 5
+
+
+POLL_INTERVAL_SEC = env_int(
+    "TRADER_KOO_TELEGRAM_COMMAND_POLL_SEC", 1, min_value=0, max_value=30
+)
+LONG_POLL_TIMEOUT_SEC = env_int(
+    "TRADER_KOO_TELEGRAM_COMMAND_LONG_POLL_SEC", 25, min_value=5, max_value=50
+)
 SEND_TIMEOUT_SEC = 15
 MIN_RESPONSE_INTERVAL_SEC = 1.0
 
@@ -80,7 +89,7 @@ class TelegramCommandHandler:
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Long-running async task — polls ``getUpdates`` every 10s."""
+        """Long-running async task — long-polls ``getUpdates`` for commands."""
         self._running = True
         LOG.info(
             "Telegram command handler started "
@@ -225,6 +234,7 @@ class TelegramCommandHandler:
             "/status": self._cmd_status,
             "/top": self._cmd_top,
             "/price": self._cmd_price,
+            "/options": self._cmd_options,
             "/vix": self._cmd_vix,
             "/alerts": self._cmd_alerts,
             "/help": self._cmd_help,
@@ -260,6 +270,7 @@ class TelegramCommandHandler:
             "/status — Pipeline status + alert engine\n"
             "/top — Today's top 10 setups\n"
             "/price AAPL — Current price + levels\n"
+            "/options — Latest options premium proxy\n"
             "/vix — VIX level + regime + Fear/Greed\n"
             "/alerts — Last 5 alerts fired today\n"
             "/help — This message"
@@ -359,10 +370,21 @@ class TelegramCommandHandler:
             if not isinstance(signals, dict):
                 return "No signals in daily report."
 
+            suggestions_payload = signals.get("suggestions")
+            suggestion_rows: list[dict[str, Any]] = []
+            if isinstance(suggestions_payload, dict):
+                raw_items = suggestions_payload.get("items")
+                if isinstance(raw_items, list):
+                    suggestion_rows = [
+                        row for row in raw_items if isinstance(row, dict)
+                    ]
+
             setup_rows: list[dict[str, Any]] = signals.get(
                 "setup_quality_top", []
             )
-            if not isinstance(setup_rows, list) or not setup_rows:
+            if not suggestion_rows and (
+                not isinstance(setup_rows, list) or not setup_rows
+            ):
                 return "No top setups in latest report."
 
             # Extract report date
@@ -374,7 +396,46 @@ class TelegramCommandHandler:
             except ValueError:
                 pass
 
-            lines: list[str] = [
+            if suggestion_rows:
+                lines: list[str] = [
+                    f"\U0001f3af *Top Research Suggestions ({date_label})*",
+                    "_Research only. Not financial advice._",
+                    "",
+                ]
+                for i, row in enumerate(suggestion_rows[:3], start=1):
+                    ticker = _md_safe(row.get("ticker"), max_len=12).upper()
+                    if not ticker:
+                        continue
+                    action = _md_safe(row.get("action") or "Watch", max_len=24)
+                    conviction = _md_safe(
+                        row.get("conviction") or "Low",
+                        max_len=16,
+                    )
+                    prob = row.get("probability_pct")
+                    prob_part = ""
+                    if isinstance(prob, (int, float)):
+                        prob_part = f" | {float(prob):.0f}%"
+                        sample = row.get("sample_size")
+                        if isinstance(sample, (int, float)) and int(sample) > 0:
+                            prob_part += f" n={int(sample)}"
+                    lines.append(
+                        f"{i}. {ticker} \u2014 {action} | "
+                        f"{conviction}{prob_part}"
+                    )
+                    why_raw = row.get("why")
+                    if isinstance(why_raw, list) and why_raw:
+                        why = _md_safe(why_raw[0], max_len=120)
+                        if why:
+                            lines.append(f"   Why: {why}")
+                    invalidation = _md_safe(
+                        row.get("invalidation"),
+                        max_len=120,
+                    )
+                    if invalidation:
+                        lines.append(f"   Invalid: {invalidation}")
+                return "\n".join(lines)
+
+            lines = [
                 f"\U0001f4ca *Top Setups ({date_label})*\n"
             ]
             for i, row in enumerate(setup_rows[:10], start=1):
@@ -399,6 +460,18 @@ class TelegramCommandHandler:
         except Exception as exc:
             LOG.error("/top command failed: %s", exc)
             return f"Failed to load top setups: {exc}"
+
+    async def _cmd_options(self) -> str:
+        """Latest options premium proxy digest."""
+        try:
+            from trader_koo.notifications.options_digest import (
+                generate_options_digest,
+            )
+
+            return generate_options_digest(self._db_path)
+        except Exception as exc:
+            LOG.error("/options command failed: %s", exc)
+            return f"Failed to load options premium proxy: {exc}"
 
     async def _cmd_price(self, ticker_arg: str = "") -> str:
         """Current price + nearest support/resistance for a ticker."""

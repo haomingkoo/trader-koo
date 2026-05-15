@@ -27,8 +27,9 @@ def check_model_drift(
 ) -> dict[str, Any]:
     """Check if the model's predictions are still accurate.
 
-    Compares predicted win probability against actual outcomes
-    from closed paper trades that have a `predicted_win_prob` value.
+    Compares stored model probability against actual outcomes from closed
+    paper trades that have a `predicted_win_prob` value.  For barrier-mode
+    models this is a coarse target-hit calibration check, not short accuracy.
 
     Returns:
         {
@@ -78,7 +79,9 @@ def check_model_drift(
                 "recommendation": f"Only {len(rows)} trades with ML predictions. Need ≥10 for drift detection.",
             }
 
-        # Compare: model predicted win (prob > 0.5) vs actual win (pnl > 0)
+        # Compare: model predicted favorable outcome (prob > 0.5) vs actual
+        # positive P&L. This is coarse because legacy storage does not include
+        # target_mode per trade yet.
         correct = sum(
             1 for r in rows
             if (float(r[1]) > 0.5) == (float(r[0]) > 0)

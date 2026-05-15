@@ -10,7 +10,7 @@ interface GlassCardProps {
 }
 
 export const GLASS_BASE =
-  "rounded-xl backdrop-blur-sm bg-[var(--panel)]/80 border border-[var(--line)] p-4";
+  "rounded-xl backdrop-blur-sm bg-[var(--panel)]/86 border border-[var(--line)] p-4 shadow-[var(--shadow-soft)]";
 
 export default function GlassCard({
   label,
@@ -36,7 +36,7 @@ export default function GlassCard({
     >
       {header}
       {label && (
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+        <div className="label-xs mb-1">
           {label}
         </div>
       )}

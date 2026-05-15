@@ -9,7 +9,12 @@ import "./styles/globals.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, refetchOnWindowFocus: false },
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+      placeholderData: (previousData: unknown) => previousData,
+      gcTime: 10 * 60 * 1000,
+    },
   },
 });
 

@@ -98,8 +98,8 @@ class TestEnsureTelegramAlertsTable:
 class TestAlertEngineConfig:
     """Verify engine initialization and configuration constants."""
 
-    def test_poll_interval_is_120_seconds(self) -> None:
-        assert POLL_INTERVAL_SEC == 120
+    def test_poll_interval_is_60_seconds(self) -> None:
+        assert POLL_INTERVAL_SEC == 60
 
     def test_max_poll_tickers_is_10(self) -> None:
         assert MAX_REPORT_TICKERS == 10

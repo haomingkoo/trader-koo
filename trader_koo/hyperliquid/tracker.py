@@ -9,9 +9,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 import sqlite3
 from dataclasses import asdict, dataclass
+from html import escape
 from typing import Any
 
 from trader_koo.hyperliquid.wallets import get_tracked_wallets
@@ -35,6 +37,9 @@ class WalletPosition:
     leverage_value: int
     notional_usd: float
     liquidation_price: float | None
+    mark_price_source: str = "unknown"
+    notional_source: str = "unknown"
+    data_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,61 @@ def _get_info_client():
     return Info(constants.MAINNET_API_URL, skip_ws=True)
 
 
+def _as_finite_float(value: Any) -> float | None:
+    """Parse API numeric strings without converting invalid values to real data."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, dict):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _position_size(position: dict[str, Any]) -> float:
+    raw_size = position.get("szi")
+    if isinstance(raw_size, dict):
+        return _as_finite_float(raw_size.get("base")) or 0.0
+    return _as_finite_float(raw_size) or 0.0
+
+
+def _derive_position_prices(
+    position: dict[str, Any],
+    abs_size: float,
+) -> tuple[float, float, str, str, tuple[str, ...]]:
+    """Return mark/notional values plus provenance for Hyperliquid positions."""
+    warnings: list[str] = []
+    direct_mark = _as_finite_float(position.get("markPx"))
+    position_value = _as_finite_float(position.get("positionValue"))
+
+    if direct_mark is not None and direct_mark > 0:
+        mark_price = direct_mark
+        mark_source = "markPx"
+    elif position_value is not None and position_value > 0 and abs_size > 0:
+        mark_price = position_value / abs_size
+        mark_source = "positionValue"
+    else:
+        mark_price = 0.0
+        mark_source = "missing"
+        warnings.append("missing_mark_price")
+
+    if position_value is not None and position_value >= 0:
+        notional_usd = abs(position_value)
+        notional_source = "positionValue"
+    elif mark_price > 0 and abs_size > 0:
+        notional_usd = abs_size * mark_price
+        notional_source = f"{mark_source}_times_size"
+        warnings.append("missing_position_value")
+    else:
+        notional_usd = 0.0
+        notional_source = "missing"
+        warnings.append("missing_position_value")
+
+    return mark_price, notional_usd, mark_source, notional_source, tuple(warnings)
+
+
 def fetch_wallet_state(
     wallet_address: str,
     wallet_label: str = "",
@@ -67,35 +127,41 @@ def fetch_wallet_state(
         state = info.user_state(wallet_address)
 
         margin = state.get("marginSummary", {})
-        account_value = float(margin.get("accountValue", 0))
-        total_margin = float(margin.get("totalMarginUsed", 0))
+        account_value = _as_finite_float(margin.get("accountValue")) or 0.0
+        total_margin = _as_finite_float(margin.get("totalMarginUsed")) or 0.0
         margin_ratio = total_margin / account_value if account_value > 0 else 0
 
         positions: list[WalletPosition] = []
         for asset_pos in state.get("assetPositions", []):
             p = asset_pos.get("position", {})
-            sz = float(p.get("szi", 0))
+            sz = _position_size(p)
             if sz == 0:
                 continue
 
             lev = p.get("leverage", {})
-            entry_px = float(p.get("entryPx", 0))
-            mark_px = float(p.get("markPx") or p.get("entryPx", 0))
-            liq_px = float(p.get("liquidationPx")) if p.get("liquidationPx") else None
+            entry_px = _as_finite_float(p.get("entryPx")) or 0.0
+            abs_size = abs(sz)
+            mark_px, notional_usd, mark_source, notional_source, data_warnings = (
+                _derive_position_prices(p, abs_size)
+            )
+            liq_px = _as_finite_float(p.get("liquidationPx"))
 
             positions.append(WalletPosition(
                 wallet_label=wallet_label,
                 wallet_address=wallet_address,
                 coin=p.get("coin", ""),
                 side="long" if sz > 0 else "short",
-                size=abs(sz),
+                size=abs_size,
                 entry_price=entry_px,
                 mark_price=mark_px,
-                unrealized_pnl=float(p.get("unrealizedPnl", 0)),
+                unrealized_pnl=_as_finite_float(p.get("unrealizedPnl")) or 0.0,
                 leverage_type=str(lev.get("type", "cross")),
-                leverage_value=int(lev.get("value", 1)),
-                notional_usd=abs(sz) * mark_px,
+                leverage_value=int(_as_finite_float(lev.get("value")) or 1),
+                notional_usd=notional_usd,
                 liquidation_price=liq_px,
+                mark_price_source=mark_source,
+                notional_source=notional_source,
+                data_warnings=data_warnings,
             ))
 
         return WalletSnapshot(
@@ -259,8 +325,7 @@ def _estimate_position_age_hours(
 
 
 # Minimum notional to promote a signal to COUNTER (configurable via env).
-# Study (595K fills, Jul 2025–Apr 2026): he wins 71-87% on <$15M positions.
-# Only >$25M positions show counter-trade edge (33% WR, -$34M total PnL).
+# Study-derived default: only very large positions showed counter-trade edge.
 _MIN_COUNTER_NOTIONAL_USD = float(
     os.getenv("TRADER_KOO_HL_MIN_COUNTER_NOTIONAL_USD", "25000000")
 )
@@ -285,6 +350,28 @@ _CROWD_FUNDING_THRESHOLD = max(
     0.0,
     float(os.getenv("TRADER_KOO_HL_CROWD_FUNDING_THRESHOLD", "0.0003")),
 )
+
+
+def get_counter_signal_config() -> dict[str, Any]:
+    """Expose live signal thresholds from the backend single source of truth."""
+    return {
+        "min_counter_notional_usd": _MIN_COUNTER_NOTIONAL_USD,
+        "skip_counter_coins": sorted(_SKIP_COUNTER_COINS),
+        "reload_signal_boost": _RELOAD_SIGNAL_BOOST,
+        "reload_lookback_hours": _RELOAD_LOOKBACK_HOURS,
+        "crowd_ratio_threshold": _CROWD_RATIO_THRESHOLD,
+        "crowd_funding_threshold": _CROWD_FUNDING_THRESHOLD,
+    }
+
+
+def _format_millions(value: float) -> str:
+    return f"${value / 1_000_000:.0f}M"
+
+
+def _html(value: Any) -> str:
+    """Escape external text before inserting it into Telegram HTML."""
+    return escape(str(value), quote=False)
+
 
 _DERIVATIVE_SYMBOLS: dict[str, str] = {
     "BTC": "BTC-USD",
@@ -476,7 +563,7 @@ def generate_counter_signals(
     Enhancements (v2):
     - Position count discount: >8 positions halves scores, <=3 boosts 1.5x
     - Position age: extended holds (+1 >24h, +2 >72h) — his worst win rate
-    - Notional gate: only COUNTER for positions >$5M
+    - Notional gate: only COUNTER for positions above configured threshold
     - Concentration boost: >70% in one position doubles concentration score
 
     Win rate is ~51% daily (coin flip). Edge comes from payoff
@@ -623,7 +710,10 @@ def generate_counter_signals(
         elif score >= 6:
             # High score but small position — downgrade
             action = "LEAN_COUNTER"
-            reasons.append(f"notional ${pos.notional_usd / 1e6:.1f}M < $25M gate")
+            reasons.append(
+                f"notional ${pos.notional_usd / 1e6:.1f}M < "
+                f"{_format_millions(_MIN_COUNTER_NOTIONAL_USD)} gate"
+            )
         elif score >= 3:
             action = "LEAN_COUNTER"
         else:
@@ -709,6 +799,17 @@ def ensure_hyperliquid_schema(conn: sqlite3.Connection) -> None:
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    signal_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(hyperliquid_counter_signals)").fetchall()
+    }
+    for name, ddl in {
+        "action": "TEXT",
+        "score": "REAL",
+        "reasons_json": "TEXT",
+    }.items():
+        if name not in signal_columns:
+            conn.execute(f"ALTER TABLE hyperliquid_counter_signals ADD COLUMN {name} {ddl}")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_hl_signals_coin_ts "
         "ON hyperliquid_counter_signals(coin, signal_ts DESC)"
@@ -763,14 +864,18 @@ def save_counter_signals(
             """
             INSERT INTO hyperliquid_counter_signals
                 (wallet_label, coin, counter_side, their_side, their_size,
-                 their_leverage, their_notional_usd, confidence, reasoning, signal_ts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 their_leverage, their_notional_usd, confidence, reasoning, signal_ts,
+                 action, score, reasons_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sig["wallet_label"], sig["coin"], sig["counter_side"],
                 sig["their_side"], sig["their_size"], sig["their_leverage"],
                 sig["their_notional_usd"], sig["confidence"],
                 sig["reasoning"], sig["timestamp"],
+                sig.get("action"),
+                sig.get("score"),
+                json.dumps(sig.get("reasons") or []),
             ),
         )
         inserted += 1
@@ -1054,16 +1159,19 @@ def _send_telegram_reload_alert(snapshot: WalletSnapshot) -> None:
     leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
 
     lines = [
-        f"<b>RELOAD: {snapshot.wallet_label}</b>",
+        f"<b>RELOAD: {_html(snapshot.wallet_label)}</b>",
         f"Back with ${snapshot.account_value:,.0f} | {leverage:.0f}x leverage",
         "",
     ]
 
     for p in snapshot.positions:
-        lines.append(f"  {p.coin} {p.side.upper()} ${p.notional_usd:,.0f} at {p.leverage_value}x")
+        lines.append(
+            f"  {_html(p.coin)} {_html(p.side.upper())} "
+            f"${p.notional_usd:,.0f} at {p.leverage_value}x"
+        )
 
     lines.append("")
-    lines.append("Watch for new counter signals.")
+    lines.append("Watch for research signals; no automatic trade.")
 
     text = "\n".join(lines)
 
@@ -1094,9 +1202,9 @@ def _send_telegram_liquidation_alert(
         return
 
     lines = [
-        f"<b>LIQUIDATED: {label}</b>",
+        f"<b>LIQUIDATED: {_html(label)}</b>",
         f"Account went from ${prev_value:,.0f} to $0",
-        f"Last seen: {prev_ts}",
+        f"Last seen: {_html(prev_ts)}",
         "",
     ]
 
@@ -1107,12 +1215,15 @@ def _send_telegram_liquidation_alert(
         leverage = p.get("leverage_value", "?")
         liq_px = p.get("liquidation_price")
         entry_px = float(p.get("entry_price", 0))
-        lines.append(f"  {coin} {side} ${notional:,.0f} at {leverage}x (entry ${entry_px:,.2f})")
+        lines.append(
+            f"  {_html(coin)} {_html(side)} ${notional:,.0f} "
+            f"at {_html(leverage)}x (entry ${entry_px:,.2f})"
+        )
         if liq_px:
             lines.append(f"  Liq price was ${float(liq_px):,.2f}")
 
     lines.append("")
-    lines.append("Counter-trade strategy validated.")
+    lines.append("One liquidation event observed; log it as evidence, not proof.")
 
     text = "\n".join(lines)
 
@@ -1158,8 +1269,12 @@ def _send_telegram_signal_alert(
     changed_coins = {c.coin for c in changes}
     has_position_changes = len(changes) > 0
 
-    # Only alert on critical scores (COUNTER) if no position changes
-    critical_signals = [s for s in signals if s.get("score", 0) >= 6]
+    # Only alert on actionable COUNTER signals if no position changes.
+    # LEAN_COUNTER/MONITOR/SKIP stay visible in the web UI but do not page Telegram.
+    critical_signals = [
+        s for s in signals
+        if str(s.get("action") or "").upper() == "COUNTER"
+    ]
     if not has_position_changes and not critical_signals:
         return
 
@@ -1178,7 +1293,7 @@ def _send_telegram_signal_alert(
 
     sig_by_coin = {s["coin"]: s for s in signals}
 
-    lines = [f"<b>{snapshot.wallet_label}</b>"]
+    lines = [f"<b>{_html(snapshot.wallet_label)}</b>"]
     lines.append(
         f"Account ${snapshot.account_value:,.0f} | {acct_leverage:.0f}x leverage"
         f" | {len(snapshot.positions)} positions"
@@ -1199,24 +1314,40 @@ def _send_telegram_signal_alert(
             emoji = _CHANGE_EMOJI.get(ch.change_type, "\u2022")
 
             if ch.change_type == "closed":
-                lines.append(f"{emoji} <b>{ch.coin}</b> CLOSED (was {ch.prev_side} {ch.prev_size:,.2f})")
+                prev_size = ch.prev_size or 0.0
+                lines.append(
+                    f"{emoji} <b>{_html(ch.coin)}</b> CLOSED "
+                    f"(was {_html(ch.prev_side or '?')} {prev_size:,.2f})"
+                )
             elif ch.change_type in ("partial_close", "partial_liq"):
                 label = "PARTIAL LIQ" if ch.change_type == "partial_liq" else "PARTIAL CLOSE"
+                prev_size = ch.prev_size or 0.0
+                curr_size = ch.curr_size or 0.0
+                delta_pct = ch.size_delta_pct or 0.0
                 lines.append(
-                    f"{emoji} <b>{ch.coin}</b> {label} {ch.size_delta_pct:+.0f}%"
-                    f" ({ch.prev_size:,.2f} \u2192 {ch.curr_size:,.2f} {ch.curr_side})"
+                    f"{emoji} <b>{_html(ch.coin)}</b> {label} {delta_pct:+.0f}%"
+                    f" ({prev_size:,.2f} \u2192 {curr_size:,.2f} {_html(ch.curr_side or '?')})"
                 )
             elif ch.change_type == "new":
-                lines.append(f"{emoji} <b>{ch.coin}</b> NEW {ch.curr_side.upper()} {ch.curr_size:,.2f}")
-            elif ch.change_type == "increased":
+                curr_size = ch.curr_size or 0.0
                 lines.append(
-                    f"{emoji} <b>{ch.coin}</b> INCREASED {ch.size_delta_pct:+.0f}%"
-                    f" ({ch.prev_size:,.2f} \u2192 {ch.curr_size:,.2f} {ch.curr_side})"
+                    f"{emoji} <b>{_html(ch.coin)}</b> NEW "
+                    f"{_html((ch.curr_side or '?').upper())} {curr_size:,.2f}"
+                )
+            elif ch.change_type == "increased":
+                prev_size = ch.prev_size or 0.0
+                curr_size = ch.curr_size or 0.0
+                delta_pct = ch.size_delta_pct or 0.0
+                lines.append(
+                    f"{emoji} <b>{_html(ch.coin)}</b> INCREASED {delta_pct:+.0f}%"
+                    f" ({prev_size:,.2f} \u2192 {curr_size:,.2f} {_html(ch.curr_side or '?')})"
                 )
             elif ch.change_type == "flipped":
+                curr_size = ch.curr_size or 0.0
                 lines.append(
-                    f"{emoji} <b>{ch.coin}</b> FLIPPED"
-                    f" {ch.prev_side} \u2192 {ch.curr_side} ({ch.curr_size:,.2f})"
+                    f"{emoji} <b>{_html(ch.coin)}</b> FLIPPED"
+                    f" {_html(ch.prev_side or '?')} \u2192 {_html(ch.curr_side or '?')}"
+                    f" ({curr_size:,.2f})"
                 )
 
             # Add liquidation info for current positions
@@ -1245,17 +1376,21 @@ def _send_telegram_signal_alert(
                     liq_info = f" | liq ${pos.liquidation_price:,.2f} ({dist:.1f}%)"
             coin_marker = " \u26a0\ufe0f" if pos.coin in changed_coins else ""
             lines.append(
-                f"  {pos.coin}{coin_marker} {pos.side.upper()} ${pos.notional_usd:,.0f}"
+                f"  {_html(pos.coin)}{coin_marker} {_html(pos.side.upper())} ${pos.notional_usd:,.0f}"
                 f" ({pos.leverage_value}x) uPnL ${pos.unrealized_pnl:+,.0f}{liq_info}"
             )
         lines.append("")
 
-    # Counter signals for critical scores only
+    # Counter signals for actionable research signals only
     if critical_signals:
         best = max(critical_signals, key=lambda s: s.get("score", 0))
-        lines.append(f"\U0001f6a8 <b>COUNTER signal</b> (score {best['score']})")
+        lines.append(
+            "\U0001f6a8 <b>Hyperliquid research signal</b> "
+            f"(score {_html(best.get('score', '?'))})"
+        )
         for sig in critical_signals:
             reasons = sig.get("reasons", [])
+            reasons_text = ", ".join(_html(reason) for reason in reasons[:4])
             age_str = ""
             age_h = sig.get("position_age_hours")
             if age_h is not None and age_h > 1:
@@ -1263,10 +1398,13 @@ def _send_telegram_signal_alert(
                     age_str = f" [{age_h / 24:.0f}d held]"
                 else:
                     age_str = f" [{age_h:.0f}h held]"
-            lines.append(f"  {sig['counter_side'].upper()} {sig['coin']}: {', '.join(reasons[:4])}{age_str}")
+            lines.append(
+                f"  {_html(str(sig['counter_side']).upper())} {_html(sig['coin'])}: "
+                f"{reasons_text}{age_str}"
+            )
         lines.append("")
 
-    lines.append("<i>NFA</i>")
+    lines.append("<i>Research only. NFA. In-sample rule until paper validated.</i>")
     text = "\n".join(lines)
 
     try:

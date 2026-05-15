@@ -209,6 +209,7 @@ def _yolo_role(row: dict[str, Any]) -> dict[str, Any]:
     yolo_bias = str(row.get("yolo_bias") or "neutral").lower()
     recency = str(row.get("yolo_recency") or "unknown").lower()
     age_days = _to_float(row.get("yolo_age_days"))
+    confidence_raw = _to_float(row.get("yolo_confidence"))
     conflict = bool(row.get("yolo_direction_conflict"))
     conflict_strength = str(row.get("yolo_conflict_strength") or "none").lower()
 
@@ -218,6 +219,10 @@ def _yolo_role(row: dict[str, Any]) -> dict[str, Any]:
         evidence.append(f"{recency or 'unknown'} YOLO: {pattern}")
     if age_days is not None:
         evidence.append(f"YOLO age {int(age_days)}d")
+    if confidence_raw is not None:
+        evidence.append(f"YOLO conf {confidence_raw * 100:.0f}%")
+        if confidence_raw < 0.35:
+            risks.append("low YOLO confidence")
     if conflict:
         risks.append(f"YOLO conflict ({conflict_strength})")
 
@@ -234,6 +239,11 @@ def _yolo_role(row: dict[str, Any]) -> dict[str, Any]:
         "stale": 0.2,
     }.get(recency, 0.35)
     score *= recency_weight
+    if confidence_raw is not None:
+        if confidence_raw < 0.35:
+            score *= 0.25
+        else:
+            score *= _clamp(0.6 + confidence_raw * 0.4, 0.6, 1.0)
 
     if conflict:
         score *= 0.4 if conflict_strength in {"fresh", "recent"} else 0.7
@@ -312,6 +322,104 @@ def _risk_role(row: dict[str, Any]) -> dict[str, Any]:
         "evidence": evidence[:4],
         "risk_flags": risks[:5],
         "weight": 0.16,
+    }
+
+
+def _news_role(row: dict[str, Any]) -> dict[str, Any]:
+    score_v = _to_float(row.get("news_sentiment_score"))
+    macro_v = _to_float(row.get("macro_news_score"))
+    headlines = ((row.get("news_context") or {}).get("ticker_headlines") or [])
+    evidence: list[str] = []
+    risks: list[str] = []
+    score = 0.0
+
+    if score_v is not None:
+        if score_v >= 60.0:
+            score += min((score_v - 50.0) / 40.0, 0.35)
+            evidence.append(f"news pulse {score_v:.0f}/100")
+        elif score_v <= 40.0:
+            score -= min((50.0 - score_v) / 40.0, 0.35)
+            risks.append(f"news pulse {score_v:.0f}/100")
+    if macro_v is not None:
+        if macro_v <= 40.0:
+            score -= 0.12
+            risks.append(f"risk-off macro headlines {macro_v:.0f}/100")
+        elif macro_v >= 60.0:
+            score += 0.08
+            evidence.append(f"risk-on macro headlines {macro_v:.0f}/100")
+    for item in headlines[:2]:
+        title = str(item.get("title") or "").strip()
+        if title:
+            evidence.append(title[:90])
+
+    if score >= 0.12:
+        stance = "bullish"
+    elif score <= -0.12:
+        stance = "bearish"
+    else:
+        stance = "neutral"
+
+    confidence = _clamp(0.38 + abs(score) * 1.1, 0.25, 0.82)
+    return {
+        "role": "news_catalyst",
+        "stance": stance,
+        "confidence": round(confidence, 2),
+        "evidence": evidence[:4],
+        "risk_flags": risks[:4],
+        "weight": 0.1,
+    }
+
+
+def _options_role(row: dict[str, Any]) -> dict[str, Any]:
+    ctx = row.get("options_context") if isinstance(row.get("options_context"), dict) else {}
+    signal = str(ctx.get("signal") or row.get("options_positioning_signal") or "neutral")
+    iv_rank = _to_float(ctx.get("iv_rank_pct") or row.get("options_iv_rank_pct"))
+    oi_rank = _to_float(ctx.get("oi_rank_pct") or row.get("options_oi_rank_pct"))
+    underpriced = _to_float(ctx.get("underpriced_score") or row.get("options_underpriced_score"))
+    skew = str(ctx.get("positioning_skew") or row.get("options_positioning_skew") or "")
+
+    evidence: list[str] = []
+    risks: list[str] = []
+    score = 0.0
+
+    if iv_rank is not None:
+        evidence.append(f"IV rank {iv_rank:.0f}%")
+    if oi_rank is not None:
+        evidence.append(f"OI rank {oi_rank:.0f}%")
+    if underpriced is not None:
+        evidence.append(f"underpriced score {underpriced:.0f}/100")
+    if skew in {"call_oi_skew", "put_oi_skew"}:
+        evidence.append(skew.replace("_", " "))
+
+    if signal == "underpriced_positioning":
+        score += 0.28
+    elif signal == "subdued_iv":
+        score += 0.15
+    elif signal == "elevated_iv_event_risk":
+        score -= 0.25
+        risks.append("elevated IV: premium may already price the move")
+    elif signal == "crowded_open_interest":
+        score -= 0.08
+        risks.append("crowded open interest")
+
+    if underpriced is not None:
+        score += _clamp((underpriced - 50.0) / 180.0, -0.18, 0.18)
+
+    if score >= 0.12:
+        stance = "bullish"
+    elif score <= -0.12:
+        stance = "bearish"
+    else:
+        stance = "neutral"
+
+    confidence = _clamp(0.34 + abs(score) * 1.2, 0.25, 0.82)
+    return {
+        "role": "options_positioning",
+        "stance": stance,
+        "confidence": round(confidence, 2),
+        "evidence": evidence[:4],
+        "risk_flags": risks[:4],
+        "weight": 0.1,
     }
 
 
@@ -496,9 +604,13 @@ def build_setup_debate(row: dict[str, Any]) -> dict[str, Any]:
     yolo_role = _yolo_role(row)
     risk_role = _risk_role(row)
     roles = [trend_role, momentum_role, valuation_role, yolo_role, risk_role]
+    if row.get("news_context") or row.get("news_sentiment_score") is not None:
+        roles.append(_news_role(row))
+    if row.get("options_context") or row.get("options_positioning_signal"):
+        roles.append(_options_role(row))
 
     return {
-        "version": "v1",
+        "version": "v2",
         "mode": "rule",
         "roles": roles,
         "consensus": _aggregate_roles(roles, row),

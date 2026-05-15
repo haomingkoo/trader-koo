@@ -27,11 +27,22 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from trader_koo.config import (
+    DEFAULT_DB_PATH as CONFIG_DEFAULT_DB_PATH,
+    DEFAULT_LOG_DIR,
+    OPTIONS_SNAPSHOT_DEFAULT_MAX_EXPIRIES,
+    OPTIONS_SNAPSHOT_DEFAULT_MAX_MONEYNESS,
+    OPTIONS_SNAPSHOT_DEFAULT_MIN_MONEYNESS,
+    get_options_config,
+)
 from trader_koo.db.schema import ensure_ohlcv_schema
+from trader_koo.options_research import (
+    fetch_yfinance_options_rows,
+    write_options_rows as write_options_snapshot_rows,
+)
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = str((PROJECT_DIR / "data" / "trader_koo.db").resolve())
-DEFAULT_LOG_PATH = str((PROJECT_DIR / "data" / "logs" / "update_market_db.log").resolve())
+DEFAULT_DB_PATH = str(CONFIG_DEFAULT_DB_PATH)
+DEFAULT_LOG_PATH = str(DEFAULT_LOG_DIR / "update_market_db.log")
 
 
 DEFAULT_TARGET_PE = 21.0
@@ -684,69 +695,20 @@ def write_price_daily(
 
 def fetch_options_rows(
     ticker: str,
-    max_expiries: int = 2,
-    min_moneyness: float = 0.7,
-    max_moneyness: float = 1.3,
+    max_expiries: int = OPTIONS_SNAPSHOT_DEFAULT_MAX_EXPIRIES,
+    min_moneyness: float = OPTIONS_SNAPSHOT_DEFAULT_MIN_MONEYNESS,
+    max_moneyness: float = OPTIONS_SNAPSHOT_DEFAULT_MAX_MONEYNESS,
 ) -> list[tuple]:
-    out: list[tuple] = []
-    tk = yf.Ticker(ticker)
-    expiries = list(tk.options or [])[:max_expiries]
-    if not expiries:
-        return out
-
-    spot_hist = tk.history(period="5d")
-    if spot_hist.empty or "Close" not in spot_hist.columns:
-        return out
-    spot = float(spot_hist["Close"].iloc[-1])
-    if spot <= 0:
-        return out
-
-    for exp in expiries:
-        chain = tk.option_chain(exp)
-        for option_type, df in (("call", chain.calls), ("put", chain.puts)):
-            if df is None or df.empty:
-                continue
-            work = df.copy()
-            work["moneyness"] = work["strike"] / spot
-            work = work[
-                (work["moneyness"] >= min_moneyness)
-                & (work["moneyness"] <= max_moneyness)
-            ].copy()
-            if work.empty:
-                continue
-            for r in work.itertuples(index=False):
-                out.append(
-                    (
-                        ticker,
-                        exp,
-                        option_type,
-                        float(r.strike),
-                        float(r.lastPrice) if pd.notna(r.lastPrice) else None,
-                        float(r.bid) if pd.notna(r.bid) else None,
-                        float(r.ask) if pd.notna(r.ask) else None,
-                        float(r.impliedVolatility) if pd.notna(r.impliedVolatility) else None,
-                        float(r.openInterest) if pd.notna(r.openInterest) else None,
-                        float(r.volume) if pd.notna(r.volume) else None,
-                        float(r.moneyness) if pd.notna(r.moneyness) else None,
-                    )
-                )
-    return out
+    return fetch_yfinance_options_rows(
+        ticker,
+        max_expiries=max_expiries,
+        min_moneyness=min_moneyness,
+        max_moneyness=max_moneyness,
+    )
 
 
 def write_options_rows(conn: sqlite3.Connection, snapshot_ts: str, rows: Iterable[tuple]) -> int:
-    data = list(rows)
-    if not data:
-        return 0
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO options_iv (
-            snapshot_ts, ticker, expiration, option_type, strike,
-            last_price, bid, ask, implied_vol, open_interest, volume, moneyness
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [(snapshot_ts, *r) for r in data],
-    )
-    return len(data)
+    return write_options_snapshot_rows(conn, snapshot_ts, rows)
 
 
 def classify_ingest_error(exc: Exception) -> str:
@@ -1267,14 +1229,15 @@ def run(args: argparse.Namespace) -> None:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    options_snapshot_config = get_options_config().snapshot
     p = argparse.ArgumentParser(description="Update local market database (Finviz + prices + options).")
     p.add_argument("--db-path", default=DEFAULT_DB_PATH)
     p.add_argument("--use-sp500", action="store_true")
     p.add_argument("--tickers", default="SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,TSLA")
     p.add_argument("--include-options", action="store_true")
-    p.add_argument("--max-expiries", type=int, default=2)
-    p.add_argument("--min-moneyness", type=float, default=0.7)
-    p.add_argument("--max-moneyness", type=float, default=1.3)
+    p.add_argument("--max-expiries", type=int, default=options_snapshot_config.max_expiries)
+    p.add_argument("--min-moneyness", type=float, default=options_snapshot_config.min_moneyness)
+    p.add_argument("--max-moneyness", type=float, default=options_snapshot_config.max_moneyness)
     p.add_argument("--price-start", default="2018-01-01")
     p.add_argument("--price-end", default=None)
     p.add_argument("--price-lookback-days", type=int, default=10)
@@ -1282,7 +1245,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-price", action="store_true")
     p.add_argument("--auto-adjust", action="store_true")
     p.add_argument("--fund-min-interval-hours", type=float, default=12.0)
-    p.add_argument("--options-min-interval-hours", type=float, default=4.0)
+    p.add_argument(
+        "--options-min-interval-hours",
+        type=float,
+        default=options_snapshot_config.min_interval_hours,
+    )
     p.add_argument("--retry-attempts", type=int, default=3)
     p.add_argument(
         "--max-seconds-per-ticker",

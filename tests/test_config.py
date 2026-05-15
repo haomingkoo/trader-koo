@@ -3,7 +3,7 @@
 import os
 import pytest
 from hypothesis import given, strategies as st
-from trader_koo.config import Config, ConfigError, validate_config
+from trader_koo.config import Config, ConfigError, env_int, get_options_config, validate_config
 
 
 class TestConfigValidation:
@@ -96,6 +96,27 @@ class TestConfigValidation:
             Config()
 
         assert "secrets.token_urlsafe(32)" in str(exc_info.value)
+
+    def test_env_int_rejects_invalid_configured_value(self, monkeypatch):
+        """Invalid configured numbers should fail instead of silently falling back."""
+        monkeypatch.setenv("TRADER_KOO_TEST_INT", "not-a-number")
+
+        with pytest.raises(ConfigError):
+            env_int("TRADER_KOO_TEST_INT", 10, min_value=1, max_value=20)
+
+    def test_options_config_centralizes_runtime_defaults(self, monkeypatch):
+        """Options scheduler/API/digest settings come from the central config."""
+        monkeypatch.setenv("TRADER_KOO_OPTIONS_SNAPSHOT_HOUR_UTC", "20")
+        monkeypatch.setenv("TRADER_KOO_OPTIONS_SNAPSHOT_MINUTE_UTC", "45")
+        monkeypatch.setenv("TRADER_KOO_OPTIONS_DIGEST_LIMIT", "7")
+        monkeypatch.setenv("TRADER_KOO_OPTIONS_PREMIUM_LIMIT", "120")
+
+        config = get_options_config()
+
+        assert config.snapshot.hour_utc == 20
+        assert config.snapshot.minute_utc == 45
+        assert config.digest.limit == 7
+        assert config.premium.default_limit == 120
 
 
 class TestPropertyBasedValidation:

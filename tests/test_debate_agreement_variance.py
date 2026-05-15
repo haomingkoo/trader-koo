@@ -150,5 +150,33 @@ def test_debate_structure():
     assert isinstance(bear["evidence"], list)
 
 
+def test_debate_includes_news_and_options_research_roles():
+    setup = {
+        "trend_state": "uptrend",
+        "pct_change": 1.2,
+        "signal_bias": "bullish",
+        "news_sentiment_score": 72,
+        "macro_news_score": 58,
+        "news_context": {
+            "ticker_headlines": [{"title": "AMD rallies on strong demand"}],
+        },
+        "options_context": {
+            "signal": "underpriced_positioning",
+            "iv_rank_pct": 22,
+            "oi_rank_pct": 91,
+            "underpriced_score": 74,
+            "positioning_skew": "call_oi_skew",
+        },
+    }
+
+    result = build_setup_debate(setup)
+    roles = {role["role"]: role for role in result["roles"]}
+
+    assert result["version"] == "v2"
+    assert "news_catalyst" in roles
+    assert "options_positioning" in roles
+    assert roles["options_positioning"]["stance"] == "bullish"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

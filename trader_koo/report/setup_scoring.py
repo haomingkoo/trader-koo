@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import os
 import sqlite3
 from typing import Any
 
+from trader_koo.config import env_bool, env_float, env_int
 from trader_koo.debate_engine import build_setup_debate
 from trader_koo.llm_narrative import llm_enabled, llm_max_setups, maybe_rewrite_setup_copy
 from trader_koo.report.utils import (
@@ -21,20 +21,15 @@ from trader_koo.report.utils import (
 
 LOG = logging.getLogger(__name__)
 
-TRUTHY_VALUES = {"1", "true", "yes", "on"}
-
-
-def _as_bool(value: Any) -> bool:
-    return str(value or "").strip().lower() in TRUTHY_VALUES
-
-
-SETUP_EVAL_ENABLED = _as_bool(os.getenv("TRADER_KOO_SETUP_EVAL_ENABLED", "1"))
-SETUP_EVAL_TRACK_LIMIT = max(5, int(os.getenv("TRADER_KOO_SETUP_EVAL_TRACK_LIMIT", "40")))
-SETUP_EVAL_WINDOW_DAYS = max(30, int(os.getenv("TRADER_KOO_SETUP_EVAL_WINDOW_DAYS", "180")))
-SETUP_EVAL_MIN_SAMPLE = max(3, int(os.getenv("TRADER_KOO_SETUP_EVAL_MIN_SAMPLE", "5")))
-SETUP_EVAL_HIT_THRESHOLD_PCT = float(os.getenv("TRADER_KOO_SETUP_EVAL_HIT_THRESHOLD_PCT", "0.3"))
-DEBATE_ENGINE_ENABLED = _as_bool(os.getenv("TRADER_KOO_DEBATE_ENABLED", "1"))
-
+SETUP_EVAL_ENABLED = env_bool("TRADER_KOO_SETUP_EVAL_ENABLED", True)
+SETUP_EVAL_TRACK_LIMIT = env_int("TRADER_KOO_SETUP_EVAL_TRACK_LIMIT", 40, min_value=5)
+SETUP_EVAL_WINDOW_DAYS = env_int("TRADER_KOO_SETUP_EVAL_WINDOW_DAYS", 180, min_value=30)
+SETUP_EVAL_MIN_SAMPLE = env_int("TRADER_KOO_SETUP_EVAL_MIN_SAMPLE", 5, min_value=3)
+SETUP_EVAL_HIT_THRESHOLD_PCT = env_float("TRADER_KOO_SETUP_EVAL_HIT_THRESHOLD_PCT", 0.3)
+DEBATE_ENGINE_ENABLED = env_bool("TRADER_KOO_DEBATE_ENABLED", True)
+SETUP_NEWS_ENABLED = env_bool("TRADER_KOO_SETUP_NEWS_ENABLED", True)
+OPTIONS_RESEARCH_ENABLED = env_bool("TRADER_KOO_OPTIONS_RESEARCH_ENABLED", True)
+YOLO_SCORE_MIN_CONF = env_float("TRADER_KOO_YOLO_SCORE_MIN_CONF", 0.35, min_value=0.0, max_value=1.0)
 
 def _yolo_pattern_bias(pattern: Any) -> str:
     name = str(pattern or "").strip().lower()
@@ -192,6 +187,7 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
 
     yolo_age_factor = _yolo_age_factor(yolo_age_days, yolo_timeframe)
     yolo_recency = _yolo_recency_label(yolo_age_days, yolo_timeframe)
+    yolo_score_eligible = bool(row.get("yolo_pattern")) and yolo_conf >= YOLO_SCORE_MIN_CONF
     yolo_direction_conflict = False
     yolo_conflict_strength = "none"
     fresh_bear_gap = recent_gap_state == "bear_gap" and isinstance(recent_gap_days, (int, float)) and float(recent_gap_days) <= 2
@@ -218,13 +214,13 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         confirmations_bear += 1
         contradictions_bull += 1
 
-    if yolo_bias == "bullish" and yolo_age_factor > 0.0:
+    if yolo_bias == "bullish" and yolo_age_factor > 0.0 and yolo_score_eligible:
         boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
         bull_score += boost
         if yolo_age_factor >= 0.5:
             confirmations_bull += 1
         contradictions_bear += 1
-    elif yolo_bias == "bearish" and yolo_age_factor > 0.0:
+    elif yolo_bias == "bearish" and yolo_age_factor > 0.0 and yolo_score_eligible:
         boost = (8.0 + min(8.0, yolo_conf * 10.0)) * yolo_age_factor
         bear_score += boost
         if yolo_age_factor >= 0.5:
@@ -448,7 +444,12 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
     else:
         bias = "neutral"
     score_margin = abs(bull_score - bear_score)
-    if bias in {"bullish", "bearish"} and yolo_bias in {"bullish", "bearish"} and bias != yolo_bias:
+    if (
+        yolo_score_eligible
+        and bias in {"bullish", "bearish"}
+        and yolo_bias in {"bullish", "bearish"}
+        and bias != yolo_bias
+    ):
         yolo_direction_conflict = True
         if yolo_recency == "fresh":
             yolo_conflict_strength = "fresh"
@@ -579,6 +580,7 @@ def _score_setup_from_confluence(row: dict[str, Any]) -> dict[str, Any]:
         "yolo_age_factor": round(yolo_age_factor, 2) if yolo_age_factor else 0.0,
         "yolo_recency": yolo_recency,
         "yolo_bias": yolo_bias or "neutral",
+        "yolo_score_eligible": yolo_score_eligible,
         "yolo_direction_conflict": yolo_direction_conflict,
         "yolo_conflict_strength": yolo_conflict_strength,
         "score_margin": round(score_margin, 1),
@@ -1162,6 +1164,282 @@ def _apply_debate_guardrails(setup_rows: list[dict[str, Any]]) -> None:
                 row["risk_note"] = f"{existing_risk}; {debate_risk}"
         else:
             row["risk_note"] = debate_risk
+
+
+def _append_risk_note(row: dict[str, Any], note: str) -> None:
+    existing = str(row.get("risk_note") or "").strip()
+    if not note or note in existing:
+        return
+    if existing and existing.lower() not in {"none", "-"}:
+        row["risk_note"] = f"{existing}; {note}"
+    else:
+        row["risk_note"] = note
+
+
+def _safe_research_text(value: Any, *, max_len: int = 180) -> str:
+    text = str(value or "").replace("\x00", " ").strip()
+    text = " ".join(text.split())
+    # Keep external text inert for downstream rendering and prompt contexts.
+    text = text.replace("<", "").replace(">", "")
+    return text[:max_len]
+
+
+def _apply_options_research_context(
+    conn: sqlite3.Connection,
+    setup_rows: list[dict[str, Any]],
+) -> int:
+    """Attach free/yfinance options positioning context to setup rows.
+
+    This is not order-flow. It uses local option-chain snapshots to produce a
+    MarketChameleon-style context: IV rank, OI rank, skew, and cheap/elevated
+    volatility flags.
+    """
+    if not OPTIONS_RESEARCH_ENABLED or not setup_rows:
+        return 0
+
+    limit = env_int("TRADER_KOO_OPTIONS_RESEARCH_LIMIT", 80, min_value=1, max_value=500)
+    applied = 0
+    try:
+        from trader_koo.options_research import build_options_positioning_context
+    except Exception as exc:
+        LOG.debug("Options research unavailable: %s", exc)
+        return 0
+
+    for row in setup_rows[:limit]:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "").upper().strip()
+        if not ticker:
+            continue
+        try:
+            ctx = build_options_positioning_context(conn, ticker)
+        except Exception as exc:
+            LOG.debug("Options research failed for %s: %s", ticker, exc)
+            continue
+        if not ctx.get("available"):
+            row["options_context"] = ctx
+            continue
+
+        row["options_context"] = ctx
+        row["options_iv_rank_pct"] = ctx.get("iv_rank_pct")
+        row["options_oi_rank_pct"] = ctx.get("oi_rank_pct")
+        row["options_put_call_oi_ratio"] = ctx.get("put_call_oi_ratio")
+        row["options_underpriced_score"] = ctx.get("underpriced_score")
+        row["options_positioning_signal"] = ctx.get("signal")
+        row["options_positioning_skew"] = ctx.get("positioning_skew")
+
+        signal = str(ctx.get("signal") or "neutral")
+        skew = str(ctx.get("positioning_skew") or "")
+        bias = str(row.get("signal_bias") or "neutral").lower()
+        option_component = 0.0
+        if signal == "underpriced_positioning":
+            option_component += 2.0
+        elif signal == "subdued_iv":
+            option_component += 1.0
+        elif signal == "elevated_iv_event_risk":
+            option_component -= 2.0
+            _append_risk_note(row, "options IV elevated; premium may already price the move")
+        elif signal == "crowded_open_interest":
+            option_component -= 0.5
+            _append_risk_note(row, "options OI crowded versus local history")
+
+        if bias == "bullish" and skew == "call_oi_skew":
+            option_component += 0.75
+        elif bias == "bearish" and skew == "put_oi_skew":
+            option_component += 0.75
+        elif bias == "bullish" and skew == "put_oi_skew":
+            option_component -= 0.75
+        elif bias == "bearish" and skew == "call_oi_skew":
+            option_component -= 0.75
+
+        option_component = _clamp(option_component, -3.0, 3.0)
+        if option_component:
+            base_score = float(row.get("score") or 0.0)
+            row["score"] = round(_clamp(base_score + option_component, 0.0, 100.0), 1)
+            row["confluence_score"] = row["score"]
+            row["setup_tier"] = _setup_tier(row["score"])
+        components = row.setdefault("components", {})
+        if isinstance(components, dict):
+            components["options"] = round(option_component, 2)
+        applied += 1
+
+    return applied
+
+
+def _apply_news_research_context(
+    setup_rows: list[dict[str, Any]],
+    *,
+    as_of_date: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Attach RSS/news pulse to top setup rows before debate.
+
+    External headlines are treated as untrusted data: we only store shortened,
+    inert text snippets and deterministic scores. The rows can use this as a
+    research input, but headlines cannot change code or prompts.
+    """
+    meta: dict[str, Any] = {"enabled": SETUP_NEWS_ENABLED, "annotated": 0}
+    if not SETUP_NEWS_ENABLED or not setup_rows:
+        return meta
+    historical_requires_snapshot = False
+    parsed_as_of: dt.date | None = None
+    if as_of_date:
+        try:
+            parsed_as_of = dt.date.fromisoformat(str(as_of_date)[:10])
+            today_utc = dt.datetime.now(dt.timezone.utc).date()
+            if parsed_as_of < (today_utc - dt.timedelta(days=1)):
+                historical_requires_snapshot = True
+        except ValueError:
+            meta["warning"] = "invalid_as_of_date"
+
+    limit = env_int("TRADER_KOO_SETUP_NEWS_MAX_TICKERS", 12, min_value=0, max_value=50)
+    tickers = []
+    for row in setup_rows:
+        ticker = str(row.get("ticker") or "").upper().strip()
+        if ticker and ticker not in tickers:
+            tickers.append(ticker)
+        if len(tickers) >= limit:
+            break
+    if not tickers:
+        return meta
+
+    try:
+        if historical_requires_snapshot:
+            if conn is None:
+                meta["skipped_reason"] = "live_rss_not_point_in_time"
+                meta["as_of_date"] = parsed_as_of.isoformat() if parsed_as_of else str(as_of_date)
+                return meta
+            from trader_koo.rss_news import load_rss_headline_snapshot
+
+            payload = load_rss_headline_snapshot(
+                conn,
+                tickers=tickers,
+                as_of_date=parsed_as_of.isoformat() if parsed_as_of else as_of_date,
+                max_headlines=max(20, limit * 3),
+            )
+            if not payload.get("available"):
+                meta["skipped_reason"] = "rss_snapshot_unavailable"
+                meta["as_of_date"] = parsed_as_of.isoformat() if parsed_as_of else str(as_of_date)
+                meta["note"] = payload.get("note")
+                return meta
+        else:
+            from trader_koo.rss_news import fetch_rss_headlines, persist_rss_headline_snapshot
+
+            payload = fetch_rss_headlines(
+                tickers=tickers,
+                max_headlines=max(20, limit * 3),
+                include_market_feeds=True,
+            )
+            if conn is not None and payload.get("available"):
+                try:
+                    meta["snapshots_persisted"] = persist_rss_headline_snapshot(
+                        conn,
+                        payload,
+                        snapshot_date=as_of_date,
+                    )
+                    conn.commit()
+                except Exception as exc:
+                    conn.rollback()
+                    LOG.debug("RSS snapshot persistence failed: %s", exc)
+    except Exception as exc:
+        LOG.debug("Setup news context unavailable: %s", exc)
+        meta["error"] = "news_fetch_failed"
+        return meta
+
+    headlines = payload.get("headlines")
+    if not isinstance(headlines, list):
+        return meta
+
+    macro_scores: list[float] = []
+    macro_headlines: list[dict[str, Any]] = []
+    by_ticker: dict[str, list[dict[str, Any]]] = {ticker: [] for ticker in tickers}
+
+    for item in headlines:
+        if not isinstance(item, dict):
+            continue
+        feed_ticker = str(item.get("feed_ticker") or "").upper().strip()
+        score = _to_float(item.get("score"))
+        safe_item = {
+            "title": _safe_research_text(item.get("title")),
+            "source": _safe_research_text(item.get("source"), max_len=80),
+            "url": item.get("url"),
+            "score": score,
+            "label": item.get("label"),
+            "time_published": item.get("time_published"),
+            "macro_relevant": bool(item.get("macro_relevant")),
+        }
+        if feed_ticker in by_ticker:
+            by_ticker[feed_ticker].append(safe_item)
+        if item.get("macro_relevant") and score is not None:
+            macro_scores.append(float(score))
+            if len(macro_headlines) < 5:
+                macro_headlines.append(safe_item)
+
+    macro_score = round(sum(macro_scores) / len(macro_scores), 1) if macro_scores else None
+    meta.update(
+        {
+            "provider": payload.get("provider"),
+            "article_count": payload.get("article_count", 0),
+            "macro_score": macro_score,
+            "tickers": tickers,
+        }
+    )
+
+    for row in setup_rows:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "").upper().strip()
+        ticker_items = by_ticker.get(ticker) or []
+        if not ticker_items and macro_score is None:
+            continue
+
+        ticker_scores = [
+            float(item["score"])
+            for item in ticker_items
+            if isinstance(item.get("score"), (int, float))
+        ]
+        ticker_score = round(sum(ticker_scores) / len(ticker_scores), 1) if ticker_scores else None
+        effective_score = ticker_score if ticker_score is not None else macro_score
+        row["news_context"] = {
+            "provider": payload.get("provider"),
+            "source_note": "RSS headline pulse; deterministic lexicon score, not trade advice.",
+            "ticker_score": ticker_score,
+            "macro_score": macro_score,
+            "ticker_headlines": ticker_items[:3],
+            "macro_headlines": macro_headlines[:3],
+        }
+        row["news_sentiment_score"] = effective_score
+        row["news_headline_count"] = len(ticker_items)
+        row["macro_news_score"] = macro_score
+
+        news_component = 0.0
+        bias = str(row.get("signal_bias") or "neutral").lower()
+        if effective_score is not None:
+            if bias == "bullish":
+                news_component += (float(effective_score) - 50.0) / 12.0
+            elif bias == "bearish":
+                news_component += (50.0 - float(effective_score)) / 12.0
+            else:
+                news_component += (float(effective_score) - 50.0) / 20.0
+        if macro_score is not None and macro_score < 40.0 and bias == "bullish":
+            news_component -= 0.75
+            _append_risk_note(row, "macro/news pulse is risk-off")
+        if macro_score is not None and macro_score > 60.0 and bias == "bearish":
+            news_component -= 0.5
+            _append_risk_note(row, "macro/news pulse conflicts with short bias")
+
+        news_component = _clamp(news_component, -3.0, 3.0)
+        if news_component:
+            base_score = float(row.get("score") or 0.0)
+            row["score"] = round(_clamp(base_score + news_component, 0.0, 100.0), 1)
+            row["confluence_score"] = row["score"]
+            row["setup_tier"] = _setup_tier(row["score"])
+        components = row.setdefault("components", {})
+        if isinstance(components, dict):
+            components["news"] = round(news_component, 2)
+        meta["annotated"] += 1
+
+    return meta
 
 
 def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
@@ -1751,12 +2029,53 @@ def _setup_eval_score_adjustment(
     return round(_clamp(adjustment, -10.0, 10.0), 1)
 
 
+def _score_prior_probability(score: Any) -> float:
+    """Map the rule/evidence score to a conservative prior probability."""
+    numeric = _to_float(score)
+    if numeric is None:
+        return 0.5
+    return _clamp(0.5 + ((float(numeric) - 60.0) / 100.0), 0.15, 0.85)
+
+
+def _calibrated_setup_hit_probability(
+    row: dict[str, Any],
+    stat: dict[str, Any] | None,
+    *,
+    min_sample: int,
+    baseline_hit_rate_pct: float | None,
+) -> dict[str, Any]:
+    """Continuous hit probability from empirical outcomes + current evidence.
+
+    This is intentionally simpler than the ML model. It is not a trade gate:
+    it gives the UI and Telegram bot a continuous, calibrated confidence field
+    while the LightGBM remains observation-only until it proves OOS edge.
+    """
+    baseline = _clamp(float(baseline_hit_rate_pct or 50.0) / 100.0, 0.05, 0.95)
+    score_prior = _score_prior_probability(row.get("score"))
+    calls = int(stat.get("calls") or 0) if stat else 0
+    family_hit = _to_float(stat.get("hit_rate_pct")) if stat else None
+    if calls >= max(1, int(min_sample)) and family_hit is not None:
+        empirical = _clamp(float(family_hit) / 100.0, 0.05, 0.95)
+    else:
+        empirical = baseline
+    sample_weight = _clamp(calls / float(max(1, int(min_sample) * 4)), 0.0, 0.85)
+    probability = (empirical * sample_weight) + (score_prior * (1.0 - sample_weight))
+
+    return {
+        "calibrated_hit_prob": round(_clamp(probability, 0.05, 0.95), 4),
+        "probability_source": "empirical_bayes_setup_eval",
+        "probability_sample_size": calls,
+        "probability_baseline_pct": round(baseline * 100.0, 2),
+    }
+
+
 def _apply_setup_eval_fields(
     setup_rows: list[dict[str, Any]],
     *,
     reliability_lookup: dict[tuple[str, str], dict[str, Any]],
     min_sample: int,
     hit_threshold_pct: float,
+    baseline_hit_rate_pct: float | None = None,
     calibration_state: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Apply calibration adjustments to setup scores.
@@ -1783,6 +2102,24 @@ def _apply_setup_eval_fields(
         row["historical_reliability_pct"] = stat.get("hit_rate_pct") if stat else None
         row["historical_sample_size"] = int(stat.get("calls") or 0) if stat else 0
         row["historical_avg_signed_return_pct"] = stat.get("avg_signed_return_pct") if stat else None
+        row.update(
+            _calibrated_setup_hit_probability(
+                row,
+                stat,
+                min_sample=min_sample,
+                baseline_hit_rate_pct=baseline_hit_rate_pct,
+            )
+        )
+        hit_prob = _to_float(row.get("calibrated_hit_prob"))
+        if hit_prob is not None:
+            if hit_prob >= 0.62:
+                row["probability_label"] = "high"
+            elif hit_prob >= 0.53:
+                row["probability_label"] = "medium"
+            elif hit_prob <= 0.45:
+                row["probability_label"] = "low"
+            else:
+                row["probability_label"] = "neutral"
         if stat:
             row["reliability_label"] = (
                 f"{_round_or_none(stat.get('hit_rate_pct'))}% hit rate "
@@ -1919,6 +2256,11 @@ def _refresh_setup_eval_surfaces(signals: dict[str, Any]) -> None:
         "historical_reliability_pct",
         "historical_sample_size",
         "historical_avg_signed_return_pct",
+        "calibrated_hit_prob",
+        "probability_label",
+        "probability_source",
+        "probability_sample_size",
+        "probability_baseline_pct",
         "reliability_label",
         "reliability_signal",
         "setup_score_raw",

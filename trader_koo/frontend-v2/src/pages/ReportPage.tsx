@@ -13,6 +13,7 @@ import {
 import SectorHeatmap from "../components/report/SectorHeatmap";
 import SetupEvaluationPanel from "../components/report/SetupEvaluationPanel";
 import SetupQualitySection from "../components/report/SetupQualitySection";
+import SuggestionSection from "../components/report/SuggestionSection";
 
 /* ── Main Page ── */
 
@@ -77,11 +78,8 @@ export default function ReportPage() {
     <div className="space-y-6">
       {/* NFA disclaimer banner */}
       <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
-        <strong>For informational and educational purposes only.</strong> Nothing on this
-        page constitutes investment advice, a recommendation, or a solicitation to buy or sell
-        any security. All content may be inaccurate, incomplete, or outdated. Past performance
-        is not indicative of future results. Consult a licensed financial advisor before making
-        any investment decisions. Use entirely at your own risk.
+        <strong>Research only. Not financial advice.</strong> Data may be stale, partial, or wrong.
+        Past performance does not guarantee future results.
       </div>
 
       {reportDetail && (
@@ -115,6 +113,8 @@ export default function ReportPage() {
           />
 
           <KeyChangesSection changes={signals.tonight_key_changes ?? []} />
+
+          <SuggestionSection suggestions={signals.suggestions} />
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
             <FearGreedGauge />

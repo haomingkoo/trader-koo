@@ -9,7 +9,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,7 @@ from typing import Any
 import pandas as pd
 from fastapi import HTTPException
 
+from trader_koo.config import DEFAULT_DB_PATH, PACKAGE_DIR, env_path
 from trader_koo.db.schema import ensure_ohlcv_schema
 from trader_koo.scripts.generate_daily_report import (
     _yolo_age_factor as _report_yolo_age_factor,
@@ -25,9 +25,9 @@ from trader_koo.scripts.generate_daily_report import (
 
 LOG = logging.getLogger("trader_koo.services.database")
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_DB_PRIMARY = (PROJECT_DIR / "data" / "trader_koo.db").resolve()
-DB_PATH = Path(os.getenv("TRADER_KOO_DB_PATH", str(DEFAULT_DB_PRIMARY)))
+PROJECT_DIR = PACKAGE_DIR
+DEFAULT_DB_PRIMARY = DEFAULT_DB_PATH
+DB_PATH = env_path("TRADER_KOO_DB_PATH", DEFAULT_DB_PATH)
 
 
 # ---------------------------------------------------------------------------

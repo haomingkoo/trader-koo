@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ComponentProps } from "react";
 import { Link } from "react-router-dom";
 import type { ChartCommentary, SetupRow } from "../../api/types";
 import Badge, { tierVariant } from "../ui/Badge";
@@ -12,7 +12,7 @@ function normalizeDebate(
   const debate = raw as DebateData | null | undefined;
   if (!debate || typeof debate !== "object" || !debate.consensus) return undefined;
   return {
-    version: Number(debate.version ?? 1),
+    version: String(debate.version ?? "v1"),
     consensus: {
       consensus_state: String(debate.consensus.consensus_state ?? "unknown"),
       consensus_bias: String(debate.consensus.consensus_bias ?? "neutral"),
@@ -30,6 +30,31 @@ function normalizeDebate(
         }))
       : [],
   };
+}
+
+function asNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function optionSignalLabel(signal: unknown): string {
+  return String(signal ?? "neutral").replace(/_/g, " ");
+}
+
+function optionSignalVariant(signal: unknown): ComponentProps<typeof Badge>["variant"] {
+  const value = String(signal ?? "");
+  if (value === "underpriced_positioning" || value === "subdued_iv") return "green";
+  if (value === "elevated_iv_event_risk" || value === "crowded_open_interest") return "amber";
+  return "muted";
+}
+
+function probabilityVariant(probability: unknown): ComponentProps<typeof Badge>["variant"] {
+  const value = asNumber(probability);
+  if (value == null) return "muted";
+  if (value >= 0.62) return "green";
+  if (value <= 0.45) return "red";
+  if (value >= 0.53) return "blue";
+  return "muted";
 }
 
 function DebateVisualization({ debate }: { debate: DebateData }) {
@@ -252,6 +277,9 @@ function SetupTableRow({
                     {Boolean(row.yolo_bias) && (
                       <Badge variant={biasVariant(String(row.yolo_bias))}>{String(row.yolo_bias)}</Badge>
                     )}
+                    {row.yolo_score_eligible === false && (
+                      <Badge variant="amber">Low-conf pattern</Badge>
+                    )}
                   </>
                 )}
               </div>
@@ -345,6 +373,22 @@ export default function SetupQualitySection({
       render: (row) => <span className="tabular-nums">{fmt(row.score, 1)}</span>,
     },
     {
+      key: "calibrated_hit_prob",
+      label: "Prob",
+      render: (row) => {
+        const prob = asNumber(row.calibrated_hit_prob);
+        if (prob == null) return "\u2014";
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge variant={probabilityVariant(prob)}>{(prob * 100).toFixed(0)}%</Badge>
+            <span className="text-[10px] text-[var(--muted)]">
+              n={asNumber(row.probability_sample_size)?.toFixed(0) ?? "0"}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
       key: "setup_tier",
       label: "Tier",
       render: (row) =>
@@ -363,6 +407,46 @@ export default function SetupQualitySection({
         ) : (
           "\u2014"
         ),
+    },
+    {
+      key: "options_underpriced_score",
+      label: "Options",
+      render: (row) => {
+        const signal = row.options_positioning_signal;
+        const ivRank = asNumber(row.options_iv_rank_pct);
+        const oiRank = asNumber(row.options_oi_rank_pct);
+        if (!signal && ivRank == null && oiRank == null) return "\u2014";
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge variant={optionSignalVariant(signal)} className="w-fit max-w-[130px] truncate">
+              {optionSignalLabel(signal)}
+            </Badge>
+            <span className="text-[10px] tabular-nums text-[var(--muted)]">
+              IV {ivRank != null ? `${ivRank.toFixed(0)}%` : "\u2014"} / OI{" "}
+              {oiRank != null ? `${oiRank.toFixed(0)}%` : "\u2014"}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      key: "news_sentiment_score",
+      label: "News",
+      render: (row) => {
+        const score = asNumber(row.news_sentiment_score);
+        if (score == null) return "\u2014";
+        const variant = score >= 60 ? "green" : score <= 40 ? "red" : "muted";
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge variant={variant}>{score.toFixed(0)}</Badge>
+            {asNumber(row.macro_news_score) != null ? (
+              <span className="text-[10px] tabular-nums text-[var(--muted)]">
+                Macro {asNumber(row.macro_news_score)?.toFixed(0)}
+              </span>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       key: "setup",
@@ -447,6 +531,11 @@ export default function SetupQualitySection({
                       {debate?.consensus?.agreement_score != null ? (
                         <Badge variant="muted">
                           Debate {debate.consensus.agreement_score.toFixed(0)}%
+                        </Badge>
+                      ) : null}
+                      {asNumber(row.calibrated_hit_prob) != null ? (
+                        <Badge variant={probabilityVariant(row.calibrated_hit_prob)}>
+                          P {(Number(row.calibrated_hit_prob) * 100).toFixed(0)}%
                         </Badge>
                       ) : null}
                     </div>
