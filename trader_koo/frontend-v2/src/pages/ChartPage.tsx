@@ -28,6 +28,38 @@ import {
 
 /* ── Main Page ── */
 
+// Throttle the live price that drives the full Plotly rebuild. Equity ticks can
+// arrive several times per second; coalescing them to a fixed cadence keeps the
+// LIVE candle/badge visually current while avoiding a full trace rebuild per tick.
+// Toolbar/fundamentals keep using the unthrottled livePrice for instant display.
+const CHART_LIVE_PRICE_THROTTLE_MS = 1000;
+
+function useThrottledValue<T>(value: T, intervalMs: number): T {
+  const [throttled, setThrottled] = useState(value);
+  const lastEmit = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const now = Date.now();
+    const elapsed = now - lastEmit.current;
+    if (elapsed >= intervalMs) {
+      lastEmit.current = now;
+      setThrottled(value);
+    } else {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        lastEmit.current = Date.now();
+        setThrottled(value);
+      }, intervalMs - elapsed);
+    }
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [value, intervalMs]);
+
+  return throttled;
+}
+
 export default function ChartPage() {
   const { ticker, timeframe, setTicker, setTimeframe } = useChartStore();
   const [searchParams] = useSearchParams();
@@ -131,9 +163,11 @@ export default function ChartPage() {
   const commentary = commentaryData?.chart_commentary ?? null;
   const freshness = quickData?.data_freshness ?? undefined;
   const isWeekly = timeframe === "weekly";
+  // Throttled copy for the chart rebuild only; toolbar/fundamentals stay instant.
+  const chartLivePrice = useThrottledValue(livePrice, CHART_LIVE_PRICE_THROTTLE_MS);
   const livePayload = useMemo(
-    () => applyLivePriceToPayload(data, livePrice),
-    [data, livePrice],
+    () => applyLivePriceToPayload(data, chartLivePrice),
+    [data, chartLivePrice],
   );
 
   // Build effective live candle: start from API live_candle, overlay WS price if newer
@@ -144,26 +178,28 @@ export default function ChartPage() {
         : null;
     if (!apiCandle) return null;
 
-    // If WS price exists and belongs to the same ticker, update close/high/low
+    // If WS price exists and belongs to the same ticker, update close/high/low.
+    // Use the throttled price so this memo (and the downstream full chart rebuild)
+    // coalesces ticks instead of recomputing on every WS message.
     if (
-      livePrice &&
-      typeof livePrice.price === "number" &&
-      Number.isFinite(livePrice.price) &&
-      livePrice.symbol === data?.ticker
+      chartLivePrice &&
+      typeof chartLivePrice.price === "number" &&
+      Number.isFinite(chartLivePrice.price) &&
+      chartLivePrice.symbol === data?.ticker
     ) {
-      const wsTime = livePrice.timestamp ? new Date(livePrice.timestamp).getTime() : 0;
+      const wsTime = chartLivePrice.timestamp ? new Date(chartLivePrice.timestamp).getTime() : 0;
       const apiTime = apiCandle.timestamp ? new Date(apiCandle.timestamp).getTime() : 0;
       if (wsTime > apiTime) {
         return {
           ...apiCandle,
-          close: livePrice.price,
-          high: Math.max(apiCandle.high, livePrice.price),
-          low: Math.min(apiCandle.low, livePrice.price),
+          close: chartLivePrice.price,
+          high: Math.max(apiCandle.high, chartLivePrice.price),
+          low: Math.min(apiCandle.low, chartLivePrice.price),
         };
       }
     }
     return apiCandle;
-  }, [data, livePrice]);
+  }, [data, chartLivePrice]);
 
   const chartResult = useMemo(() => {
     if (!livePayload || !livePayload.chart || livePayload.chart.length === 0) {

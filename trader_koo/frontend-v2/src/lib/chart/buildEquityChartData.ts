@@ -15,12 +15,14 @@ export function formatChartNumber(
 }
 
 function ma(arr: number[], n: number): (number | null)[] {
-  return arr.map((_, i) => {
-    if (i < n - 1) return null;
-    let s = 0;
-    for (let j = i - n + 1; j <= i; j++) s += arr[j];
-    return s / n;
-  });
+  const result: (number | null)[] = new Array(arr.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i];
+    if (i >= n) sum -= arr[i - n];
+    if (i >= n - 1) result[i] = sum / n;
+  }
+  return result;
 }
 
 function ema(arr: number[], n: number): (number | null)[] {
@@ -158,34 +160,33 @@ function computeRollingBollinger(
   period: number,
   stdDev: number,
 ): { upper: (number | null)[]; middle: (number | null)[]; lower: (number | null)[] } {
-  return values
-    .map((_, idx) => {
-      if (idx < period - 1) {
-        return { upper: null, middle: null, lower: null };
-      }
-      const window = values.slice(idx - period + 1, idx + 1);
-      const mean = window.reduce((a, b) => a + b, 0) / period;
-      const variance = window.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
+  const upper: (number | null)[] = new Array(values.length).fill(null);
+  const middle: (number | null)[] = new Array(values.length).fill(null);
+  const lower: (number | null)[] = new Array(values.length).fill(null);
+
+  let sum = 0;
+  let sumSq = 0;
+  for (let idx = 0; idx < values.length; idx++) {
+    const v = values[idx];
+    sum += v;
+    sumSq += v * v;
+    if (idx >= period) {
+      const drop = values[idx - period];
+      sum -= drop;
+      sumSq -= drop * drop;
+    }
+    if (idx >= period - 1) {
+      const mean = sum / period;
+      // Variance via E[x^2] - E[x]^2; clamp tiny negatives from float error.
+      const variance = Math.max(sumSq / period - mean * mean, 0);
       const sd = Math.sqrt(variance);
-      return {
-        upper: mean + stdDev * sd,
-        middle: mean,
-        lower: mean - stdDev * sd,
-      };
-    })
-    .reduce(
-      (acc, row) => {
-        acc.upper.push(row.upper);
-        acc.middle.push(row.middle);
-        acc.lower.push(row.lower);
-        return acc;
-      },
-      {
-        upper: [] as (number | null)[],
-        middle: [] as (number | null)[],
-        lower: [] as (number | null)[],
-      },
-    );
+      upper[idx] = mean + stdDev * sd;
+      middle[idx] = mean;
+      lower[idx] = mean - stdDev * sd;
+    }
+  }
+
+  return { upper, middle, lower };
 }
 
 function defaultThreeMonthRange(dates: string[]): [string, string] | undefined {
@@ -592,6 +593,10 @@ export function buildChartData(
   }
 
   if (candlePatterns.length > 0) {
+    const dateIndex = new Map<string, number>();
+    for (let i = 0; i < x.length; i++) {
+      if (!dateIndex.has(x[i])) dateIndex.set(x[i], i);
+    }
     const bullish = candlePatterns.filter(
       (p) => (p.bias ?? "").toLowerCase() === "bullish",
     );
@@ -604,7 +609,7 @@ export function buildChartData(
         mode: "markers",
         x: bullish.map((p) => p.date),
         y: bullish.map((p) => {
-          const i = x.indexOf(p.date);
+          const i = dateIndex.get(p.date) ?? -1;
           return i >= 0 ? low[i] * 0.994 : null;
         }),
         name: "Bullish Signal",
@@ -623,7 +628,7 @@ export function buildChartData(
         mode: "markers",
         x: bearish.map((p) => p.date),
         y: bearish.map((p) => {
-          const i = x.indexOf(p.date);
+          const i = dateIndex.get(p.date) ?? -1;
           return i >= 0 ? high[i] * 1.006 : null;
         }),
         name: "Bearish Signal",
