@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { CryptoPrice } from "../api/types";
 import { CryptoWsContext } from "./cryptoWsContext";
@@ -75,8 +75,13 @@ export function CryptoWsProvider({ children }: { children: ReactNode }) {
     };
   }, [connect]);
 
+  const value = useMemo(
+    () => ({ prices, connected, send, addListener }),
+    [prices, connected, send, addListener],
+  );
+
   return (
-    <CryptoWsContext.Provider value={{ prices, connected, send, addListener }}>
+    <CryptoWsContext.Provider value={value}>
       {children}
     </CryptoWsContext.Provider>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { EquityTick } from "../api/types";
 import { EquityWsContext } from "./equityWsContext";
@@ -54,8 +54,10 @@ export function EquityWsProvider({ children }: { children: ReactNode }) {
     };
   }, [connect]);
 
+  const value = useMemo(() => ({ prices, connected }), [prices, connected]);
+
   return (
-    <EquityWsContext.Provider value={{ prices, connected }}>
+    <EquityWsContext.Provider value={value}>
       {children}
     </EquityWsContext.Provider>
   );
