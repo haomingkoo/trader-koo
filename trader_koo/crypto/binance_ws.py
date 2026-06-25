@@ -378,6 +378,10 @@ class BinanceWSClient:
                 self._bars[display_symbol].append(bar)
                 self._pending_bars.append(bar)
 
+        # Roll the 24h reference window forward on each closed bar.
+        if is_closed:
+            self._prune_old_bars()
+
         # Notify candle close callback (outside the lock)
         if is_closed and self._on_candle_close is not None:
             try:

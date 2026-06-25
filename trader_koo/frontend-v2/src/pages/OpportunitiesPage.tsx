@@ -200,9 +200,7 @@ export default function OpportunitiesPage() {
 
       <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] px-4 py-3 text-xs text-[var(--muted)]">
         Snapshot: {formatTimestamp(data?.snapshot_ts)}
-        {typeof rows.length === "number" && (
-          <span className="ml-2">• {rows.length} names shown</span>
-        )}
+        <span className="ml-2">• {rows.length} names shown</span>
       </div>
 
       {/* Main table */}

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+import statistics
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -192,19 +193,15 @@ def _apply_ensemble_adjustment(row: dict[str, Any]) -> None:
         if agreement >= 80:
             boost *= 1.5
         score = min(100.0, score + boost)
-        row["ensemble_effect"] = f"+{boost:.1f} (ensemble agrees)"
     elif ensemble_bias != "neutral" and confluence_bias != "neutral" and ensemble_bias != confluence_bias:
         # Disagreement: penalize and potentially downgrade tier
         penalty = min(10.0, abs(net_score) * 0.12)
         if agreement >= 80:
             penalty *= 1.5
         score = max(0.0, score - penalty)
-        row["ensemble_effect"] = f"-{penalty:.1f} (ensemble disagrees)"
         # Strong disagreement with high agreement: downgrade tier
         if penalty >= 8.0 and tier in {"A", "B"}:
             tier = "B" if tier == "A" else "C"
-    else:
-        row["ensemble_effect"] = "neutral"
 
     row["score"] = round(score, 1)
     row["confluence_score"] = round(score, 1)
@@ -442,14 +439,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
 
         total = advancers + decliners + unchanged
         avg_pct = (sum(pct_changes) / len(pct_changes)) if pct_changes else None
-        median_pct: float | None = None
-        if pct_changes:
-            sorted_changes = sorted(pct_changes)
-            n = len(sorted_changes)
-            if n % 2 == 1:
-                median_pct = sorted_changes[n // 2]
-            else:
-                median_pct = (sorted_changes[(n // 2) - 1] + sorted_changes[n // 2]) / 2.0
+        median_pct: float | None = statistics.median(pct_changes) if pct_changes else None
         signals["market_breadth"] = {
             "total_tickers": total,
             "advancers": advancers,
@@ -909,7 +899,6 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                     row["ensemble_bias"] = ensemble["aggregate"]["bias"]
                     row["ensemble_net_score"] = ensemble["aggregate"]["net_score"]
                     row["ensemble_agreement_pct"] = ensemble["aggregate"]["agreement_pct"]
-                    row["ensemble_strategies"] = ensemble["strategies"]
             except Exception as exc:
                 LOG.debug("Ensemble enrichment skipped for %s: %s", row.get("ticker"), exc)
 
@@ -923,12 +912,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             changes = [float(x) for x in bucket.pop("_changes", [])]
             if not changes:
                 continue
-            changes_sorted = sorted(changes)
-            n = len(changes_sorted)
-            if n % 2 == 1:
-                median_change = changes_sorted[n // 2]
-            else:
-                median_change = (changes_sorted[(n // 2) - 1] + changes_sorted[n // 2]) / 2.0
+            median_change = statistics.median(changes)
             tickers = int(bucket.get("tickers") or 0)
             advancers = int(bucket.get("advancers") or 0)
             bucket["avg_pct_change"] = round(sum(changes) / len(changes), 2)

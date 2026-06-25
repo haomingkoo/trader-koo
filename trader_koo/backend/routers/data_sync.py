@@ -7,6 +7,7 @@ Provides admin-only endpoints for:
 
 All endpoints require X-API-Key authentication via the standard admin middleware.
 """
+import csv
 import io
 import logging
 import os
@@ -106,13 +107,9 @@ def export_table_csv(
 
         # Build CSV in memory
         buf = io.StringIO()
-        buf.write(",".join(columns) + "\n")
-        for row in rows:
-            line = ",".join(
-                _csv_escape(str(val)) if val is not None else ""
-                for val in row
-            )
-            buf.write(line + "\n")
+        w = csv.writer(buf, lineterminator="\n")
+        w.writerow(columns)
+        w.writerows([["" if v is None else v for v in row] for row in rows])
 
         buf.seek(0)
         LOG.info(
@@ -127,13 +124,6 @@ def export_table_csv(
         )
     finally:
         conn.close()
-
-
-def _csv_escape(value: str) -> str:
-    """Escape a CSV field if it contains commas, quotes, or newlines."""
-    if "," in value or '"' in value or "\n" in value:
-        return '"' + value.replace('"', '""') + '"'
-    return value
 
 
 # ---------------------------------------------------------------------------

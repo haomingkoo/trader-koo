@@ -1,14 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { EquityTick } from "../api/types";
-
-interface EquityWsContextValue {
-  /** All broadcast equity ticks keyed by symbol. */
-  prices: Record<string, EquityTick>;
-  connected: boolean;
-}
-
-const EquityWsContext = createContext<EquityWsContextValue | null>(null);
+import { EquityWsContext } from "./equityWsContext";
 
 export function EquityWsProvider({ children }: { children: ReactNode }) {
   const [prices, setPrices] = useState<Record<string, EquityTick>>({});
@@ -16,6 +9,7 @@ export function EquityWsProvider({ children }: { children: ReactNode }) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoff = useRef(1000);
+  const reconnectRef = useRef<() => void>(() => {});
 
   const connect = useCallback(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -40,13 +34,17 @@ export function EquityWsProvider({ children }: { children: ReactNode }) {
       wsRef.current = null;
       reconnectTimer.current = setTimeout(() => {
         backoff.current = Math.min(backoff.current * 2, 30_000);
-        connect();
+        reconnectRef.current();
       }, backoff.current);
     };
 
     ws.onerror = () => ws.close();
     wsRef.current = ws;
   }, []);
+
+  useEffect(() => {
+    reconnectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     connect();
@@ -61,10 +59,4 @@ export function EquityWsProvider({ children }: { children: ReactNode }) {
       {children}
     </EquityWsContext.Provider>
   );
-}
-
-export function useEquityWs(): EquityWsContextValue {
-  const ctx = useContext(EquityWsContext);
-  if (!ctx) throw new Error("useEquityWs must be used within EquityWsProvider");
-  return ctx;
 }

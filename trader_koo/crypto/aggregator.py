@@ -228,19 +228,3 @@ class CandleAggregator:
                 return None
             minutes = INTERVAL_MINUTES.get(interval, 1)
             return forming.to_dict(minutes)
-
-    def get_snapshot(self, symbol: str) -> dict:
-        """Get latest price + all forming candles for a symbol."""
-        with self._lock:
-            price = self._latest_price.get(symbol)
-            forming_map: dict[str, dict] = {}
-            for interval in INTERVALS:
-                forming = (self._forming.get(symbol) or {}).get(interval)
-                if forming is not None:
-                    minutes = INTERVAL_MINUTES.get(interval, 1)
-                    forming_map[interval] = forming.to_dict(minutes)
-            return {
-                "symbol": symbol,
-                "price": price,
-                "forming": forming_map,
-            }

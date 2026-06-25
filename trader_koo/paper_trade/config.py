@@ -42,6 +42,10 @@ class PaperTradeConfig:
     max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
     max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this
     starting_capital: float = 1_000_000.0  # initial paper portfolio value
+    # Benchmark-aware allocation model. The paper-trade book is treated as the
+    # satellite overlay; SPY buy-and-hold is the default core benchmark.
+    core_allocation_pct: float = 70.0
+    satellite_allocation_pct: float = 30.0
     # Realism costs (conservative defaults — better to overestimate than underestimate)
     entry_slippage_bps: float = 10.0  # 10 bps entry slippage (0.10%)
     exit_slippage_bps: float = 10.0  # 10 bps exit slippage on stop-market orders
@@ -91,4 +95,8 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
         },
         "expiry_use_trading_days": config.expiry_use_trading_days,
         "critic_fail_open": config.critic_fail_open,
+        "core_satellite": {
+            "core_allocation_pct": config.core_allocation_pct,
+            "satellite_allocation_pct": config.satellite_allocation_pct,
+        },
     }

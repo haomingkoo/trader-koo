@@ -500,25 +500,6 @@ class Config:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
-    def _parse_int(value: str, default: int, min_value: int, max_value: int) -> int:
-        """Parse integer from environment variable with bounds checking.
-
-        Args:
-            value: The string value to parse.
-            default: Default value if parsing fails.
-            min_value: Minimum allowed value.
-            max_value: Maximum allowed value.
-
-        Returns:
-            Parsed integer within bounds, or default if parsing fails.
-        """
-        try:
-            parsed = int(str(value or "").strip())
-            return max(min_value, min(max_value, parsed))
-        except ValueError:
-            return default
-
-    @staticmethod
     def _parse_cors_origins(value: str) -> list[str]:
         """Parse comma-separated CORS origins from environment variable.
 

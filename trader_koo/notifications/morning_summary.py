@@ -23,6 +23,7 @@ import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
 from trader_koo.notifications.telegram import is_configured, send_message
@@ -322,21 +323,7 @@ def _count_watched_tickers(report: dict[str, Any]) -> int:
 
 def _hours_to_market_open() -> float:
     """Estimate hours until US market open (09:30 ET) from current UTC time."""
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    # US Eastern Time — approximate with fixed offset; actual DST logic not critical
-    # for a rough "X hours" display
-    et_offset = dt.timedelta(hours=-5)
-    # Check if we're in DST (Mar second Sun – Nov first Sun) — simplified
-    month = now_utc.month
-    if 3 < month < 11:
-        et_offset = dt.timedelta(hours=-4)
-    elif month == 3 and now_utc.day >= 8:
-        et_offset = dt.timedelta(hours=-4)
-    elif month == 11 and now_utc.day < 7:
-        et_offset = dt.timedelta(hours=-4)
-
-    et_tz = dt.timezone(et_offset)
-    now_et = now_utc.astimezone(et_tz)
+    now_et = dt.datetime.now(ZoneInfo("America/New_York"))
 
     # Next market open: today 09:30 ET if before that, else tomorrow 09:30 ET
     market_open_today = now_et.replace(

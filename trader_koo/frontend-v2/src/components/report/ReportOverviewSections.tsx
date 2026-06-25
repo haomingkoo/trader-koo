@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import type {
   KeyChange,
   RegimeContext,
+  ReportLatest,
   RiskCondition,
   YoloBlock,
 } from "../../api/types";
@@ -28,6 +29,127 @@ export function SummaryKpiRow({
         Generated {ts.local}
       </div>
       <div className="mt-1 text-xs text-[var(--muted)]">NY: {ts.ny}</div>
+    </GlassCard>
+  );
+}
+
+function compactAge(hours: number | null | undefined): string | null {
+  if (typeof hours !== "number") return null;
+  if (hours < 24) return `${hours.toFixed(0)}h old`;
+  return `${(hours / 24).toFixed(1)}d old`;
+}
+
+function EvidenceChip({
+  label,
+  value,
+  detail,
+  stale = false,
+}: {
+  label: string;
+  value: string | null | undefined;
+  detail?: string | null;
+  stale?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2 ${
+        stale
+          ? "border-[var(--amber)]/35 bg-[var(--amber)]/5"
+          : "border-[var(--line)] bg-[var(--bg)]/40"
+      }`}
+    >
+      <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+        {label}
+      </div>
+      <div className="mt-1 truncate text-xs font-semibold text-[var(--text)]">
+        {value || "Unavailable"}
+      </div>
+      {detail && (
+        <div className="mt-0.5 truncate text-[10px] text-[var(--muted)]">
+          {detail}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function EvidenceSourceStrip({
+  generatedTs,
+  latestData,
+  freshness,
+  warnings = [],
+}: {
+  generatedTs: string | null;
+  latestData: ReportLatest["latest_data"];
+  freshness: ReportLatest["freshness"];
+  warnings?: string[];
+}) {
+  const generated = formatReportTimestamp(generatedTs);
+  const priceAge = compactAge(
+    typeof freshness?.price_age_days === "number"
+      ? freshness.price_age_days * 24
+      : null,
+  );
+  const fundAge = compactAge(freshness?.fund_age_hours);
+  const optionsAge = compactAge(freshness?.opt_age_hours);
+  const yoloAge = compactAge(freshness?.yolo_age_hours);
+
+  return (
+    <GlassCard>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+            Evidence & Freshness
+          </div>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            Source timestamps are shown so report claims can be checked before acting on them.
+          </p>
+        </div>
+        {warnings.length > 0 && (
+          <Badge variant="amber">{warnings.length} warning{warnings.length === 1 ? "" : "s"}</Badge>
+        )}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        <EvidenceChip
+          label="Report"
+          value={generated.local}
+          detail={`NY ${generated.ny}`}
+        />
+        <EvidenceChip
+          label="Prices"
+          value={latestData?.price_date}
+          detail={priceAge}
+          stale={Boolean(freshness?.price_age_days != null && freshness.price_age_days > 1)}
+        />
+        <EvidenceChip
+          label="Fundamentals"
+          value={latestData?.fund_snapshot}
+          detail={fundAge}
+          stale={Boolean(freshness?.fund_age_hours != null && freshness.fund_age_hours > 72)}
+        />
+        <EvidenceChip
+          label="Options"
+          value={latestData?.options_snapshot}
+          detail={optionsAge}
+          stale={Boolean(freshness?.opt_age_hours != null && freshness.opt_age_hours > 72)}
+        />
+        <EvidenceChip
+          label="YOLO"
+          value={latestData?.yolo_detected_ts}
+          detail={yoloAge}
+          stale={Boolean(freshness?.yolo_age_hours != null && freshness.yolo_age_hours > 72)}
+        />
+      </div>
+      {warnings.length > 0 && (
+        <ul className="mt-3 space-y-1 border-t border-[var(--line)] pt-3">
+          {warnings.slice(0, 3).map((warning, index) => (
+            <li key={`${warning}-${index}`} className="text-[11px] text-[var(--muted)]">
+              <span className="font-semibold text-[var(--amber)]">Warning:</span>{" "}
+              {warning}
+            </li>
+          ))}
+        </ul>
+      )}
     </GlassCard>
   );
 }

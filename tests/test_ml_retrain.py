@@ -19,7 +19,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trader_koo.backend.routers.admin.ml import (
+    _finalize_model_promotion,
     _log_retrain_metrics,
+    _snapshot_latest_model_files,
     _send_retrain_notification,
 )
 
@@ -110,6 +112,62 @@ class TestLogRetrainMetrics:
 
         rows = conn.execute("SELECT * FROM ml_train_log").fetchall()
         assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: model promotion guard
+# ---------------------------------------------------------------------------
+
+class TestModelPromotionGuard:
+    def test_blocked_validation_restores_previous_latest(self, tmp_path: Path) -> None:
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        latest_model = model_dir / "swing_lgbm_latest.txt"
+        latest_meta = model_dir / "swing_lgbm_latest_meta.json"
+        latest_model.write_text("old-model", encoding="utf-8")
+        latest_meta.write_text('{"old": true}', encoding="utf-8")
+
+        snapshot = _snapshot_latest_model_files(model_dir)
+        latest_model.write_text("bad-candidate", encoding="utf-8")
+        latest_meta.write_text('{"bad": true}', encoding="utf-8")
+        (model_dir / "swing_meta_lgbm_latest.txt").write_text("bad-meta", encoding="utf-8")
+
+        action = _finalize_model_promotion(
+            model_dir,
+            snapshot,
+            {
+                "validation_registry": {
+                    "champion_eligible": False,
+                    "promotion_status": "blocked",
+                    "eligibility_reasons": ["does_not_beat_rule_baseline"],
+                },
+            },
+        )
+
+        assert action["promoted"] is False
+        assert action["restored_previous_latest"] is True
+        assert latest_model.read_text(encoding="utf-8") == "old-model"
+        assert latest_meta.read_text(encoding="utf-8") == '{"old": true}'
+        assert not (model_dir / "swing_meta_lgbm_latest.txt").exists()
+
+    def test_eligible_validation_keeps_candidate_latest(self, tmp_path: Path) -> None:
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        latest_model = model_dir / "swing_lgbm_latest.txt"
+        latest_model.write_text("old-model", encoding="utf-8")
+
+        snapshot = _snapshot_latest_model_files(model_dir)
+        latest_model.write_text("new-candidate", encoding="utf-8")
+
+        action = _finalize_model_promotion(
+            model_dir,
+            snapshot,
+            {"validation_registry": {"champion_eligible": True}},
+        )
+
+        assert action["promoted"] is True
+        assert action["restored_previous_latest"] is False
+        assert latest_model.read_text(encoding="utf-8") == "new-candidate"
 
 
 # ---------------------------------------------------------------------------

@@ -332,8 +332,4 @@ def fetch_yolo_pattern_persistence(
         reverse=True,
     )
     result["rows"] = out_rows[: max(1, int(top_n))]
-    return {
-        **result,
-        "lookback_asof": len(asof_dates),
-        "rows": out_rows[: max(1, int(top_n))],
-    }
+    return result

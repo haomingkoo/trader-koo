@@ -13,6 +13,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -37,6 +38,17 @@ _cache_ttl_sec = 3600  # 1 hour
 # In-memory store for bulk-prefetched FRED data.
 # Maps series_id -> DataFrame with columns [date, value], sorted by date.
 _fred_bulk_store: dict[str, pd.DataFrame] = {}
+
+
+def _redact_url_secrets(value: object) -> str:
+    """Remove API credentials from exception strings before logging."""
+    text = str(value)
+    return re.sub(
+        r"([?&](?:api_key|apikey|token|access_token|key)=)[^&\s]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +149,11 @@ def prefetch_fred_series_bulk(
             )
 
         except Exception as exc:
-            LOG.warning("FRED bulk prefetch failed for %s: %s", series_id, exc)
+            LOG.warning(
+                "FRED bulk prefetch failed for %s: %s",
+                series_id,
+                _redact_url_secrets(exc),
+            )
 
     return result
 
@@ -262,7 +278,7 @@ def fetch_fred_series(
         return rows
 
     except Exception as exc:
-        LOG.warning("FRED fetch failed for %s: %s", series_id, exc)
+        LOG.warning("FRED fetch failed for %s: %s", series_id, _redact_url_secrets(exc))
         return []
 
 
@@ -521,95 +537,6 @@ def fetch_polymarket_events(
 
     except Exception as exc:
         LOG.warning("Polymarket events fetch failed: %s", exc)
-        return []
-
-
-def fetch_polymarket_markets(
-    *,
-    limit: int = 20,
-    tag: str = "",
-) -> list[dict[str, Any]]:
-    """Fetch active Polymarket prediction markets via Gamma API.
-
-    Returns list of markets with question, outcome prices, volume, liquidity.
-    """
-    cache_key = f"poly_{tag}_{limit}"
-    with _cache_lock:
-        cached = _polymarket_cache.get(cache_key)
-        if cached and cached.get("expires_at", 0) > dt.datetime.now(dt.timezone.utc).timestamp():
-            return cached["data"]
-
-    try:
-        # Fetch a large batch and filter for finance-relevant markets
-        fetch_limit = max(limit * 10, 200)  # oversample then filter
-        params: dict[str, str] = {
-            "limit": str(fetch_limit),
-            "active": "true",
-            "closed": "false",
-        }
-        if tag:
-            params["tag"] = tag
-        qs = urllib.parse.urlencode(params)
-        url = f"{_POLYMARKET_GAMMA}/markets?{qs}"
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "trader-koo/1.0",
-            "Accept": "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-
-        markets = []
-        if isinstance(data, list):
-            for market in data:
-                if not isinstance(market, dict):
-                    continue
-                outcomes = market.get("outcomes") or []
-                prices_raw = market.get("outcomePrices") or []
-                prices = []
-                for p in prices_raw:
-                    try:
-                        prices.append(round(float(p) * 100, 1))
-                    except (TypeError, ValueError):
-                        prices.append(None)
-
-                markets.append({
-                    "question": str(market.get("question") or "").strip(),
-                    "slug": market.get("slug", ""),
-                    "outcomes": outcomes,
-                    "prices_pct": prices,  # percentage (0-100)
-                    "volume": round(float(market.get("volume") or 0), 2),
-                    "liquidity": round(float(market.get("liquidity") or 0), 2),
-                    "end_date": market.get("endDate"),
-                    "image": market.get("image"),
-                    "active": bool(market.get("active")),
-                    "url": f"https://polymarket.com/event/{market.get('slug', '')}",
-                })
-
-        # Filter: exclude sports/entertainment, then require finance relevance
-        relevant = []
-        for m in markets:
-            text = str(m.get("question", "")).lower()
-            if any(kw in text for kw in _EXCLUDE_KEYWORDS):
-                continue
-            if not any(kw in text for kw in _FINANCE_KEYWORDS):
-                continue
-            relevant.append(m)
-
-        # Sort by volume (highest first) and cap at requested limit
-        relevant.sort(key=lambda m: m.get("volume", 0), reverse=True)
-        result = relevant[:limit]
-
-        with _cache_lock:
-            _polymarket_cache[cache_key] = {
-                "data": result,
-                "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=_cache_ttl_sec)).timestamp(),
-            }
-
-        LOG.info("Polymarket: %d relevant / %d total, returning %d", len(relevant), len(markets), len(result))
-        return result
-
-    except Exception as exc:
-        LOG.warning("Polymarket fetch failed: %s", exc)
         return []
 
 

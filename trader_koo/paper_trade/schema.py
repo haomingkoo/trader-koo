@@ -109,6 +109,9 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "sizing_summary", "sizing_summary TEXT")
     _ensure_column(conn, "paper_trades", "review_status", "review_status TEXT")
     _ensure_column(conn, "paper_trades", "review_summary", "review_summary TEXT")
+    _ensure_column(conn, "paper_trades", "entry_reason", "entry_reason TEXT")
+    _ensure_column(conn, "paper_trades", "entry_evidence", "entry_evidence TEXT")
+    _ensure_column(conn, "paper_trades", "entry_risks", "entry_risks TEXT")
     _ensure_column(conn, "paper_trades", "bot_version", "bot_version TEXT")
     _ensure_column(conn, "paper_trades", "vix_at_entry", "vix_at_entry REAL")
     _ensure_column(conn, "paper_trades", "vix_percentile_at_entry", "vix_percentile_at_entry REAL")
@@ -165,6 +168,33 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_portfolio_date "
         "ON paper_portfolio_snapshots(snapshot_date)"
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trade_reflections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER NOT NULL UNIQUE,
+            ticker TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            setup_family TEXT,
+            entry_date TEXT,
+            exit_date TEXT,
+            exit_reason TEXT,
+            pnl_pct REAL,
+            r_multiple REAL,
+            spy_return_pct REAL,
+            alpha_vs_spy_pct REAL,
+            lesson_summary TEXT,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_reflections_trade "
+        "ON paper_trade_reflections(trade_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_reflections_ticker "
+        "ON paper_trade_reflections(ticker, exit_date)"
     )
     conn.commit()
 

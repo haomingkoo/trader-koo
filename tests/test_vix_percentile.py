@@ -12,7 +12,6 @@ import pytest
 
 from trader_koo.structure.vix_analysis import (
     calculate_vix_percentile,
-    format_percentile_display,
     get_percentile_color,
     should_show_volatility_warning,
 )
@@ -242,48 +241,6 @@ class TestVolatilityWarning:
     def test_no_warning_when_none(self):
         """Test warning is not shown when percentile is None."""
         assert should_show_volatility_warning(None) is False
-
-
-class TestPercentileDisplay:
-    """Test VIX percentile display formatting (Requirements 11.2, 11.3, 11.5)."""
-
-    def test_display_with_low_percentile(self):
-        """Test display format for low percentile (green)."""
-        display = format_percentile_display(25.0)
-
-        assert "25.0%" in display
-        assert "GREEN" in display
-        assert "⚠️" not in display
-
-    def test_display_with_medium_percentile(self):
-        """Test display format for medium percentile (yellow)."""
-        display = format_percentile_display(50.0)
-
-        assert "50.0%" in display
-        assert "YELLOW" in display
-        assert "⚠️" not in display
-
-    def test_display_with_high_percentile(self):
-        """Test display format for high percentile (red)."""
-        display = format_percentile_display(75.0)
-
-        assert "75.0%" in display
-        assert "RED" in display
-        assert "⚠️" not in display
-
-    def test_display_with_elevated_volatility_warning(self):
-        """Test display includes warning when percentile > 80."""
-        display = format_percentile_display(85.0)
-
-        assert "85.0%" in display
-        assert "RED" in display
-        assert "⚠️ ELEVATED VOLATILITY" in display
-
-    def test_display_with_none_percentile(self):
-        """Test display when percentile is unavailable."""
-        display = format_percentile_display(None)
-
-        assert "Unavailable" in display
 
 
 class TestPercentileInHealthScore:

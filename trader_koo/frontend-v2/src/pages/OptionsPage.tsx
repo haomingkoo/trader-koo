@@ -82,8 +82,6 @@ const tagVariant = (value: string): BadgeVariant => {
 const includesText = (values: readonly string[], value: string | null | undefined): boolean =>
   values.includes(String(value ?? ""));
 
-const positivePremiumFloor = (): number => OPTIONS_PREMIUM_CONFIG.positivePremiumFloor;
-
 const matchesSmartView = (row: OptionsPremiumRow, view: OptionsSmartView): boolean => {
   const rules = OPTIONS_PREMIUM_CONFIG.smartViewRules;
   const tags = new Set(row.smart_tags ?? []);
@@ -100,7 +98,7 @@ const matchesSmartView = (row: OptionsPremiumRow, view: OptionsSmartView): boole
   if (view === "calls") {
     return (
       includesText(rules.calls.premiumBiases, row.premium_bias) &&
-      (row.net_volume_premium ?? positivePremiumFloor()) > positivePremiumFloor()
+      (row.net_volume_premium ?? 0) > 0
     );
   }
   if (view === "hedge") {
@@ -250,7 +248,7 @@ export default function OptionsPage() {
     sort_by: sortBy,
   });
 
-  const rows = data?.rows ?? [];
+  const rows = useMemo(() => data?.rows ?? [], [data?.rows]);
   const filteredRows = useMemo(
     () => rows.filter((row) => matchesSmartView(row, smartView)),
     [rows, smartView],
@@ -258,12 +256,12 @@ export default function OptionsPage() {
   const filteredTotals = useMemo(
     () => ({
       net_volume_premium: filteredRows.reduce(
-        (sum, row) => sum + (row.net_volume_premium ?? positivePremiumFloor()),
-        positivePremiumFloor(),
+        (sum, row) => sum + (row.net_volume_premium ?? 0),
+        0,
       ),
       net_oi_premium: filteredRows.reduce(
-        (sum, row) => sum + (row.net_oi_premium ?? positivePremiumFloor()),
-        positivePremiumFloor(),
+        (sum, row) => sum + (row.net_oi_premium ?? 0),
+        0,
       ),
     }),
     [filteredRows],

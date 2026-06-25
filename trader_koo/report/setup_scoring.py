@@ -35,12 +35,10 @@ def _yolo_pattern_bias(pattern: Any) -> str:
     name = str(pattern or "").strip().lower()
     if not name:
         return "neutral"
-    if ("bottom" in name) or ("w_bottom" in name):
+    if "bottom" in name:
         return "bullish"
     if ("top" in name) or ("m_head" in name):
         return "bearish"
-    if "triangle" in name:
-        return "neutral"
     return "neutral"
 
 

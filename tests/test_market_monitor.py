@@ -13,9 +13,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trader_koo.notifications.market_monitor import (
-    _format_crypto_alert,
-    _format_polymarket_alert,
-    _format_price,
     _format_volume,
     detect_crypto_spikes,
     detect_polymarket_spikes,
@@ -312,64 +309,6 @@ class TestFormatting:
 
     def test_format_volume_zero(self) -> None:
         assert _format_volume(0) == "N/A"
-
-    def test_format_price_large(self) -> None:
-        assert _format_price(85200.0) == "$85,200.00"
-
-    def test_format_price_small(self) -> None:
-        assert _format_price(0.1234) == "$0.1234"
-
-    def test_format_polymarket_alert_contains_key_info(self) -> None:
-        spike = {
-            "event_title": "Fed rate cut March 31",
-            "question": "Will it happen?",
-            "old_prob": 6.0,
-            "new_prob": 15.0,
-            "change_pct": 9.0,
-            "direction": "up",
-            "volume": 2_200_000,
-            "lookback_hours": 6,
-        }
-        msg = _format_polymarket_alert(spike)
-        assert "Prediction Market Spike" in msg
-        assert "Fed rate cut March 31" in msg
-        assert "6%" in msg
-        assert "15%" in msg
-        assert "$2.2M" in msg
-
-    def test_format_crypto_alert_contains_key_info(self) -> None:
-        spike = {
-            "symbol": "BTC-USD",
-            "old_price": 85200.0,
-            "new_price": 89800.0,
-            "price_change_pct": 5.4,
-            "direction": "up",
-            "lookback_hours": 4,
-            "price_spike": True,
-            "oi_spike": True,
-            "oi_change_pct": 12.0,
-        }
-        msg = _format_crypto_alert(spike)
-        assert "Crypto Alert" in msg
-        assert "BTC-USD" in msg
-        assert "$85,200.00" in msg
-        assert "$89,800.00" in msg
-        assert "OI change" in msg
-        assert "Volume surge detected" in msg
-
-    def test_format_crypto_alert_no_oi(self) -> None:
-        spike = {
-            "symbol": "ETH-USD",
-            "old_price": 3000.0,
-            "new_price": 3200.0,
-            "price_change_pct": 6.7,
-            "direction": "up",
-            "lookback_hours": 4,
-            "price_spike": True,
-            "oi_spike": False,
-        }
-        msg = _format_crypto_alert(spike)
-        assert "OI change" not in msg
 
 
 # ---------------------------------------------------------------------------

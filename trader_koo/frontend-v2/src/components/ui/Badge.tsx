@@ -1,9 +1,11 @@
 interface BadgeProps {
   children: React.ReactNode;
-  variant?: "default" | "green" | "red" | "amber" | "blue" | "muted";
+  variant?: BadgeVariant;
   className?: string;
   title?: string;
 }
+
+export type BadgeVariant = "default" | "green" | "red" | "amber" | "blue" | "muted";
 
 const variantStyles: Record<string, string> = {
   default:
@@ -19,15 +21,6 @@ const variantStyles: Record<string, string> = {
   muted:
     "bg-[var(--panel)] text-[var(--muted)] border-[var(--line)]",
 };
-
-export function tierVariant(tier: string | null | undefined): BadgeProps["variant"] {
-  if (!tier) return "muted";
-  const t = tier.toUpperCase();
-  if (t === "A") return "green";
-  if (t === "B") return "amber";
-  if (t === "C") return "red";
-  return "default";
-}
 
 export default function Badge({ children, variant = "default", className = "", title }: BadgeProps) {
   return (

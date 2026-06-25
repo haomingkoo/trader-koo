@@ -39,15 +39,21 @@ export function useCryptoSubscription(
   const [closedBar, setClosedBar] = useState<CryptoBar | null>(null);
   const currentSub = useRef({ symbol, interval });
 
-  currentSub.current = { symbol, interval };
+  useEffect(() => {
+    currentSub.current = { symbol, interval };
+  }, [symbol, interval]);
 
   // Subscribe when connected or when symbol/interval changes
   useEffect(() => {
     if (connected) {
       send({ action: "subscribe", symbol, interval });
-      setFormingCandle(null);
-      setClosedBar(null);
+      const resetTimer = window.setTimeout(() => {
+        setFormingCandle(null);
+        setClosedBar(null);
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
     }
+    return undefined;
   }, [connected, symbol, interval, send]);
 
   // Listen for candle messages on the shared socket

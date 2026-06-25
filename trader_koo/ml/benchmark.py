@@ -33,17 +33,7 @@ LOG = logging.getLogger("trader_koo.ml.benchmark")
 # ---------------------------------------------------------------------------
 # Feature sets
 # ---------------------------------------------------------------------------
-from trader_koo.ml.features import (
-    FEATURE_COLUMNS,
-    FEATURE_COLUMNS_SLIM,
-    FEATURE_COLUMNS_FULL,
-    extract_features_for_universe,
-)
-
-try:
-    from trader_koo.ml.features import FEATURE_COLUMNS_RANKED
-except ImportError:
-    FEATURE_COLUMNS_RANKED = FEATURE_COLUMNS
+from trader_koo.ml.features import FEATURE_COLUMNS_SLIM, FEATURE_COLUMNS_RANKED
 
 from trader_koo.ml.trainer import _apply_target_mode, build_dataset
 
@@ -300,7 +290,6 @@ if __name__ == "__main__":
 
     # Prefetch FRED data
     try:
-        import os
         from trader_koo.ml.external_data import prefetch_fred_series_bulk
         prefetch_fred_series_bulk(
             ["DFF", "T10Y2Y", "BAMLH0A0HYM2"],

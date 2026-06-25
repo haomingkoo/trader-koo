@@ -18,7 +18,7 @@ from trader_koo.backend.services.report_loader import (
     latest_daily_report_json,
 )
 from trader_koo.catalyst_data import build_earnings_calendar_payload, fetch_economic_calendar
-from trader_koo.scripts.generate_daily_report import (
+from trader_koo.report.market_context import (
     _build_regime_context as _report_build_regime_context,
 )
 from trader_koo.structure.fear_greed import compute_fear_greed_index

@@ -74,6 +74,7 @@ from trader_koo.scripts.build_cv_weak_labels import (  # type: ignore[import]
     merge_pattern_sources,
     pick_tickers,
 )
+from trader_koo.scripts.apply_cv_review import parse_bool as _parse_bool  # type: ignore[import]
 
 GOLD_COLS = [
     "sample_id", "ticker", "pattern", "status",
@@ -109,10 +110,6 @@ def _load_price(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
         conn, params=(ticker,),
     )
     return ensure_ohlcv_schema(df)
-
-
-def _parse_bool(x: object) -> bool:
-    return str(x or "").strip().lower() in {"1", "true", "t", "yes", "y"}
 
 
 # Pattern colour buckets (for line drawing)

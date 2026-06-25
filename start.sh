@@ -31,11 +31,11 @@ if [ ! -f "$DB_PATH" ]; then
     "$PYTHON" -c "
 import sqlite3
 from pathlib import Path
-from trader_koo.db.schema import ensure_ohlcv_schema
+from trader_koo.scripts.update_market_db import ensure_schema
 
 db_path = Path('$DB_PATH')
 conn = sqlite3.connect(str(db_path))
-ensure_ohlcv_schema(conn)
+ensure_schema(conn)
 conn.close()
 print('[start.sh] Empty database created with schema')
 "

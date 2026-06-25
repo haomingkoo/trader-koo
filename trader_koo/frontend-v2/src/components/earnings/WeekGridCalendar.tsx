@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { EarningsRow, EconomicEvent } from "../../api/types";
+import { formatState } from "../../lib/formatState";
 import Badge from "../ui/Badge";
 import TickerLogo from "./TickerLogo";
 
@@ -86,12 +87,6 @@ function toDateKey(date: Date): string {
 
 function getTodayKey(): string {
   return toDateKey(new Date());
-}
-
-function formatState(value: string): string {
-  return value
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function tierColor(tier: string | null | undefined): string {
@@ -367,11 +362,13 @@ export default function WeekGridCalendar({ rows, economicEvents = [] }: WeekGrid
         const diffMs = targetMonday.getTime() - thisMonday.getTime();
         const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
         if (diffWeeks > 0) {
-          setWeekOffset(diffWeeks);
           autoAdvanced.current = true;
+          const timer = window.setTimeout(() => setWeekOffset(diffWeeks), 0);
+          return () => window.clearTimeout(timer);
         }
       }
     }
+    return undefined;
   }, [rows, weekOffset]);
 
   const rangeDays = RANGE_OPTIONS.find((o) => o.value === range)?.days ?? 5;

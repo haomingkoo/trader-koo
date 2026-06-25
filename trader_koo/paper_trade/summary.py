@@ -6,6 +6,7 @@ import datetime as dt
 import logging
 import math
 import sqlite3
+import statistics
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
@@ -71,8 +72,7 @@ def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
 
     if len(pnls) > 1:
         mean_p = sum(pnls) / len(pnls)
-        var_p = sum((pnl - mean_p) ** 2 for pnl in pnls) / (len(pnls) - 1)
-        std_p = math.sqrt(var_p) if var_p > 0 else 0
+        std_p = statistics.stdev(pnls)
         sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
 
         # Sortino: uses downside deviation (only negative returns)
@@ -137,6 +137,7 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
                expected_reward_pct, expected_r_multiple,
                entry_plan, exit_plan, sizing_summary,
                review_status, review_summary,
+               entry_reason, entry_evidence, entry_risks,
                ml_predicted_win_prob, ml_confidence, ml_signal, notes
         FROM paper_trades
         ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC
@@ -154,7 +155,37 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
         "expected_reward_pct", "expected_r_multiple",
         "entry_plan", "exit_plan", "sizing_summary",
         "review_status", "review_summary",
+        "entry_reason", "entry_evidence", "entry_risks",
         "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
+    ]
+    trades: list[dict[str, Any]] = []
+    for row in rows:
+        trade = dict(zip(keys, row))
+        trade["entry_evidence"] = decode_json_list(trade.get("entry_evidence"))
+        trade["entry_risks"] = decode_json_list(trade.get("entry_risks"))
+        trades.append(trade)
+    return trades
+
+
+def recent_reflections(conn: sqlite3.Connection, *, limit: int = 10) -> list[dict[str, Any]]:
+    """Return recent post-trade decision-memory rows."""
+    if not _table_exists(conn, "paper_trade_reflections"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT trade_id, ticker, direction, setup_family, entry_date, exit_date,
+               exit_reason, pnl_pct, r_multiple, spy_return_pct, alpha_vs_spy_pct,
+               lesson_summary, created_ts
+        FROM paper_trade_reflections
+        ORDER BY exit_date DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    keys = [
+        "trade_id", "ticker", "direction", "setup_family", "entry_date", "exit_date",
+        "exit_reason", "pnl_pct", "r_multiple", "spy_return_pct", "alpha_vs_spy_pct",
+        "lesson_summary", "created_ts",
     ]
     return [dict(zip(keys, row)) for row in rows]
 
@@ -265,6 +296,134 @@ def _feedback_items(
     return items[:6]
 
 
+def _benchmark_feedback(
+    *,
+    overall: dict[str, Any],
+    benchmarks: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Surface benchmark-relative performance before isolated expectancy."""
+    spy = benchmarks.get("spy_buy_hold") if isinstance(benchmarks, dict) else None
+    if not isinstance(spy, dict):
+        return []
+
+    portfolio_return = overall.get("total_return_pct")
+    spy_return = spy.get("return_pct")
+    if not isinstance(portfolio_return, (int, float)) or not isinstance(spy_return, (int, float)):
+        return []
+
+    spread = round(float(portfolio_return) - float(spy_return), 2)
+    if spread < -2.0:
+        return [
+            {
+                "kind": "benchmark",
+                "severity": "high",
+                "title": "Pipeline is trailing SPY",
+                "detail": (
+                    f"Paper portfolio return is {portfolio_return:+.2f}% versus "
+                    f"SPY buy-and-hold at {spy_return:+.2f}% over the same window "
+                    f"({spread:.2f}pp spread)."
+                ),
+                "action": "Reduce new entries until family gates prove they beat the benchmark, not just raw setup returns.",
+            }
+        ]
+
+    if spread > 2.0:
+        return [
+            {
+                "kind": "benchmark",
+                "severity": "green",
+                "title": "Pipeline is beating SPY",
+                "detail": (
+                    f"Paper portfolio return is {portfolio_return:+.2f}% versus "
+                    f"SPY buy-and-hold at {spy_return:+.2f}% over the same window "
+                    f"({spread:+.2f}pp spread)."
+                ),
+                "action": "Keep benchmark-relative tracking active before increasing allocation.",
+            }
+        ]
+
+    return [
+        {
+            "kind": "benchmark",
+            "severity": "amber",
+            "title": "Pipeline is near SPY",
+            "detail": (
+                f"Paper portfolio return is {portfolio_return:+.2f}% versus "
+                f"SPY buy-and-hold at {spy_return:+.2f}% over the same window "
+                f"({spread:+.2f}pp spread)."
+            ),
+            "action": "Treat the edge as unproven until it clears SPY after costs and drawdown.",
+        }
+    ]
+
+
+def _compute_core_satellite_benchmark(
+    *,
+    starting_capital: float,
+    pipeline_return_pct: float | int | None,
+    spy_benchmark: dict[str, Any] | None,
+    config: PaperTradeConfig | None,
+) -> dict[str, Any] | None:
+    """Compute a benchmark-aware core + satellite portfolio comparison.
+
+    The satellite return is the current paper-trade portfolio return. The core
+    return uses SPY buy-and-hold over the same window. This isolates two
+    questions: whether the overlay has alpha, and whether using a market core
+    reduces idle-cash drag versus a pure trade book.
+    """
+    if not isinstance(pipeline_return_pct, (int, float)):
+        return None
+    if not isinstance(spy_benchmark, dict):
+        return None
+    spy_return_pct = spy_benchmark.get("return_pct")
+    if not isinstance(spy_return_pct, (int, float)):
+        return None
+
+    core_pct = float(config.core_allocation_pct if config else 70.0)
+    satellite_pct = float(config.satellite_allocation_pct if config else 30.0)
+    if core_pct < 0 or satellite_pct < 0:
+        return None
+    total_alloc = core_pct + satellite_pct
+    if total_alloc <= 0:
+        return None
+
+    if total_alloc > 100.0:
+        core_pct = core_pct / total_alloc * 100.0
+        satellite_pct = satellite_pct / total_alloc * 100.0
+
+    cash_pct = max(0.0, 100.0 - core_pct - satellite_pct)
+    core_weight = core_pct / 100.0
+    satellite_weight = satellite_pct / 100.0
+    cash_weight = cash_pct / 100.0
+
+    satellite_return_pct = float(pipeline_return_pct)
+    core_return_contribution_pct = core_weight * float(spy_return_pct)
+    satellite_return_contribution_pct = satellite_weight * satellite_return_pct
+    cash_return_contribution_pct = cash_weight * 0.0
+    total_return_pct = (
+        core_return_contribution_pct
+        + satellite_return_contribution_pct
+        + cash_return_contribution_pct
+    )
+
+    return {
+        "label": "Core/Satellite",
+        "core_symbol": "SPY",
+        "core_allocation_pct": round(core_pct, 1),
+        "satellite_allocation_pct": round(satellite_pct, 1),
+        "cash_allocation_pct": round(cash_pct, 1),
+        "core_return_pct": round(float(spy_return_pct), 2),
+        "satellite_return_pct": round(satellite_return_pct, 2),
+        "total_return_pct": round(total_return_pct, 2),
+        "portfolio_value": round(starting_capital * (1.0 + total_return_pct / 100.0), 2),
+        "alpha_vs_spy_pct": round(total_return_pct - float(spy_return_pct), 2),
+        "satellite_alpha_vs_spy_pct": round(satellite_return_pct - float(spy_return_pct), 2),
+        "core_contribution_pct": round(core_return_contribution_pct, 2),
+        "satellite_contribution_pct": round(satellite_return_contribution_pct, 2),
+        "cash_contribution_pct": round(cash_return_contribution_pct, 2),
+    }
+
+
 def _compute_spy_benchmark(
     conn: sqlite3.Connection,
     *,
@@ -333,8 +492,7 @@ def _baseline_stats(
     sharpe: float | None = None
     if total > 1:
         mean_p = sum(pnls) / total
-        var_p = sum((p - mean_p) ** 2 for p in pnls) / (total - 1)
-        std_p = math.sqrt(var_p) if var_p > 0 else 0
+        std_p = statistics.stdev(pnls)
         sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
 
     return {
@@ -490,6 +648,7 @@ def paper_trade_summary(
             "by_exit_reason": {},
             "equity_curve": [],
             "recent_trades": recent_trades(conn, limit=20),
+            "recent_reflections": recent_reflections(conn, limit=10),
             "policy": _policy_snapshot(config),
             "feedback": [],
             "benchmarks": {},
@@ -646,12 +805,6 @@ def paper_trade_summary(
     except Exception as exc:
         LOG.warning("Edge computation failed (non-fatal): %s", exc)
 
-    base_feedback = _feedback_items(
-        overall=overall,
-        by_direction=by_direction,
-        by_family=by_family,
-    )
-
     # Benchmark comparisons (SPY buy-and-hold + unfiltered baseline)
     benchmarks: dict[str, Any] = {}
     try:
@@ -672,8 +825,27 @@ def paper_trade_summary(
         unfiltered_result = _compute_unfiltered_baseline(conn, cutoff=cutoff)
         if unfiltered_result is not None:
             benchmarks["unfiltered_setups"] = unfiltered_result
+
+        core_satellite = _compute_core_satellite_benchmark(
+            starting_capital=STARTING_CAPITAL,
+            pipeline_return_pct=overall.get("total_return_pct"),
+            spy_benchmark=benchmarks.get("spy_buy_hold"),
+            config=config,
+        )
+        if core_satellite is not None:
+            benchmarks["core_satellite"] = core_satellite
     except Exception as exc:
         LOG.warning("Benchmark computation failed (non-fatal): %s", exc)
+
+    base_feedback = _feedback_items(
+        overall=overall,
+        by_direction=by_direction,
+        by_family=by_family,
+    )
+    benchmark_feedback = _benchmark_feedback(
+        overall=overall,
+        benchmarks=benchmarks,
+    )
 
     return {
         "overall": overall,
@@ -683,8 +855,9 @@ def paper_trade_summary(
         "by_exit_reason": by_exit_reason,
         "equity_curve": equity_curve,
         "recent_trades": recent_trades(conn, limit=20),
+        "recent_reflections": recent_reflections(conn, limit=10),
         "policy": _policy_snapshot(config),
-        "feedback": base_feedback + edge_feedback,
+        "feedback": benchmark_feedback + base_feedback + edge_feedback,
         "family_edges": family_edges,
         "regime_edges": regime_edges,
         "vix_bucket_edges": vix_bucket_edges,
@@ -745,6 +918,7 @@ def list_paper_trades(
                expected_reward_pct, expected_r_multiple,
                entry_plan, exit_plan, sizing_summary,
                review_status, review_summary,
+               entry_reason, entry_evidence, entry_risks,
                ml_predicted_win_prob, ml_confidence, ml_signal, notes
         FROM paper_trades
         WHERE {where}
@@ -767,6 +941,7 @@ def list_paper_trades(
         "expected_reward_pct", "expected_r_multiple",
         "entry_plan", "exit_plan", "sizing_summary",
         "review_status", "review_summary",
+        "entry_reason", "entry_evidence", "entry_risks",
         "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
     ]
     trades: list[dict[str, Any]] = []
@@ -774,5 +949,7 @@ def list_paper_trades(
         trade = dict(zip(keys, row))
         trade["decision_reasons"] = decode_json_list(trade.get("decision_reasons"))
         trade["risk_flags"] = decode_json_list(trade.get("risk_flags"))
+        trade["entry_evidence"] = decode_json_list(trade.get("entry_evidence"))
+        trade["entry_risks"] = decode_json_list(trade.get("entry_risks"))
         trades.append(trade)
     return trades

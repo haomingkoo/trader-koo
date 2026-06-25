@@ -243,7 +243,11 @@ class TestUpdateDispatch:
                 "trader_koo.notifications.options_digest.generate_options_digest",
                 return_value="Options Premium Proxy\nAMD",
             ),
-            patch.object(handler, "_send_reply", new_callable=AsyncMock) as mock_reply,
+            patch.object(
+                handler,
+                "_send_reply",
+                new_callable=AsyncMock,
+            ) as mock_reply,
         ):
             await handler._handle_update(update)
             mock_reply.assert_called_once()
@@ -267,6 +271,72 @@ class TestUpdateDispatch:
         ) as mock_reply:
             await handler._handle_update(update)
             mock_reply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_callback_query_refreshes_price(
+        self,
+        handler: TelegramCommandHandler,
+    ) -> None:
+        """Inline keyboard callbacks are acknowledged and routed."""
+        update = {
+            "update_id": 300,
+            "callback_query": {
+                "id": "callback-1",
+                "data": "price:AAPL",
+                "message": {"chat": {"id": 12345}},
+            },
+        }
+        with (
+            patch.object(
+                handler,
+                "_answer_callback_query",
+                new_callable=AsyncMock,
+            ) as mock_answer,
+            patch.object(
+                handler,
+                "_cmd_price",
+                new_callable=AsyncMock,
+                return_value="AAPL $200.00",
+            ) as mock_price,
+            patch.object(
+                handler,
+                "_send_reply",
+                new_callable=AsyncMock,
+            ) as mock_reply,
+        ):
+            await handler._handle_update(update)
+
+        mock_answer.assert_called_once_with("callback-1", "Refreshing price")
+        mock_price.assert_called_once_with("AAPL")
+        mock_reply.assert_called_once()
+        assert "reply_markup" in mock_reply.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_callback_query_ignores_wrong_chat(
+        self,
+        handler: TelegramCommandHandler,
+    ) -> None:
+        """Inline buttons from unauthorized chats are ignored."""
+        update = {
+            "update_id": 301,
+            "callback_query": {
+                "id": "callback-2",
+                "data": "top",
+                "message": {"chat": {"id": 99999}},
+            },
+        }
+        with (
+            patch.object(
+                handler,
+                "_answer_callback_query",
+                new_callable=AsyncMock,
+            ) as mock_answer,
+            patch.object(handler, "_send_reply", new_callable=AsyncMock) as mock_reply,
+        ):
+            await handler._handle_update(update)
+
+        mock_answer.assert_not_called()
+        mock_reply.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

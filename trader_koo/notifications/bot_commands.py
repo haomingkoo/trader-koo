@@ -11,16 +11,19 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 import os
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 
 from trader_koo.config import env_int
+from trader_koo.notifications.finnhub import fetch_finnhub_quote
 from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
 
 LOG = logging.getLogger("trader_koo.notifications.bot_commands")
@@ -37,9 +40,14 @@ LONG_POLL_TIMEOUT_SEC = env_int(
 SEND_TIMEOUT_SEC = 15
 MIN_RESPONSE_INTERVAL_SEC = 1.0
 
-# Finnhub REST API for /price command
-FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
-FINNHUB_REQUEST_TIMEOUT_SEC = 10
+PUBLIC_BASE_URL = (
+    os.getenv("TRADER_KOO_PUBLIC_BASE_URL")
+    or os.getenv("TRADER_KOO_PUBLIC_URL")
+    or "https://trader.kooexperience.com"
+).rstrip("/")
+MAX_CALLBACK_DATA_LEN = 64
+
+InlineKeyboardMarkup = dict[str, list[list[dict[str, str]]]]
 
 
 class TelegramCommandHandler:
@@ -126,7 +134,7 @@ class TelegramCommandHandler:
         url = f"{TELEGRAM_API_BASE}/bot{self._bot_token}/getUpdates"
         params: dict[str, Any] = {
             "timeout": LONG_POLL_TIMEOUT_SEC,
-            "allowed_updates": '["message"]',
+            "allowed_updates": json.dumps(["message", "callback_query"]),
         }
         if self._last_update_id > 0:
             params["offset"] = self._last_update_id + 1
@@ -157,7 +165,12 @@ class TelegramCommandHandler:
             LOG.warning("getUpdates failed: %s", exc)
             return []
 
-    async def _send_reply(self, text: str) -> bool:
+    async def _send_reply(
+        self,
+        text: str,
+        *,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> bool:
         """Send a reply message to the authorized chat."""
         # Rate limit: max 1 response per second
         now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
@@ -174,6 +187,8 @@ class TelegramCommandHandler:
             "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
 
         loop = asyncio.get_running_loop()
         try:
@@ -198,6 +213,42 @@ class TelegramCommandHandler:
             LOG.error("sendMessage failed: %s", exc)
             return False
 
+    async def _answer_callback_query(
+        self,
+        callback_query_id: str,
+        text: str = "",
+        *,
+        show_alert: bool = False,
+    ) -> bool:
+        """Acknowledge a Telegram inline button press."""
+        if not callback_query_id:
+            return False
+        url = f"{TELEGRAM_API_BASE}/bot{self._bot_token}/answerCallbackQuery"
+        payload: dict[str, Any] = {
+            "callback_query_id": callback_query_id,
+            "show_alert": show_alert,
+        }
+        if text:
+            payload["text"] = text[:180]
+
+        loop = asyncio.get_running_loop()
+        try:
+            resp = await loop.run_in_executor(
+                None,
+                lambda: httpx.post(url, json=payload, timeout=SEND_TIMEOUT_SEC),
+            )
+            if resp.status_code != 200:
+                LOG.warning(
+                    "answerCallbackQuery returned %d: %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return False
+            return True
+        except Exception as exc:
+            LOG.warning("answerCallbackQuery failed: %s", exc)
+            return False
+
     # ------------------------------------------------------------------
     # Update dispatch
     # ------------------------------------------------------------------
@@ -207,6 +258,11 @@ class TelegramCommandHandler:
         update_id = int(update.get("update_id", 0))
         if update_id > self._last_update_id:
             self._last_update_id = update_id
+
+        callback_query = update.get("callback_query")
+        if isinstance(callback_query, dict):
+            await self._handle_callback_query(callback_query)
+            return
 
         message = update.get("message")
         if not isinstance(message, dict):
@@ -256,7 +312,118 @@ class TelegramCommandHandler:
             LOG.error("Command %s failed: %s", command, exc)
             response = f"Command failed: {type(exc).__name__}"
 
-        await self._send_reply(response)
+        await self._send_reply(
+            response,
+            reply_markup=self._reply_markup_for_command(command, args),
+        )
+
+    async def _handle_callback_query(
+        self,
+        callback_query: dict[str, Any],
+    ) -> None:
+        """Handle inline keyboard actions from bot messages."""
+        message = callback_query.get("message")
+        chat_id = ""
+        if isinstance(message, dict):
+            chat = message.get("chat", {})
+            if isinstance(chat, dict):
+                chat_id = str(chat.get("id", ""))
+        if chat_id != self._chat_id:
+            return
+
+        callback_id = str(callback_query.get("id") or "")
+        data = str(callback_query.get("data") or "")[:MAX_CALLBACK_DATA_LEN]
+
+        # {callback_data: (toast, command coroutine)}
+        actions: dict[str, tuple[str, Any]] = {
+            "help": ("Opening help", self._cmd_help),
+            "top": ("Loading setups", self._cmd_top),
+            "vix": ("Loading VIX", self._cmd_vix),
+            "alerts": ("Loading alerts", self._cmd_alerts),
+            "options": ("Loading options", self._cmd_options),
+        }
+
+        action = actions.get(data)
+        if action is not None:
+            toast, handler = action
+            await self._answer_callback_query(callback_id, toast)
+            await self._send_reply(
+                await handler(),
+                reply_markup=self._command_keyboard(),
+            )
+            return
+
+        if data.startswith("price:"):
+            await self._answer_callback_query(callback_id, "Refreshing price")
+            ticker = data.split(":", 1)[1]
+            await self._send_reply(
+                await self._cmd_price(ticker),
+                reply_markup=self._ticker_keyboard(ticker),
+            )
+            return
+
+        await self._answer_callback_query(
+            callback_id,
+            "Unsupported action",
+            show_alert=True,
+        )
+
+    def _reply_markup_for_command(
+        self,
+        command: str,
+        args: str = "",
+    ) -> InlineKeyboardMarkup:
+        """Attach command-specific next actions to Telegram replies."""
+        if command == "/price":
+            ticker = re.sub(r"[^A-Za-z0-9.^]", "", args).upper()
+            if ticker:
+                return self._ticker_keyboard(ticker)
+        return self._command_keyboard()
+
+    def _command_keyboard(self) -> InlineKeyboardMarkup:
+        """Small set of high-signal commands available after every reply."""
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "Top setups", "callback_data": "top"},
+                    {"text": "VIX", "callback_data": "vix"},
+                    {"text": "Alerts", "callback_data": "alerts"},
+                ],
+                [
+                    {"text": "Options", "callback_data": "options"},
+                    {"text": "Open app", "url": self._web_url("/")},
+                ],
+            ]
+        }
+
+    def _ticker_keyboard(self, ticker: str) -> InlineKeyboardMarkup:
+        """Actions for a specific ticker: inspect, refresh, and paper review."""
+        safe_ticker = re.sub(r"[^A-Za-z0-9.^]", "", ticker).upper()
+        encoded = quote_plus(safe_ticker)
+        callback_data = f"price:{safe_ticker}"[:MAX_CALLBACK_DATA_LEN]
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": f"Open {safe_ticker} chart",
+                        "url": self._web_url(f"/chart?ticker={encoded}"),
+                    },
+                    {
+                        "text": "Paper trades",
+                        "url": self._web_url("/paper-trades"),
+                    },
+                ],
+                [
+                    {"text": "Refresh price", "callback_data": callback_data},
+                    {"text": "Recent alerts", "callback_data": "alerts"},
+                ],
+            ]
+        }
+
+    def _web_url(self, path: str) -> str:
+        """Build a public app URL from a route path."""
+        normalized = path if path.startswith("/") else f"/{path}"
+        return f"{PUBLIC_BASE_URL}{normalized}"
 
     # ------------------------------------------------------------------
     # Command implementations
@@ -683,93 +850,20 @@ class TelegramCommandHandler:
         self,
         ticker: str,
     ) -> float | None:
-        """Fetch current price via Finnhub REST API."""
-        if not self._finnhub_api_key:
-            LOG.warning(
-                "FINNHUB_API_KEY not set — cannot fetch quote"
-            )
-            return None
-
+        """Fetch current price via Finnhub REST API (async wrapper)."""
         loop = asyncio.get_running_loop()
-        try:
-            resp = await loop.run_in_executor(
-                None,
-                lambda: httpx.get(
-                    FINNHUB_QUOTE_URL,
-                    params={
-                        "symbol": ticker,
-                        "token": self._finnhub_api_key,
-                    },
-                    timeout=FINNHUB_REQUEST_TIMEOUT_SEC,
-                ),
-            )
-            if resp.status_code != 200:
-                LOG.warning(
-                    "Finnhub quote returned %d for %s",
-                    resp.status_code,
-                    ticker,
-                )
-                return None
-            data = resp.json()
-            price = data.get("c")
-            if price is None or price == 0:
-                return None
-            return float(price)
-        except Exception as exc:
-            LOG.warning(
-                "Finnhub quote failed for %s: %s", ticker, exc
-            )
-            return None
+        return await loop.run_in_executor(
+            None,
+            fetch_finnhub_quote,
+            ticker,
+            self._finnhub_api_key,
+        )
 
     def _get_ticker_levels(
         self,
         ticker: str,
     ) -> list[dict[str, Any]]:
         """Extract support/resistance levels from the DB."""
-        if not self._db_path.exists():
-            return []
-        try:
-            conn = sqlite3.connect(str(self._db_path))
-            conn.row_factory = sqlite3.Row
-            from trader_koo.backend.services.database import (
-                get_price_df,
-                table_exists,
-            )
-            from trader_koo.structure.levels import (
-                LevelConfig,
-                add_fallback_levels,
-                build_levels_from_pivots,
-                select_target_levels,
-            )
-            from trader_koo.features.technical import compute_pivots
+        from trader_koo.structure.levels import get_ticker_levels
 
-            if not table_exists(conn, "price_daily"):
-                conn.close()
-                return []
-
-            df = get_price_df(conn, ticker)
-            conn.close()
-
-            if df.empty or len(df) < 30:
-                return []
-
-            cfg = LevelConfig()
-            pivots = compute_pivots(df, left=5, right=5)
-            raw_levels = build_levels_from_pivots(pivots, cfg)
-            last_close = float(df["close"].iloc[-1])
-            selected = select_target_levels(
-                raw_levels, last_close, cfg
-            )
-            selected = add_fallback_levels(
-                df, selected, last_close, cfg
-            )
-
-            if selected.empty:
-                return []
-
-            return selected[["type", "level"]].to_dict("records")
-        except Exception as exc:
-            LOG.warning(
-                "Failed to get levels for %s: %s", ticker, exc
-            )
-            return []
+        return get_ticker_levels(self._db_path, ticker)

@@ -1,7 +1,8 @@
 import { useMemo, useState, type ComponentProps } from "react";
 import { Link } from "react-router-dom";
 import type { ChartCommentary, SetupRow } from "../../api/types";
-import Badge, { tierVariant } from "../ui/Badge";
+import Badge from "../ui/Badge";
+import { tierVariant } from "../ui/badgeUtils";
 import { biasVariant, formatReportNumber as fmt } from "./reportShared";
 
 type DebateData = NonNullable<ChartCommentary["debate_v1"]>;

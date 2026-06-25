@@ -71,7 +71,7 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
         if not row:
             raise HTTPException(status_code=404, detail=f"Paper trade {trade_id} not found")
         trade = dict(row)
-        for key in ("decision_reasons", "risk_flags"):
+        for key in ("decision_reasons", "risk_flags", "entry_evidence", "entry_risks"):
             raw = trade.get(key)
             if raw is None:
                 trade[key] = []

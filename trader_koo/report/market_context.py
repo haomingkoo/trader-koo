@@ -22,14 +22,12 @@ from trader_koo.structure.vix_analysis import (
     calculate_term_structure,
     calculate_vix_percentile,
     detect_compression_signal,
-    format_compression_thresholds_display,
     get_percentile_color,
     should_show_volatility_warning,
 )
 from trader_koo.structure.vix_patterns import (
     VIXTrapReclaimConfig,
     detect_vix_trap_reclaim_patterns,
-    get_pattern_glossary,
 )
 from trader_koo.report.utils import (
     _clamp,

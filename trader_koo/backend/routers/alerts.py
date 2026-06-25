@@ -255,18 +255,3 @@ def get_alerts(
         return {"alerts": [], "unread_count": 0}
     finally:
         conn.close()
-
-
-@router.post("/api/alerts/mark-read")
-def mark_alerts_read() -> dict[str, Any]:
-    """Acknowledge that alerts have been read.
-
-    Read state is tracked client-side via localStorage.
-    This endpoint exists to provide a consistent API surface.
-    """
-    return {
-        "ok": True,
-        "marked_at": dt.datetime.now(dt.timezone.utc).replace(
-            microsecond=0,
-        ).isoformat(),
-    }

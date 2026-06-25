@@ -831,8 +831,6 @@ def _fmt_signed_pct(value: Any) -> str:
     except (TypeError, ValueError):
         return str(value)
     sign = "+" if num > 0 else ""
-    if abs(num) >= 10:
-        return f"{sign}{num:.2f}%"
     return f"{sign}{num:.2f}%"
 
 
@@ -851,8 +849,6 @@ def _fmt_num(value: Any) -> str:
         return f"{int(num):,}"
     if abs(num) >= 100:
         return f"{num:,.1f}"
-    if abs(num) >= 10:
-        return f"{num:.2f}".rstrip("0").rstrip(".")
     return f"{num:.2f}".rstrip("0").rstrip(".")
 
 

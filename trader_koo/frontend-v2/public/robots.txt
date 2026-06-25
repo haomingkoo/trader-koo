@@ -1,5 +1,7 @@
 User-agent: *
 Allow: /
+Allow: /llms.txt
 Disallow: /api/
+Disallow: /admin/
 
 Sitemap: https://trader.kooexperience.com/sitemap.xml

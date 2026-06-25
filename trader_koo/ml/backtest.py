@@ -85,21 +85,17 @@ def _return_cash_on_close(
 ) -> float:
     """Compute cash returned when a position is closed.
 
-    Long: invested capital was entry_price * shares; returned = that + pnl.
-    Short: proceeds from short sale (entry_price * shares) were already
-           added to cash at entry. On cover, we pay exit_price * shares.
-           Net cash change = -(exit_price * shares) - commission,
-           but pnl already includes commission, so return the pnl portion
-           plus release the margin reserve.
+    Entry already reserved half of the round-trip commission in cash. Trade
+    log PnL includes the full round-trip commission, so add the entry-half
+    back here to make portfolio cash reflect exactly one round-trip fee.
     """
     entry_price = pos["entry_price"]
     shares = pos["shares"]
+    entry_commission = DEFAULT_COMMISSION_PER_TRADE / 2
 
-    if pos["direction"] == "long":
-        return entry_price * shares + pnl
-    # Short: margin reserve (entry_price * shares) was deducted at open.
-    # Now we return reserve + pnl.
-    return entry_price * shares + pnl
+    # Long and short return identically: for shorts, entry_price * shares is the
+    # margin reserve deducted at open and returned here alongside pnl.
+    return entry_price * shares + pnl + entry_commission
 
 
 def _apply_exit_slippage(

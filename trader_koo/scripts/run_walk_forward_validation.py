@@ -18,6 +18,7 @@ from typing import Any
 
 from trader_koo.ml.backtest import run_backtest
 from trader_koo.ml.features import ML_CONTEXT_TICKERS
+from trader_koo.ml.rule_baseline import run_rule_baseline
 from trader_koo.ml.trainer import train_walk_forward
 
 LOG = logging.getLogger("trader_koo.scripts.run_walk_forward_validation")
@@ -93,8 +94,10 @@ def main() -> int:
     parser.add_argument("--max-positions", type=int, default=5)
     parser.add_argument("--min-win-prob", type=float, default=0.55)
     parser.add_argument("--short-threshold", type=float, default=0.45)
+    parser.add_argument("--rule-min-score", type=float, default=68.0)
     parser.add_argument("--output-dir", type=Path, default=Path("data/models"))
     parser.add_argument("--skip-backtest", action="store_true")
+    parser.add_argument("--skip-rule-baseline", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -138,9 +141,25 @@ def main() -> int:
                 target_mode=args.target_mode,
             )
 
+        rule_baseline: dict[str, Any] | None = None
+        if not args.skip_backtest and not args.skip_rule_baseline:
+            rule_baseline = run_rule_baseline(
+                conn,
+                start_date=args.backtest_start_date,
+                end_date=end_date,
+                max_positions=args.max_positions,
+                min_score=args.rule_min_score,
+            )
+
+        components_ok = [bool(training.get("ok"))]
+        if backtest is not None:
+            components_ok.append(bool(backtest.get("ok")))
+        if rule_baseline is not None:
+            components_ok.append(bool(rule_baseline.get("ok")))
+
         elapsed = round(time.time() - t0, 1)
         artifact = {
-            "ok": bool(training.get("ok")) and (True if backtest is None else bool(backtest.get("ok"))),
+            "ok": all(components_ok),
             "started_at": started.isoformat(),
             "elapsed_sec": elapsed,
             "db_path": str(args.db_path),
@@ -156,10 +175,13 @@ def main() -> int:
                 "max_positions": args.max_positions,
                 "min_win_prob": args.min_win_prob,
                 "short_threshold": args.short_threshold,
+                "rule_min_score": args.rule_min_score,
+                "skip_rule_baseline": args.skip_rule_baseline,
             },
             "universe": universe,
             "training": training,
             "backtest": _compact_backtest(backtest) if backtest is not None else None,
+            "rule_baseline": _compact_backtest(rule_baseline) if rule_baseline is not None else None,
         }
 
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -167,10 +189,27 @@ def main() -> int:
         out_path = args.output_dir / f"walk_forward_validation_{ts}.json"
         out_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
 
+        registry: dict[str, Any] | None = None
+        try:
+            from trader_koo.ml.validation_registry import record_validation_run
+
+            registry = record_validation_run(
+                conn,
+                artifact,
+                source="walk_forward_validation",
+                artifact_path=str(out_path),
+                run_id=f"walk-forward-{ts}",
+            )
+            artifact["validation_registry"] = registry
+            out_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        except Exception as exc:
+            LOG.warning("Validation registry write failed: %s", exc)
+
         print(json.dumps({
             "ok": artifact["ok"],
             "elapsed_sec": elapsed,
             "artifact": str(out_path),
+            "validation_registry": registry,
             "universe": universe,
             "training": {
                 "ok": training.get("ok"),
@@ -180,6 +219,7 @@ def main() -> int:
                 "target_mode": training.get("target_mode"),
             },
             "backtest": (backtest or {}).get("summary") if backtest is not None else None,
+            "rule_baseline": (rule_baseline or {}).get("summary") if rule_baseline is not None else None,
         }, indent=2))
         return 0 if artifact["ok"] else 1
     finally:

@@ -3,8 +3,8 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
-import { CryptoWsProvider } from "./hooks/useCryptoWs";
-import { EquityWsProvider } from "./hooks/useEquityWs";
+import { CryptoWsProvider } from "./hooks/CryptoWsProvider";
+import { EquityWsProvider } from "./hooks/EquityWsProvider";
 import "./styles/globals.css";
 
 const queryClient = new QueryClient({

@@ -437,7 +437,6 @@ def predict_directional_regimes(
     for i in range(3):
         sorted_probs[:, i] = raw_probs[:, state_order[i]]
 
-    date_col = features.index if features.index.dtype == "datetime64[ns]" else range(len(features))
     if "date" in df.columns:
         date_values = pd.to_datetime(df.loc[features.index, "date"], errors="coerce")
     else:

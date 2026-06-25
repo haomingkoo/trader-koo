@@ -434,17 +434,6 @@ def _usage_summary(conn: sqlite3.Connection, days: int = 7, limit: int = 10) -> 
             }
             for row in top_paths
         ],
-        "top_pages": [
-            {
-                **row,
-                "path": str(row.get("path") or ""),
-                "sessions": int(row.get("sessions") or 0),
-                "visitors": int(row.get("visitors") or 0),
-                "page_views_total": int(row.get("page_views_total") or 0),
-                "chart_loads_total": int(row.get("chart_loads_total") or 0),
-            }
-            for row in top_paths
-        ],
         "daily": [
             {
                 "day": row["day"],

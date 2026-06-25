@@ -47,15 +47,33 @@ REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
 PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
 INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STALE_MIN", "75")))
-AUTO_RESUME_POST_INGEST = str(os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1")).strip().lower() in {
-    "1", "true", "yes", "on",
-}
+
+
+def _env_flag(name: str, default: str) -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+AUTO_RESUME_POST_INGEST = _env_flag("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1")
+AUTO_RESUME_INTERRUPTED_PIPELINE = _env_flag(
+    "TRADER_KOO_AUTO_RESUME_INTERRUPTED_PIPELINE",
+    os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1"),
+)
 AUTO_RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_AGE_HOURS", "18")))
 AUTO_RESUME_MAX_RETRIES = max(0, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_RETRIES", "2")))
 
 # ---------------------------------------------------------------------------
 # pipeline_runs table: DB-based pipeline stage tracking
 # ---------------------------------------------------------------------------
+
+def _now_iso_z() -> str:
+    """Return the current UTC time as a second-precision ISO-8601 Z string."""
+    return (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
 
 _PIPELINE_RUNS_DDL = """
 CREATE TABLE IF NOT EXISTS pipeline_runs (
@@ -92,12 +110,7 @@ def create_pipeline_run(
     path = db_path or DB_PATH
     if not path.exists():
         return
-    now_iso = (
-        dt.datetime.now(dt.timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    now_iso = _now_iso_z()
     conn = sqlite3.connect(str(path))
     try:
         ensure_pipeline_runs_schema(conn)
@@ -124,12 +137,7 @@ def update_pipeline_stage(
     path = db_path or DB_PATH
     if not path.exists():
         return
-    now_iso = (
-        dt.datetime.now(dt.timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    now_iso = _now_iso_z()
     conn = sqlite3.connect(str(path))
     try:
         conn.execute(
@@ -159,12 +167,7 @@ def finish_pipeline_run(
     path = db_path or DB_PATH
     if not path.exists():
         return
-    now_iso = (
-        dt.datetime.now(dt.timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    now_iso = _now_iso_z()
     conn = sqlite3.connect(str(path))
     try:
         conn.execute(
@@ -190,31 +193,6 @@ def finish_pipeline_run(
             ),
         )
         conn.commit()
-    finally:
-        conn.close()
-
-
-def read_latest_pipeline_run(
-    db_path: Path | None = None,
-) -> dict[str, Any] | None:
-    """Return the most recent ``pipeline_runs`` row, or None."""
-    path = db_path or DB_PATH
-    if not path.exists():
-        return None
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    try:
-        if not table_exists(conn, "pipeline_runs"):
-            return None
-        row = conn.execute(
-            """
-            SELECT *
-            FROM pipeline_runs
-            ORDER BY started_ts DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        return dict(row) if row else None
     finally:
         conn.close()
 

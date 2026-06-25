@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import logging
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
+
+LOG = logging.getLogger("trader_koo.structure.levels")
 
 
 @dataclass
@@ -268,3 +274,46 @@ def add_fallback_levels(
     if lv.empty:
         return lv
     return lv.drop_duplicates(subset=["type", "level"]).sort_values("level").reset_index(drop=True)
+
+
+def get_ticker_levels(db_path: Path, ticker: str) -> list[dict[str, Any]]:
+    """Query support/resistance levels for *ticker* from the price DB.
+
+    Returns a list of ``{"type", "level"}`` records, or ``[]`` on any
+    failure (missing DB, missing table, insufficient history, etc.).
+    """
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        from trader_koo.backend.services.database import (
+            get_price_df,
+            table_exists,
+        )
+        from trader_koo.features.technical import compute_pivots
+
+        if not table_exists(conn, "price_daily"):
+            conn.close()
+            return []
+
+        df = get_price_df(conn, ticker)
+        conn.close()
+
+        if df.empty or len(df) < 30:
+            return []
+
+        cfg = LevelConfig()
+        pivots = compute_pivots(df, left=5, right=5)
+        raw_levels = build_levels_from_pivots(pivots, cfg)
+        last_close = float(df["close"].iloc[-1])
+        selected = select_target_levels(raw_levels, last_close, cfg)
+        selected = add_fallback_levels(df, selected, last_close, cfg)
+
+        if selected.empty:
+            return []
+
+        return selected[["type", "level"]].to_dict("records")
+    except Exception as exc:
+        LOG.warning("Failed to extract levels for %s: %s", ticker, exc)
+        return []

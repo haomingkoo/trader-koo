@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Thin CLI wrapper for daily report generation.
 
-All logic has been moved to the ``trader_koo.report`` package.
-This module re-exports every public symbol so that existing
-``from trader_koo.scripts.generate_daily_report import …`` imports
-continue to work without changes.
+All logic lives in the ``trader_koo.report`` package; this module only
+wires up the command-line entry point.
 """
 from __future__ import annotations
 
@@ -18,112 +16,19 @@ from typing import Any
 LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Re-export everything from the report package so callers that import from
-# ``trader_koo.scripts.generate_daily_report`` keep working.
+# Imports used by the CLI entry point below.
 # ---------------------------------------------------------------------------
 
-from trader_koo.report.utils import (  # noqa: F401, E402
-    MARKET_CLOSE_HOUR,
-    MARKET_TZ,
-    MARKET_TZ_NAME,
-    TRUTHY_VALUES,
-    _as_bool,
-    _clamp,
-    _fmt_pct_short,
-    _median,
-    _normalize_report_kind,
-    _parse_iso_date,
-    _percentile_rank,
-    _round_or_none,
-    _setup_tier,
-    _stdev,
-    _to_float,
-    days_since_date,
-    hours_since,
-    market_calendar_context,
-    nyse_early_closes_for_year,
-    nyse_holidays_for_year,
-    parse_iso_utc,
-    row_to_dict,
-    table_exists,
-    tail_text,
-)
-
-from trader_koo.report.email_dispatch import (  # noqa: F401, E402
+from trader_koo.report.utils import _as_bool, _normalize_report_kind
+from trader_koo.report.email_dispatch import (
     _email_transport,
     _resend_cfg,
-    _send_resend_email,
     _smtp_cfg,
     send_llm_failure_alert_email,
     send_report_email,
 )
-
-from trader_koo.report.pattern_analysis import (  # noqa: F401, E402
-    _summarize_yolo_lifecycle,
-    _yolo_match_tolerance_days,
-    _yolo_seen_streak,
-    _yolo_snapshot_matches,
-    fetch_yolo_delta,
-    fetch_yolo_pattern_persistence,
-)
-
-from trader_koo.report.market_context import (  # noqa: F401, E402
-    REPORT_FEATURE_CFG,
-    REPORT_LEVEL_CFG,
-    _build_regime_context,
-    _build_regime_llm_commentary,
-    _fetch_symbol_ohlcv,
-    _fetch_technical_context,
-    _fetch_volatility_inputs,
-)
-
-from trader_koo.report.setup_scoring import (  # noqa: F401, E402
-    DEBATE_ENGINE_ENABLED,
-    SETUP_EVAL_ENABLED,
-    SETUP_EVAL_HIT_THRESHOLD_PCT,
-    SETUP_EVAL_MIN_SAMPLE,
-    SETUP_EVAL_TRACK_LIMIT,
-    SETUP_EVAL_WINDOW_DAYS,
-    _apply_agreement_tier_adjustment,
-    _apply_debate_guardrails,
-    _apply_debate_payload,
-    _apply_llm_narrative_overrides,
-    _apply_setup_eval_fields,
-    _cap_tier,
-    _describe_setup,
-    _downgrade_tier,
-    _fundamental_context,
-    _persist_setup_call_candidates,
-    _refresh_setup_eval_surfaces,
-    _score_open_setup_call_outcomes,
-    _score_setup_from_confluence,
-    _setup_call_direction,
-    _setup_cluster_rows,
-    _setup_eval_bucket,
-    _setup_eval_score_adjustment,
-    _setup_validity_days,
-    _summarize_setup_call_evaluations,
-    _tier_rank,
-    _yolo_age_factor,
-    _yolo_pattern_bias,
-    _yolo_recency_label,
-    build_no_trade_conditions,
-    build_tonight_key_changes,
-    ensure_setup_call_eval_schema,
-)
-
-from trader_koo.report.generator import (  # noqa: F401, E402
-    fetch_report_payload,
-    fetch_signals,
-)
-
-from trader_koo.report.serializer import (  # noqa: F401, E402
-    _md_line,
-    _parse_report_snapshot_ts,
-    _prune_report_snapshots,
-    to_markdown,
-    write_reports,
-)
+from trader_koo.report.generator import fetch_report_payload
+from trader_koo.report.serializer import to_markdown, write_reports
 
 
 # ---------------------------------------------------------------------------

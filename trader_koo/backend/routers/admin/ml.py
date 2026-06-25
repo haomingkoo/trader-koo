@@ -28,6 +28,11 @@ _retrain_thread: threading.Thread | None = None
 _retrain_result: dict[str, Any] | None = None
 
 VALID_TARGET_MODES = {"return_sign", "barrier", "rank"}
+LATEST_MODEL_FILES = (
+    "swing_lgbm_latest.txt",
+    "swing_lgbm_latest_meta.json",
+    "swing_meta_lgbm_latest.txt",
+)
 
 
 def _target_mode_error(target_mode: str) -> dict[str, Any] | None:
@@ -39,6 +44,66 @@ def _target_mode_error(target_mode: str) -> dict[str, Any] | None:
             f"Invalid target_mode '{target_mode}'. "
             "Choose from: 'return_sign', 'barrier', 'rank'."
         ),
+    }
+
+
+def _snapshot_latest_model_files(model_dir: Path) -> dict[str, bytes | None]:
+    """Capture current promoted model files before candidate training starts."""
+    snapshot: dict[str, bytes | None] = {}
+    for name in LATEST_MODEL_FILES:
+        path = model_dir / name
+        snapshot[name] = path.read_bytes() if path.exists() else None
+    return snapshot
+
+
+def _restore_latest_model_files(
+    model_dir: Path,
+    snapshot: dict[str, bytes | None],
+) -> list[str]:
+    """Restore promoted model files from a pre-training snapshot."""
+    restored: list[str] = []
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for name in LATEST_MODEL_FILES:
+        path = model_dir / name
+        payload = snapshot.get(name)
+        if payload is None:
+            if path.exists():
+                path.unlink()
+                restored.append(name)
+            continue
+        path.write_bytes(payload)
+        restored.append(name)
+    return restored
+
+
+def _finalize_model_promotion(
+    model_dir: Path,
+    latest_snapshot: dict[str, bytes | None],
+    validation_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep candidate latest files only if registry marks the run eligible."""
+    registry = (
+        validation_result.get("validation_registry")
+        if isinstance(validation_result.get("validation_registry"), dict)
+        else {}
+    )
+    champion_eligible = bool(registry.get("champion_eligible"))
+    if champion_eligible:
+        return {
+            "promoted": True,
+            "restored_previous_latest": False,
+            "reason": "champion_eligible",
+            "model_dir": str(model_dir),
+        }
+
+    restored = _restore_latest_model_files(model_dir, latest_snapshot)
+    return {
+        "promoted": False,
+        "restored_previous_latest": True,
+        "reason": registry.get("promotion_status") or "validation_not_eligible",
+        "eligibility_reasons": registry.get("eligibility_reasons") or [],
+        "restored_files": restored,
+        "model_dir": str(model_dir),
     }
 
 
@@ -233,6 +298,7 @@ def run_backtest_endpoint(
     min_win_prob: float = Query(default=0.55),
     short_threshold: float = Query(default=0.45),
     target_mode: str = Query(default="barrier"),
+    rule_min_score: float = Query(default=68.0),
 ) -> dict[str, Any]:
     """Run a walk-forward backtest in background. Check /api/admin/backtest-result."""
     global _backtest_thread, _backtest_result
@@ -254,10 +320,11 @@ def run_backtest_endpoint(
         global _backtest_result
         try:
             from trader_koo.ml.backtest import run_backtest
+            from trader_koo.ml.rule_baseline import run_rule_baseline
 
             conn = get_conn()
             try:
-                _backtest_result = run_backtest(
+                result = run_backtest(
                     conn,
                     start_date=start_date,
                     end_date=end_date,
@@ -266,6 +333,40 @@ def run_backtest_endpoint(
                     short_threshold=short_threshold,
                     target_mode=target_mode,
                 )
+                rule_baseline = run_rule_baseline(
+                    conn,
+                    start_date=start_date,
+                    end_date=end_date,
+                    max_positions=max_positions,
+                    min_score=rule_min_score,
+                )
+                if isinstance(result, dict):
+                    result["rule_baseline"] = rule_baseline
+                    model_summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+                    rule_summary = (
+                        rule_baseline.get("summary")
+                        if isinstance(rule_baseline, dict)
+                        and isinstance(rule_baseline.get("summary"), dict)
+                        else {}
+                    )
+                    model_return = model_summary.get("total_return_pct")
+                    rule_return = rule_summary.get("return_pct")
+                    try:
+                        result["rule_baseline_comparison"] = {
+                            "model_return_pct": model_return,
+                            "rule_baseline_return_pct": rule_return,
+                            "alpha_vs_rule_baseline_pct": round(
+                                float(model_return) - float(rule_return),
+                                2,
+                            ),
+                        }
+                    except Exception:
+                        result["rule_baseline_comparison"] = {
+                            "model_return_pct": model_return,
+                            "rule_baseline_return_pct": rule_return,
+                            "alpha_vs_rule_baseline_pct": None,
+                        }
+                _backtest_result = result
             finally:
                 conn.close()
         except Exception as exc:
@@ -311,6 +412,11 @@ def _run_retrain_pipeline(
     start_date: str,
     target_mode: str,
     notify: bool,
+    backtest_start_date: str,
+    max_positions: int,
+    min_win_prob: float,
+    short_threshold: float,
+    rule_min_score: float,
 ) -> None:
     """Background worker: extract features from prod DB, train walk-forward,
     save model, log metrics to ``ml_train_log`` table, optionally notify via
@@ -318,11 +424,18 @@ def _run_retrain_pipeline(
     """
     global _retrain_result
     started = dt.datetime.now(dt.timezone.utc)
+    model_dir: Path | None = None
+    latest_snapshot: dict[str, bytes | None] | None = None
     try:
-        from trader_koo.ml.trainer import train_walk_forward
+        from trader_koo.ml.backtest import run_backtest
+        from trader_koo.ml.rule_baseline import run_rule_baseline
+        from trader_koo.ml.trainer import _model_dir, train_walk_forward
 
         conn = get_conn()
         try:
+            model_dir = _model_dir()
+            latest_snapshot = _snapshot_latest_model_files(model_dir)
+
             # Determine end_date from the latest data in the DB
             row = conn.execute(
                 "SELECT MAX(date) AS max_date FROM price_daily "
@@ -335,6 +448,22 @@ def _run_retrain_pipeline(
                 start_date, end_date, target_mode,
             )
 
+            _retrain_result = {
+                "ok": False,
+                "status": "training",
+                "message": "Training walk-forward model...",
+                "started_at": started.isoformat(),
+                "config": {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "backtest_start_date": backtest_start_date,
+                    "target_mode": target_mode,
+                    "max_positions": max_positions,
+                    "min_win_prob": min_win_prob,
+                    "short_threshold": short_threshold,
+                    "rule_min_score": rule_min_score,
+                },
+            }
             result = train_walk_forward(
                 conn,
                 start_date=start_date,
@@ -349,24 +478,112 @@ def _run_retrain_pipeline(
 
             # Log metrics to DB table for historical tracking
             _log_retrain_metrics(conn, result)
+
+            _retrain_result = {
+                "ok": False,
+                "status": "backtesting",
+                "message": "Running ML backtest and current-rule baseline...",
+                "started_at": started.isoformat(),
+                "training": result,
+            }
+
+            backtest = run_backtest(
+                conn,
+                start_date=backtest_start_date,
+                end_date=end_date,
+                max_positions=max_positions,
+                min_win_prob=min_win_prob,
+                short_threshold=short_threshold,
+                target_mode=target_mode,
+            )
+            rule_baseline = run_rule_baseline(
+                conn,
+                start_date=backtest_start_date,
+                end_date=end_date,
+                max_positions=max_positions,
+                min_score=rule_min_score,
+            )
+
+            validation_result = {
+                "ok": bool(result.get("ok")) and bool(backtest.get("ok")) and bool(rule_baseline.get("ok")),
+                "status": (
+                    "completed"
+                    if bool(result.get("ok")) and bool(backtest.get("ok")) and bool(rule_baseline.get("ok"))
+                    else "failed"
+                ),
+                "started_at": started.isoformat(),
+                "elapsed_sec": round((dt.datetime.now(dt.timezone.utc) - started).total_seconds(), 1),
+                "start_date": start_date,
+                "end_date": end_date,
+                "target_mode": target_mode,
+                "config": {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "backtest_start_date": backtest_start_date,
+                    "target_mode": target_mode,
+                    "max_positions": max_positions,
+                    "min_win_prob": min_win_prob,
+                    "short_threshold": short_threshold,
+                    "rule_min_score": rule_min_score,
+                },
+                "training": result,
+                "backtest": backtest,
+                "rule_baseline": rule_baseline,
+            }
+            try:
+                from trader_koo.ml.validation_registry import record_validation_run
+
+                registry = record_validation_run(
+                    conn,
+                    validation_result,
+                    source="admin_retrain",
+                    artifact_path=None,
+                    run_id=f"admin-retrain-{started.strftime('%Y%m%dT%H%M%SZ')}",
+                )
+                validation_result["validation_registry"] = registry
+            except Exception as exc:
+                LOG.warning("Failed to record validation registry run: %s", exc)
+
+            if model_dir is not None and latest_snapshot is not None:
+                validation_result["promotion_action"] = _finalize_model_promotion(
+                    model_dir,
+                    latest_snapshot,
+                    validation_result,
+                )
             conn.commit()
 
-            _retrain_result = result
+            _retrain_result = validation_result
 
             # Telegram notification
-            if notify and result.get("ok"):
-                _send_retrain_notification(result)
+            if notify and validation_result.get("ok"):
+                _send_retrain_notification(validation_result)
 
         finally:
             conn.close()
 
     except Exception as exc:
         elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+        restore_info: dict[str, Any] | None = None
+        if model_dir is not None and latest_snapshot is not None:
+            try:
+                restored = _restore_latest_model_files(model_dir, latest_snapshot)
+                restore_info = {
+                    "restored_previous_latest": True,
+                    "restored_files": restored,
+                    "model_dir": str(model_dir),
+                }
+            except Exception as restore_exc:
+                restore_info = {
+                    "restored_previous_latest": False,
+                    "error": str(restore_exc),
+                    "model_dir": str(model_dir),
+                }
         LOG.exception("Retrain pipeline failed after %.1fs: %s", elapsed, exc)
         _retrain_result = {
             "ok": False,
             "error": str(exc),
             "elapsed_sec": round(elapsed, 1),
+            "promotion_action": restore_info,
         }
 
 
@@ -432,11 +649,23 @@ def _send_retrain_notification(result: dict[str, Any]) -> None:
         if not is_configured():
             return
 
-        agg = result.get("aggregate_metrics") or {}
-        meta = result.get("meta_labeling") or {}
-        fold_count = result.get("fold_count", 0)
-        samples = result.get("total_samples", 0)
-        elapsed = result.get("elapsed_sec", 0)
+        training = result.get("training") if isinstance(result.get("training"), dict) else result
+        agg = training.get("aggregate_metrics") or {}
+        meta = training.get("meta_labeling") or {}
+        fold_count = training.get("fold_count", 0)
+        samples = training.get("total_samples", 0)
+        elapsed = result.get("elapsed_sec", training.get("elapsed_sec", 0))
+        backtest_summary = (
+            result.get("backtest", {}).get("summary", {})
+            if isinstance(result.get("backtest"), dict)
+            else {}
+        )
+        rule_summary = (
+            result.get("rule_baseline", {}).get("summary", {})
+            if isinstance(result.get("rule_baseline"), dict)
+            else {}
+        )
+        registry = result.get("validation_registry") if isinstance(result.get("validation_registry"), dict) else {}
 
         lines = [
             "\U0001f916 *ML Model Retrained*",
@@ -444,15 +673,39 @@ def _send_retrain_notification(result: dict[str, Any]) -> None:
             f"Folds: {fold_count} | Samples: {samples:,}",
             f"Avg AUC: {agg.get('avg_auc', 0):.4f} | Best: {agg.get('best_auc', 0):.4f}",
             f"Avg Precision: {agg.get('avg_precision', 0):.4f}",
-            f"Target mode: {result.get('target_mode', 'unknown')}",
-            f"Range: {result.get('start_date')} to {result.get('end_date')}",
+            f"Target mode: {training.get('target_mode', result.get('target_mode', 'unknown'))}",
+            f"Range: {training.get('start_date', result.get('start_date'))} to {training.get('end_date', result.get('end_date'))}",
             f"Time: {elapsed:.0f}s",
         ]
 
         if meta.get("ok"):
             lines.append(f"Meta-label AUC: {meta.get('auc', 0):.4f}")
 
-        model_path = result.get("model_path", "")
+        if backtest_summary:
+            lines.append(
+                "Backtest: "
+                f"{backtest_summary.get('total_return_pct', 0):+.2f}% "
+                f"vs SPY {backtest_summary.get('spy_return_pct', 0):+.2f}%"
+            )
+        if rule_summary:
+            model_return = backtest_summary.get("total_return_pct") if backtest_summary else None
+            rule_return = rule_summary.get("return_pct")
+            try:
+                alpha_rule = float(model_return) - float(rule_return)
+                lines.append(
+                    f"Rule baseline: {rule_return:+.2f}% "
+                    f"(model alpha {alpha_rule:+.2f}pp)"
+                )
+            except Exception:
+                lines.append(f"Rule baseline: {rule_return}")
+        if registry:
+            lines.append(
+                "Promotion: "
+                f"{registry.get('promotion_status', 'unknown')} "
+                f"({', '.join(registry.get('eligibility_reasons') or []) or 'no blockers'})"
+            )
+
+        model_path = training.get("model_path", "")
         if model_path:
             lines.append(f"Model: `{Path(model_path).name}`")
 
@@ -468,12 +721,18 @@ def retrain_ml_model(
     start_date: str = Query(default="2025-01-01"),
     target_mode: str = Query(default="barrier"),
     notify: bool = Query(default=True),
+    backtest_start_date: str = Query(default="2025-06-01"),
+    max_positions: int = Query(default=5, ge=1, le=20),
+    min_win_prob: float = Query(default=0.55, ge=0.0, le=1.0),
+    short_threshold: float = Query(default=0.45, ge=0.0, le=1.0),
+    rule_min_score: float = Query(default=68.0, ge=0.0, le=100.0),
 ) -> dict[str, Any]:
-    """Retrain the LightGBM model using current prod DB data.
+    """Retrain and validate the LightGBM model using current prod DB data.
 
     Extracts features from the live database, runs walk-forward training,
-    saves the model, logs metrics to ``ml_train_log``, and optionally sends
-    a Telegram notification with results.
+    runs the ML backtest plus current-rule baseline, records the validation
+    registry row, logs metrics to ``ml_train_log``, and optionally sends a
+    Telegram notification with results.
 
     The end_date is auto-detected from the latest price data in the DB.
 
@@ -514,12 +773,30 @@ def retrain_ml_model(
     _retrain_result = {
         "ok": False,
         "status": "training",
-        "message": "Retrain pipeline started...",
+        "message": "Retrain and validation pipeline started...",
         "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "config": {
+            "start_date": start_date,
+            "backtest_start_date": backtest_start_date,
+            "target_mode": target_mode,
+            "max_positions": max_positions,
+            "min_win_prob": min_win_prob,
+            "short_threshold": short_threshold,
+            "rule_min_score": rule_min_score,
+        },
     }
     _retrain_thread = threading.Thread(
         target=_run_retrain_pipeline,
-        args=(start_date, target_mode, notify),
+        args=(
+            start_date,
+            target_mode,
+            notify,
+            backtest_start_date,
+            max_positions,
+            min_win_prob,
+            short_threshold,
+            rule_min_score,
+        ),
         daemon=True,
     )
     _retrain_thread.start()
@@ -527,11 +804,13 @@ def retrain_ml_model(
     return {
         "ok": True,
         "message": (
-            f"Retrain pipeline started (start_date={start_date}, "
-            f"target_mode={target_mode}, notify={notify}). "
+            f"Retrain + validation pipeline started (start_date={start_date}, "
+            f"backtest_start_date={backtest_start_date}, target_mode={target_mode}, "
+            f"notify={notify}). "
             "Check GET /api/admin/ml/retrain-status for results."
         ),
         "start_date": start_date,
+        "backtest_start_date": backtest_start_date,
         "target_mode": target_mode,
     }
 
@@ -578,6 +857,37 @@ def retrain_history(
         except sqlite3.OperationalError:
             # Table does not exist yet
             return {"ok": True, "count": 0, "entries": []}
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@router.get("/api/admin/ml/validation-runs")
+@require_admin_auth
+def validation_runs(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    """Return Qlib-style validation registry entries and promotion gates."""
+    try:
+        from trader_koo.ml.validation_registry import (
+            champion_status,
+            list_validation_runs,
+            model_version_card,
+        )
+
+        conn = get_conn()
+        try:
+            runs = list_validation_runs(conn, limit=limit)
+            status = champion_status(conn)
+            return {
+                "ok": True,
+                "count": len(runs),
+                "runs": runs,
+                "champion": status,
+                "model_card": model_version_card(conn),
+            }
         finally:
             conn.close()
     except Exception as exc:

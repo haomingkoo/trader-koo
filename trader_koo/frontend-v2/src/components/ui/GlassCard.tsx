@@ -5,8 +5,6 @@ interface GlassCardProps {
   value?: string | number;
   children?: ReactNode;
   className?: string;
-  onClick?: () => void;
-  header?: ReactNode;
 }
 
 export const GLASS_BASE =
@@ -17,24 +15,9 @@ export default function GlassCard({
   value,
   children,
   className = "",
-  onClick,
-  header,
 }: GlassCardProps) {
   return (
-    <div
-      className={`${GLASS_BASE} ${className}`}
-      onClick={onClick}
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={
-        onClick
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") onClick();
-            }
-          : undefined
-      }
-    >
-      {header}
+    <div className={`${GLASS_BASE} ${className}`}>
       {label && (
         <div className="label-xs mb-1">
           {label}
@@ -42,9 +25,7 @@ export default function GlassCard({
       )}
       {value !== undefined && (
         <div className="text-lg font-bold tabular-nums text-[var(--text)]">
-          {typeof value === "string" || typeof value === "number"
-            ? (value ?? "\u2014")
-            : String(value ?? "\u2014")}
+          {value}
         </div>
       )}
       {children}

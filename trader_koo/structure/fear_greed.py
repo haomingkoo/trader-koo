@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import math
 import sqlite3
 from typing import Any
 
@@ -71,15 +70,7 @@ def _label_for_score(score: int) -> tuple[str, str]:
 
 def _signal_for_score(score: float) -> str:
     """Return a signal label for a component score."""
-    if score < 25:
-        return "Extreme Fear"
-    if score < 45:
-        return "Fear"
-    if score < 55:
-        return "Neutral"
-    if score < 75:
-        return "Greed"
-    return "Extreme Greed"
+    return _label_for_score(score)[0]
 
 
 def _blended_sentiment(

@@ -210,35 +210,6 @@ def calculate_term_structure(conn: sqlite3.Connection) -> TermStructure:
     )
 
 
-def format_term_structure_display(term_structure: TermStructure) -> str:
-    """
-    Format term structure for display with source labeling.
-
-    Requirements: 9.3, 9.6
-    """
-    if term_structure.source == "unavailable":
-        return "Term structure unavailable"
-
-    lines = [
-        f"VIX Spot: {term_structure.vix_spot:.2f}",
-    ]
-
-    if term_structure.vix_3m:
-        lines.append(f"VIX 3M: {term_structure.vix_3m:.2f}")
-
-    if term_structure.vix_6m:
-        lines.append(f"VIX 6M: {term_structure.vix_6m:.2f}")
-
-    if term_structure.slope is not None:
-        lines.append(f"Slope: {term_structure.slope:.2%}")
-
-    lines.append(f"State: {'Contango' if term_structure.contango else 'Backwardation/Flat'}")
-    lines.append(f"Source: {term_structure.source}")
-    lines.append(f"Timestamp: {term_structure.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-
-    return "\n".join(lines)
-
-
 def calculate_vix_percentile(conn: sqlite3.Connection, window_days: int = 252) -> Optional[float]:
     """
     Calculate VIX percentile rank over a rolling window.
@@ -331,28 +302,6 @@ def should_show_volatility_warning(percentile: Optional[float]) -> bool:
     Requirements: 11.5
     """
     return percentile is not None and percentile > 80
-
-
-def format_percentile_display(percentile: Optional[float]) -> str:
-    """
-    Format VIX percentile for display with color coding and warning.
-
-    Args:
-        percentile: VIX percentile value (0-100)
-
-    Returns:
-        Formatted display string
-
-    Requirements: 11.2, 11.3, 11.5
-    """
-    if percentile is None:
-        return "VIX Percentile: Unavailable"
-
-    color = get_percentile_color(percentile)
-    warning = " ⚠️ ELEVATED VOLATILITY" if should_show_volatility_warning(percentile) else ""
-
-    return f"VIX Percentile: {percentile:.1f}% [{color.upper()}]{warning}"
-
 
 
 @dataclass

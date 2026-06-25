@@ -10,8 +10,6 @@ import logging
 import sqlite3
 from typing import Any
 
-import numpy as np
-
 LOG = logging.getLogger(__name__)
 
 # Thresholds
@@ -123,34 +121,3 @@ def check_model_drift(
             "window_days": window_days,
             "recommendation": f"Drift detection error: {exc}",
         }
-
-
-def check_feature_drift(
-    current_features: dict[str, float],
-    historical_means: dict[str, float],
-    historical_stds: dict[str, float],
-    *,
-    z_threshold: float = 3.0,
-) -> list[dict[str, Any]]:
-    """Check if current feature values are anomalous vs historical distribution.
-
-    Returns list of features that are >z_threshold standard deviations from mean.
-    """
-    anomalies: list[dict[str, Any]] = []
-    for feature, value in current_features.items():
-        if feature not in historical_means or feature not in historical_stds:
-            continue
-        mean = historical_means[feature]
-        std = historical_stds[feature]
-        if std <= 0:
-            continue
-        z_score = abs(value - mean) / std
-        if z_score > z_threshold:
-            anomalies.append({
-                "feature": feature,
-                "current_value": round(value, 4),
-                "historical_mean": round(mean, 4),
-                "historical_std": round(std, 4),
-                "z_score": round(z_score, 2),
-            })
-    return anomalies

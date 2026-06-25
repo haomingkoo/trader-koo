@@ -5,9 +5,11 @@ import Spinner from "../components/ui/Spinner";
 import Badge from "../components/ui/Badge";
 import {
   PaperTradePortfolioHero,
+  PaperTradeDecisionFlow,
   PaperTradeOpenPositions,
   PaperTradeEquityCurve,
   PaperTradeBenchmarkComparison,
+  PaperTradeDecisionMemory,
   PaperTradeFeedbackPanel,
   PaperTradePerformanceAttribution,
   PaperTradeMLCalibration,
@@ -60,6 +62,8 @@ export default function PaperTradePage() {
 
       <PaperTradePortfolioHero overall={overall} />
 
+      <PaperTradeDecisionFlow overall={overall} policy={summary?.policy} />
+
       {/* How it works — collapsible explainer */}
       <details className="group rounded-xl border border-[var(--line)] bg-[var(--panel)]">
         <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-[var(--text)] select-none">
@@ -108,6 +112,8 @@ export default function PaperTradePage() {
       />
 
       <PaperTradeFeedbackPanel feedback={summary?.feedback} />
+
+      <PaperTradeDecisionMemory reflections={summary?.recent_reflections} />
 
       {summary && (
         <PaperTradePerformanceAttribution summary={summary} />

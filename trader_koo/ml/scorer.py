@@ -17,7 +17,6 @@ import pandas as pd
 
 from trader_koo.ml.features import (
     FEATURE_COLUMNS,
-    FEATURE_COLUMNS_FULL,
     extract_features_for_universe,
 )
 

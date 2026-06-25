@@ -43,6 +43,12 @@ def _build_review(
             "stopped_out",
             f"Invalidation was hit{expected_text}. Review whether the entry was early, the setup family is weakening, or confirmation should be stricter.",
         )
+    if exit_reason == "trailing_stop":
+        achieved = f"{r_multiple:.2f}R" if isinstance(r_multiple, (int, float)) else "a protected gain"
+        return (
+            "trailing_stop",
+            f"Protective trailing stop was hit at {achieved}{expected_text}. Review whether the trail locked gains too early or the target was too ambitious.",
+        )
     if exit_reason == "expired":
         return (
             "timed_out",
@@ -52,6 +58,115 @@ def _build_review(
         "closed",
         f"Trade closed with {f'{r_multiple:.2f}R' if isinstance(r_multiple, (int, float)) else 'an unscored outcome'}{expected_text}. Compare discretion with the original plan.",
     )
+
+
+def _clean_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().split())
+
+
+def _append_unique(items: list[str], value: Any) -> None:
+    text = _clean_text(value)
+    if text and text not in items:
+        items.append(text)
+
+
+def _critic_reason_text(raw: Any) -> str:
+    text = _clean_text(raw)
+    if not text:
+        return ""
+    if "]: " in text:
+        return text.split("]: ", 1)[1]
+    return text
+
+
+def _build_entry_rationale(
+    *,
+    ticker: str,
+    direction: str,
+    row: dict[str, Any],
+    evaluation: dict[str, Any],
+    plan: dict[str, Any],
+    market_ctx: dict[str, Any],
+    critic: dict[str, Any],
+    ml_prediction: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a compact trade-entry journal for auditability and UI display."""
+    family = _clean_text(row.get("setup_family")) or "setup"
+    tier = _clean_text(row.get("setup_tier")).upper() or "?"
+    score = row.get("score")
+    score_text = f"{float(score):.1f}" if isinstance(score, (int, float)) else "n/a"
+    agreement = row.get("debate_agreement_score")
+    agreement_text = f"{float(agreement):.0f}%" if isinstance(agreement, (int, float)) else "n/a"
+    critic_grade = _clean_text(critic.get("conviction_grade")).upper() or "APPROVED"
+    checks_passed = critic.get("checks_passed")
+    checks_total = critic.get("checks_total")
+    checks_text = (
+        f"{checks_passed}/{checks_total}"
+        if isinstance(checks_passed, int) and isinstance(checks_total, int)
+        else "critic"
+    )
+
+    entry_reason = (
+        f"{ticker} {direction}: {family} {tier}-tier setup, score {score_text}, "
+        f"debate agreement {agreement_text}; critic {critic_grade} passed {checks_text} checks."
+    )
+
+    evidence: list[str] = []
+    _append_unique(evidence, row.get("observation"))
+    _append_unique(evidence, row.get("action"))
+    _append_unique(
+        evidence,
+        f"Planned reward/risk {plan.get('expected_r_multiple')}R; "
+        f"size {plan.get('position_size_pct')}% notional; "
+        f"risk budget {plan.get('risk_budget_pct')}%.",
+    )
+    yolo_pattern = _clean_text(row.get("yolo_pattern"))
+    if yolo_pattern:
+        recency = _clean_text(row.get("yolo_recency")) or "unknown"
+        _append_unique(evidence, f"Pattern context: {recency} {yolo_pattern}.")
+    vix = market_ctx.get("vix_at_entry")
+    regime = _clean_text(market_ctx.get("regime_state_at_entry"))
+    if isinstance(vix, (int, float)) or regime:
+        _append_unique(
+            evidence,
+            f"Market context: VIX {float(vix):.1f}" if isinstance(vix, (int, float)) else f"Market context: {regime}",
+        )
+    if ml_prediction.get("predicted_win_prob") is not None:
+        label = _clean_text(ml_prediction.get("prediction_label")) or "ML probability"
+        _append_unique(
+            evidence,
+            f"{label}: {float(ml_prediction['predicted_win_prob']) * 100:.0f}% observation-only.",
+        )
+
+    for raw in critic.get("critic_reasons") or []:
+        if not str(raw).startswith("PASS"):
+            continue
+        text = _critic_reason_text(raw)
+        if any(
+            key in str(raw)
+            for key in ("conviction_grade", "debate_strength", "risk_reward", "regime_alignment", "family_edge")
+        ):
+            _append_unique(evidence, text)
+        if len(evidence) >= 8:
+            break
+
+    risks: list[str] = []
+    _append_unique(risks, row.get("risk_note"))
+    for flag in evaluation.get("risk_flags") or []:
+        _append_unique(risks, flag)
+    if evaluation.get("decision_state") == "approved_with_flags":
+        _append_unique(risks, "Approved with caution flags.")
+    for raw in critic.get("critic_reasons") or []:
+        if not str(raw).startswith("PASS"):
+            _append_unique(risks, _critic_reason_text(raw))
+    if not ml_prediction:
+        _append_unique(risks, "ML did not filter this entry; model remains observation-only or unavailable.")
+
+    return {
+        "entry_reason": entry_reason,
+        "entry_evidence": evidence[:8],
+        "entry_risks": risks[:6],
+    }
 
 
 def compute_pnl(
@@ -86,6 +201,136 @@ def compute_r_multiple(
     else:
         pnl_per_share = entry_price - exit_price
     return round(pnl_per_share / risk, 2)
+
+
+def _stop_exit_reason(direction: str, entry_price: float, exit_price: float) -> str:
+    """Return a clearer reason for stops that close after protecting gains."""
+    pnl = compute_pnl(direction, entry_price, exit_price)
+    return "trailing_stop" if pnl > 0 else "stopped_out"
+
+
+def _compute_spy_return_pct(
+    conn: sqlite3.Connection,
+    *,
+    entry_date: str | None,
+    exit_date: str,
+) -> float | None:
+    if not entry_date:
+        return None
+    start_row = conn.execute(
+        "SELECT CAST(close AS REAL) FROM price_daily "
+        "WHERE ticker = 'SPY' AND date >= ? ORDER BY date ASC LIMIT 1",
+        (entry_date,),
+    ).fetchone()
+    end_row = conn.execute(
+        "SELECT CAST(close AS REAL) FROM price_daily "
+        "WHERE ticker = 'SPY' AND date <= ? ORDER BY date DESC LIMIT 1",
+        (exit_date,),
+    ).fetchone()
+    if not start_row or not end_row or start_row[0] is None or end_row[0] is None:
+        return None
+    start = float(start_row[0])
+    end = float(end_row[0])
+    if start <= 0:
+        return None
+    return round((end / start - 1.0) * 100.0, 2)
+
+
+def _lesson_from_outcome(
+    *,
+    ticker: str,
+    direction: str,
+    setup_family: str | None,
+    exit_reason: str,
+    pnl_pct: float,
+    r_multiple: float | None,
+    alpha_vs_spy_pct: float | None,
+) -> str:
+    family = setup_family or "unclassified setup"
+    r_text = f", {r_multiple:+.2f}R" if isinstance(r_multiple, (int, float)) else ""
+    alpha_text = (
+        f", alpha vs SPY {alpha_vs_spy_pct:+.2f}pp"
+        if isinstance(alpha_vs_spy_pct, (int, float))
+        else ""
+    )
+    if pnl_pct > 0 and (alpha_vs_spy_pct is None or alpha_vs_spy_pct >= 0):
+        verdict = "worked and beat the benchmark"
+    elif pnl_pct > 0:
+        verdict = "made money but lagged SPY"
+    elif exit_reason == "stopped_out":
+        verdict = "failed at invalidation"
+    else:
+        verdict = "did not produce enough edge"
+    return (
+        f"{ticker} {direction} {family} {verdict}: "
+        f"{pnl_pct:+.2f}%{r_text}{alpha_text}. "
+        "Compare future entries in this family/regime against this outcome."
+    )
+
+
+def _record_trade_reflection(
+    conn: sqlite3.Connection,
+    *,
+    trade_id: int,
+    exit_date: str,
+    exit_reason: str,
+    pnl_pct: float,
+    r_multiple: float | None,
+) -> None:
+    row = conn.execute(
+        """
+        SELECT ticker, direction, setup_family, entry_date
+        FROM paper_trades
+        WHERE id = ?
+        """,
+        (trade_id,),
+    ).fetchone()
+    if not row:
+        return
+    ticker, direction, setup_family, entry_date = row
+    spy_return = _compute_spy_return_pct(conn, entry_date=entry_date, exit_date=exit_date)
+    alpha = round(pnl_pct - spy_return, 2) if isinstance(spy_return, (int, float)) else None
+    lesson = _lesson_from_outcome(
+        ticker=str(ticker),
+        direction=str(direction),
+        setup_family=str(setup_family) if setup_family else None,
+        exit_reason=exit_reason,
+        pnl_pct=pnl_pct,
+        r_multiple=r_multiple,
+        alpha_vs_spy_pct=alpha,
+    )
+    conn.execute(
+        """
+        INSERT INTO paper_trade_reflections (
+            trade_id, ticker, direction, setup_family, entry_date, exit_date,
+            exit_reason, pnl_pct, r_multiple, spy_return_pct, alpha_vs_spy_pct,
+            lesson_summary
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(trade_id) DO UPDATE SET
+            exit_date = excluded.exit_date,
+            exit_reason = excluded.exit_reason,
+            pnl_pct = excluded.pnl_pct,
+            r_multiple = excluded.r_multiple,
+            spy_return_pct = excluded.spy_return_pct,
+            alpha_vs_spy_pct = excluded.alpha_vs_spy_pct,
+            lesson_summary = excluded.lesson_summary
+        """,
+        (
+            trade_id,
+            ticker,
+            direction,
+            setup_family,
+            entry_date,
+            exit_date,
+            exit_reason,
+            pnl_pct,
+            r_multiple,
+            spy_return,
+            alpha,
+            lesson,
+        ),
+    )
 
 
 def compute_trailing_stop(
@@ -268,6 +513,14 @@ def _close_trade(
             now,
             trade_id,
         ),
+    )
+    _record_trade_reflection(
+        conn,
+        trade_id=trade_id,
+        exit_date=exit_date,
+        exit_reason=exit_reason,
+        pnl_pct=pnl,
+        r_multiple=r_mult,
     )
 
 
@@ -490,6 +743,7 @@ def create_paper_trades_from_report(
         market_ctx["bot_version"] = config.bot_version
 
         # Critic review — devil's advocate that kills low-conviction trades
+        critic: dict[str, Any] = {}
         try:
             from trader_koo.paper_trade.critic import critic_review
 
@@ -524,6 +778,17 @@ def create_paper_trades_from_report(
                 LOG.warning("Critic check failed (rejecting trade): %s", exc)
                 continue
 
+        rationale = _build_entry_rationale(
+            ticker=ticker,
+            direction=direction,
+            row=row,
+            evaluation=evaluation,
+            plan=plan,
+            market_ctx=market_ctx,
+            critic=critic,
+            ml_prediction=ml_prediction,
+        )
+
         before_changes = conn.total_changes
         conn.execute(
             """
@@ -542,6 +807,7 @@ def create_paper_trades_from_report(
                 expected_reward_pct, expected_r_multiple,
                 entry_plan, exit_plan, sizing_summary,
                 review_status, review_summary,
+                entry_reason, entry_evidence, entry_risks,
                 bot_version, vix_at_entry, vix_percentile_at_entry,
                 regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry,
                 directional_regime_at_entry, directional_regime_confidence,
@@ -561,6 +827,7 @@ def create_paper_trades_from_report(
                 ?, ?,
                 ?, ?, ?,
                 ?, ?,
+                ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?,
@@ -611,6 +878,9 @@ def create_paper_trades_from_report(
                 plan["sizing_summary"],
                 plan["review_status"],
                 plan["review_summary"],
+                rationale["entry_reason"],
+                json.dumps(rationale["entry_evidence"]),
+                json.dumps(rationale["entry_risks"]),
                 market_ctx["bot_version"],
                 market_ctx["vix_at_entry"],
                 market_ctx["vix_percentile_at_entry"],
@@ -627,9 +897,9 @@ def create_paper_trades_from_report(
         if conn.total_changes > before_changes:
             inserted += 1
             LOG.info(
-                "Paper trade created: %s %s @ %.2f (stop=%.2f target=%.2f)",
+                "Paper trade created: %s %s @ %.2f (stop=%.2f target=%.2f) — %s",
                 direction.upper(), ticker, entry_price,
-                levels["stop_loss"], levels["target_price"],
+                levels["stop_loss"], levels["target_price"], rationale["entry_reason"],
             )
 
     return inserted
@@ -770,12 +1040,13 @@ def mark_to_market(
         )
 
         if hit_stop:
+            exit_reason = _stop_exit_reason(direction, float(entry_price), current_price)
             _close_trade(
                 conn,
                 trade_id,
                 current_price,
                 today,
-                "stopped_out",
+                exit_reason,
                 direction,
                 entry_price,
                 stop_loss,

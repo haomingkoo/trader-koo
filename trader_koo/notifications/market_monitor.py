@@ -361,59 +361,9 @@ def _format_volume(vol: float | None) -> str:
     return f"${vol:.0f}"
 
 
-def _format_price(price: float) -> str:
-    """Format price with commas."""
-    if price >= 1:
-        return f"${price:,.2f}"
-    return f"${price:.4f}"
-
-
 def _html(value: Any) -> str:
     """Escape external text before inserting it into Telegram HTML."""
     return escape(str(value), quote=False)
-
-
-def _format_polymarket_alert(spike: dict[str, Any]) -> str:
-    """Format a single Polymarket spike as a Telegram message."""
-    arrow = "\u2b06\ufe0f" if spike["direction"] == "up" else "\u2b07\ufe0f"
-    sign = "+" if spike["change_pct"] > 0 else ""
-    vol_str = _format_volume(spike.get("volume"))
-
-    return (
-        "\U0001f6a8 *Prediction Market Spike*\n"
-        "\n"
-        f"\U0001f4ca {spike['event_title']}\n"
-        f"{arrow} {spike['old_prob']:.0f}% \u2192 {spike['new_prob']:.0f}% "
-        f"({sign}{spike['change_pct']:.1f} pts in {spike['lookback_hours']}h)\n"
-        f"\U0001f4b0 Vol: {vol_str}\n"
-        "\n"
-        "Possible signal: insider activity or breaking news"
-    )
-
-
-def _format_crypto_alert(spike: dict[str, Any]) -> str:
-    """Format a single crypto spike as a Telegram message."""
-    arrow = "\U0001f4c8" if spike["direction"] == "up" else "\U0001f4c9"
-    sign = "+" if spike["price_change_pct"] > 0 else ""
-
-    lines = [
-        "\U0001f6a8 *Crypto Alert*",
-        "",
-        f"{arrow} {spike['symbol']}: {_format_price(spike['old_price'])} \u2192 "
-        f"{_format_price(spike['new_price'])} "
-        f"({sign}{spike['price_change_pct']:.1f}% in {spike['lookback_hours']}h)",
-    ]
-
-    if spike.get("oi_change_pct") is not None:
-        oi_sign = "+" if spike["oi_change_pct"] > 0 else ""
-        lines.append(
-            f"\U0001f4ca OI change: {oi_sign}{spike['oi_change_pct']:.0f}%"
-        )
-
-    if spike.get("price_spike") and spike.get("oi_spike"):
-        lines.append("Volume surge detected")
-
-    return "\n".join(lines)
 
 
 def send_spike_alerts(db_path: Path, report_dir: Path) -> int:

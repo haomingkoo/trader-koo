@@ -2,7 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useEarnings } from "../api/hooks";
 import type { EarningsRow } from "../api/types";
-import Badge, { tierVariant } from "../components/ui/Badge";
+import { formatState } from "../lib/formatState";
+import Badge from "../components/ui/Badge";
+import { tierVariant } from "../components/ui/badgeUtils";
 import Spinner from "../components/ui/Spinner";
 import Table from "../components/ui/Table";
 import TickerLogo from "../components/earnings/TickerLogo";
@@ -37,11 +39,6 @@ const riskBadgeVariant = (
   if (r.includes("normal")) return "green";
   return "amber";
 };
-
-const formatState = (s: string): string =>
-  s
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
 
 const earningsColumns = [
   {

@@ -275,7 +275,7 @@ def check_request_rate_limit(
             source_ip=source_ip,
         )
         if ip_count >= ip_limit:
-            return (False, f"Too many requests from this IP. Try again in about 1 hour.")
+            return (False, "Too many requests from this IP. Try again in about 1 hour.")
         email_count = _count_recent_events(
             conn,
             event_type=event_type,
@@ -283,7 +283,7 @@ def check_request_rate_limit(
             email=email,
         )
         if email_count >= mail_limit:
-            return (False, f"Too many requests for this email. Try again tomorrow.")
+            return (False, "Too many requests for this email. Try again tomorrow.")
         return (True, None)
     finally:
         conn.close()
