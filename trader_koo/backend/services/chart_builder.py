@@ -12,6 +12,9 @@ import json
 import logging
 import os
 import sqlite3
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -881,6 +884,61 @@ def _compute_data_freshness(
 # Shared model preparation (used by both quick and full builders)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Feature/detector pipeline cache
+# ---------------------------------------------------------------------------
+# _prepare_model_and_features runs ~13 pandas/structure passes per call. The
+# inputs only change when a ticker gets new daily bars, so cache by
+# (ticker, months, max price date) with a bounded LRU + TTL. Callers may mutate
+# the returned frames (live-candle attach etc.), so hand out copies and keep the
+# cached tuple pristine.
+_PREPARED_CACHE: "OrderedDict[tuple, tuple[float, tuple]]" = OrderedDict()
+_PREPARED_CACHE_LOCK = threading.Lock()
+_PREPARED_CACHE_MAXSIZE = 64
+_PREPARED_CACHE_TTL_SEC = 3600.0
+
+
+def _get_prepared_features(key: tuple) -> tuple | None:
+    now = time.time()
+    with _PREPARED_CACHE_LOCK:
+        entry = _PREPARED_CACHE.get(key)
+        if entry is None:
+            return None
+        ts, value = entry
+        if now - ts >= _PREPARED_CACHE_TTL_SEC:
+            _PREPARED_CACHE.pop(key, None)
+            return None
+        _PREPARED_CACHE.move_to_end(key)
+        return value
+
+
+def _put_prepared_features(key: tuple, value: tuple) -> None:
+    with _PREPARED_CACHE_LOCK:
+        _PREPARED_CACHE[key] = (time.time(), value)
+        _PREPARED_CACHE.move_to_end(key)
+        while len(_PREPARED_CACHE) > _PREPARED_CACHE_MAXSIZE:
+            _PREPARED_CACHE.popitem(last=False)
+
+
+def _copy_prepared(value: tuple) -> tuple:
+    """Copy the prepared tuple so callers never mutate the cached objects."""
+    *frames, fund = value
+    copied = [f.copy() if isinstance(f, pd.DataFrame) else f for f in frames]
+    copied.append(dict(fund) if isinstance(fund, dict) else fund)
+    return tuple(copied)
+
+
+def _conn_db_path(conn: sqlite3.Connection) -> str:
+    """Return the connection's main on-disk db path ('' for in-memory)."""
+    try:
+        for row in conn.execute("PRAGMA database_list").fetchall():
+            if row[1] == "main":
+                return row[2] or ""
+    except sqlite3.Error:
+        return ""
+    return ""
+
+
 def _prepare_model_and_features(
     conn: sqlite3.Connection,
     ticker: str,
@@ -905,7 +963,6 @@ def _prepare_model_and_features(
     Returns all intermediate artifacts needed by both the quick and
     full dashboard builders so the heavy DataFrame work runs once.
     """
-    fund = get_latest_fundamentals(conn, ticker)
     prices = get_price_df(conn, ticker)
     if prices.empty:
         raise HTTPException(
@@ -913,6 +970,14 @@ def _prepare_model_and_features(
         )
 
     max_date = prices["date"].max()
+    db_path = _conn_db_path(conn)
+    cache_key = (db_path, ticker, int(months), str(max_date)) if db_path else None
+    if cache_key is not None:
+        cached = _get_prepared_features(cache_key)
+        if cached is not None:
+            return _copy_prepared(cached)
+
+    fund = get_latest_fundamentals(conn, ticker)
     if months <= 0:
         calc_cutoff = prices["date"].min()
         view_cutoff = prices["date"].min()
@@ -985,7 +1050,7 @@ def _prepare_model_and_features(
         [c for c in chart_cols if c in chart_rows.columns]
     ].copy()
 
-    return (
+    result = (
         prices,
         model,
         chart_rows,
@@ -1000,6 +1065,10 @@ def _prepare_model_and_features(
         pattern_overlays,
         fund,
     )
+    if cache_key is not None:
+        _put_prepared_features(cache_key, result)
+        return _copy_prepared(result)
+    return result
 
 
 # ---------------------------------------------------------------------------
