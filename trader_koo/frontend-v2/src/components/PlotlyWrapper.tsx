@@ -16,13 +16,35 @@ function isRenderablePlotComponent(
   );
 }
 
+// CJS↔ESM interop: a dynamically-imported CommonJS module's callable can sit at
+// the namespace itself, at `.default`, or double-wrapped at `.default.default`
+// depending on the bundler. Unwrap `.default` until we find the function.
+function resolveCallable(mod: unknown): ((arg: unknown) => unknown) | null {
+  let cur = mod;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof cur === "function") {
+      return cur as (arg: unknown) => unknown;
+    }
+    if (cur && typeof cur === "object" && "default" in cur) {
+      cur = (cur as { default: unknown }).default;
+    } else {
+      return null;
+    }
+  }
+  return null;
+}
+
 const Plot = lazy(async () => {
   const [factoryModule, plotlyModule] = await Promise.all([
     import("react-plotly.js/factory"),
     import("plotly.js/dist/plotly-finance.min.js"),
   ]);
   const plotly = (plotlyModule as PlotComponentModule).default ?? plotlyModule;
-  const resolved = factoryModule.default(plotly);
+  const createPlotlyComponent = resolveCallable(factoryModule);
+  if (createPlotlyComponent === null) {
+    throw new Error("react-plotly.js factory did not resolve to a function");
+  }
+  const resolved = createPlotlyComponent(plotly);
 
   if (!isRenderablePlotComponent(resolved)) {
     throw new Error("Unable to create Plotly component");
