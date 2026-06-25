@@ -131,8 +131,10 @@ def fit_hmm(
 
     best_model: GaussianHMM | None = None
     best_score = float("-inf")
-    # 10 random restarts — EM is sensitive to initialization
-    for seed in (42, 7, 123, 0, 17, 31, 55, 73, 88, 99):
+    # 6 random restarts — EM is sensitive to initialization. Trimmed from 10
+    # to cut cold-path fit latency; kept at 6 (not 3-4) so robustness against
+    # "no stable fit found" on marginal data is largely preserved.
+    for seed in (42, 7, 123, 0, 17, 31):
         model = GaussianHMM(
             n_components=n_states,
             covariance_type="tied",  # shared full covariance — models feature correlations
