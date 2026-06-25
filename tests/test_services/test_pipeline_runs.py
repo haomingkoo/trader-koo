@@ -20,7 +20,6 @@ from trader_koo.backend.services.pipeline import (
     ensure_pipeline_runs_schema,
     finish_pipeline_run,
     read_interrupted_pipeline_run,
-    read_latest_pipeline_run,
     update_pipeline_stage,
 )
 
@@ -256,57 +255,6 @@ class TestFinishPipelineRun:
         assert row["status"] == "interrupted"
         assert row["ingest_ok"] == 1
         assert row["yolo_ok"] == 0
-
-
-# ---------------------------------------------------------------------------
-# read_latest_pipeline_run
-# ---------------------------------------------------------------------------
-
-class TestReadLatestPipelineRun:
-    def test_returns_most_recent_run(self, tmp_path: Path) -> None:
-        db_file = _make_db(tmp_path)
-        # Insert with explicit timestamps to guarantee ordering
-        conn = sqlite3.connect(str(db_file))
-        conn.execute(
-            "INSERT INTO pipeline_runs (run_id, started_ts, mode, source, status, stage) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            ("pipe_old", "2026-03-25T10:00:00Z", "full", "scheduler", "ok", "done"),
-        )
-        conn.execute(
-            "INSERT INTO pipeline_runs (run_id, started_ts, mode, source, status, stage) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            ("pipe_new", "2026-03-25T22:00:00Z", "yolo", "admin", "running", "yolo"),
-        )
-        conn.commit()
-        conn.close()
-
-        result = read_latest_pipeline_run(db_path=db_file)
-
-        assert result is not None
-        assert result["run_id"] == "pipe_new"
-
-    def test_returns_none_when_no_runs(self, tmp_path: Path) -> None:
-        db_file = _make_db(tmp_path)
-
-        result = read_latest_pipeline_run(db_path=db_file)
-
-        assert result is None
-
-    def test_returns_none_when_db_missing(self, tmp_path: Path) -> None:
-        missing = tmp_path / "nonexistent.db"
-
-        result = read_latest_pipeline_run(db_path=missing)
-
-        assert result is None
-
-    def test_returns_none_when_table_missing(self, tmp_path: Path) -> None:
-        db_file = tmp_path / "test.db"
-        conn = sqlite3.connect(str(db_file))
-        conn.close()
-
-        result = read_latest_pipeline_run(db_path=db_file)
-
-        assert result is None
 
 
 # ---------------------------------------------------------------------------

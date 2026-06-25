@@ -769,25 +769,22 @@ if DIST_DIR.exists() and DIST_DIR.is_dir():
     if _root_index.is_file():
         # Only intercept KNOWN SPA routes at root level.
         # Do NOT use a wildcard catch-all — it breaks /assets, /api, etc.
+        def _spa_shell() -> Any:
+            return FileResponse(str(_root_index), headers=_root_shell_headers)
+
         for _route in _SPA_ROUTES:
-            def _make_handler(_r: str = _route):
-                def _handler() -> Any:
-                    return FileResponse(str(_root_index), headers=_root_shell_headers)
-                _handler.__name__ = f"spa_{_r.replace('-', '_')}"
-                return _handler
-            app.get(f"/{_route}", include_in_schema=False)(_make_handler())
-            app.get(f"/{_route}/{{rest:path}}", include_in_schema=False)(_make_handler())
+            app.get(f"/{_route}", include_in_schema=False)(_spa_shell)
+            app.get(f"/{_route}/{{rest:path}}", include_in_schema=False)(_spa_shell)
 
 
     # Serve favicon and other root-level static files from dist-v2/
     for _static_file in ("favicon.svg", "favicon.ico", "robots.txt", "sitemap.xml"):
         _static_path = DIST_DIR / _static_file
         if _static_path.is_file():
-            def _make_static_handler(_p: str = str(_static_path)):
-                def _handler() -> Any:
-                    return FileResponse(_p)
-                _handler.__name__ = f"static_{_static_file.replace('.', '_')}"
-                return _handler
-            app.get(f"/{_static_file}", include_in_schema=False)(_make_static_handler())
+            app.add_api_route(
+                f"/{_static_file}",
+                (lambda _p=str(_static_path): FileResponse(_p)),
+                include_in_schema=False,
+            )
 
     # Legacy /v2 routes removed — React app is now served at root.

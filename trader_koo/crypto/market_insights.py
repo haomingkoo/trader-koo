@@ -5,6 +5,7 @@ import datetime as dt
 import logging
 import math
 import sqlite3
+import statistics
 from typing import Any
 
 LOG = logging.getLogger("trader_koo.crypto.market_insights")
@@ -31,27 +32,20 @@ def _pct_change(current: float | None, previous: float | None) -> float | None:
 def _correlation(xs: list[float], ys: list[float]) -> float | None:
     if len(xs) != len(ys) or len(xs) < 2:
         return None
-    mean_x = sum(xs) / len(xs)
-    mean_y = sum(ys) / len(ys)
-    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=False))
-    var_x = sum((x - mean_x) ** 2 for x in xs)
-    var_y = sum((y - mean_y) ** 2 for y in ys)
-    if var_x <= 0 or var_y <= 0:
+    try:
+        return round(statistics.correlation(xs, ys), 3)
+    except statistics.StatisticsError:
         return None
-    return round(cov / math.sqrt(var_x * var_y), 3)
 
 
 def _beta(xs: list[float], ys: list[float]) -> float | None:
     """Return beta of x relative to y."""
     if len(xs) != len(ys) or len(xs) < 2:
         return None
-    mean_x = sum(xs) / len(xs)
-    mean_y = sum(ys) / len(ys)
-    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=False))
-    var_y = sum((y - mean_y) ** 2 for y in ys)
-    if var_y <= 0:
+    try:
+        return round(statistics.linear_regression(ys, xs).slope, 3)
+    except statistics.StatisticsError:
         return None
-    return round(cov / var_y, 3)
 
 
 def _fetch_equity_history(

@@ -93,10 +93,8 @@ def _return_cash_on_close(
     shares = pos["shares"]
     entry_commission = DEFAULT_COMMISSION_PER_TRADE / 2
 
-    if pos["direction"] == "long":
-        return entry_price * shares + pnl + entry_commission
-    # Short: margin reserve (entry_price * shares) was deducted at open.
-    # Now we return reserve + pnl.
+    # Long and short return identically: for shorts, entry_price * shares is the
+    # margin reserve deducted at open and returned here alongside pnl.
     return entry_price * shares + pnl + entry_commission
 
 

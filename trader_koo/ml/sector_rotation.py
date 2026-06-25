@@ -263,11 +263,3 @@ def compute_sector_features(
             result["sector_momentum_21d"] = data["sector_ret_21d"].get(sector, np.nan)
 
     return result
-
-
-def clear_cache() -> None:
-    """Clear the sector cache (call between training runs if needed)."""
-    global _sector_map_cache
-    with _cache_lock:
-        _sector_cache.clear()
-        _sector_map_cache = None

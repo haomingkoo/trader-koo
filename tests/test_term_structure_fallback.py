@@ -20,7 +20,6 @@ import pytest
 from trader_koo.structure.vix_analysis import (
     TermStructure,
     calculate_term_structure,
-    format_term_structure_display,
 )
 
 
@@ -157,36 +156,6 @@ def test_timestamp_inclusion(mock_conn):
     assert isinstance(result.timestamp, datetime)
     # Verify ISO format
     assert "T" in result_dict["timestamp"]
-
-
-def test_format_display_with_vix3m(mock_conn):
-    """Test display formatting with VIX3M source."""
-    mock_conn.execute.return_value.fetchone.side_effect = [
-        (15.0,),  # VIX spot
-        (16.5,),  # VIX3M
-    ]
-
-    result = calculate_term_structure(mock_conn)
-    display = format_term_structure_display(result)
-
-    assert "VIX Spot: 15.00" in display
-    assert "VIX 3M: 16.50" in display
-    assert "Source: VIX3M" in display
-    assert "Timestamp:" in display
-    assert "Contango" in display
-
-
-def test_format_display_unavailable(mock_conn):
-    """Test display formatting when unavailable (Requirement 9.5)."""
-    mock_conn.execute.return_value.fetchone.side_effect = [
-        (14.8,),  # VIX spot
-        None, None, None, None, None, None,  # All sources unavailable
-    ]
-
-    result = calculate_term_structure(mock_conn)
-    display = format_term_structure_display(result)
-
-    assert display == "Term structure unavailable"
 
 
 def test_contango_detection():

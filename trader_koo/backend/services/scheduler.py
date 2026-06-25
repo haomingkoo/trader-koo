@@ -22,6 +22,7 @@ try:
 except ImportError:  # pragma: no cover - production/runtime is Unix-like
     fcntl = None
 
+from trader_koo.backend.services.report_loader import _tail_text_file
 from trader_koo.config import (
     DEFAULT_DB_PATH,
     DEFAULT_LOG_DIR,
@@ -63,7 +64,10 @@ _UPDATE_THREAD_LOCK = threading.Lock()
 # Resource helpers
 # ---------------------------------------------------------------------------
 
-from trader_koo.backend.utils import current_rss_mb as _current_rss_mb
+from trader_koo.backend.utils import (
+    current_rss_mb as _current_rss_mb,
+    normalize_update_mode as _normalize_update_mode,
+)
 
 
 def _fmt_mb(value: float | None) -> str:
@@ -164,43 +168,8 @@ def _release_update_lock(handle) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mode normalisation
-# ---------------------------------------------------------------------------
-
-def _normalize_update_mode(mode: str | None) -> str | None:
-    """Map mode aliases to canonical names (full | yolo | report)."""
-    value = str(mode or "full").strip().lower()
-    aliases = {
-        "full": "full",
-        "all": "full",
-        "yolo": "yolo",
-        "yolo_report": "yolo",
-        "yolo+report": "yolo",
-        "report": "report",
-        "report_only": "report",
-        "email": "report",
-    }
-    return aliases.get(value)
-
-
-# ---------------------------------------------------------------------------
 # Daily update
 # ---------------------------------------------------------------------------
-
-def _tail_text_file(path: Path, lines: int = 60, max_bytes: int = 64_000) -> list[str]:
-    if not path.exists():
-        return []
-    try:
-        with path.open("rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            read_size = min(size, max_bytes)
-            f.seek(max(0, size - read_size))
-            data = f.read().decode("utf-8", errors="replace")
-        return data.splitlines()[-lines:]
-    except Exception:
-        return []
-
 
 def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
     mode_norm = _normalize_update_mode(mode) or "full"
@@ -226,7 +195,7 @@ def _run_daily_update_unlocked(mode: str = "full", source: str = "scheduler") ->
         update_pipeline_stage,
     )
 
-    mode_norm = _normalize_update_mode(mode) or "full"
+    mode_norm = mode
     script = SCRIPTS_DIR / "daily_update.sh"
     started = dt.datetime.now(dt.timezone.utc)
     rss_before = _current_rss_mb()

@@ -10,19 +10,12 @@ function PipelineDot({ state }: { state: StageState }) {
     warning: "bg-[var(--amber)]",
     error: "bg-[var(--red)]",
   };
-  const labels: Record<string, string> = {
-    idle: "idle",
-    active: "active",
-    done: "done",
-    warning: "warning",
-    error: "error",
-  };
 
   return (
     <div
       className={`h-2.5 w-2.5 rounded-full ${colors[state]}`}
-      title={labels[state]}
-      aria-label={`Pipeline stage: ${labels[state]}`}
+      title={state}
+      aria-label={`Pipeline stage: ${state}`}
     />
   );
 }

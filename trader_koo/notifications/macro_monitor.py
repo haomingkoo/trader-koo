@@ -19,7 +19,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-import httpx
+from trader_koo.notifications.finnhub import fetch_finnhub_quote
 
 LOG = logging.getLogger("trader_koo.notifications.macro_monitor")
 
@@ -46,10 +46,6 @@ MACRO_WATCH: dict[str, dict[str, Any]] = {
 _YIELD_TICKERS = {"^TNX", "^TYX", "^IRX"}
 _SAFE_HAVEN_TICKERS = {"GLD", "SLV"}
 _VIX_TICKER = "^VIX"
-
-# Finnhub REST API
-FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
-FINNHUB_TIMEOUT_SEC = 10
 
 # Alert cooldown: suppress macro alerts for 1 hour
 MACRO_COOLDOWN_SEC = 3600
@@ -118,34 +114,9 @@ def _get_finnhub_key() -> str:
 def _fetch_quote(ticker: str, api_key: str) -> float | None:
     """Fetch current price for *ticker* via Finnhub REST ``/quote``.
 
-    Returns the current price (``c`` field) or ``None`` on failure.
+    Thin wrapper over the shared ``fetch_finnhub_quote`` helper.
     """
-    if not api_key:
-        LOG.warning("FINNHUB_API_KEY not set — cannot fetch quote for %s", ticker)
-        return None
-
-    try:
-        with httpx.Client(timeout=FINNHUB_TIMEOUT_SEC) as client:
-            resp = client.get(
-                FINNHUB_QUOTE_URL,
-                params={"symbol": ticker, "token": api_key},
-            )
-        if resp.status_code != 200:
-            LOG.warning("Finnhub quote returned %d for %s", resp.status_code, ticker)
-            return None
-
-        data = resp.json()
-        price = data.get("c")
-        if price is None or price == 0:
-            LOG.debug("Finnhub returned no price for %s: %s", ticker, data)
-            return None
-        return float(price)
-    except httpx.HTTPError as exc:
-        LOG.warning("Finnhub HTTP error for %s: %s", ticker, exc)
-        return None
-    except Exception as exc:
-        LOG.warning("Finnhub quote fetch failed for %s: %s", ticker, exc)
-        return None
+    return fetch_finnhub_quote(ticker, api_key)
 
 
 def _get_prev_close(db_path: Path, ticker: str) -> float | None:

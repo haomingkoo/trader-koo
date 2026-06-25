@@ -11,7 +11,7 @@ from typing import Any
 
 from trader_koo.audit import AuditLogger
 from trader_koo.backend.services.database import DB_PATH
-from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
+from trader_koo.backend.utils import normalize_update_mode as _normalize_update_mode
 
 LOG = logging.getLogger("trader_koo.routers.admin")
 
@@ -31,11 +31,6 @@ ANALYTICS_ENABLED = str(
     os.getenv("TRADER_KOO_ANALYTICS_ENABLED", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
 
-STATUS_APP_URL = _clean_optional_url(
-    os.getenv("TRADER_KOO_APP_URL")
-) or _clean_optional_url(os.getenv("TRADER_KOO_ALLOWED_ORIGIN"))
-STATUS_BASE_URL = _clean_optional_url(os.getenv("TRADER_KOO_BASE_URL"))
-
 # Shared mutable state for background threads
 _yolo_seed_thread: threading.Thread | None = None
 
@@ -43,21 +38,6 @@ _yolo_seed_thread: threading.Thread | None = None
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-def _normalize_update_mode(mode: str | None) -> str | None:
-    value = str(mode or "full").strip().lower()
-    aliases = {
-        "full": "full",
-        "all": "full",
-        "yolo": "yolo",
-        "yolo_report": "yolo",
-        "yolo+report": "yolo",
-        "report": "report",
-        "report_only": "report",
-        "email": "report",
-    }
-    return aliases.get(value)
-
 
 def _load_json_file(path: Path) -> dict[str, Any] | None:
     if not path.exists():

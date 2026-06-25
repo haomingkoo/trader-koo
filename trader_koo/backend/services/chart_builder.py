@@ -73,6 +73,21 @@ try:
 except Exception:
     _MARKET_TZ = dt.timezone.utc
 
+# Old report payloads used short alias keys; map each canonical key to its
+# legacy alias so we can backfill missing canonical values from the alias.
+_SETUP_OVERRIDE_ALIASES = {
+    "setup_tier": "tier",
+    "score": "setup_score",
+    "setup_family": "setup",
+    "signal_bias": "bias",
+    "actionability": "state",
+    "observation": "what_it_is",
+    "action": "next_step",
+    "risk_note": "risk",
+    "technical_read": "technical_context",
+    "yolo_signal_role": "yolo_role",
+}
+
 
 # ---------------------------------------------------------------------------
 # Serialization
@@ -622,26 +637,9 @@ def _build_chart_commentary_payload(
     row["narrative_source"] = "rule"
     if isinstance(setup_override, dict) and setup_override:
         override = dict(setup_override)
-        if override.get("setup_tier") in (None, "") and override.get("tier") not in (None, ""):
-            override["setup_tier"] = override.get("tier")
-        if override.get("score") in (None, "") and override.get("setup_score") not in (None, ""):
-            override["score"] = override.get("setup_score")
-        if override.get("setup_family") in (None, "") and override.get("setup") not in (None, ""):
-            override["setup_family"] = override.get("setup")
-        if override.get("signal_bias") in (None, "") and override.get("bias") not in (None, ""):
-            override["signal_bias"] = override.get("bias")
-        if override.get("actionability") in (None, "") and override.get("state") not in (None, ""):
-            override["actionability"] = override.get("state")
-        if override.get("observation") in (None, "") and override.get("what_it_is") not in (None, ""):
-            override["observation"] = override.get("what_it_is")
-        if override.get("action") in (None, "") and override.get("next_step") not in (None, ""):
-            override["action"] = override.get("next_step")
-        if override.get("risk_note") in (None, "") and override.get("risk") not in (None, ""):
-            override["risk_note"] = override.get("risk")
-        if override.get("technical_read") in (None, "") and override.get("technical_context") not in (None, ""):
-            override["technical_read"] = override.get("technical_context")
-        if override.get("yolo_signal_role") in (None, "") and override.get("yolo_role") not in (None, ""):
-            override["yolo_signal_role"] = override.get("yolo_role")
+        for canon, alt in _SETUP_OVERRIDE_ALIASES.items():
+            if override.get(canon) in (None, "") and override.get(alt) not in (None, ""):
+                override[canon] = override[alt]
         for key in (
             "score",
             "confluence_score",

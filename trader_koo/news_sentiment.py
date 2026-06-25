@@ -21,6 +21,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from trader_koo.rss_news import _label_for_score, _score_to_100
+
 LOG = logging.getLogger(__name__)
 
 _DEFAULT_TICKERS = ("SPY", "QQQ", "DIA", "IWM")
@@ -105,27 +107,6 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _score_to_100(score: float | None) -> int | None:
-    if score is None:
-        return None
-    clipped = max(-1.0, min(1.0, score))
-    return round((clipped + 1.0) * 50.0)
-
-
-def _label_for_score(score: int | None) -> str | None:
-    if score is None:
-        return None
-    if score < 25:
-        return "Extreme Fear"
-    if score < 45:
-        return "Fear"
-    if score < 55:
-        return "Neutral"
-    if score < 75:
-        return "Greed"
-    return "Extreme Greed"
 
 
 def _iso_utc(value: dt.datetime) -> str:
@@ -275,8 +256,6 @@ def _fetch_finnhub_news_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
 
     # Fallback to Finnhub company-news if RSS returned nothing
     if not headlines:
-        date_to = now_utc.strftime("%Y-%m-%d")
-        date_from = (now_utc - dt.timedelta(hours=lookback_hours)).strftime("%Y-%m-%d")
         for ticker in tickers[:2]:
             try:
                 articles = _finnhub_get(

@@ -23,6 +23,7 @@ from urllib.parse import quote_plus
 import httpx
 
 from trader_koo.config import env_int
+from trader_koo.notifications.finnhub import fetch_finnhub_quote
 from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
 
 LOG = logging.getLogger("trader_koo.notifications.bot_commands")
@@ -39,9 +40,6 @@ LONG_POLL_TIMEOUT_SEC = env_int(
 SEND_TIMEOUT_SEC = 15
 MIN_RESPONSE_INTERVAL_SEC = 1.0
 
-# Finnhub REST API for /price command
-FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
-FINNHUB_REQUEST_TIMEOUT_SEC = 10
 PUBLIC_BASE_URL = (
     os.getenv("TRADER_KOO_PUBLIC_BASE_URL")
     or os.getenv("TRADER_KOO_PUBLIC_URL")
@@ -336,41 +334,25 @@ class TelegramCommandHandler:
         callback_id = str(callback_query.get("id") or "")
         data = str(callback_query.get("data") or "")[:MAX_CALLBACK_DATA_LEN]
 
-        if data == "help":
-            await self._answer_callback_query(callback_id, "Opening help")
+        # {callback_data: (toast, command coroutine)}
+        actions: dict[str, tuple[str, Any]] = {
+            "help": ("Opening help", self._cmd_help),
+            "top": ("Loading setups", self._cmd_top),
+            "vix": ("Loading VIX", self._cmd_vix),
+            "alerts": ("Loading alerts", self._cmd_alerts),
+            "options": ("Loading options", self._cmd_options),
+        }
+
+        action = actions.get(data)
+        if action is not None:
+            toast, handler = action
+            await self._answer_callback_query(callback_id, toast)
             await self._send_reply(
-                await self._cmd_help(),
+                await handler(),
                 reply_markup=self._command_keyboard(),
             )
             return
-        if data == "top":
-            await self._answer_callback_query(callback_id, "Loading setups")
-            await self._send_reply(
-                await self._cmd_top(),
-                reply_markup=self._command_keyboard(),
-            )
-            return
-        if data == "vix":
-            await self._answer_callback_query(callback_id, "Loading VIX")
-            await self._send_reply(
-                await self._cmd_vix(),
-                reply_markup=self._command_keyboard(),
-            )
-            return
-        if data == "alerts":
-            await self._answer_callback_query(callback_id, "Loading alerts")
-            await self._send_reply(
-                await self._cmd_alerts(),
-                reply_markup=self._command_keyboard(),
-            )
-            return
-        if data == "options":
-            await self._answer_callback_query(callback_id, "Loading options")
-            await self._send_reply(
-                await self._cmd_options(),
-                reply_markup=self._command_keyboard(),
-            )
-            return
+
         if data.startswith("price:"):
             await self._answer_callback_query(callback_id, "Refreshing price")
             ticker = data.split(":", 1)[1]
@@ -868,93 +850,20 @@ class TelegramCommandHandler:
         self,
         ticker: str,
     ) -> float | None:
-        """Fetch current price via Finnhub REST API."""
-        if not self._finnhub_api_key:
-            LOG.warning(
-                "FINNHUB_API_KEY not set — cannot fetch quote"
-            )
-            return None
-
+        """Fetch current price via Finnhub REST API (async wrapper)."""
         loop = asyncio.get_running_loop()
-        try:
-            resp = await loop.run_in_executor(
-                None,
-                lambda: httpx.get(
-                    FINNHUB_QUOTE_URL,
-                    params={
-                        "symbol": ticker,
-                        "token": self._finnhub_api_key,
-                    },
-                    timeout=FINNHUB_REQUEST_TIMEOUT_SEC,
-                ),
-            )
-            if resp.status_code != 200:
-                LOG.warning(
-                    "Finnhub quote returned %d for %s",
-                    resp.status_code,
-                    ticker,
-                )
-                return None
-            data = resp.json()
-            price = data.get("c")
-            if price is None or price == 0:
-                return None
-            return float(price)
-        except Exception as exc:
-            LOG.warning(
-                "Finnhub quote failed for %s: %s", ticker, exc
-            )
-            return None
+        return await loop.run_in_executor(
+            None,
+            fetch_finnhub_quote,
+            ticker,
+            self._finnhub_api_key,
+        )
 
     def _get_ticker_levels(
         self,
         ticker: str,
     ) -> list[dict[str, Any]]:
         """Extract support/resistance levels from the DB."""
-        if not self._db_path.exists():
-            return []
-        try:
-            conn = sqlite3.connect(str(self._db_path))
-            conn.row_factory = sqlite3.Row
-            from trader_koo.backend.services.database import (
-                get_price_df,
-                table_exists,
-            )
-            from trader_koo.structure.levels import (
-                LevelConfig,
-                add_fallback_levels,
-                build_levels_from_pivots,
-                select_target_levels,
-            )
-            from trader_koo.features.technical import compute_pivots
+        from trader_koo.structure.levels import get_ticker_levels
 
-            if not table_exists(conn, "price_daily"):
-                conn.close()
-                return []
-
-            df = get_price_df(conn, ticker)
-            conn.close()
-
-            if df.empty or len(df) < 30:
-                return []
-
-            cfg = LevelConfig()
-            pivots = compute_pivots(df, left=5, right=5)
-            raw_levels = build_levels_from_pivots(pivots, cfg)
-            last_close = float(df["close"].iloc[-1])
-            selected = select_target_levels(
-                raw_levels, last_close, cfg
-            )
-            selected = add_fallback_levels(
-                df, selected, last_close, cfg
-            )
-
-            if selected.empty:
-                return []
-
-            return selected[["type", "level"]].to_dict("records")
-        except Exception as exc:
-            LOG.warning(
-                "Failed to get levels for %s: %s", ticker, exc
-            )
-            return []
+        return get_ticker_levels(self._db_path, ticker)

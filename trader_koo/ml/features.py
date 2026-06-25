@@ -596,7 +596,6 @@ def extract_features_for_universe(
         return pd.DataFrame(columns=["ticker"] + output_cols)
 
     df["date"] = pd.to_datetime(df["date"])
-    as_of_ts = pd.Timestamp(as_of_date)
 
     # VIX regime features
     vix_df = pd.read_sql_query(
@@ -630,12 +629,6 @@ def extract_features_for_universe(
         if needs_earnings
         else {}
     )
-
-    # Seasonality from as_of_date
-    dow = as_of_ts.dayofweek
-    month = as_of_ts.month
-    is_month_end = 1 if as_of_ts.is_month_end else 0
-    is_quarter_end = 1 if as_of_ts.is_quarter_end else 0
 
     results: list[dict[str, Any]] = []
 
@@ -685,8 +678,6 @@ def extract_features_for_universe(
         dist_ma20 = (current_close - float(ma20.iloc[i])) / float(ma20.iloc[i]) * 100 if n >= 20 else np.nan
         dist_ma50 = (current_close - float(ma50.iloc[i])) / float(ma50.iloc[i]) * 100 if n >= 50 else np.nan
         dist_ma200 = (current_close - float(ma200.iloc[i])) / float(ma200.iloc[i]) * 100 if n >= 200 else np.nan
-        ma20_above_ma50 = 1.0 if n >= 50 and float(ma20.iloc[i]) > float(ma50.iloc[i]) else 0.0
-        ma50_above_ma200 = 1.0 if n >= 200 and float(ma50.iloc[i]) > float(ma200.iloc[i]) else 0.0
 
         # Time series features
         autocorr_1 = _autocorrelation(daily_ret.dropna(), 1)
@@ -713,13 +704,10 @@ def extract_features_for_universe(
             "dist_ma20_pct": dist_ma20 if np.isfinite(dist_ma20) else np.nan,
             "dist_ma50_pct": dist_ma50 if np.isfinite(dist_ma50) else np.nan,
             "dist_ma200_pct": dist_ma200 if np.isfinite(dist_ma200) else np.nan,
-            "ma20_above_ma50": ma20_above_ma50, "ma50_above_ma200": ma50_above_ma200,
             "vix_level": vix_latest, "vix_percentile": vix_pctile,
             "vix_ma20_ratio": vix_ma20_ratio, "vix_ret_5d": vix_ret_5d,
             "autocorr_lag1": autocorr_1, "autocorr_lag5": autocorr_5,
             "trend_strength_10d": trend_str, "mean_reversion_5d": mean_rev,
-            "day_of_week": float(dow), "month": float(month),
-            "is_month_end": float(is_month_end), "is_quarter_end": float(is_quarter_end),
             "has_yolo_pattern": float(yolo[0]), "yolo_confidence": yolo[1],
             "days_to_next_earnings": earnings_proximity.get(str(ticker), np.nan),
             "is_earnings_week": (
@@ -821,8 +809,7 @@ def extract_features_for_universe(
             # Widening OAS = rising credit stress = risk-off signal.
             # Use bulk-prefetched data when available (training path).
             from trader_koo.ml.external_data import _fred_bulk_store
-            with __import__("threading").Lock():
-                hy_df = _fred_bulk_store.get("BAMLH0A0HYM2")
+            hy_df = _fred_bulk_store.get("BAMLH0A0HYM2")
 
             if hy_df is not None and not hy_df.empty:
                 # Fast path: lookup from bulk store

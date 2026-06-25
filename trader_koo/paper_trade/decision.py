@@ -255,10 +255,6 @@ def compute_stop_and_target(
     }
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
-
 def compute_position_plan(
     row: dict[str, Any],
     evaluation: dict[str, Any],
@@ -356,10 +352,9 @@ def compute_position_plan(
         sizing_notes.append(f"VIX={vix_level:.1f} scale={vix_scale:.2f}")
 
     # Cap at tier notional ceiling (prevents overleveraging on very tight stops)
-    position_size_pct = _clamp(
-        position_size_pct,
+    position_size_pct = max(
         config.min_position_pct,
-        min(tier_notional_cap, config.max_position_pct),
+        min(min(tier_notional_cap, config.max_position_pct), position_size_pct),
     )
 
     risk_budget_pct = (

@@ -6,6 +6,7 @@ import datetime as dt
 import logging
 import math
 import sqlite3
+import statistics
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
@@ -71,8 +72,7 @@ def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
 
     if len(pnls) > 1:
         mean_p = sum(pnls) / len(pnls)
-        var_p = sum((pnl - mean_p) ** 2 for pnl in pnls) / (len(pnls) - 1)
-        std_p = math.sqrt(var_p) if var_p > 0 else 0
+        std_p = statistics.stdev(pnls)
         sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
 
         # Sortino: uses downside deviation (only negative returns)
@@ -492,8 +492,7 @@ def _baseline_stats(
     sharpe: float | None = None
     if total > 1:
         mean_p = sum(pnls) / total
-        var_p = sum((p - mean_p) ** 2 for p in pnls) / (total - 1)
-        std_p = math.sqrt(var_p) if var_p > 0 else 0
+        std_p = statistics.stdev(pnls)
         sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
 
     return {

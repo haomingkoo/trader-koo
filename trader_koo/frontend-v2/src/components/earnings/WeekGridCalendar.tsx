@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { EarningsRow, EconomicEvent } from "../../api/types";
+import { formatState } from "../../lib/formatState";
 import Badge from "../ui/Badge";
 import TickerLogo from "./TickerLogo";
 
@@ -86,12 +87,6 @@ function toDateKey(date: Date): string {
 
 function getTodayKey(): string {
   return toDateKey(new Date());
-}
-
-function formatState(value: string): string {
-  return value
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function tierColor(tier: string | null | undefined): string {

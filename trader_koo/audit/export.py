@@ -1,8 +1,8 @@
 """
 External export functionality for audit logs.
 
-Supports exporting audit logs to S3, Azure Blob Storage, or local filesystem
-for long-term retention and compliance.
+Exports audit logs to the local filesystem for long-term retention and
+compliance.
 """
 
 import json
@@ -16,7 +16,7 @@ from typing import Any, Literal
 from trader_koo.audit.logger import AuditLogger
 
 
-StorageType = Literal["s3", "azure_blob", "local"]
+StorageType = Literal["local"]
 
 
 class AuditExporter:
@@ -33,7 +33,7 @@ class AuditExporter:
         Initialize audit exporter.
 
         Args:
-            storage_type: Type of storage (s3, azure_blob, local)
+            storage_type: Type of storage (local)
             storage_config: Storage-specific configuration
         """
         self.storage_type = storage_type
@@ -88,10 +88,6 @@ class AuditExporter:
         # Export to storage
         if self.storage_type == "local":
             location = self._export_to_local(filename, export_data)
-        elif self.storage_type == "s3":
-            location = self._export_to_s3(filename, export_data)
-        elif self.storage_type == "azure_blob":
-            location = self._export_to_azure(filename, export_data)
         else:
             raise ValueError(f"Unsupported storage type: {self.storage_type}")
 
@@ -137,64 +133,6 @@ class AuditExporter:
 
         return str(filepath)
 
-    def _export_to_s3(self, filename: str, data: str) -> str:
-        """Export to AWS S3."""
-        try:
-            import boto3
-        except ImportError:
-            raise ImportError("boto3 is required for S3 export. Install with: pip install boto3")
-
-        bucket = self.storage_config.get("bucket")
-        if not bucket:
-            raise ValueError("S3 bucket not configured")
-
-        prefix = self.storage_config.get("prefix", "audit_logs")
-        key = f"{prefix}/{filename}"
-
-        s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=self.storage_config.get("access_key_id"),
-            aws_secret_access_key=self.storage_config.get("secret_access_key"),
-            region_name=self.storage_config.get("region", "us-east-1"),
-        )
-
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=data.encode("utf-8"),
-            ContentType="application/json" if filename.endswith(".jsonl") else "text/csv",
-        )
-
-        return f"s3://{bucket}/{key}"
-
-    def _export_to_azure(self, filename: str, data: str) -> str:
-        """Export to Azure Blob Storage."""
-        try:
-            from azure.storage.blob import BlobServiceClient
-        except ImportError:
-            raise ImportError(
-                "azure-storage-blob is required for Azure export. "
-                "Install with: pip install azure-storage-blob"
-            )
-
-        connection_string = self.storage_config.get("connection_string")
-        if not connection_string:
-            raise ValueError("Azure connection string not configured")
-
-        container = self.storage_config.get("container", "audit-logs")
-        prefix = self.storage_config.get("prefix", "")
-        blob_name = f"{prefix}/{filename}" if prefix else filename
-
-        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-        blob_client = blob_service_client.get_blob_client(
-            container=container,
-            blob=blob_name,
-        )
-
-        blob_client.upload_blob(data.encode("utf-8"), overwrite=True)
-
-        return f"azure://{container}/{blob_name}"
-
 
 def schedule_daily_export(
     logger: AuditLogger,
@@ -232,35 +170,10 @@ def get_exporter_from_env() -> AuditExporter:
     Create AuditExporter from environment variables.
 
     Environment variables:
-        AUDIT_EXPORT_STORAGE: Storage type (s3, azure_blob, local)
         AUDIT_EXPORT_PATH: Local path for local storage
-        AUDIT_EXPORT_S3_BUCKET: S3 bucket name
-        AUDIT_EXPORT_S3_PREFIX: S3 key prefix
-        AUDIT_EXPORT_S3_REGION: AWS region
-        AWS_ACCESS_KEY_ID: AWS access key
-        AWS_SECRET_ACCESS_KEY: AWS secret key
-        AUDIT_EXPORT_AZURE_CONNECTION_STRING: Azure connection string
-        AUDIT_EXPORT_AZURE_CONTAINER: Azure container name
     """
-    storage_type = os.getenv("AUDIT_EXPORT_STORAGE", "local")
+    config = {
+        "path": os.getenv("AUDIT_EXPORT_PATH", "./audit_exports"),
+    }
 
-    if storage_type == "s3":
-        config = {
-            "bucket": os.getenv("AUDIT_EXPORT_S3_BUCKET"),
-            "prefix": os.getenv("AUDIT_EXPORT_S3_PREFIX", "audit_logs"),
-            "region": os.getenv("AUDIT_EXPORT_S3_REGION", "us-east-1"),
-            "access_key_id": os.getenv("AWS_ACCESS_KEY_ID"),
-            "secret_access_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
-        }
-    elif storage_type == "azure_blob":
-        config = {
-            "connection_string": os.getenv("AUDIT_EXPORT_AZURE_CONNECTION_STRING"),
-            "container": os.getenv("AUDIT_EXPORT_AZURE_CONTAINER", "audit-logs"),
-            "prefix": os.getenv("AUDIT_EXPORT_AZURE_PREFIX", ""),
-        }
-    else:  # local
-        config = {
-            "path": os.getenv("AUDIT_EXPORT_PATH", "./audit_exports"),
-        }
-
-    return AuditExporter(storage_type=storage_type, storage_config=config)
+    return AuditExporter(storage_type="local", storage_config=config)

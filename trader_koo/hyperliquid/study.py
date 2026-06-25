@@ -379,16 +379,11 @@ def compute_study(
         wins = 0
         losses = 0
         curve_pts: list[dict[str, Any]] = []
-        his_eq = _CAPITAL  # Track his equity if he held same positions
 
         for c in sorted_cycles:
             notional = c["entry_notional_usd"]
             pnl = c["closed_pnl"]
             dur = c["duration_hours"]
-
-            # Track his equity for all cycles
-            his_notional_frac = min(notional * 0.05, _MAX_POS, _CAPITAL * 0.25)
-            his_pnl_scaled = pnl * (his_notional_frac / notional) if notional > 0 else 0
 
             if notional >= min_notional and dur >= min_dur_hours:
                 our_notional = min(notional * 0.05, _MAX_POS, eq * 0.25)

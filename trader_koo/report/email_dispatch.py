@@ -124,6 +124,25 @@ def _send_resend_email(
         raise RuntimeError(f"Resend connect failed: {exc.reason}") from exc
 
 
+def _send_smtp_email(smtp: dict[str, Any], msg: EmailMessage) -> None:
+    host, port, timeout_sec = smtp["host"], int(smtp["port"]), int(smtp["timeout_sec"])
+    user, password, security = smtp["user"], smtp["password"], smtp["security"]
+    if security == "ssl":
+        with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
+            if user:
+                server.login(user, password)
+            server.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
+            server.ehlo()
+            if security == "starttls":
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+            if user:
+                server.login(user, password)
+            server.send_message(msg)
+
+
 def send_report_email(
     report: dict[str, Any],
     md_text: str,
@@ -176,8 +195,6 @@ def send_report_email(
     skipped_duplicate = 0
     failures: list[str] = []
 
-    host, port, timeout_sec = smtp["host"], int(smtp["port"]), int(smtp["timeout_sec"])
-    user, password, security = smtp["user"], smtp["password"], smtp["security"]
     for row in recipient_rows:
         recipient = str(row.get("email") or "").strip().lower()
         if not recipient:
@@ -221,20 +238,7 @@ def send_report_email(
                     subtype="markdown",
                     filename=f"daily_report_{generated_key[:10]}.md",
                 )
-                if security == "ssl":
-                    with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
-                        if user:
-                            server.login(user, password)
-                        server.send_message(msg)
-                else:
-                    with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
-                        server.ehlo()
-                        if security == "starttls":
-                            server.starttls(context=ssl.create_default_context())
-                            server.ehlo()
-                        if user:
-                            server.login(user, password)
-                        server.send_message(msg)
+                _send_smtp_email(smtp, msg)
             sent += 1
             try:
                 if generated:
@@ -384,22 +388,7 @@ def send_llm_failure_alert_email(
                 msg["To"] = recipient
                 msg.set_content(text_body)
                 msg.add_alternative(html_body, subtype="html")
-                host, port, timeout_sec = smtp["host"], int(smtp["port"]), int(smtp["timeout_sec"])
-                user, password, security = smtp["user"], smtp["password"], smtp["security"]
-                if security == "ssl":
-                    with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
-                        if user:
-                            server.login(user, password)
-                        server.send_message(msg)
-                else:
-                    with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
-                        server.ehlo()
-                        if security == "starttls":
-                            server.starttls(context=ssl.create_default_context())
-                            server.ehlo()
-                        if user:
-                            server.login(user, password)
-                        server.send_message(msg)
+                _send_smtp_email(smtp, msg)
             sent += 1
         except Exception as exc:
             failed += 1

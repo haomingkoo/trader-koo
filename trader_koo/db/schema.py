@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Iterable
-
 import pandas as pd
 
 
@@ -125,11 +123,3 @@ def ensure_ohlcv_schema(
         .reset_index(drop=True)
     )
     return work[CANONICAL_COLUMNS].copy()
-
-
-def pick_columns(rows: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
-    out = rows.copy()
-    for c in columns:
-        if c not in out.columns:
-            out[c] = pd.NA
-    return out[list(columns)]

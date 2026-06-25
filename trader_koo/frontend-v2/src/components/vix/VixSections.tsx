@@ -1,6 +1,7 @@
 import type { RegimeContext, VixData, VixMetricsPayload } from "../../api/types";
 import Badge from "../ui/Badge";
 import Card from "../ui/Card";
+import GaugeSvg from "../ui/GaugeSvg";
 import { formatVixState } from "./vixUtils";
 
 const riskReadBadgeVariant = (
@@ -29,134 +30,16 @@ const GAUGE_ZONES: Array<[number, number, string, string]> = [
 
 const GAUGE_MAX = 80;
 
-function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  const rad = (angleDeg * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
-
-function describeArc(
-  cx: number,
-  cy: number,
-  r: number,
-  startAngle: number,
-  endAngle: number,
-) {
-  const start = polarToCartesian(cx, cy, r, startAngle);
-  const end = polarToCartesian(cx, cy, r, endAngle);
-  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
-}
-
 function VixGauge({ vixClose }: { vixClose: number }) {
-  const cx = 150;
-  const cy = 155;
-  const r = 120;
-  const arcWidth = 14;
-  const vixToAngle = (value: number) => 180 + (value / GAUGE_MAX) * 180;
-  const zoneArcs = GAUGE_ZONES.map(([lo, hi, , color]) => ({
-    d: describeArc(cx, cy, r, vixToAngle(lo), vixToAngle(hi)),
-    color,
-  }));
-  const clampedVix = Math.max(0, Math.min(vixClose, GAUGE_MAX));
-  const needleRotation = vixToAngle(clampedVix) - 270;
-  const currentZone = GAUGE_ZONES.find(
-    ([lo, hi]) => vixClose >= lo && vixClose < hi,
-  ) ?? GAUGE_ZONES[GAUGE_ZONES.length - 1];
-  const zoneLabel = currentZone[2];
-  const zoneColor = currentZone[3];
-  const needleLen = r - arcWidth / 2 - 6;
-
   return (
     <div className="flex flex-col items-center">
-      <svg viewBox="0 0 300 180" className="w-full max-w-[340px]">
-        <path
-          d={describeArc(cx, cy, r, 180, 360)}
-          fill="none"
-          stroke="var(--panel-hover)"
-          strokeWidth={arcWidth + 4}
-          strokeLinecap="round"
-          opacity={0.3}
-        />
-        {zoneArcs.map((arc, index) => (
-          <path
-            key={index}
-            d={arc.d}
-            fill="none"
-            stroke={arc.color}
-            strokeWidth={arcWidth}
-            strokeLinecap="butt"
-          />
-        ))}
-        {(() => {
-          const leftCap = polarToCartesian(cx, cy, r, 180);
-          const rightCap = polarToCartesian(cx, cy, r, 360);
-          return (
-            <>
-              <circle cx={leftCap.x} cy={leftCap.y} r={arcWidth / 2} fill={GAUGE_ZONES[0][3]} />
-              <circle
-                cx={rightCap.x}
-                cy={rightCap.y}
-                r={arcWidth / 2}
-                fill={GAUGE_ZONES[GAUGE_ZONES.length - 1][3]}
-              />
-            </>
-          );
-        })()}
-        <text
-          x={cx - r}
-          y={cy + 18}
-          textAnchor="middle"
-          fontSize={9}
-          fill="var(--muted)"
-          opacity={0.6}
-        >
-          0
-        </text>
-        <text
-          x={cx + r}
-          y={cy + 18}
-          textAnchor="middle"
-          fontSize={9}
-          fill="var(--muted)"
-          opacity={0.6}
-        >
-          {GAUGE_MAX}
-        </text>
-        <line
-          x1={cx}
-          y1={cy}
-          x2={cx}
-          y2={cy - needleLen}
-          stroke="var(--text)"
-          strokeWidth={2}
-          strokeLinecap="round"
-          transform={`rotate(${needleRotation}, ${cx}, ${cy})`}
-        />
-        <circle cx={cx} cy={cy} r={6} fill="var(--panel-hover)" />
-        <circle cx={cx} cy={cy} r={3} fill="var(--text)" />
-        <text
-          x={cx}
-          y={cy - 24}
-          textAnchor="middle"
-          fontSize={34}
-          fontWeight={800}
-          fill="var(--text)"
-          style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
-        >
-          {vixClose.toFixed(2)}
-        </text>
-        <text
-          x={cx}
-          y={cy - 2}
-          textAnchor="middle"
-          fontSize={11}
-          fontWeight={700}
-          fill={zoneColor}
-          style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
-        >
-          {zoneLabel}
-        </text>
-      </svg>
+      <GaugeSvg
+        value={vixClose}
+        zones={GAUGE_ZONES}
+        max={GAUGE_MAX}
+        valueLabel={vixClose.toFixed(2)}
+        valueColor="var(--text)"
+      />
     </div>
   );
 }

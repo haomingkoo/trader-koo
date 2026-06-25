@@ -56,32 +56,49 @@ DEFAULT_REQUIRE_FULL_DATASET = os.getenv("TRADER_KOO_REQUIRE_FULL_DATASET", "0")
     "yes",
     "on",
 }
-DEFAULT_SOFT_FAIL_TICKERS = (
+# Macro context tickers shared by ALWAYS_FETCH and DEFAULT_SOFT_FAIL_TICKERS.
+# Single source of truth — used for regime detection, ML features, and sentiment.
+_SHARED_CONTEXT_TICKERS = (
     "^VIX",
     "^GSPC",
     "^DJI",
     "^TNX",
     "SVIX",
+    "^IRX",    # 13-week T-bill (short-term rates)
+    "^TYX",    # 30-year yield (long end)
+    "GLD",     # Gold ETF (risk-off proxy)
+    "TLT",     # 20+ year treasury ETF (duration/rate sensitivity)
+    "HYG",     # High-yield corporate bond ETF (credit risk proxy)
+    "IEF",     # 7-10 year treasury ETF (mid-duration)
+    "DIA",     # Dow Jones ETF (breadth confirmation)
+    "USO",     # Crude oil ETF (energy/inflation proxy)
+    "UNG",     # Natural gas ETF (energy proxy)
+    "SLV",     # Silver ETF (precious metals)
+    "EEM",     # Emerging markets ETF (global risk appetite)
+    "FXI",     # China large-cap ETF (China risk proxy)
+    "UUP",     # USD bull ETF (dollar strength proxy)
+    "IWM",     # Russell 2000 small-cap (risk appetite)
+    # Sector ETFs (sector rotation signals)
+    "XLK",     # Technology
+    "XLF",     # Financials
+    "XLV",     # Health Care
+    "XLE",     # Energy
+    "XLY",     # Consumer Discretionary
+    "XLP",     # Consumer Staples
+    "XLI",     # Industrials
+    "XLU",     # Utilities
+    "XLB",     # Materials
+    "XLRE",    # Real Estate
+    "XLC",     # Communication Services
+    "IGV",     # Software (sub-sector)
+)
+DEFAULT_SOFT_FAIL_TICKERS = (
+    *_SHARED_CONTEXT_TICKERS,
+    # VIX term-structure variants (soft-fail only — frequently empty on free data)
     "^VIX3M",
     "^VIX6M",
     "VIX3M",
     "VIX6M",
-    "^IRX",
-    "^TYX",
-    "GLD",
-    "TLT",
-    "HYG",
-    "IEF",
-    "DIA",
-    "USO",
-    "UNG",
-    "SLV",
-    "EEM",
-    "FXI",
-    "UUP",
-    "IWM",
-    "XLK", "XLF", "XLV", "XLE", "XLY", "XLP",
-    "XLI", "XLU", "XLB", "XLRE", "XLC", "IGV",
 )
 LOG = logging.getLogger("trader_koo.ingest")
 
@@ -823,39 +840,10 @@ def run(args: argparse.Namespace) -> None:
     if not tickers:
         raise ValueError("No tickers provided.")
 
-    # Always include market context tickers regardless of mode
-    # Trinity: SPY (S&P 500), QQQ (Nasdaq), ^DJI (Dow) + VIX + 10yr yield + inverse VIX
-    # Macro context tickers — used for regime detection, ML features, and sentiment
-    ALWAYS_FETCH = [
-        "^VIX", "^GSPC", "^DJI", "^TNX", "SPY", "QQQ", "SVIX",
-        "^IRX",   # 13-week T-bill (short-term rates)
-        "^TYX",   # 30-year yield (long end)
-        "GLD",    # Gold ETF (risk-off proxy)
-        "TLT",    # 20+ year treasury ETF (duration/rate sensitivity)
-        "HYG",    # High-yield corporate bond ETF (credit risk proxy)
-        "IEF",    # 7-10 year treasury ETF (mid-duration)
-        "DIA",    # Dow Jones ETF (breadth confirmation)
-        "USO",    # Crude oil ETF (energy/inflation proxy)
-        "UNG",    # Natural gas ETF (energy proxy)
-        "SLV",    # Silver ETF (precious metals)
-        "EEM",    # Emerging markets ETF (global risk appetite)
-        "FXI",    # China large-cap ETF (China risk proxy)
-        "UUP",    # USD bull ETF (dollar strength proxy)
-        "IWM",    # Russell 2000 small-cap (risk appetite)
-        # Sector ETFs (sector rotation signals)
-        "XLK",    # Technology
-        "XLF",    # Financials
-        "XLV",    # Health Care
-        "XLE",    # Energy
-        "XLY",    # Consumer Discretionary
-        "XLP",    # Consumer Staples
-        "XLI",    # Industrials
-        "XLU",    # Utilities
-        "XLB",    # Materials
-        "XLRE",   # Real Estate
-        "XLC",    # Communication Services
-        "IGV",    # Software (sub-sector)
-    ]
+    # Always include market context tickers regardless of mode.
+    # Trinity: SPY (S&P 500), QQQ (Nasdaq), ^DJI (Dow) + VIX + 10yr yield + inverse VIX.
+    # Shares the macro/sector context block with DEFAULT_SOFT_FAIL_TICKERS.
+    ALWAYS_FETCH = ["SPY", "QQQ", *_SHARED_CONTEXT_TICKERS]
     for t in ALWAYS_FETCH:
         if t not in tickers:
             tickers.append(t)

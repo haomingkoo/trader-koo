@@ -120,7 +120,6 @@ def _detect_bull_traps(
         for i in range(len(df) - cfg.trap_lookback_bars):
             # Check if we broke above resistance
             high_i = float(df.iloc[i]["high"])
-            close_i = float(df.iloc[i]["close"])
 
             if high_i <= zone_high:
                 continue  # No breakout
@@ -213,7 +212,6 @@ def _detect_bear_traps(
         for i in range(len(df) - cfg.trap_lookback_bars):
             # Check if we broke below support
             low_i = float(df.iloc[i]["low"])
-            close_i = float(df.iloc[i]["close"])
 
             if low_i >= zone_low:
                 continue  # No breakdown
@@ -299,7 +297,6 @@ def _detect_support_reclaims(
         breakdown_idx = -1
 
         for i in range(len(df) - cfg.reclaim_confirmation_bars):
-            close_i = float(df.iloc[i]["close"])
             low_i = float(df.iloc[i]["low"])
 
             # Check for breakdown
@@ -370,7 +367,6 @@ def _detect_resistance_reclaims(
         breakout_idx = -1
 
         for i in range(len(df) - cfg.reclaim_confirmation_bars):
-            close_i = float(df.iloc[i]["close"])
             high_i = float(df.iloc[i]["high"])
 
             # Check for breakout

@@ -27,6 +27,8 @@ import logging
 import sqlite3
 from typing import Any
 
+from trader_koo.report.utils import table_exists
+
 LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -95,14 +97,6 @@ def ensure_calibration_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return bool(
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-        ).fetchone()
-    )
-
-
 # ---------------------------------------------------------------------------
 # Data collection
 # ---------------------------------------------------------------------------
@@ -113,7 +107,7 @@ def _eval_stats(
     window_days: int,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Read setup_call_evaluations outcomes for the last N days."""
-    if not _table_exists(conn, "setup_call_evaluations"):
+    if not table_exists(conn, "setup_call_evaluations"):
         return {}
     cutoff = (
         dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=window_days)
@@ -158,7 +152,7 @@ def _paper_stats(
     Uses a window function to correctly rank within each family so that a
     high-volume family cannot crowd out recent data from other families.
     """
-    if not _table_exists(conn, "paper_trades"):
+    if not table_exists(conn, "paper_trades"):
         return {}
     rows = conn.execute(
         """
@@ -216,23 +210,11 @@ def _combined_expectancy(
     eval_n = int((eval_stat or {}).get("sample") or 0)
     paper_n = int((paper_stat or {}).get("sample") or 0)
 
-    # Weighted returns list
-    eval_returns: list[float] = []
-    paper_returns: list[float] = []
+    # Paper trades weighted more heavily — they represent real capital decisions.
+    paper_effective = int(paper_n * paper_weight)
+    total_weight = eval_n + paper_effective
 
-    if eval_stat and eval_n > 0:
-        # Reconstruct approximate returns from hit_rate + expectancy
-        # (exact values not available at this aggregation level — use expectancy as proxy)
-        eval_returns = [float(eval_stat["expectancy_pct"])] * eval_n
-
-    if paper_stat and paper_n > 0:
-        # Paper trades weighted more heavily
-        paper_returns = [float(paper_stat["expectancy_pct"])] * int(paper_n * paper_weight)
-
-    all_returns = eval_returns + paper_returns
-    combined_n = len(all_returns)
-
-    if combined_n == 0:
+    if total_weight == 0:
         return {
             "combined_sample": 0,
             "eval_sample": eval_n,
@@ -241,18 +223,15 @@ def _combined_expectancy(
             "expectancy_pct": None,
         }
 
-    # For hit_rate: weighted average of the two hit rates
+    # Weighted average of the two hit rates and expectancies, using eval_n and
+    # paper_effective as weights (expectancy_pct is the per-bucket proxy return).
     eval_hr = float((eval_stat or {}).get("hit_rate_pct") or 0.0)
     paper_hr = float((paper_stat or {}).get("hit_rate_pct") or 0.0)
-    eval_weight = eval_n
-    paper_effective = int(paper_n * paper_weight)
-    total_weight = eval_weight + paper_effective
-    if total_weight > 0:
-        combined_hr = (eval_hr * eval_weight + paper_hr * paper_effective) / total_weight
-    else:
-        combined_hr = 0.0
+    combined_hr = (eval_hr * eval_n + paper_hr * paper_effective) / total_weight
 
-    combined_exp = sum(all_returns) / combined_n
+    eval_exp = float((eval_stat or {}).get("expectancy_pct") or 0.0)
+    paper_exp = float((paper_stat or {}).get("expectancy_pct") or 0.0)
+    combined_exp = (eval_exp * eval_n + paper_exp * paper_effective) / total_weight
 
     return {
         # combined_sample is the actual trade count (unweighted) — used for block
@@ -460,7 +439,7 @@ def load_calibration_state(
 
     Returns empty dict if the table doesn't exist yet (fail open).
     """
-    if not _table_exists(conn, "calibration_state"):
+    if not table_exists(conn, "calibration_state"):
         return {}
     try:
         rows = conn.execute(

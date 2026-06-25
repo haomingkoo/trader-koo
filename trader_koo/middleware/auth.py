@@ -151,7 +151,6 @@ def require_admin_auth(func: Callable) -> Callable:
 
     # Mark the wrapper so we can identify decorated endpoints
     wrapper._requires_admin_auth = True  # type: ignore
-    wrapper._original_func = func  # type: ignore
 
     return wrapper
 

@@ -100,7 +100,6 @@ class FundingSnapshot:
     funding_rate: float
     funding_time: str
     mark_price: float
-    next_funding_rate: float | None
 
 
 def fetch_funding_rates() -> list[FundingSnapshot]:
@@ -125,7 +124,6 @@ def fetch_funding_rates() -> list[FundingSnapshot]:
                     int(data["nextFundingTime"]) / 1000, tz=dt.timezone.utc,
                 ).isoformat(),
                 mark_price=float(data.get("markPrice", 0)),
-                next_funding_rate=float(data["estimatedSettlePrice"]) if data.get("estimatedSettlePrice") else None,
             ))
         except Exception as exc:
             LOG.warning("Funding rate fetch failed for %s: %s", our_sym, exc)
@@ -342,11 +340,9 @@ def check_and_alert(db_path: Path, summary: dict[str, Any]) -> int:
 
     Returns number of alerts sent.
     """
-    import os
+    from trader_koo.notifications.telegram import is_configured, send_message
 
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not bot_token or not chat_id:
+    if not is_configured():
         return 0
 
     def _cooldown_ok(alert_key: str) -> bool:
@@ -420,19 +416,10 @@ def check_and_alert(db_path: Path, summary: dict[str, Any]) -> int:
     lines.append("<i>NFA</i>")
     text = "\n".join(lines)
 
-    try:
-        import httpx
-
-        httpx.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            timeout=10,
-        )
+    if send_message(text, parse_mode="HTML"):
         LOG.info("Derivatives alert sent: %d signals", len(alerts))
         return len(alerts)
-    except Exception as exc:
-        LOG.warning("Derivatives Telegram alert failed: %s", exc)
-        return 0
+    return 0
 
 
 # ---------------------------------------------------------------------------

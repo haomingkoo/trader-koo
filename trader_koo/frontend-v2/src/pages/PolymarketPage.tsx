@@ -143,7 +143,6 @@ function Chevron({ open, className = "" }: ChevronProps) {
 
 interface SubMarketRowProps {
   market: SubMarket;
-  eventType?: "simple" | "timeline" | "multi_outcome";
   muted?: boolean;
 }
 
@@ -269,7 +268,6 @@ function SubMarketList({ markets, eventType }: SubMarketListProps) {
         <SubMarketRow
           key={`${mkt.question}-${i}`}
           market={mkt}
-          eventType={eventType}
         />
       ))}
       {!showAll && hiddenCount > 0 && (
@@ -300,10 +298,9 @@ function SubMarketList({ markets, eventType }: SubMarketListProps) {
 
 interface ResolvedToggleProps {
   markets: SubMarket[];
-  eventType: "simple" | "timeline" | "multi_outcome";
 }
 
-function ResolvedToggle({ markets, eventType }: ResolvedToggleProps) {
+function ResolvedToggle({ markets }: ResolvedToggleProps) {
   const [open, setOpen] = useState(false);
 
   if (markets.length === 0) return null;
@@ -324,7 +321,6 @@ function ResolvedToggle({ markets, eventType }: ResolvedToggleProps) {
             <SubMarketRow
               key={`resolved-${mkt.question}-${i}`}
               market={mkt}
-              eventType={eventType}
               muted
             />
           ))}
@@ -408,7 +404,7 @@ function EventCard({ event }: EventCardProps) {
             />
           )}
 
-          <ResolvedToggle markets={resolvedMarkets} eventType={eventType} />
+          <ResolvedToggle markets={resolvedMarkets} />
       </div>
     </article>
   );

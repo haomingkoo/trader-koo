@@ -132,6 +132,22 @@ def resolve_child_filename(base_dir: Path, target_name: str) -> tuple[str, Path]
     return safe_name, dest_path
 
 
+def normalize_update_mode(mode: str | None) -> str | None:
+    """Map pipeline mode aliases to canonical names (full | yolo | report)."""
+    value = str(mode or "full").strip().lower()
+    aliases = {
+        "full": "full",
+        "all": "full",
+        "yolo": "yolo",
+        "yolo_report": "yolo",
+        "yolo+report": "yolo",
+        "report": "report",
+        "report_only": "report",
+        "email": "report",
+    }
+    return aliases.get(value)
+
+
 def clean_optional_url(value: Any) -> str | None:
     """Normalise an optional URL env var: strip, drop wildcards, rstrip '/'."""
     raw = str(value or "").strip()

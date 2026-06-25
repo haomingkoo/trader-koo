@@ -47,45 +47,6 @@ META_LGBM_PARAMS = {
 }
 
 
-def build_meta_labels(
-    dataset: pd.DataFrame,
-    primary_model: lgb.LGBMClassifier,
-    feature_cols: list[str],
-) -> pd.DataFrame:
-    """Generate meta-labels from a primary model's predictions.
-
-    For each sample in the dataset:
-    1. Get primary model's predicted probability
-    2. Get primary model's predicted class (0/1)
-    3. Meta-label = 1 if primary prediction was CORRECT, 0 if WRONG
-
-    This creates the training data for the meta-labeling model.
-    """
-    X = dataset[feature_cols].fillna(dataset[feature_cols].median())
-    primary_probs = primary_model.predict_proba(X)[:, 1]
-    primary_preds = (primary_probs >= 0.5).astype(int)
-    actual = dataset["target"].values
-
-    # Meta-label: was the primary model correct?
-    meta_labels = (primary_preds == actual).astype(int)
-
-    result = dataset.copy()
-    result["primary_prob"] = primary_probs
-    result["primary_pred"] = primary_preds
-    result["meta_label"] = meta_labels
-
-    # Add primary model confidence as a feature for the meta model
-    result["primary_confidence"] = np.abs(primary_probs - 0.5) * 2  # 0=uncertain, 1=confident
-
-    LOG.info(
-        "Meta-labels: %d samples, primary accuracy=%.3f, meta_label_rate=%.3f",
-        len(result),
-        float(accuracy_score(actual, primary_preds)),
-        float(meta_labels.mean()),
-    )
-    return result
-
-
 def build_meta_labels_from_oos(
     dataset: pd.DataFrame,
     oos_indices: list[int],
@@ -200,43 +161,3 @@ def train_meta_model(
     )
 
     return model, metrics
-
-
-def apply_meta_filter(
-    primary_probs: np.ndarray,
-    meta_model: lgb.LGBMClassifier,
-    features: pd.DataFrame,
-    feature_cols: list[str],
-    *,
-    min_meta_prob: float = 0.5,
-) -> np.ndarray:
-    """Apply meta-model to filter primary predictions.
-
-    Returns adjusted probabilities: if meta-model says "don't trade",
-    probability is pushed toward 0.5 (uncertain).
-    """
-    # Build feature matrix with primary model outputs FIRST, then filter to available
-    X = features[feature_cols].copy() if all(c in features.columns for c in feature_cols) else features.copy()
-    X["primary_prob"] = primary_probs
-    X["primary_confidence"] = np.abs(primary_probs - 0.5) * 2
-    X = X.fillna(0.0)
-
-    # Use all columns the meta-model was trained on
-    meta_features = feature_cols + ["primary_confidence", "primary_prob"]
-    available = [c for c in meta_features if c in X.columns]
-
-    meta_probs = meta_model.predict_proba(X[available])[:, 1]
-
-    # If meta says "don't trade" (low prob), push primary toward 0.5
-    adjusted = np.where(
-        meta_probs >= min_meta_prob,
-        primary_probs,  # keep original signal
-        0.5,            # neutralize to "no trade"
-    )
-
-    filtered = int((meta_probs >= min_meta_prob).sum())
-    LOG.info(
-        "Meta-filter: %d/%d signals pass (%.1f%%)",
-        filtered, len(primary_probs), filtered / len(primary_probs) * 100,
-    )
-    return adjusted

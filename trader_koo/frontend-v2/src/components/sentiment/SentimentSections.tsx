@@ -3,6 +3,7 @@ import type {
   FearGreedComponent,
   SocialSentiment,
 } from "../../api/types";
+import GaugeSvgBase from "../ui/GaugeSvg";
 
 const ZONES: Array<[number, number, string, string]> = [
   [0, 25, "Extreme Fear", "#ff6b6b"],
@@ -12,117 +13,15 @@ const ZONES: Array<[number, number, string, string]> = [
   [75, 100, "Extreme Greed", "#1b5e20"],
 ];
 
-function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  const rad = (angleDeg * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
-
-function describeArc(
-  cx: number,
-  cy: number,
-  r: number,
-  startAngle: number,
-  endAngle: number,
-) {
-  const start = polarToCartesian(cx, cy, r, startAngle);
-  const end = polarToCartesian(cx, cy, r, endAngle);
-  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
-}
-
 export function GaugeSvg({ score, scoreColor }: { score: number; scoreColor: string }) {
-  const cx = 150;
-  const cy = 155;
-  const r = 120;
-  const arcWidth = 14;
-  const scoreToAngle = (value: number) => 180 + (value / 100) * 180;
-  const zoneArcs = ZONES.map(([lo, hi, , color]) => ({
-    d: describeArc(cx, cy, r, scoreToAngle(lo), scoreToAngle(hi)),
-    color,
-  }));
-  const clamped = Math.max(0, Math.min(score, 100));
-  const needleRotation = scoreToAngle(clamped) - 270;
-  const currentZone = ZONES.find(([lo, hi]) => score >= lo && score < hi) ?? ZONES[ZONES.length - 1];
-  const zoneLabel = currentZone[2];
-  const zoneColor = currentZone[3];
-  const needleLen = r - arcWidth / 2 - 6;
-
   return (
-    <svg viewBox="0 0 300 180" className="w-full max-w-[340px]">
-      <path
-        d={describeArc(cx, cy, r, 180, 360)}
-        fill="none"
-        stroke="var(--panel-hover)"
-        strokeWidth={arcWidth + 4}
-        strokeLinecap="round"
-        opacity={0.3}
-      />
-      {zoneArcs.map((arc, index) => (
-        <path
-          key={index}
-          d={arc.d}
-          fill="none"
-          stroke={arc.color}
-          strokeWidth={arcWidth}
-          strokeLinecap="butt"
-        />
-      ))}
-      {(() => {
-        const leftCap = polarToCartesian(cx, cy, r, 180);
-        const rightCap = polarToCartesian(cx, cy, r, 360);
-        return (
-          <>
-            <circle cx={leftCap.x} cy={leftCap.y} r={arcWidth / 2} fill={ZONES[0][3]} />
-            <circle
-              cx={rightCap.x}
-              cy={rightCap.y}
-              r={arcWidth / 2}
-              fill={ZONES[ZONES.length - 1][3]}
-            />
-          </>
-        );
-      })()}
-      <text x={cx - r} y={cy + 18} textAnchor="middle" fontSize={9} fill="var(--muted)" opacity={0.6}>
-        0
-      </text>
-      <text x={cx + r} y={cy + 18} textAnchor="middle" fontSize={9} fill="var(--muted)" opacity={0.6}>
-        100
-      </text>
-      <line
-        x1={cx}
-        y1={cy}
-        x2={cx}
-        y2={cy - needleLen}
-        stroke="var(--text)"
-        strokeWidth={2}
-        strokeLinecap="round"
-        transform={`rotate(${needleRotation}, ${cx}, ${cy})`}
-      />
-      <circle cx={cx} cy={cy} r={6} fill="var(--panel-hover)" />
-      <circle cx={cx} cy={cy} r={3} fill="var(--text)" />
-      <text
-        x={cx}
-        y={cy - 24}
-        textAnchor="middle"
-        fontSize={34}
-        fontWeight={800}
-        fill={scoreColor}
-        style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
-      >
-        {score}
-      </text>
-      <text
-        x={cx}
-        y={cy - 2}
-        textAnchor="middle"
-        fontSize={11}
-        fontWeight={700}
-        fill={zoneColor}
-        style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
-      >
-        {zoneLabel}
-      </text>
-    </svg>
+    <GaugeSvgBase
+      value={score}
+      zones={ZONES}
+      max={100}
+      valueLabel={String(score)}
+      valueColor={scoreColor}
+    />
   );
 }
 
