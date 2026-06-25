@@ -27,7 +27,7 @@ from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
 from trader_koo.llm_narrative import llm_status, maybe_rewrite_setup_copy
-from trader_koo.scripts.generate_daily_report import (
+from trader_koo.report.setup_scoring import (
     _describe_setup as _report_describe_setup,
     _score_setup_from_confluence as _report_score_setup_from_confluence,
 )

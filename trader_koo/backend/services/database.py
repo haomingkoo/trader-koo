@@ -18,7 +18,7 @@ from fastapi import HTTPException
 
 from trader_koo.config import DEFAULT_DB_PATH, env_path
 from trader_koo.db.schema import ensure_ohlcv_schema
-from trader_koo.scripts.generate_daily_report import (
+from trader_koo.report.setup_scoring import (
     _yolo_age_factor as _report_yolo_age_factor,
     _yolo_recency_label as _report_yolo_recency_label,
 )

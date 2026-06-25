@@ -25,7 +25,7 @@ from trader_koo.backend.services.report_loader import (
 )
 from trader_koo.backend.services.scheduler import _run_daily_update
 from trader_koo.middleware.auth import require_admin_auth
-from trader_koo.scripts.generate_daily_report import (
+from trader_koo.report.market_context import (
     _build_regime_context as _report_build_regime_context,
 )
 

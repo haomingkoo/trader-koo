@@ -1,6 +1,6 @@
 """Unit tests for agreement score tier adjustment functionality."""
 import pytest
-from trader_koo.scripts.generate_daily_report import (
+from trader_koo.report.setup_scoring import (
     _apply_agreement_tier_adjustment,
     _downgrade_tier,
 )
