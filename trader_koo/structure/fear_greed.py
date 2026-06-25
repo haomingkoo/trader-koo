@@ -19,6 +19,8 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import sqlite3
+import threading
+import time
 from typing import Any
 
 from trader_koo.news_sentiment import get_external_news_sentiment
@@ -46,6 +48,38 @@ _METHODOLOGY_SUMMARY = (
     "price strength, and options positioning. External news and social pulses "
     "are optional overlays, not replacements for the core score."
 )
+
+# ---------------------------------------------------------------------------
+# In-process TTL cache
+# ---------------------------------------------------------------------------
+# The composite re-runs ~6 SQL aggregations over price_daily on every call, but
+# the underlying data only changes after the nightly pipeline. Cache successful
+# results per database file for a short window. Keyed by the conn's backing file
+# path so different databases never share a cached result (test isolation).
+
+_FG_CACHE_TTL_SEC = 600.0
+_FG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_FG_LOCK = threading.Lock()
+
+
+def _db_cache_key(conn: sqlite3.Connection) -> str | None:
+    """Return a stable cache key from the conn's backing file path.
+
+    Returns ``None`` for in-memory databases (path '' or ':memory:'), which
+    must not be cached.
+    """
+    try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+    except sqlite3.Error:
+        return None
+    for row in rows:
+        # row = (seq, name, file); the 'main' database is what we read from.
+        if str(row[1]) == "main":
+            path = str(row[2] or "")
+            if path in ("", ":memory:"):
+                return None
+            return path
+    return None
 
 # ---------------------------------------------------------------------------
 # Zone definitions
@@ -502,6 +536,31 @@ def _compute_historical_score(
 # ---------------------------------------------------------------------------
 
 def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Compute a 0-100 market sentiment score, with a short-lived TTL cache.
+
+    Results are cached per backing database file for ``_FG_CACHE_TTL_SEC`` so
+    repeated callers (fear-greed/market-sentiment endpoints, morning summary,
+    bot commands) within the window reuse one computation. In-memory databases
+    are never cached. Only successful scores (non-``None``) are stored.
+    """
+    cache_key = _db_cache_key(conn)
+    if cache_key is not None:
+        now = time.time()
+        with _FG_LOCK:
+            entry = _FG_CACHE.get(cache_key)
+            if entry is not None and (now - entry[0]) < _FG_CACHE_TTL_SEC:
+                return entry[1]
+
+    result = _compute_fear_greed_index_uncached(conn)
+
+    if cache_key is not None and result.get("score") is not None:
+        with _FG_LOCK:
+            _FG_CACHE[cache_key] = (time.time(), result)
+
+    return result
+
+
+def _compute_fear_greed_index_uncached(conn: sqlite3.Connection) -> dict[str, Any]:
     """Compute a 0-100 market sentiment score from multiple market indicators."""
     components: list[dict[str, Any]] = []
     valid_scores: list[float] = []

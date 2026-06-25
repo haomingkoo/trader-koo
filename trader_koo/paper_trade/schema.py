@@ -4,7 +4,22 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from typing import Any
+
+# Track which on-disk database files have already had their full schema
+# ensured, so the ~45 PRAGMA table_info probes run at most once per file.
+# In-memory databases are never cached (each connection is a distinct DB).
+_ensured_db_paths: set[str] = set()
+_ensured_db_paths_lock = threading.Lock()
+
+
+def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
+    """Return the file path of the connection's 'main' database ('' if in-memory)."""
+    for row in conn.execute("PRAGMA database_list").fetchall():
+        if str(row[1]) == "main":
+            return str(row[2] or "")
+    return ""
 
 
 def _ensure_column(
@@ -38,6 +53,15 @@ def decode_json_list(raw: Any) -> list[str]:
 
 def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     """Create paper_trades and paper_portfolio_snapshots tables."""
+    db_path = _resolve_main_db_path(conn)
+    # In-memory DBs (path '' or ':memory:') are never cached: each connection
+    # is a distinct database, so the full ensure must always run.
+    is_memory = db_path in ("", ":memory:")
+    if not is_memory:
+        with _ensured_db_paths_lock:
+            if db_path in _ensured_db_paths:
+                return
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,6 +221,10 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "ON paper_trade_reflections(ticker, exit_date)"
     )
     conn.commit()
+
+    if not is_memory:
+        with _ensured_db_paths_lock:
+            _ensured_db_paths.add(db_path)
 
 
 def register_bot_version(

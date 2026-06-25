@@ -8,6 +8,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
+import threading
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
@@ -82,28 +84,69 @@ def _tail_text_file(
 # Report discovery
 # ---------------------------------------------------------------------------
 
-def latest_daily_report_json(
-    report_dir: Path,
-) -> tuple[Path | None, dict[str, Any] | None]:
-    """Find and parse the latest daily report JSON.
+# Memoizes the parsed latest report keyed by (resolved path str, mtime_ns).
+# The latest report file changes only nightly, so this avoids re-parsing the
+# ~256KB JSON on every dashboard/report request. mtime invalidates on any
+# new report write.
+_latest_report_cache: dict[tuple[str, int], dict[str, Any]] = {}
+_latest_report_cache_lock = threading.Lock()
 
-    Checks ``daily_report_latest.json`` first, then falls back to
-    the newest dated report file.
+
+def _resolve_latest_report_file(report_dir: Path) -> Path | None:
+    """Resolve the latest readable report file without parsing it.
+
+    Prefers ``daily_report_latest.json``, then the newest dated report file
+    that successfully parses.
     """
     latest = report_dir / "daily_report_latest.json"
-    payload = _load_json_file(latest)
-    if payload is not None:
-        return latest, payload
+    if _load_json_file(latest) is not None:
+        return latest
     candidates = sorted(
         [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
         key=lambda p: p.name,
         reverse=True,
     )
     for p in candidates:
-        payload = _load_json_file(p)
-        if payload is not None:
-            return p, payload
-    return None, None
+        if _load_json_file(p) is not None:
+            return p
+    return None
+
+
+def latest_daily_report_json(
+    report_dir: Path,
+) -> tuple[Path | None, dict[str, Any] | None]:
+    """Find and parse the latest daily report JSON.
+
+    Checks ``daily_report_latest.json`` first, then falls back to
+    the newest dated report file. The parsed payload is memoized by
+    ``(path, st_mtime_ns)`` so the latest file is parsed at most once per
+    nightly write.
+    """
+    path = _resolve_latest_report_file(report_dir)
+    if path is None:
+        return None, None
+    try:
+        mtime_ns = os.stat(path).st_mtime_ns
+    except OSError:
+        # File vanished between resolution and stat; fall back to a direct read.
+        payload = _load_json_file(path)
+        return (path, payload) if payload is not None else (None, None)
+
+    cache_key = (str(path), mtime_ns)
+    with _latest_report_cache_lock:
+        cached = _latest_report_cache.get(cache_key)
+    if cached is not None:
+        return path, cached
+
+    payload = _load_json_file(path)
+    if payload is None:
+        return None, None
+    with _latest_report_cache_lock:
+        # Drop stale entries for this path (older mtimes) before storing.
+        for key in [k for k in _latest_report_cache if k[0] == cache_key[0]]:
+            del _latest_report_cache[key]
+        _latest_report_cache[cache_key] = payload
+    return path, payload
 
 
 def report_json_for_generated_ts(

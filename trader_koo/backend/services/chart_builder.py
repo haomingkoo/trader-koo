@@ -1117,7 +1117,7 @@ def build_commentary_payload(
         yolo_pats = get_yolo_patterns(conn, ticker)
         yolo_aud = get_yolo_audit(conn, ticker, limit=14)
         fund = get_latest_fundamentals(conn, ticker) or {}
-        prices = get_price_df(conn, ticker, months=months)
+        prices = get_price_df(conn, ticker)
         model = prices.copy() if not prices.empty else prices
         chart_commentary = _build_chart_commentary_payload(
             ticker=ticker,
