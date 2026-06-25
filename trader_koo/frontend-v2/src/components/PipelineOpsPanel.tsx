@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePipelineStatus, useTriggerUpdate } from "../api/hooks";
+import { apiFetch } from "../api/client";
 import type { PipelineStatus } from "../api/types";
 import Badge from "./ui/Badge";
 
@@ -29,6 +30,47 @@ function hasAdminKey(): boolean {
 }
 
 type PipelineState = "idle" | "running" | "completed" | "warning" | "error";
+
+type MLValidationRun = {
+  run_id: string;
+  created_ts: string;
+  source: string;
+  status: string;
+  target_mode: string | null;
+  model_path?: string | null;
+  artifact_path?: string | null;
+  avg_auc: number | null;
+  backtest_return_pct: number | null;
+  spy_return_pct: number | null;
+  alpha_vs_spy_pct: number | null;
+  rule_baseline_return_pct: number | null;
+  alpha_vs_rule_baseline_pct: number | null;
+  max_drawdown_pct: number | null;
+  total_trades: number | null;
+  profit_factor: number | null;
+  champion_eligible: boolean;
+  promotion_status: string;
+  eligibility_reasons: string[];
+};
+
+type MLVersionCard = {
+  deployment_state: string;
+  summary: string;
+  candidate: MLValidationRun | null;
+  latest_eligible: MLValidationRun | null;
+  promotion_gates: Record<string, number | boolean | string | null>;
+};
+
+type MLValidationPayload = {
+  ok: boolean;
+  runs: MLValidationRun[];
+  champion: {
+    latest_run: MLValidationRun | null;
+    latest_eligible_run: MLValidationRun | null;
+    promotion_gates: Record<string, number | boolean | string | null>;
+  };
+  model_card?: MLVersionCard;
+};
 
 function derivePipelineState(data: PipelineStatus | undefined): PipelineState {
   if (!data) return "idle";
@@ -90,6 +132,29 @@ function formatTimestamp(ts: string | null | undefined): string {
   }
 }
 
+function formatPct(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "\u2014";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function formatNum(value: number | null | undefined, digits = 2): string {
+  if (value == null || Number.isNaN(value)) return "\u2014";
+  return value.toFixed(digits);
+}
+
+function fileName(path: string | null | undefined): string {
+  if (!path) return "none";
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function versionCardVariant(state: string): "green" | "amber" | "red" | "muted" {
+  if (state === "latest_candidate_eligible") return "green";
+  if (state === "using_previous_eligible") return "amber";
+  if (state === "no_validation_runs") return "muted";
+  return "red";
+}
+
 function parseFailedTickers(errorMsg: string | null | undefined): string[] {
   if (!errorMsg) return [];
   // Try to extract ticker symbols like ^VIX, ^VIX3M from error messages
@@ -119,7 +184,7 @@ function freshnessColor(age: number | null | undefined, thresholdFresh: number, 
 
 /* ── API Key Input ── */
 
-function ApiKeyInput() {
+function ApiKeyInput({ onKeyChange }: { onKeyChange?: () => void }) {
   const [key, setKey] = useState(getAdminKey);
   const hasKey = key.length > 0;
   const [visible, setVisible] = useState(hasKey);
@@ -152,6 +217,7 @@ function ApiKeyInput() {
           onChange={(e) => {
             setKey(e.target.value);
             setAdminKey(e.target.value);
+            onKeyChange?.();
           }}
           placeholder="Admin API key"
           className="h-8 w-full max-w-xs rounded-md border border-[var(--line)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none"
@@ -159,6 +225,20 @@ function ApiKeyInput() {
       )}
     </div>
   );
+}
+
+function useMLValidationRuns(enabled: boolean) {
+  return useQuery({
+    queryKey: ["ml-validation-runs"],
+    queryFn: () =>
+      apiFetch<MLValidationPayload>("/api/admin/ml/validation-runs?limit=5", {
+        headers: { "X-API-Key": getAdminKey() },
+      }),
+    enabled,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    retry: false,
+  });
 }
 
 /* ── Action Button ── */
@@ -376,11 +456,159 @@ function EventsLog({ data }: { data: PipelineStatus }) {
   );
 }
 
+function ValidationMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "green" | "amber" | "red";
+}) {
+  const color =
+    tone === "green"
+      ? "text-[var(--green)]"
+      : tone === "amber"
+        ? "text-[var(--amber)]"
+        : tone === "red"
+          ? "text-[var(--red)]"
+          : "text-[var(--text)]";
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-widest text-[var(--muted)]">{label}</div>
+      <div className={`mt-1 text-sm font-semibold ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function MLValidationStatus({ enabled }: { enabled: boolean }) {
+  const { data, isLoading, error } = useMLValidationRuns(enabled);
+
+  if (!enabled) return null;
+
+  if (isLoading) {
+    return (
+      <div className="rounded-md border border-[var(--line)] bg-[var(--bg)]/45 px-3 py-2 text-xs text-[var(--muted)]">
+        Loading model validation status...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-md border border-[var(--red)]/30 bg-[var(--red)]/5 px-3 py-2 text-xs text-[var(--red)]">
+        Model validation status unavailable: {error instanceof Error ? error.message : String(error)}
+      </div>
+    );
+  }
+
+  const latest = data?.champion?.latest_run ?? null;
+  const eligible = data?.champion?.latest_eligible_run ?? null;
+  const modelCard = data?.model_card ?? null;
+  const reasons = latest?.eligibility_reasons ?? [];
+
+  if (!latest) {
+    return (
+      <div className="rounded-md border border-[var(--line)] bg-[var(--bg)]/45 px-3 py-3 text-xs text-[var(--muted)]">
+        No model validation runs recorded yet.
+      </div>
+    );
+  }
+
+  const eligibleNow = latest.champion_eligible;
+  const alphaRule = latest.alpha_vs_rule_baseline_pct;
+  const alphaSpy = latest.alpha_vs_spy_pct;
+
+  return (
+    <div className="rounded-md border border-[var(--line)] bg-[var(--bg)]/35 p-3">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h4 className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+          Model Promotion Gate
+        </h4>
+        <Badge variant={eligibleNow ? "green" : "amber"}>
+          {eligibleNow ? "ELIGIBLE" : "BLOCKED"}
+        </Badge>
+        {eligible && !eligibleNow && (
+          <span className="text-[10px] text-[var(--muted)]">
+            Latest eligible: {eligible.run_id}
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <ValidationMetric label="Avg AUC" value={formatNum(latest.avg_auc, 3)} />
+        <ValidationMetric
+          label="Model Return"
+          value={formatPct(latest.backtest_return_pct)}
+          tone={(latest.backtest_return_pct ?? 0) >= 0 ? "green" : "red"}
+        />
+        <ValidationMetric
+          label="Alpha vs SPY"
+          value={formatPct(alphaSpy)}
+          tone={(alphaSpy ?? 0) >= 0 ? "green" : "red"}
+        />
+        <ValidationMetric label="Rule Baseline" value={formatPct(latest.rule_baseline_return_pct)} />
+        <ValidationMetric
+          label="Alpha vs Rules"
+          value={formatPct(alphaRule)}
+          tone={(alphaRule ?? 0) > 0 ? "green" : "red"}
+        />
+        <ValidationMetric label="Trades / PF" value={`${latest.total_trades ?? 0} / ${formatNum(latest.profit_factor)}`} />
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-[var(--muted)]">
+        <span>Run: {latest.run_id}</span>
+        <span>Source: {latest.source}</span>
+        <span>Target: {latest.target_mode ?? "unknown"}</span>
+        <span>Model: {fileName(latest.model_path)}</span>
+        <span>Artifact: {fileName(latest.artifact_path)}</span>
+        <span>Drawdown: {formatPct(latest.max_drawdown_pct)}</span>
+        <span>{formatTimestamp(latest.created_ts)}</span>
+      </div>
+
+      {modelCard && (
+        <div className="mt-3 rounded-md border border-[var(--line)] bg-[var(--panel)]/60 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+              Version card
+            </span>
+            <Badge variant={versionCardVariant(modelCard.deployment_state)}>
+              {modelCard.deployment_state.replaceAll("_", " ")}
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs text-[var(--muted)]">{modelCard.summary}</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-[var(--muted)]">
+            <span>Candidate: {modelCard.candidate?.run_id ?? "none"}</span>
+            <span>Latest eligible: {modelCard.latest_eligible?.run_id ?? "none"}</span>
+            <span>Min AUC: {formatNum(Number(modelCard.promotion_gates.min_avg_auc), 2)}</span>
+            <span>Min trades: {String(modelCard.promotion_gates.min_total_trades ?? "n/a")}</span>
+            <span>Rule baseline required</span>
+          </div>
+        </div>
+      )}
+
+      {reasons.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {reasons.map((reason) => (
+            <span
+              key={reason}
+              className="rounded-md border border-[var(--amber)]/30 bg-[var(--amber)]/10 px-2 py-1 text-[10px] text-[var(--amber)]"
+            >
+              {reason.replaceAll("_", " ")}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Full Panel (for GuidePage) ── */
 
 export default function PipelineOpsPanel() {
   const { data, isLoading } = usePipelineStatus();
   const queryClient = useQueryClient();
+  const [, setAdminKeyRevision] = useState(0);
 
   const state = derivePipelineState(data);
   const isRunning = state === "running";
@@ -398,7 +626,7 @@ export default function PipelineOpsPanel() {
   return (
     <div className="space-y-5">
       {/* API Key input */}
-      <ApiKeyInput />
+      <ApiKeyInput onKeyChange={() => setAdminKeyRevision((value) => value + 1)} />
 
       {/* Status */}
       <StatusSection data={data} state={state} />
@@ -414,7 +642,10 @@ export default function PipelineOpsPanel() {
             <ActionButton label="Rerun YOLO + Report" mode="yolo" disabled={isRunning} />
             <ActionButton label="Rebuild Report Only" mode="report" disabled={isRunning} />
             <button
-              onClick={() => queryClient.invalidateQueries({ queryKey: ["pipeline-status"] })}
+              onClick={() => {
+                void queryClient.invalidateQueries({ queryKey: ["pipeline-status"] });
+                void queryClient.invalidateQueries({ queryKey: ["ml-validation-runs"] });
+              }}
               className="rounded-md border border-[var(--line)] bg-[var(--panel-hover)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text)]"
             >
               Refresh Status
@@ -428,6 +659,8 @@ export default function PipelineOpsPanel() {
       )}
 
       {/* Recent Events */}
+      {adminUnlocked && <MLValidationStatus enabled={adminUnlocked} />}
+
       <div>
         <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
           Recent Events

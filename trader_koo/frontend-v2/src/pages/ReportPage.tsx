@@ -5,6 +5,7 @@ import Spinner from "../components/ui/Spinner";
 import FearGreedGauge from "../components/FearGreedGauge";
 import { PipelineStatusInline } from "../components/PipelineOpsPanel";
 import {
+  EvidenceSourceStrip,
   KeyChangesSection,
   RiskFiltersPanel,
   SummaryKpiRow,
@@ -101,6 +102,13 @@ export default function ReportPage() {
       <SummaryKpiRow
         generatedTs={latest.generated_ts}
         priceDate={latest.latest_data?.price_date ?? null}
+      />
+
+      <EvidenceSourceStrip
+        generatedTs={latest.generated_ts}
+        latestData={latest.latest_data}
+        freshness={latest.freshness}
+        warnings={latest.warnings ?? []}
       />
 
       {!reportBlocksMainReport && (

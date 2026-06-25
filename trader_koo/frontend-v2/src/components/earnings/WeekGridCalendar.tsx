@@ -367,11 +367,13 @@ export default function WeekGridCalendar({ rows, economicEvents = [] }: WeekGrid
         const diffMs = targetMonday.getTime() - thisMonday.getTime();
         const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
         if (diffWeeks > 0) {
-          setWeekOffset(diffWeeks);
           autoAdvanced.current = true;
+          const timer = window.setTimeout(() => setWeekOffset(diffWeeks), 0);
+          return () => window.clearTimeout(timer);
         }
       }
     }
+    return undefined;
   }, [rows, weekOffset]);
 
   const rangeDays = RANGE_OPTIONS.find((o) => o.value === range)?.days ?? 5;

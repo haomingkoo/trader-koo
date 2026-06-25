@@ -25,19 +25,18 @@ export default function Toast({ alert, onDismiss }: ToastProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (alert) {
-      // Trigger slide-in
-      requestAnimationFrame(() => setVisible(true));
+    if (!alert) return undefined;
 
-      const timer = setTimeout(() => {
-        setVisible(false);
-        setTimeout(onDismiss, 300);
-      }, 8000);
+    const frame = requestAnimationFrame(() => setVisible(true));
+    const timer = setTimeout(() => {
+      setVisible(false);
+      setTimeout(onDismiss, 300);
+    }, 8000);
 
-      return () => clearTimeout(timer);
-    }
-    setVisible(false);
-    return undefined;
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
   }, [alert, onDismiss]);
 
   const handleClick = useCallback(() => {

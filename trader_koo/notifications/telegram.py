@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 
@@ -17,6 +18,11 @@ LOG = logging.getLogger("trader_koo.notifications.telegram")
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 SEND_TIMEOUT_SEC = 15
+PUBLIC_BASE_URL = (
+    os.getenv("TRADER_KOO_PUBLIC_BASE_URL")
+    or os.getenv("TRADER_KOO_PUBLIC_URL")
+    or "https://trader.kooexperience.com"
+).rstrip("/")
 
 
 def _get_credentials() -> tuple[str, str] | None:
@@ -37,9 +43,18 @@ def is_configured() -> bool:
     return _get_credentials() is not None
 
 
-def send_message(text: str, parse_mode: str = "Markdown") -> bool:
+def send_message(
+    text: str,
+    parse_mode: str = "Markdown",
+    *,
+    reply_markup: dict[str, Any] | None = None,
+) -> bool:
     """Convenience alias for ``send_telegram_message``."""
-    return send_telegram_message(text, parse_mode=parse_mode)
+    return send_telegram_message(
+        text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+    )
 
 
 # ------------------------------------------------------------------
@@ -50,6 +65,8 @@ def send_message(text: str, parse_mode: str = "Markdown") -> bool:
 def send_telegram_message(
     text: str,
     parse_mode: str = "Markdown",
+    *,
+    reply_markup: dict[str, Any] | None = None,
 ) -> bool:
     """Send *text* to the configured Telegram chat.
 
@@ -68,6 +85,8 @@ def send_telegram_message(
         "parse_mode": parse_mode,
         "disable_web_page_preview": True,
     }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
 
     try:
         with httpx.Client(timeout=SEND_TIMEOUT_SEC) as client:
@@ -121,6 +140,12 @@ def _action_hint(alert_type: str) -> str:
         "breakdown_below_support": "Monitor for breakdown follow-through",
     }
     return hints.get(alert_type, "Review price action")
+
+
+def _web_url(path: str) -> str:
+    """Build a public app URL from a route path."""
+    normalized = path if path.startswith("/") else f"/{path}"
+    return f"{PUBLIC_BASE_URL}{normalized}"
 
 
 def send_price_alert(
@@ -177,6 +202,7 @@ def send_price_alert(
     headline = _alert_headline(level_type, alert_type)
     action = _action_hint(alert_type)
     bias_display = bias.capitalize() if bias else "Neutral"
+    ticker_slug = quote_plus(ticker.upper())
 
     text = (
         f"{emoji} *{ticker}* {headline}\n"
@@ -187,8 +213,32 @@ def send_price_alert(
         f"\u26a1 Action: {action}\n"
         f"\n"
         f"[View Chart \u2192]"
-        f"(https://trader.kooexperience.com/chart?ticker={ticker})"
+        f"({_web_url(f'/chart?ticker={ticker_slug}')})"
     )
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": f"Open {ticker.upper()} chart",
+                    "url": _web_url(f"/chart?ticker={ticker_slug}"),
+                },
+                {
+                    "text": "Paper review",
+                    "url": _web_url("/paper-trades"),
+                },
+            ],
+            [
+                {
+                    "text": "Recent alerts",
+                    "callback_data": "alerts",
+                },
+                {
+                    "text": "Refresh price",
+                    "callback_data": f"price:{ticker.upper()}"[:64],
+                },
+            ],
+        ]
+    }
     LOG.info(
         "Sending price alert: ticker=%s price=%.2f level=%.2f type=%s",
         ticker,
@@ -196,4 +246,4 @@ def send_price_alert(
         level,
         alert_type,
     )
-    return send_telegram_message(text)
+    return send_telegram_message(text, reply_markup=reply_markup)

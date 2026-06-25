@@ -5,13 +5,16 @@ import type {
   PaperTradeBenchmarks,
   PaperTradeDirectionStats,
   PaperTradeFeedbackItem,
+  PaperTradePolicy,
+  PaperTradeReflection,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
 } from "../../api/types";
 import { useUpdateTradeNotes } from "../../api/hooks";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
 import PlotlyWrapper from "../PlotlyWrapper";
-import Badge, { tierVariant } from "../ui/Badge";
+import Badge from "../ui/Badge";
+import { tierVariant } from "../ui/badgeUtils";
 import Table from "../ui/Table";
 
 const fmtPct = (
@@ -115,6 +118,52 @@ function TradeNotes({ trade }: { trade: PaperTrade }) {
   );
 }
 
+function TradeRationale({ trade }: { trade: PaperTrade }) {
+  const evidence = trade.entry_evidence ?? [];
+  const risks = trade.entry_risks ?? [];
+  const summary =
+    trade.entry_reason ||
+    trade.observation ||
+    trade.decision_summary ||
+    "No entry rationale recorded";
+
+  return (
+    <details className="group max-w-[340px] text-xs">
+      <summary
+        className="cursor-pointer list-none truncate font-medium text-[var(--text)] hover:text-[var(--accent)]"
+        title={summary}
+      >
+        {summary}
+      </summary>
+      <div className="mt-2 space-y-2 text-[11px] leading-relaxed text-[var(--muted)]">
+        {evidence.length > 0 && (
+          <div>
+            <div className="font-semibold uppercase tracking-wide text-[var(--text)]">Evidence</div>
+            <ul className="mt-1 list-disc space-y-1 pl-4">
+              {evidence.map((item, idx) => (
+                <li key={`${trade.id}-e-${idx}`}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {risks.length > 0 && (
+          <div>
+            <div className="font-semibold uppercase tracking-wide text-[var(--text)]">Risks</div>
+            <ul className="mt-1 list-disc space-y-1 pl-4">
+              {risks.map((item, idx) => (
+                <li key={`${trade.id}-r-${idx}`}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {trade.entry_plan && <div>{trade.entry_plan}</div>}
+        {trade.exit_plan && <div>{trade.exit_plan}</div>}
+        {trade.review_summary && <div>{trade.review_summary}</div>}
+      </div>
+    </details>
+  );
+}
+
 /* ── Portfolio Hero ── */
 export function PaperTradePortfolioHero({
   overall,
@@ -175,6 +224,88 @@ function Stat({
   );
 }
 
+function FlowStep({
+  label,
+  title,
+  value,
+  detail,
+}: {
+  label: string;
+  title: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)]/45 p-4">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+        {label}
+      </div>
+      <div className="mt-2 text-sm font-semibold text-[var(--text)]">{title}</div>
+      <div className="mt-2 text-xl font-bold tabular-nums text-[var(--accent)]">
+        {value}
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">{detail}</p>
+    </div>
+  );
+}
+
+export function PaperTradeDecisionFlow({
+  overall,
+  policy,
+}: {
+  overall: PaperTradeSummaryOverall;
+  policy?: PaperTradePolicy | null;
+}) {
+  const minTier = policy?.min_tier ?? "configured tier";
+  const minReward = typeof policy?.min_reward_r_multiple === "number"
+    ? `${policy.min_reward_r_multiple.toFixed(1)}R`
+    : "configured R";
+  const maxOpen = typeof policy?.max_open === "number" ? policy.max_open : null;
+  const openLabel = maxOpen != null
+    ? `${overall.open_count ?? 0}/${maxOpen}`
+    : String(overall.open_count ?? 0);
+
+  return (
+    <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="label-sm">Decision flow</div>
+          <h2 className="mt-1 text-base font-semibold text-[var(--text)]">
+            How a setup becomes a paper trade
+          </h2>
+        </div>
+        <Badge variant="blue">paper only</Badge>
+      </div>
+      <div className="grid gap-3 md:grid-cols-4">
+        <FlowStep
+          label="1. Candidate"
+          title="Report setup"
+          value={`Tier ${minTier}+`}
+          detail={`A setup must clear quality filters and offer at least ${minReward} planned reward before review.`}
+        />
+        <FlowStep
+          label="2. Gate"
+          title="Critic review"
+          value="9 checks"
+          detail="Conviction, debate agreement, regime fit, concentration, VIX, caution flags, expectancy, and family edge are reviewed."
+        />
+        <FlowStep
+          label="3. Risk"
+          title="Position budget"
+          value={openLabel}
+          detail="Open positions are capped, sized by tier, and managed with ATR-aware stops and staged trailing rules."
+        />
+        <FlowStep
+          label="4. Learn"
+          title="Outcome memory"
+          value={fmtPct(overall.win_rate_pct)}
+          detail={`Closed trades feed win rate, average R (${fmtPct(overall.avg_r_multiple, "R")}), and post-trade reflections.`}
+        />
+      </div>
+    </div>
+  );
+}
+
 /* ── Open Positions Table ── */
 export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
   const openTrades = trades.filter((t) => t.status === "open");
@@ -209,6 +340,7 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
               <th className="px-3 py-2 font-semibold">Plan R</th>
               <th className="px-3 py-2 font-semibold">Tier</th>
               <th className="px-3 py-2 font-semibold">Entry Date</th>
+              <th className="px-3 py-2 font-semibold">Why</th>
               <th className="px-3 py-2 font-semibold">Notes</th>
             </tr>
           </thead>
@@ -250,6 +382,9 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
                     )}
                   </td>
                   <td className="px-3 py-2 text-[var(--muted)]">{t.entry_date ?? "\u2014"}</td>
+                  <td className="px-3 py-2 min-w-[260px] max-w-[360px]">
+                    <TradeRationale trade={t} />
+                  </td>
                   <td className="px-3 py-2 min-w-[120px] max-w-[200px]">
                     <TradeNotes trade={t} />
                   </td>
@@ -387,8 +522,9 @@ export function PaperTradeBenchmarkComparison({
 }) {
   const spy = benchmarks?.spy_buy_hold;
   const unfiltered = benchmarks?.unfiltered_setups;
+  const coreSatellite = benchmarks?.core_satellite;
 
-  if (!spy && !unfiltered) {
+  if (!spy && !unfiltered && !coreSatellite) {
     return null;
   }
 
@@ -418,12 +554,12 @@ export function PaperTradeBenchmarkComparison({
         </span>
       </div>
       <p className="mt-1 text-[10px] text-[var(--muted)]">
-        Compares portfolio return against SPY over the same window, then compares
-        average trade return against a broad setup baseline when available.
+        Compares the satellite trade book, a benchmark-aware core/satellite blend,
+        SPY buy-and-hold, and the broad setup baseline when available.
       </p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <BenchmarkColumn
-          label="Your Pipeline"
+          label="Trade Satellite"
           returnPct={pipelinePortfolioReturn}
           metricLabel="portfolio return"
           winRate={pipelineWinRate}
@@ -434,6 +570,14 @@ export function PaperTradeBenchmarkComparison({
           }
           highlight
         />
+        {coreSatellite && (
+          <BenchmarkColumn
+            label={coreSatellite.label}
+            returnPct={coreSatellite.total_return_pct}
+            metricLabel="blended return"
+            subtext={`${coreSatellite.core_allocation_pct.toFixed(0)}% ${coreSatellite.core_symbol} / ${coreSatellite.satellite_allocation_pct.toFixed(0)}% Koo`}
+          />
+        )}
         {spy && (
           <BenchmarkColumn
             label="SPY Buy & Hold"
@@ -452,6 +596,25 @@ export function PaperTradeBenchmarkComparison({
           />
         )}
       </div>
+      {coreSatellite && (
+        <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--muted)]">
+          <span className="font-medium text-[var(--text)]">Core/Satellite attribution: </span>
+          core {coreSatellite.core_contribution_pct > 0 ? "+" : ""}
+          {coreSatellite.core_contribution_pct.toFixed(2)}pp, satellite{" "}
+          {coreSatellite.satellite_contribution_pct > 0 ? "+" : ""}
+          {coreSatellite.satellite_contribution_pct.toFixed(2)}pp, alpha vs SPY{" "}
+          <span className={pnlColor(coreSatellite.alpha_vs_spy_pct)}>
+            {coreSatellite.alpha_vs_spy_pct > 0 ? "+" : ""}
+            {coreSatellite.alpha_vs_spy_pct.toFixed(2)}pp
+          </span>
+          . Overlay alpha alone is{" "}
+          <span className={pnlColor(coreSatellite.satellite_alpha_vs_spy_pct)}>
+            {coreSatellite.satellite_alpha_vs_spy_pct > 0 ? "+" : ""}
+            {coreSatellite.satellite_alpha_vs_spy_pct.toFixed(2)}pp
+          </span>
+          .
+        </div>
+      )}
       {spy && typeof pipelinePortfolioReturn === "number" && (
         <div className="mt-3 text-xs">
           {pipelinePortfolioReturn > spy.return_pct ? (
@@ -538,6 +701,54 @@ export function PaperTradeFeedbackPanel({
         ))}
       </div>
     </div>
+  );
+}
+
+export function PaperTradeDecisionMemory({
+  reflections,
+}: {
+  reflections?: PaperTradeReflection[];
+}) {
+  const items = reflections ?? [];
+  if (items.length === 0) return null;
+
+  return (
+    <details className="group rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-[var(--text)] select-none">
+        Decision Memory
+        <span className="ml-2 text-xs text-[var(--muted)] group-open:hidden">
+          ({items.length} recent lessons)
+        </span>
+      </summary>
+      <div className="space-y-3 border-t border-[var(--line)] px-4 py-4">
+        {items.map((item) => (
+          <div key={item.trade_id} className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                to={`/chart?t=${item.ticker}`}
+                className="font-mono text-xs font-bold text-[var(--accent)] hover:text-[var(--blue)]"
+              >
+                {item.ticker}
+              </Link>
+              <Badge variant={item.direction === "long" ? "green" : "red"}>
+                {item.direction.toUpperCase()}
+              </Badge>
+              {item.setup_family && (
+                <span className="text-[10px] text-[var(--muted)]">
+                  {item.setup_family.replace(/_/g, " ")}
+                </span>
+              )}
+              <span className={`text-xs font-medium ${pnlColor(item.alpha_vs_spy_pct)}`}>
+                alpha {fmtPct(item.alpha_vs_spy_pct, "pp", true)}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">
+              {item.lesson_summary}
+            </p>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -834,6 +1045,9 @@ const CSV_COLUMNS = [
   "setup_family",
   "setup_tier",
   "ml_predicted_win_prob",
+  "entry_reason",
+  "entry_evidence",
+  "entry_risks",
   "notes",
 ] as const;
 
@@ -1024,6 +1238,14 @@ const tradeColumns = [
     key: "entry_date" as const,
     label: "Entry Date",
     render: (value: unknown) => String(value ?? "\u2014"),
+  },
+  {
+    key: "entry_reason" as const,
+    label: "Why",
+    render: (_value: unknown, row: unknown) => {
+      const trade = row as PaperTrade;
+      return <TradeRationale trade={trade} />;
+    },
   },
   {
     key: "notes" as const,

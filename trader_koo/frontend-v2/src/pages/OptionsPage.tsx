@@ -250,7 +250,7 @@ export default function OptionsPage() {
     sort_by: sortBy,
   });
 
-  const rows = data?.rows ?? [];
+  const rows = useMemo(() => data?.rows ?? [], [data?.rows]);
   const filteredRows = useMemo(
     () => rows.filter((row) => matchesSmartView(row, smartView)),
     [rows, smartView],

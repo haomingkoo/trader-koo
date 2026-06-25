@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ChartCommentary, HmmRegime } from "../../api/types";
-import Badge, { tierVariant } from "../ui/Badge";
+import Badge from "../ui/Badge";
+import { tierVariant } from "../ui/badgeUtils";
 import GlassCard from "../ui/GlassCard";
 
 function biasVariant(

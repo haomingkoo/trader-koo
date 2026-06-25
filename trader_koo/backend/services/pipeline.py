@@ -47,9 +47,17 @@ REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
 PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
 INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STALE_MIN", "75")))
-AUTO_RESUME_POST_INGEST = str(os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1")).strip().lower() in {
-    "1", "true", "yes", "on",
-}
+
+
+def _env_flag(name: str, default: str) -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+AUTO_RESUME_POST_INGEST = _env_flag("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1")
+AUTO_RESUME_INTERRUPTED_PIPELINE = _env_flag(
+    "TRADER_KOO_AUTO_RESUME_INTERRUPTED_PIPELINE",
+    os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1"),
+)
 AUTO_RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_AGE_HOURS", "18")))
 AUTO_RESUME_MAX_RETRIES = max(0, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_RETRIES", "2")))
 

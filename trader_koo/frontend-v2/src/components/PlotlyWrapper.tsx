@@ -17,12 +17,15 @@ function isRenderablePlotComponent(
 }
 
 const Plot = lazy(async () => {
-  const mod = (await import("react-plotly.js")) as PlotComponentModule;
-  const nestedDefault = (mod.default as PlotComponentModule | undefined)?.default;
-  const resolved = nestedDefault ?? mod.default;
+  const [factoryModule, plotlyModule] = await Promise.all([
+    import("react-plotly.js/factory"),
+    import("plotly.js/dist/plotly-finance.min.js"),
+  ]);
+  const plotly = (plotlyModule as PlotComponentModule).default ?? plotlyModule;
+  const resolved = factoryModule.default(plotly);
 
   if (!isRenderablePlotComponent(resolved)) {
-    throw new Error("Unable to resolve react-plotly.js component export");
+    throw new Error("Unable to create Plotly component");
   }
 
   return { default: resolved };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, TrendingUp, BarChart3, Bitcoin } from "lucide-react";
 import { useAlerts } from "../../api/hooks";
@@ -19,44 +19,42 @@ const SEVERITY_DOT: Record<string, string> = {
   low: "bg-[var(--muted)]",
 };
 
-function getUnreadCount(alerts: AlertItem[]): number {
-  const lastRead = localStorage.getItem(LAST_READ_KEY) ?? "";
+function getUnreadCount(alerts: AlertItem[], lastRead: string): number {
   if (!lastRead) return alerts.length;
   return alerts.filter((a) => a.timestamp > lastRead).length;
 }
 
-function markAsRead(): void {
-  localStorage.setItem(
-    LAST_READ_KEY,
-    new Date().toISOString(),
-  );
+function markAsRead(): string {
+  const timestamp = new Date().toISOString();
+  localStorage.setItem(LAST_READ_KEY, timestamp);
+  return timestamp;
 }
 
 export default function NotificationBell() {
   const navigate = useNavigate();
   const { data } = useAlerts(5);
   const [open, setOpen] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [lastRead, setLastRead] = useState(() => localStorage.getItem(LAST_READ_KEY) ?? "");
   const [toastAlert, setToastAlert] = useState<AlertItem | null>(null);
   const prevCountRef = useRef<number>(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const alerts = data?.alerts ?? [];
-
-  // Track unread count
-  useEffect(() => {
-    const count = getUnreadCount(alerts);
-    setUnreadCount(count);
-  }, [alerts]);
+  const alerts = useMemo(() => data?.alerts ?? [], [data?.alerts]);
+  const unreadCount = useMemo(
+    () => getUnreadCount(alerts, lastRead),
+    [alerts, lastRead],
+  );
 
   // Toast on new alerts
   useEffect(() => {
-    const count = getUnreadCount(alerts);
-    if (count > prevCountRef.current && prevCountRef.current >= 0 && alerts.length > 0) {
-      setToastAlert(alerts[0]);
+    if (unreadCount > prevCountRef.current && prevCountRef.current >= 0 && alerts.length > 0) {
+      const timer = window.setTimeout(() => setToastAlert(alerts[0]), 0);
+      prevCountRef.current = unreadCount;
+      return () => window.clearTimeout(timer);
     }
-    prevCountRef.current = count;
-  }, [alerts]);
+    prevCountRef.current = unreadCount;
+    return undefined;
+  }, [alerts, unreadCount]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -78,9 +76,7 @@ export default function NotificationBell() {
   const handleBellClick = useCallback(() => {
     setOpen((prev) => {
       if (!prev) {
-        // Opening dropdown — mark as read
-        markAsRead();
-        setUnreadCount(0);
+        setLastRead(markAsRead());
       }
       return !prev;
     });
@@ -92,7 +88,7 @@ export default function NotificationBell() {
   }, [navigate]);
 
   const handleAlertClick = useCallback(
-    (_alert: AlertItem) => {
+    () => {
       setOpen(false);
       navigate("/alerts");
     },
@@ -147,7 +143,7 @@ export default function NotificationBell() {
                   return (
                     <button
                       key={alert.id}
-                      onClick={() => handleAlertClick(alert)}
+                      onClick={handleAlertClick}
                       className="flex w-full items-start gap-2.5 border-b border-[var(--line)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--panel-hover)] last:border-b-0"
                     >
                       <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-[var(--panel-hover)]">

@@ -19,12 +19,14 @@ import type { LucideIcon } from "lucide-react";
 
 type PageModule = { default: ComponentType };
 type PageLoader = () => Promise<PageModule>;
+type NavGroup = "Start" | "Research" | "Risk" | "Markets" | "Method";
 
 interface AppRouteDefinition {
   path?: string;
   index?: boolean;
   navPath?: string;
   label?: string;
+  navGroup?: NavGroup;
   Icon?: LucideIcon;
   loaderTitle: string;
   loaderDetail: string;
@@ -38,7 +40,13 @@ export interface ResolvedAppRoute extends AppRouteDefinition {
 export interface NavRoute {
   to: string;
   label: string;
+  group: NavGroup;
   Icon: LucideIcon;
+}
+
+export interface NavSection {
+  label: NavGroup;
+  items: NavRoute[];
 }
 
 export const appRoutes: AppRouteDefinition[] = [
@@ -46,6 +54,7 @@ export const appRoutes: AppRouteDefinition[] = [
     index: true,
     navPath: "/",
     label: "Guide",
+    navGroup: "Start",
     Icon: BookOpen,
     loaderTitle: "Loading guide",
     loaderDetail: "Getting the dashboard tour and navigation shortcuts ready.",
@@ -55,6 +64,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "report",
     navPath: "/report",
     label: "Report",
+    navGroup: "Research",
     Icon: FileText,
     loaderTitle: "Loading daily report",
     loaderDetail: "Refreshing the latest setups, risk filters, and macro context.",
@@ -64,6 +74,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "chart",
     navPath: "/chart",
     label: "Chart",
+    navGroup: "Research",
     Icon: TrendingUp,
     loaderTitle: "Loading chart workspace",
     loaderDetail: "Preparing price history, overlays, commentary, and pattern context.",
@@ -73,6 +84,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "alerts",
     navPath: "/alerts",
     label: "Alerts",
+    navGroup: "Risk",
     Icon: Bell,
     loaderTitle: "Loading alerts",
     loaderDetail: "Fetching recent price alerts, market spikes, and crypto moves.",
@@ -82,6 +94,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "paper-trades",
     navPath: "/paper-trades",
     label: "Paper Trades",
+    navGroup: "Risk",
     Icon: Wallet,
     loaderTitle: "Loading paper trades",
     loaderDetail: "Reconstructing performance, equity curve, and trade history.",
@@ -91,6 +104,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "vix",
     navPath: "/vix",
     label: "VIX Analysis",
+    navGroup: "Markets",
     Icon: Thermometer,
     loaderTitle: "Loading volatility view",
     loaderDetail: "Building the VIX regime picture and volatility metrics.",
@@ -100,6 +114,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "earnings",
     navPath: "/earnings",
     label: "Calendar",
+    navGroup: "Markets",
     Icon: Calendar,
     loaderTitle: "Loading earnings calendar",
     loaderDetail: "Sorting the upcoming catalyst window into sessions and lanes.",
@@ -109,6 +124,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "opportunities",
     navPath: "/opportunities",
     label: "Opportunities",
+    navGroup: "Research",
     Icon: Search,
     loaderTitle: "Loading opportunities",
     loaderDetail: "Screening valuation signals and setup quality across the universe.",
@@ -118,6 +134,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "options",
     navPath: "/options",
     label: "Options",
+    navGroup: "Markets",
     Icon: DollarSign,
     loaderTitle: "Loading options premium",
     loaderDetail: "Aggregating the latest option-chain premium proxy snapshots.",
@@ -127,6 +144,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "crypto",
     navPath: "/crypto",
     label: "Crypto",
+    navGroup: "Markets",
     Icon: Bitcoin,
     loaderTitle: "Loading crypto dashboard",
     loaderDetail: "Streaming price cards, indicators, and intraday bar history.",
@@ -136,6 +154,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "hyperliquid",
     navPath: "/hyperliquid",
     label: "Hyperliquid",
+    navGroup: "Markets",
     Icon: Fish,
     loaderTitle: "Loading Hyperliquid tracker",
     loaderDetail: "Fetching whale positions and counter-trade signals.",
@@ -145,6 +164,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "markets",
     navPath: "/markets",
     label: "Pred Markets",
+    navGroup: "Markets",
     Icon: BarChart3,
     loaderTitle: "Loading prediction markets",
     loaderDetail: "Fetching live odds from Polymarket.",
@@ -154,6 +174,7 @@ export const appRoutes: AppRouteDefinition[] = [
     path: "methodology",
     navPath: "/methodology",
     label: "Methodology",
+    navGroup: "Method",
     Icon: Layers,
     loaderTitle: "Loading methodology",
     loaderDetail: "Preparing the trading pipeline walkthrough.",
@@ -180,14 +201,24 @@ export const resolvedNotFoundRoute: ResolvedAppRoute = {
 
 export const navRoutes: NavRoute[] = appRoutes
   .filter(
-    (route): route is AppRouteDefinition & Required<Pick<AppRouteDefinition, "navPath" | "label" | "Icon">> =>
-      Boolean(route.navPath && route.label && route.Icon),
+    (route): route is AppRouteDefinition & Required<Pick<AppRouteDefinition, "navPath" | "label" | "navGroup" | "Icon">> =>
+      Boolean(route.navPath && route.label && route.navGroup && route.Icon),
   )
   .map((route) => ({
     to: route.navPath,
     label: route.label,
+    group: route.navGroup,
     Icon: route.Icon,
   }));
+
+const navGroupOrder: NavGroup[] = ["Start", "Research", "Risk", "Markets", "Method"];
+
+export const navSections: NavSection[] = navGroupOrder
+  .map((group) => ({
+    label: group,
+    items: navRoutes.filter((route) => route.group === group),
+  }))
+  .filter((section) => section.items.length > 0);
 
 export const routePreloaders: Record<string, () => Promise<unknown>> = Object.fromEntries(
   appRoutes

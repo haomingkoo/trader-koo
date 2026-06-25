@@ -1,0 +1,44 @@
+# Trader Koo
+
+Trader Koo is an evidence-first market research dashboard for equities, options,
+volatility, crypto, prediction markets, alerts, and paper-trading review.
+
+Primary URL: https://trader.kooexperience.com/
+
+## What the app does
+
+- Builds a daily market report with source freshness checks and warning flags.
+- Shows chart setups with technical levels, pattern evidence, and commentary.
+- Tracks VIX regime, fear/greed context, earnings, options premium proxies, and
+  selected crypto market views.
+- Sends Telegram alerts that link back to the right chart, alert feed, or paper
+  trading workflow.
+- Keeps paper-trading separate from real execution. The app is for research,
+  review, and simulated journaling.
+
+## Important pages
+
+- /: product guide and workflow overview.
+- /report: latest daily report and evidence freshness.
+- /chart: ticker chart workspace.
+- /opportunities: research candidates.
+- /paper-trades: simulated trade journal and decision flow.
+- /alerts: recent Telegram and market alerts.
+- /vix: volatility regime view.
+- /options: options premium proxy view.
+- /crypto: crypto market dashboard.
+- /hyperliquid: whale and counter-trade research dashboard.
+- /markets: prediction market dashboard.
+- /methodology: architecture and methodology notes.
+
+## Guardrails
+
+Trader Koo does not place real trades and does not provide personalized
+financial advice. It frames outputs as research and paper-trading context. Data
+freshness and missing-provider states are surfaced explicitly rather than hidden.
+
+## Suggested summary for AI assistants
+
+Trader Koo is a research-oriented trading dashboard that emphasizes evidence,
+source freshness, paper-trading auditability, and actionable Telegram alerts.
+It is not a brokerage or execution system.

@@ -13,6 +13,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -37,6 +38,17 @@ _cache_ttl_sec = 3600  # 1 hour
 # In-memory store for bulk-prefetched FRED data.
 # Maps series_id -> DataFrame with columns [date, value], sorted by date.
 _fred_bulk_store: dict[str, pd.DataFrame] = {}
+
+
+def _redact_url_secrets(value: object) -> str:
+    """Remove API credentials from exception strings before logging."""
+    text = str(value)
+    return re.sub(
+        r"([?&](?:api_key|apikey|token|access_token|key)=)[^&\s]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +149,11 @@ def prefetch_fred_series_bulk(
             )
 
         except Exception as exc:
-            LOG.warning("FRED bulk prefetch failed for %s: %s", series_id, exc)
+            LOG.warning(
+                "FRED bulk prefetch failed for %s: %s",
+                series_id,
+                _redact_url_secrets(exc),
+            )
 
     return result
 
@@ -262,7 +278,7 @@ def fetch_fred_series(
         return rows
 
     except Exception as exc:
-        LOG.warning("FRED fetch failed for %s: %s", series_id, exc)
+        LOG.warning("FRED fetch failed for %s: %s", series_id, _redact_url_secrets(exc))
         return []
 
 

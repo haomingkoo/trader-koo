@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useChartQuick, useChartCommentary } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
@@ -46,19 +46,23 @@ export default function ChartPage() {
   }, []);
 
   // Pick up ticker from URL query param ?t=AAPL (initial mount only)
-  const [urlConsumed, setUrlConsumed] = useState(false);
+  const urlConsumed = useRef(false);
   useEffect(() => {
-    if (urlConsumed) return;
+    if (urlConsumed.current) return undefined;
+    urlConsumed.current = true;
     const urlTicker = searchParams.get("t") || searchParams.get("ticker");
     if (urlTicker) {
       const clean = urlTicker.trim().toUpperCase();
       if (clean) {
-        setTicker(clean);
-        setInputValue(clean);
+        const timer = window.setTimeout(() => {
+          setTicker(clean);
+          setInputValue(clean);
+        }, 0);
+        return () => window.clearTimeout(timer);
       }
     }
-    setUrlConsumed(true);
-  }, [searchParams, setTicker, urlConsumed]);
+    return undefined;
+  }, [searchParams, setTicker]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -159,7 +163,7 @@ export default function ChartPage() {
       }
     }
     return apiCandle;
-  }, [data?.live_candle, data?.ticker, livePrice]);
+  }, [data, livePrice]);
 
   const chartResult = useMemo(() => {
     if (!livePayload || !livePayload.chart || livePayload.chart.length === 0) {

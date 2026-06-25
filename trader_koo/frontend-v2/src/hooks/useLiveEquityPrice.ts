@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/client";
 import type { EquityTick } from "../api/types";
 import { useEquityWs } from "./useEquityWs";
@@ -13,48 +13,44 @@ interface LivePriceResponse {
 
 export function useLiveEquityPrice(ticker: string) {
   const { prices, connected: socketConnected } = useEquityWs();
-  const [livePrice, setLivePrice] = useState<EquityTick | null>(null);
+  const symbol = useMemo(() => ticker.trim().toUpperCase(), [ticker]);
+  const [apiPrice, setApiPrice] = useState<EquityTick | null>(null);
   const [subscriptionReady, setSubscriptionReady] = useState(false);
-  const tickerRef = useRef("");
-
-  useEffect(() => {
-    tickerRef.current = ticker.trim().toUpperCase();
-  }, [ticker]);
-
-  // Pick up ticks from the shared WS for the active ticker
-  useEffect(() => {
-    const symbol = ticker.trim().toUpperCase();
-    if (!symbol) return;
-    const tick = prices[symbol];
-    if (tick) {
-      setLivePrice(tick);
-    }
-  }, [prices, ticker]);
+  const livePrice = prices[symbol] ?? apiPrice;
 
   // Subscribe via HTTP API so the backend streams this ticker
   useEffect(() => {
-    const symbol = ticker.trim().toUpperCase();
+    let active = true;
+
     if (!symbol) {
-      setLivePrice(null);
-      setSubscriptionReady(false);
-      return;
+      const resetTimer = window.setTimeout(() => {
+        if (!active) return;
+        setApiPrice(null);
+        setSubscriptionReady(false);
+      }, 0);
+      return () => {
+        active = false;
+        window.clearTimeout(resetTimer);
+      };
     }
 
-    let active = true;
-    setLivePrice((current) => (current?.symbol === symbol ? current : null));
-    setSubscriptionReady(false);
+    const resetTimer = window.setTimeout(() => {
+      if (!active) return;
+      setApiPrice((current) => (current?.symbol === symbol ? current : null));
+      setSubscriptionReady(false);
+    }, 0);
 
     apiFetch<{ ok: boolean }>(`/api/streaming/subscribe/${symbol}`, {
       method: "POST",
     })
       .then((response) => {
-        if (!active) return;
+        if (!active) return undefined;
         setSubscriptionReady(Boolean(response.ok));
         return apiFetch<LivePriceResponse>(`/api/streaming/price/${symbol}`);
       })
       .then((response) => {
         if (!active || !response || response.price == null) return;
-        setLivePrice({
+        setApiPrice({
           symbol,
           price: response.price,
           volume: response.volume ?? 0,
@@ -68,11 +64,12 @@ export function useLiveEquityPrice(ticker: string) {
 
     return () => {
       active = false;
+      window.clearTimeout(resetTimer);
       apiFetch(`/api/streaming/unsubscribe/${symbol}`, {
         method: "POST",
       }).catch(() => {});
     };
-  }, [ticker]);
+  }, [symbol]);
 
   return {
     livePrice,

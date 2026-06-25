@@ -4,7 +4,7 @@ import type {
   SocialSentiment,
 } from "../../api/types";
 
-export const ZONES: Array<[number, number, string, string]> = [
+const ZONES: Array<[number, number, string, string]> = [
   [0, 25, "Extreme Fear", "#ff6b6b"],
   [25, 45, "Fear", "#ff9800"],
   [45, 55, "Neutral", "#fdd835"],
@@ -213,7 +213,7 @@ function formatPublished(ts: string | null): string {
   return compact;
 }
 
-export function noteLooksBlocked(note: string | null | undefined): boolean {
+function noteLooksBlocked(note: string | null | undefined): boolean {
   const raw = String(note ?? "").toLowerCase();
   return raw.includes("403") || raw.includes("blocked") || raw.includes("forbidden");
 }

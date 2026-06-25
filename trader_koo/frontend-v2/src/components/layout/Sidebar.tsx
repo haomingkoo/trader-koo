@@ -5,7 +5,7 @@ import {
   ChevronRight,
   X,
 } from "lucide-react";
-import { navRoutes, routePreloaders } from "../../routes/routeConfig";
+import { navSections, routePreloaders } from "../../routes/routeConfig";
 
 const preloadedRoutes = new Set<string>();
 
@@ -71,29 +71,42 @@ export default function Sidebar({
           <X size={16} />
         </button>
       </div>
-      <nav className="flex flex-1 flex-col gap-1 p-2">
-        {navRoutes.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === "/"}
-            onClick={onMobileClose}
-            onFocus={() => preloadRoute(item.to)}
-            onMouseEnter={() => preloadRoute(item.to)}
-            onTouchStart={() => preloadRoute(item.to)}
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
-                isActive
-                  ? "border border-[var(--line)] bg-[var(--surface-subtle)] text-[var(--accent)]"
-                  : "border border-transparent text-[var(--muted)] hover:border-[var(--line)] hover:bg-[var(--panel-hover)] hover:text-[var(--text)]"
-              }`
-            }
-          >
-            <item.Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-            {/* Mobile overlay always shows labels; desktop respects collapsed state */}
-            {mobileOpen && <span>{item.label}</span>}
-            {!mobileOpen && !collapsed && <span>{item.label}</span>}
-          </NavLink>
+      <nav className="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
+        {navSections.map((section) => (
+          <div key={section.label} className="space-y-1">
+            {(mobileOpen || !collapsed) && (
+              <div className="px-2.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                {section.label}
+              </div>
+            )}
+            {!mobileOpen && collapsed && section.label !== "Start" && (
+              <div className="mx-2 my-2 border-t border-[var(--line)]" />
+            )}
+            {section.items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/"}
+                onClick={onMobileClose}
+                onFocus={() => preloadRoute(item.to)}
+                onMouseEnter={() => preloadRoute(item.to)}
+                onTouchStart={() => preloadRoute(item.to)}
+                aria-label={item.label}
+                className={({ isActive }) =>
+                  `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+                    isActive
+                      ? "border border-[var(--line)] bg-[var(--surface-subtle)] text-[var(--accent)]"
+                      : "border border-transparent text-[var(--muted)] hover:border-[var(--line)] hover:bg-[var(--panel-hover)] hover:text-[var(--text)]"
+                  }`
+                }
+              >
+                <item.Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+                {/* Mobile overlay always shows labels; desktop respects collapsed state */}
+                {mobileOpen && <span>{item.label}</span>}
+                {!mobileOpen && !collapsed && <span>{item.label}</span>}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
       <div className="border-t border-[var(--line)] px-3 py-2" />

@@ -892,7 +892,12 @@ export interface PaperTrade {
   sizing_summary?: string | null;
   review_status?: string | null;
   review_summary?: string | null;
+  entry_reason?: string | null;
+  entry_evidence?: string[];
+  entry_risks?: string[];
   ml_predicted_win_prob?: number | null;
+  ml_confidence?: number | null;
+  ml_signal?: string | null;
   notes?: string | null;
 }
 
@@ -949,6 +954,10 @@ export interface PaperTradePolicy {
   caution_position_scale: number;
   high_vol_position_scale: number;
   earnings_position_scale: number;
+  core_satellite?: {
+    core_allocation_pct: number;
+    satellite_allocation_pct: number;
+  };
 }
 
 export interface PaperTradeFeedbackItem {
@@ -994,6 +1003,22 @@ export interface EquityCurvePoint {
   equity_index: number;
 }
 
+export interface PaperTradeReflection {
+  trade_id: number;
+  ticker: string;
+  direction: string;
+  setup_family: string | null;
+  entry_date: string | null;
+  exit_date: string | null;
+  exit_reason: string | null;
+  pnl_pct: number | null;
+  r_multiple: number | null;
+  spy_return_pct: number | null;
+  alpha_vs_spy_pct: number | null;
+  lesson_summary: string | null;
+  created_ts: string | null;
+}
+
 export interface SpyBuyHoldBenchmark {
   return_pct: number;
   period_days: number;
@@ -1012,9 +1037,27 @@ export interface UnfilteredSetupsBenchmark {
   label?: string;
 }
 
+export interface CoreSatelliteBenchmark {
+  label: string;
+  core_symbol: string;
+  core_allocation_pct: number;
+  satellite_allocation_pct: number;
+  cash_allocation_pct: number;
+  core_return_pct: number;
+  satellite_return_pct: number;
+  total_return_pct: number;
+  portfolio_value: number;
+  alpha_vs_spy_pct: number;
+  satellite_alpha_vs_spy_pct: number;
+  core_contribution_pct: number;
+  satellite_contribution_pct: number;
+  cash_contribution_pct: number;
+}
+
 export interface PaperTradeBenchmarks {
   spy_buy_hold?: SpyBuyHoldBenchmark;
   unfiltered_setups?: UnfilteredSetupsBenchmark;
+  core_satellite?: CoreSatelliteBenchmark;
 }
 
 export interface PaperTradeSummary {
@@ -1026,6 +1069,7 @@ export interface PaperTradeSummary {
   by_exit_reason: Record<string, number>;
   equity_curve: EquityCurvePoint[];
   recent_trades: PaperTrade[];
+  recent_reflections?: PaperTradeReflection[];
   policy?: PaperTradePolicy | null;
   feedback?: PaperTradeFeedbackItem[];
   family_edges?: PaperTradeFamilyEdgeRow[];

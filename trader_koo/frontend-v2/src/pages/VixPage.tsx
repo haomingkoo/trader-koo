@@ -4,7 +4,6 @@ import Card from "../components/ui/Card";
 import Spinner from "../components/ui/Spinner";
 import {
   CommentaryCard,
-  formatVixState,
   MAMatrixCard,
   MarketHealthCard,
   ParticipationBiasCard,
@@ -13,6 +12,7 @@ import {
   VixMetricCardsGrid,
   VixPrimaryPanels,
 } from "../components/vix/VixSections";
+import { formatVixState } from "../components/vix/vixUtils";
 
 export default function VixPage() {
   useEffect(() => {

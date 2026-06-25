@@ -7,13 +7,20 @@ subprocess invocations are contained here.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import logging
 import os
 import secrets
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - production/runtime is Unix-like
+    fcntl = None
 
 from trader_koo.config import (
     DEFAULT_DB_PATH,
@@ -49,6 +56,7 @@ def _resolve_log_dir() -> Path:
 
 LOG_DIR = _resolve_log_dir()
 RUN_LOG_PATH = LOG_DIR / "cron_daily.log"
+_UPDATE_THREAD_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +92,75 @@ def _append_run_log(
             f.write(line)
     except Exception as exc:
         LOG.warning("Failed to append run log %s: %s", _run_log, exc)
+
+
+def _acquire_update_lock(mode: str, source: str):
+    """Acquire the process and shared file lock for daily_update runs."""
+    if not _UPDATE_THREAD_LOCK.acquire(blocking=False):
+        _append_run_log(
+            "SKIP",
+            f"daily_update skipped because another run is active source={source} mode={mode}",
+        )
+        LOG.warning(
+            "Scheduler: skipping daily_update because another run is active "
+            "(source=%s, mode=%s)",
+            source,
+            mode,
+        )
+        return None
+
+    lock_path = LOG_DIR / "daily_update.lock"
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("w", encoding="utf-8")
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                handle.close()
+                _UPDATE_THREAD_LOCK.release()
+                if exc.errno in (errno.EACCES, errno.EAGAIN):
+                    _append_run_log(
+                        "SKIP",
+                        (
+                            "daily_update skipped because another process holds "
+                            f"the lock source={source} mode={mode}"
+                        ),
+                    )
+                    LOG.warning(
+                        "Scheduler: skipping daily_update because lock is held "
+                        "(source=%s, mode=%s, lock=%s)",
+                        source,
+                        mode,
+                        lock_path,
+                    )
+                    return None
+                LOG.warning("Failed to lock %s: %s", lock_path, exc)
+                return None
+        handle.seek(0)
+        handle.truncate()
+        handle.write(
+            f"pid={os.getpid()} source={source} mode={mode} "
+            f"started={dt.datetime.now(dt.timezone.utc).isoformat()}\n"
+        )
+        handle.flush()
+        return handle
+    except Exception as exc:
+        _UPDATE_THREAD_LOCK.release()
+        LOG.warning("Failed to acquire daily_update lock %s: %s", lock_path, exc)
+        return None
+
+
+def _release_update_lock(handle) -> None:
+    try:
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+    finally:
+        _UPDATE_THREAD_LOCK.release()
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +203,17 @@ def _tail_text_file(path: Path, lines: int = 60, max_bytes: int = 64_000) -> lis
 
 
 def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
+    mode_norm = _normalize_update_mode(mode) or "full"
+    lock_handle = _acquire_update_lock(mode_norm, source)
+    if lock_handle is None:
+        return
+    try:
+        _run_daily_update_unlocked(mode_norm, source)
+    finally:
+        _release_update_lock(lock_handle)
+
+
+def _run_daily_update_unlocked(mode: str = "full", source: str = "scheduler") -> None:
     """Execute ``daily_update.sh`` with the given *mode*.
 
     Called by the APScheduler job or manually from the admin trigger

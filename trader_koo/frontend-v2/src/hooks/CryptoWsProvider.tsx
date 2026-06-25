@@ -1,20 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { CryptoPrice } from "../api/types";
-
-type CryptoWsListener = (data: unknown) => void;
-
-interface CryptoWsContextValue {
-  /** Broadcast crypto price ticks (header strip). */
-  prices: Record<string, CryptoPrice>;
-  connected: boolean;
-  /** Send a raw JSON message on the shared socket. */
-  send: (msg: unknown) => void;
-  /** Register a raw-message listener (for candle subscription logic). */
-  addListener: (fn: CryptoWsListener) => () => void;
-}
-
-const CryptoWsContext = createContext<CryptoWsContextValue | null>(null);
+import { CryptoWsContext } from "./cryptoWsContext";
+import type { CryptoWsListener } from "./cryptoWsContext";
 
 export function CryptoWsProvider({ children }: { children: ReactNode }) {
   const [prices, setPrices] = useState<Record<string, CryptoPrice>>({});
@@ -23,6 +11,7 @@ export function CryptoWsProvider({ children }: { children: ReactNode }) {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoff = useRef(1000);
   const listenersRef = useRef<Set<CryptoWsListener>>(new Set());
+  const reconnectRef = useRef<() => void>(() => {});
 
   const send = useCallback((msg: unknown) => {
     const ws = wsRef.current;
@@ -50,11 +39,9 @@ export function CryptoWsProvider({ children }: { children: ReactNode }) {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        // Broadcast price ticks for header strip
         if (data.symbol && typeof data.price === "number" && !data.type) {
           setPrices((prev) => ({ ...prev, [data.symbol]: data as CryptoPrice }));
         }
-        // Forward all messages to registered listeners (candle subscriptions etc.)
         for (const fn of listenersRef.current) {
           fn(data);
         }
@@ -68,13 +55,17 @@ export function CryptoWsProvider({ children }: { children: ReactNode }) {
       wsRef.current = null;
       reconnectTimer.current = setTimeout(() => {
         backoff.current = Math.min(backoff.current * 2, 30_000);
-        connect();
+        reconnectRef.current();
       }, backoff.current);
     };
 
     ws.onerror = () => ws.close();
     wsRef.current = ws;
   }, []);
+
+  useEffect(() => {
+    reconnectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     connect();
@@ -89,10 +80,4 @@ export function CryptoWsProvider({ children }: { children: ReactNode }) {
       {children}
     </CryptoWsContext.Provider>
   );
-}
-
-export function useCryptoWs(): CryptoWsContextValue {
-  const ctx = useContext(CryptoWsContext);
-  if (!ctx) throw new Error("useCryptoWs must be used within CryptoWsProvider");
-  return ctx;
 }

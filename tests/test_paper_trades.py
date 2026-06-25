@@ -411,6 +411,22 @@ class TestCreatePaperTrades:
         assert "stop" in str(trade[4]).lower()
         assert "%" in str(trade[5])
 
+    def test_stores_entry_rationale_log(self, conn):
+        rows = [_make_setup_row()]
+
+        inserted = create_paper_trades_from_report(
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+        )
+
+        assert inserted == 1
+        trade = conn.execute(
+            "SELECT entry_reason, entry_evidence, entry_risks FROM paper_trades WHERE ticker = 'AAPL'",
+        ).fetchone()
+        assert "AAPL long" in trade[0]
+        assert "critic" in trade[0].lower()
+        assert "Test setup" in trade[1]
+        assert "ML did not filter" in trade[2]
+
     def test_stores_bot_version_and_entry_context(self, conn):
         for idx in range(25):
             date = (dt.date(2026, 2, 18) + dt.timedelta(days=idx)).isoformat()
@@ -611,6 +627,25 @@ class TestMarkToMarket:
         # Short stop: fills at stop * (1 + exit_slippage) = 105 * 1.0005 = 105.0525
         assert trade[1] > 105.0  # slippage makes it worse than stop level
 
+    def test_profitable_short_stop_is_labeled_trailing_stop(self, conn):
+        """A stop tightened into profit should not be reviewed as a bad invalidation."""
+        self._insert_open_trade(conn, "AAPL", 100.0, direction="short", stop_loss=98.0, target_price=90.0)
+        _seed_price(conn, "AAPL", 97.0, high=98.5, low=96.0, open_=97.0)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status, exit_reason, pnl_pct, review_status, review_summary "
+            "FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "closed"
+        assert trade[1] == "trailing_stop"
+        assert trade[2] > 0
+        assert trade[3] == "trailing_stop"
+        assert "protective trailing stop" in str(trade[4]).lower()
+
     def test_intraday_low_triggers_short_target(self, conn):
         """Short target should trigger on intraday low."""
         self._insert_open_trade(conn, "AAPL", 100.0, direction="short", target_price=90.0, stop_loss=105.0)
@@ -686,6 +721,43 @@ class TestMarkToMarket:
         assert result["closed"] == 1
         status = conn.execute("SELECT status, exit_reason FROM paper_trades WHERE ticker='AAPL'").fetchone()
         assert status[0] == "target_hit"
+
+    def test_close_records_decision_memory_reflection(self, conn):
+        today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        entry_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=3)).strftime("%Y-%m-%d")
+        self._insert_open_trade(
+            conn,
+            "AAPL",
+            100.0,
+            target_price=110.0,
+            entry_date=entry_date,
+        )
+        conn.execute(
+            "UPDATE paper_trades SET setup_family = 'bullish_continuation' WHERE ticker = 'AAPL'"
+        )
+        _seed_price(conn, "SPY", 100.0, date=entry_date)
+        _seed_price(conn, "SPY", 105.0, date=today)
+        _seed_price(conn, "AAPL", 112.0, date=today)
+
+        result = mark_to_market(conn)
+        conn.commit()
+
+        assert result["closed"] == 1
+        reflection = conn.execute(
+            """
+            SELECT ticker, direction, setup_family, pnl_pct, spy_return_pct,
+                   alpha_vs_spy_pct, lesson_summary
+            FROM paper_trade_reflections
+            WHERE ticker = 'AAPL'
+            """
+        ).fetchone()
+        assert reflection[0] == "AAPL"
+        assert reflection[1] == "long"
+        assert reflection[2] == "bullish_continuation"
+        assert reflection[3] > 0
+        assert reflection[4] == pytest.approx(5.0)
+        assert reflection[5] > 0
+        assert "alpha vs SPY" in reflection[6]
 
     def test_triggers_expiry(self, conn):
         old_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=20)).strftime("%Y-%m-%d")
@@ -850,12 +922,16 @@ class TestListPaperTrades:
             """INSERT INTO paper_trades (
                    report_date, ticker, direction, entry_price, entry_date,
                    status, current_price, generated_ts, notes,
-                   ml_predicted_win_prob, ml_confidence, ml_signal
+                   ml_predicted_win_prob, ml_confidence, ml_signal,
+                   entry_reason, entry_evidence, entry_risks
                )
                VALUES (
                    '2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14',
                    'closed', 155.0, 'ts', 'Review breakout quality',
-                   0.62, 0.71, 'bullish'
+                   0.62, 0.71, 'bullish',
+                   'AAPL long test rationale',
+                   '["breakout evidence"]',
+                   '["event risk"]'
                )""",
         )
         conn.commit()
@@ -866,6 +942,9 @@ class TestListPaperTrades:
         assert result[0]["ml_predicted_win_prob"] == pytest.approx(0.62)
         assert result[0]["ml_confidence"] == pytest.approx(0.71)
         assert result[0]["ml_signal"] == "bullish"
+        assert result[0]["entry_reason"] == "AAPL long test rationale"
+        assert result[0]["entry_evidence"] == ["breakout evidence"]
+        assert result[0]["entry_risks"] == ["event risk"]
 
 
 # ── Summary ──────────────────────────────────────────────────────
@@ -975,6 +1054,82 @@ class TestPaperTradeSummary:
         assert baseline["hold_days"] == 10
         assert baseline["trades"] == 1
         assert baseline["return_pct"] == pytest.approx(10.0)
+
+    def test_summary_leads_with_spy_underperformance_feedback(self, conn):
+        base_date = dt.date.today() - dt.timedelta(days=30)
+        entry_date = base_date.isoformat()
+        exit_date = (base_date + dt.timedelta(days=10)).isoformat()
+        _seed_price(conn, "SPY", 100.0, date=entry_date)
+        _seed_price(conn, "SPY", 110.0, date=exit_date)
+        conn.execute(
+            """INSERT INTO paper_trades (
+                   report_date, ticker, direction, entry_price, entry_date,
+                   status, pnl_pct, r_multiple, exit_date, exit_reason,
+                   current_price, generated_ts, position_size_pct
+               )
+               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 1.0, 0.2, ?, 'expired', 101.0, 'ts', 8.0)""",
+            (entry_date, entry_date, exit_date),
+        )
+        conn.commit()
+
+        result = paper_trade_summary(conn)
+
+        assert result["feedback"][0]["kind"] == "benchmark"
+        assert result["feedback"][0]["severity"] == "high"
+        assert "trailing SPY" in result["feedback"][0]["title"]
+
+    def test_summary_includes_core_satellite_benchmark(self, conn):
+        base_date = dt.date.today() - dt.timedelta(days=30)
+        entry_date = base_date.isoformat()
+        exit_date = (base_date + dt.timedelta(days=10)).isoformat()
+        _seed_price(conn, "SPY", 100.0, date=entry_date)
+        _seed_price(conn, "SPY", 110.0, date=exit_date)
+        conn.execute(
+            """INSERT INTO paper_trades (
+                   report_date, ticker, direction, entry_price, entry_date,
+                   status, pnl_pct, r_multiple, exit_date, exit_reason,
+                   current_price, generated_ts, position_size_pct
+               )
+               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 10.0, 2.0, ?, 'target_hit', 110.0, 'ts', 10.0)""",
+            (entry_date, entry_date, exit_date),
+        )
+        conn.commit()
+
+        result = paper_trade_summary(conn)
+        core_satellite = result["benchmarks"]["core_satellite"]
+
+        assert core_satellite["core_allocation_pct"] == pytest.approx(70.0)
+        assert core_satellite["satellite_allocation_pct"] == pytest.approx(30.0)
+        assert core_satellite["core_return_pct"] == pytest.approx(10.05)
+        # Trade contributes 10% PnL on a 10% position = 1% satellite book return.
+        # Blended: 70% * 10.05 + 30% * 1.0 = 7.335 -> 7.33 rounded.
+        assert core_satellite["satellite_return_pct"] == pytest.approx(1.0)
+        assert core_satellite["total_return_pct"] == pytest.approx(7.33)
+        assert core_satellite["alpha_vs_spy_pct"] == pytest.approx(-2.72)
+
+    def test_summary_includes_recent_reflections(self, conn):
+        base_date = dt.date.today() - dt.timedelta(days=30)
+        entry_date = base_date.isoformat()
+        exit_date = (base_date + dt.timedelta(days=5)).isoformat()
+        conn.execute(
+            """
+            INSERT INTO paper_trade_reflections (
+                trade_id, ticker, direction, setup_family, entry_date, exit_date,
+                exit_reason, pnl_pct, r_multiple, spy_return_pct, alpha_vs_spy_pct,
+                lesson_summary
+            )
+            VALUES (99, 'AAPL', 'long', 'bullish_reversal', ?, ?, 'target_hit',
+                    4.0, 1.2, 1.0, 3.0, 'AAPL lesson')
+            """,
+            (entry_date, exit_date),
+        )
+        conn.commit()
+
+        result = paper_trade_summary(conn)
+
+        assert result["recent_reflections"][0]["trade_id"] == 99
+        assert result["recent_reflections"][0]["alpha_vs_spy_pct"] == pytest.approx(3.0)
+        assert result["recent_reflections"][0]["lesson_summary"] == "AAPL lesson"
 
     def test_summary_includes_edge_tables(self, conn):
         base_date = dt.date.today() - dt.timedelta(days=20)

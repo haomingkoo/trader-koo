@@ -1,11 +1,7 @@
 import type { RegimeContext, VixData, VixMetricsPayload } from "../../api/types";
 import Badge from "../ui/Badge";
 import Card from "../ui/Card";
-
-export const formatVixState = (value: string | null | undefined): string =>
-  (value ?? "unknown")
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+import { formatVixState } from "./vixUtils";
 
 const riskReadBadgeVariant = (
   read: string | null | undefined,

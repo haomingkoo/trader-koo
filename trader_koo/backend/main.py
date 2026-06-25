@@ -63,6 +63,7 @@ from trader_koo.backend.frontend_routes import SPA_ROUTE_PATHS
 from trader_koo.backend.utils import client_ip as _client_ip
 from trader_koo.backend.services.scheduler import create_scheduler
 from trader_koo.backend.services.pipeline import (
+    AUTO_RESUME_INTERRUPTED_PIPELINE,
     determine_resume_mode,
     ensure_pipeline_runs_schema,
     finish_pipeline_run,
@@ -354,7 +355,16 @@ async def lifespan(_app: FastAPI):
 
             # Determine resume mode and schedule it
             resume_mode = determine_resume_mode(interrupted)
-            if resume_mode:
+            if resume_mode and not AUTO_RESUME_INTERRUPTED_PIPELINE:
+                LOG.warning(
+                    "Startup auto-resume disabled; not queueing interrupted pipeline "
+                    "run_id=%s mode=%s stage=%s resume_mode=%s",
+                    interrupted_id,
+                    interrupted_mode,
+                    interrupted_stage,
+                    resume_mode,
+                )
+            elif resume_mode:
                 from trader_koo.backend.services.scheduler import _run_daily_update
                 resume_source = f"startup_resume:interrupted:{interrupted_id}"
                 job_id = f"resume_pipeline_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}"

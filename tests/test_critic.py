@@ -14,6 +14,8 @@ import pytest
 from trader_koo.paper_trade.critic import (
     CAUTION_FLAGS_HARD_BLOCK,
     CAUTION_FLAGS_WARN,
+    BENCHMARK_MIN_CLOSED_TRADES,
+    BENCHMARK_UNDERPERFORM_BLOCK_PP,
     CONVICTION_A_GRADE_SCORE,
     CONVICTION_A_HIGH,
     CONVICTION_A_MIN,
@@ -41,6 +43,7 @@ from trader_koo.paper_trade.critic import (
     _check_regime_alignment,
     _check_risk_reward,
     _check_rolling_expectancy,
+    _check_spy_benchmark,
     _check_volatility_environment,
     critic_review,
 )
@@ -105,7 +108,16 @@ def _make_conn() -> sqlite3.Connection:
             status TEXT DEFAULT 'open',
             pnl_pct REAL,
             setup_family TEXT,
-            exit_date TEXT
+            entry_date TEXT,
+            exit_date TEXT,
+            position_size_pct REAL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE price_daily (
+            ticker TEXT,
+            date TEXT,
+            close REAL
         )
     """)
     conn.commit()
@@ -114,8 +126,8 @@ def _make_conn() -> sqlite3.Connection:
 
 def _insert_closed(conn: sqlite3.Connection, pnl: float, family: str = "bullish_breakout", direction: str = "long") -> None:
     conn.execute(
-        "INSERT INTO paper_trades (ticker, direction, status, pnl_pct, setup_family, exit_date) "
-        "VALUES ('X', ?, 'closed', ?, ?, '2026-01-01')",
+        "INSERT INTO paper_trades (ticker, direction, status, pnl_pct, setup_family, entry_date, exit_date, position_size_pct) "
+        "VALUES ('X', ?, 'closed', ?, ?, '2026-01-01', '2026-01-01', 8.0)",
         (direction, pnl, family),
     )
     conn.commit()
@@ -404,6 +416,69 @@ class TestRollingExpectancy:
             _insert_closed(conn, pnl=1.0)
 
         passed, reason = _check_rolling_expectancy(conn)
+        assert passed is True, reason
+
+
+# ---------------------------------------------------------------------------
+# _check_spy_benchmark
+# ---------------------------------------------------------------------------
+
+class TestSpyBenchmark:
+    def test_insufficient_history_passes(self):
+        conn = _make_conn()
+        for _ in range(BENCHMARK_MIN_CLOSED_TRADES - 1):
+            _insert_closed(conn, pnl=1.0)
+
+        passed, reason = _check_spy_benchmark(conn)
+
+        assert passed is True
+        assert "insufficient" in reason.lower()
+
+    def test_underperformance_at_block_boundary_blocks(self):
+        conn = _make_conn()
+        conn.executemany(
+            "INSERT INTO price_daily (ticker, date, close) VALUES ('SPY', ?, ?)",
+            [("2026-01-01", 100.0), ("2026-01-20", 105.0)],
+        )
+        for idx in range(BENCHMARK_MIN_CLOSED_TRADES):
+            conn.execute(
+                """
+                INSERT INTO paper_trades (
+                    ticker, direction, status, pnl_pct, setup_family,
+                    entry_date, exit_date, position_size_pct
+                )
+                VALUES (?, 'long', 'closed', 0.0, 'bullish_breakout', '2026-01-01', '2026-01-20', 8.0)
+                """,
+                (f"T{idx}",),
+            )
+        conn.commit()
+
+        passed, reason = _check_spy_benchmark(conn)
+
+        assert passed is False
+        assert f"{BENCHMARK_UNDERPERFORM_BLOCK_PP:.2f}pp" in reason
+
+    def test_spread_above_block_boundary_passes(self):
+        conn = _make_conn()
+        conn.executemany(
+            "INSERT INTO price_daily (ticker, date, close) VALUES ('SPY', ?, ?)",
+            [("2026-01-01", 100.0), ("2026-01-20", 104.0)],
+        )
+        for idx in range(BENCHMARK_MIN_CLOSED_TRADES):
+            conn.execute(
+                """
+                INSERT INTO paper_trades (
+                    ticker, direction, status, pnl_pct, setup_family,
+                    entry_date, exit_date, position_size_pct
+                )
+                VALUES (?, 'long', 'closed', 0.0, 'bullish_breakout', '2026-01-01', '2026-01-20', 8.0)
+                """,
+                (f"T{idx}",),
+            )
+        conn.commit()
+
+        passed, reason = _check_spy_benchmark(conn)
+
         assert passed is True, reason
 
 
