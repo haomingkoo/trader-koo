@@ -18,7 +18,6 @@ import pandas as pd
 import pytest
 
 from trader_koo.db.sources import (
-    DataSource,
     DataSourceManager,
     FetchResult,
     PriceFetchError,
@@ -54,7 +53,7 @@ class TestDataSourceManager:
         with patch.object(manager, "_fetch_yfinance") as mock_yfinance:
             mock_yfinance.return_value = FetchResult(
                 data=sample_price_data,
-                source=DataSource.YFINANCE,
+                source="yfinance",
                 timestamp=datetime.now(),
                 success=True,
             )
@@ -62,7 +61,7 @@ class TestDataSourceManager:
             result = manager.fetch_ticker_data("AAPL", "2024-01-01")
 
             assert result.success
-            assert result.source == DataSource.YFINANCE
+            assert result.source == "yfinance"
             assert len(result.data) == 3
             mock_yfinance.assert_called_once()
 
@@ -74,7 +73,7 @@ class TestDataSourceManager:
         with patch.object(manager, "_fetch_yfinance") as mock_yfinance:
             mock_yfinance.return_value = FetchResult(
                 data=pd.DataFrame(),
-                source=DataSource.YFINANCE,
+                source="yfinance",
                 timestamp=datetime.now(),
                 success=False,
                 error="Connection timeout",
@@ -88,7 +87,7 @@ class TestDataSourceManager:
         with patch.object(manager, "_fetch_yfinance") as mock_yfinance:
             mock_yfinance.return_value = FetchResult(
                 data=pd.DataFrame(),
-                source=DataSource.YFINANCE,
+                source="yfinance",
                 timestamp=datetime.now(),
                 success=True,  # success=True but data is empty
             )
@@ -138,7 +137,7 @@ class TestSourceMetrics:
     """Test success/failure rate tracking."""
 
     def test_success_rate_calculation(self):
-        metrics = SourceMetrics(source=DataSource.YFINANCE)
+        metrics = SourceMetrics(source="yfinance")
 
         assert metrics.success_rate == 0.0
         assert metrics.failure_rate == 100.0
@@ -151,9 +150,9 @@ class TestSourceMetrics:
         assert metrics.failure_rate == 20.0
 
     def test_get_metrics(self, manager):
-        manager.metrics[DataSource.YFINANCE].total_attempts = 10
-        manager.metrics[DataSource.YFINANCE].successful_fetches = 9
-        manager.metrics[DataSource.YFINANCE].failed_fetches = 1
+        manager.metrics.total_attempts = 10
+        manager.metrics.successful_fetches = 9
+        manager.metrics.failed_fetches = 1
 
         metrics = manager.get_metrics()
 
@@ -170,7 +169,7 @@ class TestSourceMetrics:
             result = manager._fetch_yfinance("AAPL", "2024-01-01", None, False, 30.0)
 
             assert result.success
-            metrics = manager.metrics[DataSource.YFINANCE]
+            metrics = manager.metrics
             assert metrics.total_attempts == 1
             assert metrics.successful_fetches == 1
 
@@ -182,12 +181,12 @@ class TestAlerting:
         import logging
         caplog.set_level(logging.CRITICAL)
 
-        metrics = manager.metrics[DataSource.YFINANCE]
+        metrics = manager.metrics
         metrics.total_attempts = 20
         metrics.successful_fetches = 15
         metrics.failed_fetches = 5  # 25% failure rate
 
-        manager._check_and_alert(DataSource.YFINANCE)
+        manager._check_and_alert()
 
         assert any("PRICE SOURCE DEGRADED" in record.message for record in caplog.records)
 
@@ -195,12 +194,12 @@ class TestAlerting:
         import logging
         caplog.set_level(logging.CRITICAL)
 
-        metrics = manager.metrics[DataSource.YFINANCE]
+        metrics = manager.metrics
         metrics.total_attempts = 20
         metrics.successful_fetches = 19
         metrics.failed_fetches = 1  # 5% failure rate
 
-        manager._check_and_alert(DataSource.YFINANCE)
+        manager._check_and_alert()
 
         assert not any("PRICE SOURCE DEGRADED" in record.message for record in caplog.records)
 
@@ -208,17 +207,17 @@ class TestAlerting:
         import logging
         caplog.set_level(logging.CRITICAL)
 
-        metrics = manager.metrics[DataSource.YFINANCE]
+        metrics = manager.metrics
         metrics.total_attempts = 20
         metrics.successful_fetches = 15
         metrics.failed_fetches = 5
 
-        manager._check_and_alert(DataSource.YFINANCE)
+        manager._check_and_alert()
         assert any("PRICE SOURCE DEGRADED" in record.message for record in caplog.records)
 
         caplog.clear()
 
-        manager._check_and_alert(DataSource.YFINANCE)
+        manager._check_and_alert()
         assert not any("PRICE SOURCE DEGRADED" in record.message for record in caplog.records)
 
 
@@ -268,10 +267,10 @@ class TestGlobalInstance:
         assert manager1 is manager2
 
     def test_reset_metrics(self, manager):
-        manager.metrics[DataSource.YFINANCE].total_attempts = 10
-        manager.metrics[DataSource.YFINANCE].successful_fetches = 8
+        manager.metrics.total_attempts = 10
+        manager.metrics.successful_fetches = 8
 
         manager.reset_metrics()
 
-        assert manager.metrics[DataSource.YFINANCE].total_attempts == 0
-        assert manager.metrics[DataSource.YFINANCE].successful_fetches == 0
+        assert manager.metrics.total_attempts == 0
+        assert manager.metrics.successful_fetches == 0

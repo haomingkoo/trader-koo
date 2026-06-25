@@ -661,10 +661,10 @@ def fetch_price_daily(
     )
 
     LOG.info(
-        f"Fetched {ticker} from {result.source.value}: "
+        f"Fetched {ticker} from {result.source}: "
         f"{len(result.data)} rows"
     )
-    return result.data, result.source.value
+    return result.data, result.source
 
 
 def write_price_daily(
