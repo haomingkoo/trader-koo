@@ -16,7 +16,6 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from typing import Optional
 
 import pandas as pd
@@ -24,22 +23,20 @@ import yfinance as yf
 
 LOG = logging.getLogger(__name__)
 
+# yfinance is the only price source by design (see module docstring).
+SOURCE_NAME = "yfinance"
+
 # Hard timeout for any single yf.download call.  If the call does not
 # return within this many seconds, the thread is abandoned and the
 # ticker is marked as failed with a TimeoutError.
 _HARD_TIMEOUT_SEC = 60.0
 
 
-class DataSource(Enum):
-    """Data source enumeration."""
-    YFINANCE = "yfinance"
-
-
 @dataclass
 class FetchResult:
     """Result of a data fetch operation."""
     data: pd.DataFrame
-    source: DataSource
+    source: str
     timestamp: datetime
     success: bool
     error: Optional[str] = None
@@ -47,8 +44,8 @@ class FetchResult:
 
 @dataclass
 class SourceMetrics:
-    """Metrics for a data source."""
-    source: DataSource
+    """Success/failure tracking for the price source."""
+    source: str = SOURCE_NAME
     total_attempts: int = 0
     successful_fetches: int = 0
     failed_fetches: int = 0
@@ -76,11 +73,9 @@ class DataSourceManager:
     """
 
     def __init__(self) -> None:
-        self.metrics: dict[DataSource, SourceMetrics] = {
-            source: SourceMetrics(source=source) for source in DataSource
-        }
+        self.metrics = SourceMetrics()
         self._alert_threshold = 10.0
-        self._last_alert_time: dict[DataSource, float] = {}
+        self._last_alert_time = 0.0
         self._alert_cooldown = 3600
 
     def fetch_ticker_data(
@@ -98,7 +93,7 @@ class DataSourceManager:
         recording zero rows.
         """
         result = self._fetch_yfinance(ticker, start, end, auto_adjust, timeout_sec)
-        self._check_and_alert(DataSource.YFINANCE)
+        self._check_and_alert()
 
         if not result.success or result.data.empty:
             raise PriceFetchError(
@@ -116,7 +111,7 @@ class DataSourceManager:
         timeout_sec: float,
     ) -> FetchResult:
         """Fetch data from yfinance."""
-        metrics = self.metrics[DataSource.YFINANCE]
+        metrics = self.metrics
         metrics.total_attempts += 1
 
         try:
@@ -147,7 +142,7 @@ class DataSourceManager:
                 metrics.failed_fetches += 1
                 return FetchResult(
                     data=pd.DataFrame(),
-                    source=DataSource.YFINANCE,
+                    source=SOURCE_NAME,
                     timestamp=datetime.now(),
                     success=False,
                     error=f"Empty response from yfinance for {ticker}",
@@ -160,7 +155,7 @@ class DataSourceManager:
 
             return FetchResult(
                 data=df,
-                source=DataSource.YFINANCE,
+                source=SOURCE_NAME,
                 timestamp=datetime.now(),
                 success=True,
             )
@@ -170,7 +165,7 @@ class DataSourceManager:
             LOG.error(f"yfinance fetch failed for {ticker}: {e}")
             return FetchResult(
                 data=pd.DataFrame(),
-                source=DataSource.YFINANCE,
+                source=SOURCE_NAME,
                 timestamp=datetime.now(),
                 success=False,
                 error=str(e),
@@ -265,9 +260,9 @@ class DataSourceManager:
 
         return df_copy[required]
 
-    def _check_and_alert(self, source: DataSource) -> None:
-        """Log a CRITICAL alert when failure rate exceeds threshold."""
-        metrics = self.metrics[source]
+    def _check_and_alert(self) -> None:
+        """Log a CRITICAL alert when the failure rate exceeds threshold."""
+        metrics = self.metrics
 
         if metrics.total_attempts < 10:
             return
@@ -275,39 +270,36 @@ class DataSourceManager:
         failure_rate = metrics.failure_rate
 
         if failure_rate > self._alert_threshold:
-            last_alert = self._last_alert_time.get(source, 0)
-            if time.time() - last_alert < self._alert_cooldown:
+            if time.time() - self._last_alert_time < self._alert_cooldown:
                 return
 
             LOG.critical(
                 "PRICE SOURCE DEGRADED: %s failure rate %.1f%% exceeds %.1f%% "
                 "threshold (attempts=%d, failures=%d). "
                 "Check yfinance version and Yahoo Finance API status.",
-                source.value,
+                metrics.source,
                 failure_rate,
                 self._alert_threshold,
                 metrics.total_attempts,
                 metrics.failed_fetches,
             )
-            self._last_alert_time[source] = time.time()
+            self._last_alert_time = time.time()
 
     def get_metrics(self) -> dict[str, dict]:
+        metrics = self.metrics
         return {
-            source.value: {
+            metrics.source: {
                 "total_attempts": metrics.total_attempts,
                 "successful_fetches": metrics.successful_fetches,
                 "failed_fetches": metrics.failed_fetches,
                 "success_rate": round(metrics.success_rate, 2),
                 "failure_rate": round(metrics.failure_rate, 2),
             }
-            for source, metrics in self.metrics.items()
         }
 
     def reset_metrics(self) -> None:
-        self.metrics = {
-            source: SourceMetrics(source=source) for source in DataSource
-        }
-        self._last_alert_time.clear()
+        self.metrics = SourceMetrics()
+        self._last_alert_time = 0.0
 
 
 # Global instance
