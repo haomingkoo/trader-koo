@@ -65,6 +65,7 @@ export default function ChartToolbar({
             <button
               key={tf}
               onClick={() => onSelectTimeframe(tf)}
+              aria-pressed={timeframe === tf}
               className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                 timeframe === tf
                   ? "bg-[var(--blue)] text-white"

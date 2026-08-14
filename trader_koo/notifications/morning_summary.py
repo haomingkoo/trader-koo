@@ -985,6 +985,8 @@ def send_morning_summary(
                             f"{PUBLIC_BASE_URL}/chart?ticker={quote_plus(ticker)}"
                             f"&timeframe={quote_plus(timeframe)}"
                             f"&threshold={quote_plus(f'{threshold:g}')}"
+                            f"&asof={quote_plus(as_of)}"
+                            f"&value={quote_plus(f'{value:g}')}"
                         )
                         photo_ok = send_photo(
                             png,

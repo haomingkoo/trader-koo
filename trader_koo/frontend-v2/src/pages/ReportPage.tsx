@@ -124,10 +124,12 @@ export default function ReportPage() {
           <KeyChangesSection changes={signals.tonight_key_changes ?? []} />
 
           {((signals.green_barrier_coverage?.stale_skipped_count ?? 0) > 0 ||
-            (signals.green_barrier_coverage?.invalid_date_skipped_count ?? 0) > 0) && (
+            (signals.green_barrier_coverage?.invalid_date_skipped_count ?? 0) > 0 ||
+            (signals.green_barrier_coverage?.insufficient_history_skipped_count ?? 0) > 0) && (
             <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-3 text-xs text-[var(--amber)]">
               Green Barrier coverage is incomplete: {signals.green_barrier_coverage?.stale_skipped_count ?? 0} stale and{" "}
-              {signals.green_barrier_coverage?.invalid_date_skipped_count ?? 0} invalid-date ticker(s) skipped.
+              {signals.green_barrier_coverage?.invalid_date_skipped_count ?? 0} invalid-date ticker(s), plus{" "}
+              {signals.green_barrier_coverage?.insufficient_history_skipped_count ?? 0} ticker/timeframe pair(s) with insufficient history skipped.
             </div>
           )}
 
@@ -144,15 +146,15 @@ export default function ReportPage() {
                   </p>
                 </div>
                 <span className="rounded-full border border-[var(--green)]/25 px-2.5 py-1 text-xs font-semibold text-[var(--green)]">
-                  {signals.green_barrier_hits?.length} hits
+                  {signals.green_barrier_hits?.length} {signals.green_barrier_hits?.length === 1 ? "hit" : "hits"}
                 </span>
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {signals.green_barrier_hits?.slice(0, 12).map((hit) => (
                   <Link
                     key={`${hit.ticker}-${hit.timeframe}`}
-                    to={`/chart?ticker=${encodeURIComponent(hit.ticker)}&timeframe=${hit.timeframe}&threshold=${encodeURIComponent(hit.threshold)}`}
-                    className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2 transition-colors hover:border-[var(--green)]/45"
+                    to={`/chart?ticker=${encodeURIComponent(hit.ticker)}&timeframe=${hit.timeframe}&threshold=${encodeURIComponent(hit.threshold)}&asof=${encodeURIComponent(hit.asof)}&value=${encodeURIComponent(hit.value)}`}
+                    className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2 transition-colors hover:border-[var(--green)]/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--green)]"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-mono text-sm font-bold text-[var(--text)]">

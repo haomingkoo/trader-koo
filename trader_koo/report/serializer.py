@@ -221,6 +221,7 @@ def to_markdown(report: dict[str, Any]) -> str:
             "scanned_ticker_count",
             "stale_skipped_count",
             "invalid_date_skipped_count",
+            "insufficient_history_skipped_count",
         ):
             lines.append(_md_line(key, green_barrier_coverage.get(key)))
         stale_tickers = green_barrier_coverage.get("stale_skipped_tickers")

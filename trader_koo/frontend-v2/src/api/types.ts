@@ -353,6 +353,7 @@ export interface GreenBarrierCoverage {
   stale_skipped_count: number;
   stale_skipped_tickers: string[];
   invalid_date_skipped_count: number;
+  insufficient_history_skipped_count: number;
 }
 
 export interface ReportLatest {
