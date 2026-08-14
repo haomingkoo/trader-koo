@@ -10,9 +10,7 @@ import {
   useCryptoOpenInterest,
 } from "../api/hooks";
 import type { CryptoIndicators } from "../api/types";
-import {
-  CryptoPriceCard,
-} from "../components/crypto/CryptoInsightCards";
+import { CryptoPriceCard } from "../components/crypto/CryptoPriceCards";
 import CryptoAnalyticsPanels from "../components/crypto/CryptoAnalyticsPanels";
 import CryptoToolbar from "../components/crypto/CryptoToolbar";
 import CryptoChartPanel from "../components/crypto/CryptoChartPanel";

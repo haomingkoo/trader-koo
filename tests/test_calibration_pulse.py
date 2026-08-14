@@ -1,6 +1,7 @@
 """Tests for the calibration pulse module."""
 from __future__ import annotations
 
+import datetime as dt
 import sqlite3
 
 import pytest
@@ -56,11 +57,12 @@ def _make_conn() -> sqlite3.Connection:
 
 
 def _seed_eval(conn: sqlite3.Connection, family: str, direction: str, returns: list[float]) -> None:
+    asof_date = dt.datetime.now(dt.timezone.utc).date().isoformat()
     for ret in returns:
         conn.execute(
             "INSERT INTO setup_call_evaluations (asof_date, setup_family, call_direction, "
-            "status, direction_hit, signed_return_pct) VALUES ('2026-04-01', ?, ?, 'scored', ?, ?)",
-            (family, direction, 1 if ret > 0 else 0, ret),
+            "status, direction_hit, signed_return_pct) VALUES (?, ?, ?, 'scored', ?, ?)",
+            (asof_date, family, direction, 1 if ret > 0 else 0, ret),
         )
     conn.commit()
 

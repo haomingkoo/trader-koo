@@ -328,6 +328,31 @@ export interface ReportSignals {
   volatility_context?: Record<string, unknown>;
   market_breadth?: Record<string, unknown>;
   sector_heatmap?: SectorHeatmapRow[];
+  green_barrier_hits?: GreenBarrierHit[];
+  green_barrier_coverage?: GreenBarrierCoverage;
+}
+
+export interface GreenBarrierHit {
+  ticker: string;
+  timeframe: "weekly" | "monthly";
+  period: number;
+  value: number;
+  threshold: number;
+  asof: string;
+  close: number;
+  distance_to_barrier: number;
+  age_days: number;
+}
+
+export interface GreenBarrierCoverage {
+  scan_asof: string;
+  threshold: number;
+  max_age_days: number;
+  source_ticker_count: number;
+  scanned_ticker_count: number;
+  stale_skipped_count: number;
+  stale_skipped_tickers: string[];
+  invalid_date_skipped_count: number;
 }
 
 export interface ReportLatest {

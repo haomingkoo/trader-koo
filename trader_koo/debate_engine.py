@@ -128,7 +128,8 @@ def _trend_role(row: dict[str, Any]) -> dict[str, Any]:
 
 def _momentum_role(row: dict[str, Any]) -> dict[str, Any]:
     pct_change = _to_float(row.get("pct_change")) or 0.0
-    volume_ratio = _to_float(row.get("volume_ratio_20")) or 1.0
+    volume_ratio_v = _to_float(row.get("volume_ratio_20"))
+    volume_ratio = 1.0 if volume_ratio_v is None else volume_ratio_v
     candle_bias = str(row.get("candle_bias") or "neutral").lower()
     stretch = str(row.get("stretch_state") or "normal").lower()
     pct_vs_ma20 = _to_float(row.get("pct_vs_ma20"))
@@ -307,17 +308,11 @@ def _risk_role(row: dict[str, Any]) -> dict[str, Any]:
         score += 0.1
         evidence.append("fresh context aligned")
 
-    if score <= -0.25:
-        stance = "bearish"
-    elif score >= 0.18:
-        stance = "bullish"
-    else:
-        stance = "neutral"
-
     confidence = _clamp(0.45 + abs(score) * 0.7, 0.35, 0.9)
     return {
         "role": "risk_manager",
-        "stance": stance,
+        # Risk posture controls readiness through flags; it is not price direction.
+        "stance": "neutral",
         "confidence": round(confidence, 2),
         "evidence": evidence[:4],
         "risk_flags": risks[:5],
@@ -430,6 +425,8 @@ def _bull_researcher(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[s
 
     # Look for bullish signals across all analyst reports
     for role in roles:
+        if role.get("role") == "risk_manager":
+            continue
         stance = str(role.get("stance") or "neutral")
         conf = _to_float(role.get("confidence")) or 0.0
         role_evidence = role.get("evidence") or []
@@ -461,12 +458,12 @@ def _bear_researcher(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[s
         conf = _to_float(role.get("confidence")) or 0.0
         role_risks = role.get("risk_flags") or []
 
-        if stance == "bearish":
+        if role.get("role") == "risk_manager":
+            risks.extend(role_risks[:2])
+        elif stance == "bearish":
             score += conf * (_to_float(role.get("weight")) or 0.0)
             risks.extend(role_risks[:2])
         elif len(role_risks) > 0:
-            # Bear researcher is skeptical - even neutral roles with risks matter
-            score += 0.1 * len(role_risks)
             risks.extend(role_risks[:2])
 
     # Bear researcher is skeptical - amplify negative signals
@@ -475,12 +472,11 @@ def _bear_researcher(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[s
     # Additional skepticism checks
     pct_vs_ma20 = _to_float(row.get("pct_vs_ma20"))
     if pct_vs_ma20 is not None and pct_vs_ma20 > 8.0:
-        score += 0.2
         risks.append("overextended vs MA20")
 
-    volume_ratio = _to_float(row.get("volume_ratio_20")) or 1.0
+    volume_ratio_v = _to_float(row.get("volume_ratio_20"))
+    volume_ratio = 1.0 if volume_ratio_v is None else volume_ratio_v
     if volume_ratio < 0.7:
-        score += 0.15
         risks.append("weak volume confirmation")
 
     return {
@@ -511,20 +507,28 @@ def _aggregate_roles(roles: list[dict[str, Any]], row: dict[str, Any]) -> dict[s
     else:
         consensus_bias = "neutral"
 
-    # Step 3: Calculate agreement based on researcher alignment
-    if bull["stance"] == bear["stance"]:
-        # Both agree (rare but possible)
-        agreement_score = 100.0
-    elif bull["stance"] == "neutral" or bear["stance"] == "neutral":
-        # One is neutral
-        agreement_score = 65.0
-    else:
-        # They disagree (expected) - agreement based on confidence gap
-        conf_gap = abs(bull["confidence"] - bear["confidence"])
-        agreement_score = _clamp(50.0 + conf_gap * 50.0, 40.0, 85.0)
+    # Step 3: Calculate agreement from directional analyst votes. Risk posture is
+    # deliberately excluded because caution is not a bullish or bearish vote.
+    directional_roles = [
+        role
+        for role in roles
+        if role.get("role") != "risk_manager"
+        and role.get("stance") in {"bullish", "bearish"}
+    ]
+    directional_weight = sum(_to_float(role.get("weight")) or 0.0 for role in directional_roles)
+    supporting_weight = sum(
+        _to_float(role.get("weight")) or 0.0
+        for role in directional_roles
+        if role.get("stance") == consensus_bias
+    )
+    agreement_score = (
+        supporting_weight / directional_weight * 100.0
+        if directional_weight > 0.0 and consensus_bias in {"bullish", "bearish"}
+        else 0.0
+    )
 
     # Step 4: Penalize unanimous agreement from analysts (suspicious)
-    analyst_stances = [r.get("stance") for r in roles if r.get("stance") != "neutral"]
+    analyst_stances = [role.get("stance") for role in directional_roles]
     if len(analyst_stances) >= 4 and len(set(analyst_stances)) == 1:
         # All analysts agree - reduce agreement score (likely missing something)
         agreement_score *= 0.75

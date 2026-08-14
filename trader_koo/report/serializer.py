@@ -193,6 +193,39 @@ def to_markdown(report: dict[str, Any]) -> str:
         _render_delta_section("## YOLO Pattern Delta", delta)
 
     signals = report.get("signals", {})
+    green_barrier_hits = signals.get("green_barrier_hits", [])
+    if isinstance(green_barrier_hits, list) and green_barrier_hits:
+        lines.append("")
+        lines.append("## Green Barrier Current Conditions")
+        lines.append("Williams %R(14) readings at or below the configured near-barrier threshold. Repeated daily while active. Research context only.")
+        lines.append("")
+        lines.append("| ticker | timeframe | Williams %R | threshold | distance to -100 | as of | close |")
+        lines.append("|---|---|---:|---:|---:|---|---:|")
+        for row in green_barrier_hits:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"| {row.get('ticker', '-')} | {row.get('timeframe', '-')} | {row.get('value', '-')} | "
+                f"{row.get('threshold', '-')} | {row.get('distance_to_barrier', '-')} | "
+                f"{row.get('asof', '-')} | {row.get('close', '-')} |"
+            )
+    green_barrier_coverage = signals.get("green_barrier_coverage", {})
+    if isinstance(green_barrier_coverage, dict) and green_barrier_coverage:
+        lines.append("")
+        lines.append("### Green Barrier Scan Coverage")
+        for key in (
+            "scan_asof",
+            "threshold",
+            "max_age_days",
+            "source_ticker_count",
+            "scanned_ticker_count",
+            "stale_skipped_count",
+            "invalid_date_skipped_count",
+        ):
+            lines.append(_md_line(key, green_barrier_coverage.get(key)))
+        stale_tickers = green_barrier_coverage.get("stale_skipped_tickers")
+        if isinstance(stale_tickers, list) and stale_tickers:
+            lines.append(_md_line("stale_skipped_tickers", ", ".join(map(str, stale_tickers))))
     breadth = signals.get("market_breadth", {})
     if breadth:
         lines.append("")

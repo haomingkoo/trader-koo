@@ -6,13 +6,15 @@ import type {
 } from "../../api/types";
 import {
   BollingerCard,
-  BtcSpyCorrelationCard,
-  CryptoBreadthCard,
   MacdCard,
   RsiGauge,
-  StructureCard,
   VwapSmaCard,
-} from "./CryptoInsightCards";
+} from "./CryptoIndicatorCards";
+import {
+  BtcSpyCorrelationCard,
+  CryptoBreadthCard,
+  StructureCard,
+} from "./CryptoStructureCards";
 
 interface CryptoAnalyticsPanelsProps {
   structure: CryptoStructurePayload | undefined;

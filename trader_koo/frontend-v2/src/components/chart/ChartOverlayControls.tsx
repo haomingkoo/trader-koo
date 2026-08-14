@@ -46,7 +46,7 @@ export default function ChartOverlayControls({
       })}
       {barCount > 0 && (
         <span className="text-xs text-[var(--muted)]">
-          Default view opens on the latest 3 months.
+          The default range adapts to the selected timeframe.
         </span>
       )}
     </div>

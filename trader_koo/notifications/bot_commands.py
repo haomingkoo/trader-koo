@@ -25,6 +25,7 @@ import httpx
 from trader_koo.config import env_int
 from trader_koo.notifications.finnhub import fetch_finnhub_quote
 from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
+from trader_koo.notifications.telegram import PUBLIC_BASE_URL
 
 LOG = logging.getLogger("trader_koo.notifications.bot_commands")
 
@@ -40,11 +41,6 @@ LONG_POLL_TIMEOUT_SEC = env_int(
 SEND_TIMEOUT_SEC = 15
 MIN_RESPONSE_INTERVAL_SEC = 1.0
 
-PUBLIC_BASE_URL = (
-    os.getenv("TRADER_KOO_PUBLIC_BASE_URL")
-    or os.getenv("TRADER_KOO_PUBLIC_URL")
-    or "https://trader.kooexperience.com"
-).rstrip("/")
 MAX_CALLBACK_DATA_LEN = 64
 
 InlineKeyboardMarkup = dict[str, list[list[dict[str, str]]]]

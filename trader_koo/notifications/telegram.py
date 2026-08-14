@@ -57,6 +57,49 @@ def send_message(
     )
 
 
+def send_photo(
+    photo: bytes,
+    *,
+    caption: str = "",
+    filename: str = "chart.png",
+    parse_mode: str = "Markdown",
+    reply_markup: dict[str, Any] | None = None,
+) -> bool:
+    """Upload PNG/JPEG bytes to the configured Telegram chat."""
+    creds = _get_credentials()
+    if creds is None or not photo:
+        return False
+    token, chat_id = creds
+    url = f"{TELEGRAM_API_BASE}/bot{token}/sendPhoto"
+    data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "caption": caption[:1024],
+        "parse_mode": parse_mode,
+    }
+    if reply_markup:
+        import json
+
+        data["reply_markup"] = json.dumps(reply_markup)
+    try:
+        with httpx.Client(timeout=SEND_TIMEOUT_SEC) as client:
+            resp = client.post(
+                url,
+                data=data,
+                files={"photo": (filename, photo, "image/png")},
+            )
+        if resp.status_code != 200:
+            LOG.error("Telegram photo API returned %d: %s", resp.status_code, resp.text[:300])
+            return False
+        LOG.info("Telegram photo sent successfully")
+        return True
+    except httpx.HTTPError as exc:
+        LOG.error("Telegram photo send failed (HTTP): %s", exc)
+        return False
+    except Exception as exc:
+        LOG.error("Telegram photo send failed (unexpected): %s", exc)
+        return False
+
+
 # ------------------------------------------------------------------
 # Low-level send
 # ------------------------------------------------------------------

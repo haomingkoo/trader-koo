@@ -9,7 +9,6 @@ import json
 import os
 import sqlite3
 import datetime as dt
-from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -132,37 +131,6 @@ class AuditExporter:
         filepath.write_text(data, encoding="utf-8")
 
         return str(filepath)
-
-
-def schedule_daily_export(
-    logger: AuditLogger,
-    exporter: AuditExporter,
-    retention_days: int = 90,
-) -> dict[str, Any]:
-    """
-    Export logs older than retention period to external storage.
-
-    This should be called daily to archive old logs before they are deleted.
-
-    Args:
-        logger: AuditLogger instance
-        exporter: AuditExporter instance
-        retention_days: Days to retain in database
-
-    Returns:
-        Export result
-    """
-    # Export logs that are about to be deleted (older than retention - 1 day)
-    cutoff_date = dt.datetime.now(dt.timezone.utc) - timedelta(days=retention_days - 1)
-    start_date = (cutoff_date - timedelta(days=1)).strftime("%Y-%m-%d")
-    end_date = cutoff_date.strftime("%Y-%m-%d")
-
-    return exporter.export_logs(
-        logger,
-        start_date=start_date,
-        end_date=end_date,
-        export_format="jsonl",
-    )
 
 
 def get_exporter_from_env() -> AuditExporter:
