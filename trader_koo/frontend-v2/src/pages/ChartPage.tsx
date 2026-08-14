@@ -78,6 +78,14 @@ export default function ChartPage() {
       ? parsedThreshold
       : -98;
   });
+  const [reportGreenBarrierSnapshot] = useState(() => {
+    const asof = searchParams.get("asof")?.trim() ?? "";
+    const rawValue = searchParams.get("value");
+    const value = rawValue === null ? Number.NaN : Number(rawValue);
+    return /^\d{4}-\d{2}-\d{2}$/.test(asof) && Number.isFinite(value)
+      ? { asof, value }
+      : null;
+  });
   const [compactChart, setCompactChart] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768,
   );
@@ -246,6 +254,11 @@ export default function ChartPage() {
         ? resampleToWeekly(livePayload?.chart ?? [])
         : livePayload?.chart ?? []
   ).length;
+  const reportSnapshotMatches = reportGreenBarrierSnapshot && chartResult
+    ? chartResult.greenBarrier.asof === reportGreenBarrierSnapshot.asof &&
+      chartResult.greenBarrier.value !== null &&
+      Math.abs(chartResult.greenBarrier.value - reportGreenBarrierSnapshot.value) <= 0.11
+    : null;
 
   return (
     <div className="space-y-6">
@@ -270,6 +283,23 @@ export default function ChartPage() {
           Price data as of <strong>{freshness.latest_price_date}</strong>
           {freshness.age_hours != null && ` (${freshness.age_hours < 24 ? `${freshness.age_hours.toFixed(0)}h ago` : `${(freshness.age_hours / 24).toFixed(1)}d ago`})`}
           {freshness.is_stale && " — STALE"}
+        </div>
+      )}
+
+      {reportGreenBarrierSnapshot && (
+        <div
+          role="status"
+          className={`rounded-lg border px-3 py-2 text-xs ${
+            reportSnapshotMatches
+              ? "border-[var(--green)]/30 bg-[var(--green)]/5 text-[var(--green)]"
+              : "border-[var(--amber)]/30 bg-[var(--amber)]/5 text-[var(--amber)]"
+          }`}
+        >
+          Report snapshot: Williams %R {reportGreenBarrierSnapshot.value.toFixed(1)} as of{" "}
+          {reportGreenBarrierSnapshot.asof}.{" "}
+          {reportSnapshotMatches
+            ? "The plotted snapshot matches the report."
+            : "The loaded chart no longer matches that snapshot; the threshold is context only."}
         </div>
       )}
 

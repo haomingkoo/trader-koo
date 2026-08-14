@@ -141,8 +141,9 @@ def test_morning_summary_sends_native_photo_attachment(tmp_path: Path) -> None:
     assert send_image.call_count == 1
     assert send_image.call_args.kwargs["filename"] == "green-barrier-HIT-monthly.png"
     assert send_image.call_args.kwargs["caption"].startswith("🟢")
-    assert send_image.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["url"].endswith(
-        "/chart?ticker=HIT&timeframe=monthly&threshold=-98"
+    chart_url = send_image.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["url"]
+    assert chart_url.endswith(
+        "/chart?ticker=HIT&timeframe=monthly&threshold=-98&asof=2025-06-30&value=-100"
     )
     assert "Current Condition" in send_image.call_args.kwargs["caption"]
 
@@ -182,7 +183,32 @@ def test_scan_snapshot_reports_incomplete_coverage(tmp_path: Path) -> None:
         "stale_skipped_count": 2,
         "stale_skipped_tickers": ["CLEAR", "HIT"],
         "invalid_date_skipped_count": 0,
+        "insufficient_history_skipped_count": 0,
     }
+
+
+def test_scan_snapshot_counts_insufficient_timeframe_history(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "short.db")
+    conn.execute(
+        "CREATE TABLE price_daily (ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)"
+    )
+    rows = [
+        ("SHORT", date.date().isoformat(), 10, 11, 9, 10, 100)
+        for date in pd.date_range("2026-08-01", periods=10, freq="D")
+    ]
+    conn.executemany("INSERT INTO price_daily VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    try:
+        snapshot = scan_green_barrier_snapshot(
+            conn,
+            timeframes=("weekly", "monthly"),
+            as_of=pd.Timestamp("2026-08-10").date(),
+        )
+    finally:
+        conn.close()
+
+    assert snapshot["coverage"]["scanned_ticker_count"] == 1
+    assert snapshot["coverage"]["insufficient_history_skipped_count"] == 2
 
 
 def test_chart_is_bound_to_report_asof_and_value(tmp_path: Path) -> None:

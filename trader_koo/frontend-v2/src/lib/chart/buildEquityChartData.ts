@@ -667,8 +667,10 @@ export function buildChartData(
     -100,
     Math.min(0, greenBarrierThreshold),
   );
+  let latestWilliamsValue: number | null = null;
   if (overlays.greenBarrier) {
     const williams = computeWilliamsPercentR(high, low, close);
+    latestWilliamsValue = lastFinite(williams);
     traces.push({
       type: "scatter",
       mode: "lines",
@@ -785,6 +787,8 @@ export function buildChartData(
         line: { color: "#ffcd5c", width: 1.5, dash: "dash" },
       });
     }
+    const conditionIsCurrent =
+      latestWilliamsValue !== null && latestWilliamsValue <= activeGreenBarrierThreshold;
     if (!compactMode) {
       annotations.push(
         {
@@ -795,7 +799,8 @@ export function buildChartData(
           text: "BARRIER  -100",
           showarrow: false,
           xanchor: "right",
-          yanchor: "bottom",
+          yanchor: "top",
+          yshift: -4,
           font: { color: "#38d39f", size: 10 },
         },
         {
@@ -803,13 +808,27 @@ export function buildChartData(
           yref: williamsAxis,
           x: 0.01,
           y: activeGreenBarrierThreshold,
-          text: `CURRENT CONDITION ≤ ${activeGreenBarrierThreshold}`,
+          text: `${conditionIsCurrent ? "CURRENT CONDITION" : "TRIGGER"} ≤ ${activeGreenBarrierThreshold}`,
           showarrow: false,
           xanchor: "left",
-          yanchor: "top",
+          yanchor: "bottom",
+          yshift: 4,
           font: { color: "#ffcd5c", size: 10 },
         },
       );
+    } else {
+      annotations.push({
+        xref: "paper",
+        yref: williamsAxis,
+        x: 0.02,
+        y: activeGreenBarrierThreshold,
+        text: `${conditionIsCurrent ? "CURRENT" : "TRIGGER"} ≤ ${activeGreenBarrierThreshold}`,
+        showarrow: false,
+        xanchor: "left",
+        yanchor: "bottom",
+        yshift: 3,
+        font: { color: "#ffcd5c", size: 9 },
+      });
     }
   }
 
@@ -1248,7 +1267,7 @@ export function buildChartData(
     plot_bgcolor: "transparent",
     uirevision: `${ticker}-${timeframe}`,
     font: { color: "#8ea0bd", size: 11 },
-    margin: compactMode ? { t: 18, r: 100, b: 44, l: 52 } : { t: 40, r: 200, b: 50, l: 60 },
+    margin: compactMode ? { t: 18, r: 24, b: 44, l: 40 } : { t: 40, r: 200, b: 50, l: 60 },
     dragmode: "zoom" as const,
     legend: {
       orientation: "h" as const,
@@ -1332,5 +1351,14 @@ export function buildChartData(
     };
   }
 
-  return { traces, layout };
+  return {
+    traces,
+    layout,
+    greenBarrier: {
+      asof: chart.at(-1)?.date ?? null,
+      value: latestWilliamsValue,
+      isActive:
+        latestWilliamsValue !== null && latestWilliamsValue <= activeGreenBarrierThreshold,
+    },
+  };
 }

@@ -128,6 +128,7 @@ def scan_green_barrier_snapshot(
         "stale_skipped_count": 0,
         "stale_skipped_tickers": [],
         "invalid_date_skipped_count": 0,
+        "insufficient_history_skipped_count": 0,
     }
     if daily.empty:
         return {"hits": [], "coverage": coverage}
@@ -147,6 +148,7 @@ def scan_green_barrier_snapshot(
         for timeframe in timeframes:
             bars = resample_ohlcv(ticker_daily, timeframe)
             if len(bars) < GREEN_BARRIER_PERIOD:
+                coverage["insufficient_history_skipped_count"] += 1
                 continue
             value = compute_williams_percent_r(bars).iloc[-1]
             if not np.isfinite(value) or float(value) > configured_threshold:

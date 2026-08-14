@@ -30,6 +30,7 @@ export default function ChartOverlayControls({
             key={option.key}
             type="button"
             disabled={unavailable}
+            aria-pressed={active}
             title={unavailable ? `Needs ${option.minBars} bars on this timeframe` : undefined}
             onClick={() => onToggleOverlay(option.key)}
             className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${

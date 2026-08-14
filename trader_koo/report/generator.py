@@ -269,6 +269,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         if (
             int(coverage.get("stale_skipped_count") or 0) > 0
             or int(coverage.get("invalid_date_skipped_count") or 0) > 0
+            or int(coverage.get("insufficient_history_skipped_count") or 0) > 0
         ):
             _report_warnings.append("green_barrier_incomplete_coverage")
     except Exception as exc:
@@ -1420,8 +1421,9 @@ def fetch_report_payload(
 
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
-        if "green_barrier_incomplete_coverage" in _report_warnings:
-            payload["warnings"].append("green_barrier_incomplete_coverage")
+        for warning in ("green_barrier_incomplete_coverage", "green_barrier_scan_failed"):
+            if warning in _report_warnings:
+                payload["warnings"].append(warning)
         if SETUP_EVAL_ENABLED:
             eval_summary: dict[str, Any] = {"enabled": True, "scored_calls": 0, "open_calls": 0}
             try:
