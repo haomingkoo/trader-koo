@@ -20,13 +20,20 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
 from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
-from trader_koo.notifications.telegram import is_configured, send_message
+from trader_koo.notifications.telegram import (
+    PUBLIC_BASE_URL,
+    is_configured,
+    send_message,
+    send_photo,
+)
 
 LOG = logging.getLogger("trader_koo.notifications.morning_summary")
 
@@ -37,6 +44,53 @@ _SGT = dt.timezone(dt.timedelta(hours=8))
 # the previous day during EST, or 20:00 ET during EDT.  The *next* open is
 # ~13.5 h away (EST) or ~12.5 h (EDT).  We calculate dynamically below.
 _ET = dt.timezone(dt.timedelta(hours=-5))  # EST baseline; DST handled inline
+
+
+def _extract_green_barrier_hits(report: dict[str, Any]) -> list[dict[str, Any]]:
+    signals = report.get("signals")
+    if not isinstance(signals, dict):
+        return []
+    rows = signals.get("green_barrier_hits")
+    if not isinstance(rows, list):
+        return []
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def _extract_green_barrier_coverage(report: dict[str, Any]) -> dict[str, Any]:
+    signals = report.get("signals")
+    if not isinstance(signals, dict):
+        return {}
+    coverage = signals.get("green_barrier_coverage")
+    return dict(coverage) if isinstance(coverage, dict) else {}
+
+
+def _select_green_barrier_attachments(
+    hits: list[dict[str, Any]],
+    *,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Prefer monthly charts and avoid attaching two charts for one ticker."""
+    if limit <= 0:
+        return []
+    ordered = sorted(
+        hits,
+        key=lambda row: (
+            0 if str(row.get("timeframe")) == "monthly" else 1,
+            float(row.get("value") or 0.0),
+            str(row.get("ticker") or ""),
+        ),
+    )
+    selected: list[dict[str, Any]] = []
+    tickers: set[str] = set()
+    for row in ordered:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if not ticker or ticker in tickers:
+            continue
+        tickers.add(ticker)
+        selected.append(row)
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +644,8 @@ def _fetch_counter_trade_signals(
 def generate_morning_summary(
     db_path: Path,
     report_dir: Path,
+    *,
+    report: dict[str, Any] | None = None,
 ) -> str:
     """Build the morning briefing Markdown message from live DB + report data.
 
@@ -601,8 +657,11 @@ def generate_morning_summary(
     date_label = now_sgt.strftime("%b %d, %Y")
 
     # Load latest report
-    _, report = latest_daily_report_json(report_dir)
+    if report is None:
+        _, report = latest_daily_report_json(report_dir)
     report = report if isinstance(report, dict) else {}
+    green_barrier_hits = _extract_green_barrier_hits(report)
+    green_barrier_coverage = _extract_green_barrier_coverage(report)
 
     # Open DB connection
     conn = sqlite3.connect(str(db_path))
@@ -755,6 +814,27 @@ def generate_morning_summary(
             )
         lines.append("")
 
+    if green_barrier_hits:
+        lines.append("🟢 *Green Barrier Current Conditions*")
+        lines.append("_Williams %R(14) at or below the configured threshold. Repeated daily while active._")
+        for hit in green_barrier_hits[:8]:
+            ticker = _md_safe(str(hit.get("ticker") or "?"))
+            timeframe = _md_safe(str(hit.get("timeframe") or "?"))
+            value = hit.get("value")
+            value_text = f"{float(value):.1f}" if isinstance(value, (int, float)) else "N/A"
+            asof = _md_safe(str(hit.get("asof") or "unknown"))
+            lines.append(f"  🟢 {ticker} {timeframe.title()} %R {value_text} ({asof})")
+        lines.append("_Selected charts may follow. Research context only; not a buy signal._")
+        lines.append("")
+    stale_skipped = int(green_barrier_coverage.get("stale_skipped_count") or 0)
+    invalid_skipped = int(green_barrier_coverage.get("invalid_date_skipped_count") or 0)
+    if stale_skipped or invalid_skipped:
+        lines.append(
+            f"⚠️ _Green Barrier coverage incomplete: {stale_skipped} stale and "
+            f"{invalid_skipped} invalid-date ticker(s) skipped._"
+        )
+        lines.append("")
+
     # Paper Trades: summary + open positions
     lines.append("\U0001f4c8 *Paper Trades*")
     lines.append(
@@ -853,14 +933,99 @@ def send_morning_summary(
         return False
 
     try:
-        message = generate_morning_summary(db_path, report_dir)
+        from trader_koo.backend.services.report_loader import latest_daily_report_json
+
+        _, report = latest_daily_report_json(report_dir)
+        report = report if isinstance(report, dict) else {}
+        message = generate_morning_summary(db_path, report_dir, report=report)
     except Exception as exc:
         LOG.error("Failed to generate morning summary: %s", exc, exc_info=True)
         return False
 
     try:
-        send_message(message)
-        LOG.info("Morning summary sent to Telegram")
+        if not send_message(message):
+            LOG.error("Morning summary text was rejected by Telegram")
+            return False
+
+        from trader_koo.analysis.green_barrier import build_green_barrier_chart_png
+        hits = _extract_green_barrier_hits(report)
+        raw_limit = os.getenv("TRADER_KOO_GREEN_BARRIER_CHART_LIMIT", "3")
+        try:
+            chart_limit = max(0, min(8, int(raw_limit)))
+        except ValueError:
+            LOG.warning("Invalid TRADER_KOO_GREEN_BARRIER_CHART_LIMIT; using 3")
+            chart_limit = 3
+        attachments = _select_green_barrier_attachments(hits, limit=chart_limit)
+        charts_sent = 0
+        charts_failed = 0
+        if attachments:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                for hit in attachments:
+                    try:
+                        ticker = str(hit.get("ticker") or "").strip().upper()
+                        timeframe = str(hit.get("timeframe") or "monthly").strip().lower()
+                        value = float(hit.get("value") or 0.0)
+                        raw_threshold = hit.get("threshold")
+                        threshold = (
+                            float(raw_threshold)
+                            if isinstance(raw_threshold, (int, float))
+                            else -98.0
+                        )
+                        as_of = str(hit.get("asof") or "").strip()
+                        png = build_green_barrier_chart_png(
+                            conn,
+                            ticker=ticker,
+                            timeframe=timeframe,
+                            as_of=as_of or None,
+                            threshold=threshold,
+                            expected_value=value,
+                        )
+                        chart_url = (
+                            f"{PUBLIC_BASE_URL}/chart?ticker={quote_plus(ticker)}"
+                            f"&timeframe={quote_plus(timeframe)}"
+                            f"&threshold={quote_plus(f'{threshold:g}')}"
+                        )
+                        photo_ok = send_photo(
+                            png,
+                            caption=(
+                                f"🟢 *{ticker} {timeframe.title()} Green Barrier Current Condition*\n"
+                                f"Williams %R(14): *{value:.1f}* | Threshold: *{threshold:g}*\n"
+                                "Research context only — not a buy signal."
+                            ),
+                            filename=f"green-barrier-{ticker}-{timeframe}.png",
+                            reply_markup={
+                                "inline_keyboard": [[{"text": "Open interactive chart", "url": chart_url}]]
+                            },
+                        )
+                        if photo_ok:
+                            charts_sent += 1
+                        else:
+                            charts_failed += 1
+                    except Exception as exc:
+                        charts_failed += 1
+                        LOG.error(
+                            "Failed to send Green Barrier chart for %s/%s: %s",
+                            hit.get("ticker"),
+                            hit.get("timeframe"),
+                            exc,
+                            exc_info=True,
+                        )
+            finally:
+                conn.close()
+
+        if charts_failed:
+            LOG.warning(
+                "MORNING_SUMMARY_PARTIAL: text delivered; %d Green Barrier chart(s) sent, "
+                "%d failed; text will not be retried",
+                charts_sent,
+                charts_failed,
+            )
+            return True
+        LOG.info(
+            "Morning summary sent to Telegram with %d Green Barrier chart(s)",
+            charts_sent,
+        )
         return True
     except Exception as exc:
         LOG.error("Failed to send morning summary to Telegram: %s", exc, exc_info=True)

@@ -21,6 +21,7 @@ import {
   CHART_OVERLAY_OPTIONS,
   DEFAULT_CHART_OVERLAYS,
   formatChartNumber,
+  resampleToMonthly,
   resampleToWeekly,
   type ChartOverlayKey,
   type ChartOverlayState,
@@ -43,8 +44,10 @@ function useThrottledValue<T>(value: T, intervalMs: number): T {
     const now = Date.now();
     const elapsed = now - lastEmit.current;
     if (elapsed >= intervalMs) {
-      lastEmit.current = now;
-      setThrottled(value);
+      timer.current = setTimeout(() => {
+        lastEmit.current = Date.now();
+        setThrottled(value);
+      }, 0);
     } else {
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => {
@@ -68,6 +71,13 @@ export default function ChartPage() {
   const [chartOverlays, setChartOverlays] = useState<ChartOverlayState>(
     DEFAULT_CHART_OVERLAYS,
   );
+  const [greenBarrierThreshold] = useState(() => {
+    const rawThreshold = searchParams.get("threshold");
+    const parsedThreshold = rawThreshold === null ? Number.NaN : Number(rawThreshold);
+    return Number.isFinite(parsedThreshold) && parsedThreshold >= -100 && parsedThreshold <= 0
+      ? parsedThreshold
+      : -98;
+  });
   const [compactChart, setCompactChart] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768,
   );
@@ -83,6 +93,14 @@ export default function ChartPage() {
     if (urlConsumed.current) return undefined;
     urlConsumed.current = true;
     const urlTicker = searchParams.get("t") || searchParams.get("ticker");
+    const urlTimeframe = searchParams.get("timeframe");
+    if (
+      urlTimeframe === "daily" ||
+      urlTimeframe === "weekly" ||
+      urlTimeframe === "monthly"
+    ) {
+      setTimeframe(urlTimeframe);
+    }
     if (urlTicker) {
       const clean = urlTicker.trim().toUpperCase();
       if (clean) {
@@ -94,7 +112,7 @@ export default function ChartPage() {
       }
     }
     return undefined;
-  }, [searchParams, setTicker]);
+  }, [searchParams, setTicker, setTimeframe]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -162,7 +180,6 @@ export default function ChartPage() {
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
   const commentary = commentaryData?.chart_commentary ?? null;
   const freshness = quickData?.data_freshness ?? undefined;
-  const isWeekly = timeframe === "weekly";
   // Throttled copy for the chart rebuild only; toolbar/fundamentals stay instant.
   const chartLivePrice = useThrottledValue(livePrice, CHART_LIVE_PRICE_THROTTLE_MS);
   const livePayload = useMemo(
@@ -207,15 +224,27 @@ export default function ChartPage() {
     }
     return buildChartData(
       livePayload,
-      isWeekly,
+      timeframe,
       chartOverlays,
       effectiveLiveCandle,
       compactChart,
+      greenBarrierThreshold,
     );
-  }, [livePayload, isWeekly, chartOverlays, effectiveLiveCandle, compactChart]);
+  }, [
+    livePayload,
+    timeframe,
+    chartOverlays,
+    effectiveLiveCandle,
+    compactChart,
+    greenBarrierThreshold,
+  ]);
 
   const chartBarCount = (
-    isWeekly ? resampleToWeekly(livePayload?.chart ?? []) : livePayload?.chart ?? []
+    timeframe === "monthly"
+      ? resampleToMonthly(livePayload?.chart ?? [])
+      : timeframe === "weekly"
+        ? resampleToWeekly(livePayload?.chart ?? [])
+        : livePayload?.chart ?? []
   ).length;
 
   return (

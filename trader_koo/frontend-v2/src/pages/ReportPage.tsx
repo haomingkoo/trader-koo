@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Link } from "react-router-dom";
 import { useReport } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
 import Spinner from "../components/ui/Spinner";
@@ -121,6 +122,65 @@ export default function ReportPage() {
           />
 
           <KeyChangesSection changes={signals.tonight_key_changes ?? []} />
+
+          {((signals.green_barrier_coverage?.stale_skipped_count ?? 0) > 0 ||
+            (signals.green_barrier_coverage?.invalid_date_skipped_count ?? 0) > 0) && (
+            <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-3 text-xs text-[var(--amber)]">
+              Green Barrier coverage is incomplete: {signals.green_barrier_coverage?.stale_skipped_count ?? 0} stale and{" "}
+              {signals.green_barrier_coverage?.invalid_date_skipped_count ?? 0} invalid-date ticker(s) skipped.
+            </div>
+          )}
+
+          {(signals.green_barrier_hits?.length ?? 0) > 0 && (
+            <section className="rounded-xl border border-[var(--green)]/25 bg-[var(--green)]/5 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-[var(--green)]">
+                    Green Barrier Current Conditions
+                  </h3>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    Williams %R(14) at or below the configured threshold. Repeated daily while active.
+                    Research context only—not a buy signal.
+                  </p>
+                </div>
+                <span className="rounded-full border border-[var(--green)]/25 px-2.5 py-1 text-xs font-semibold text-[var(--green)]">
+                  {signals.green_barrier_hits?.length} hits
+                </span>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {signals.green_barrier_hits?.slice(0, 12).map((hit) => (
+                  <Link
+                    key={`${hit.ticker}-${hit.timeframe}`}
+                    to={`/chart?ticker=${encodeURIComponent(hit.ticker)}&timeframe=${hit.timeframe}&threshold=${encodeURIComponent(hit.threshold)}`}
+                    className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2 transition-colors hover:border-[var(--green)]/45"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-sm font-bold text-[var(--text)]">
+                        {hit.ticker}
+                      </span>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--green)]">
+                        {hit.timeframe}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-baseline justify-between gap-2 text-xs">
+                      <span className="text-[var(--muted)]">Williams %R</span>
+                      <strong className="tabular-nums text-[var(--green)]">
+                        {hit.value.toFixed(1)}
+                      </strong>
+                    </div>
+                    <div className="mt-1 text-[10px] text-[var(--muted)]">
+                      As of {hit.asof} · trigger ≤ {hit.threshold.toFixed(1)} · close {hit.close.toLocaleString()}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+              {(signals.green_barrier_hits?.length ?? 0) > 12 && (
+                <p className="mt-2 text-[10px] text-[var(--muted)]">
+                  Showing the 12 readings closest to −100.
+                </p>
+              )}
+            </section>
+          )}
 
           <SuggestionSection suggestions={signals.suggestions} />
 

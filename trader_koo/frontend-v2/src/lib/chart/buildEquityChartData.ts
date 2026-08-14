@@ -77,6 +77,30 @@ export function resampleToWeekly(rows: OhlcvRow[]): OhlcvRow[] {
   return weeks;
 }
 
+export function resampleToMonthly(rows: OhlcvRow[]): OhlcvRow[] {
+  if (rows.length === 0) return [];
+  const months: OhlcvRow[] = [];
+  let current: OhlcvRow | null = null;
+  let currentMonth = "";
+
+  for (const row of rows) {
+    const month = row.date.slice(0, 7);
+    if (!current || month !== currentMonth) {
+      if (current) months.push(current);
+      current = { ...row };
+      currentMonth = month;
+    } else {
+      current.high = Math.max(current.high, row.high);
+      current.low = Math.min(current.low, row.low);
+      current.close = row.close;
+      current.volume += row.volume;
+      current.date = row.date;
+    }
+  }
+  if (current) months.push(current);
+  return months;
+}
+
 interface PlotlyTrace {
   type: string;
   x: string[];
@@ -139,6 +163,7 @@ export const CHART_OVERLAY_OPTIONS = [
   { key: "ema50", label: "50 EMA", minBars: 50 },
   { key: "ema200", label: "200 EMA", minBars: 200 },
   { key: "bollinger", label: "Bollinger", minBars: 20 },
+  { key: "greenBarrier", label: "Williams %R", minBars: 14 },
 ] as const;
 
 export type ChartOverlayKey = (typeof CHART_OVERLAY_OPTIONS)[number]["key"];
@@ -153,7 +178,31 @@ export const DEFAULT_CHART_OVERLAYS: ChartOverlayState = {
   ema50: false,
   ema200: false,
   bollinger: false,
+  greenBarrier: true,
 };
+
+export type ChartTimeframe = "daily" | "weekly" | "monthly";
+
+export function computeWilliamsPercentR(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+): (number | null)[] {
+  const result: (number | null)[] = new Array(closes.length).fill(null);
+  if (period < 1 || highs.length !== lows.length || highs.length !== closes.length) {
+    return result;
+  }
+  for (let idx = period - 1; idx < closes.length; idx += 1) {
+    const highestHigh = Math.max(...highs.slice(idx - period + 1, idx + 1));
+    const lowestLow = Math.min(...lows.slice(idx - period + 1, idx + 1));
+    const range = highestHigh - lowestLow;
+    if (Number.isFinite(range) && range > 0 && Number.isFinite(closes[idx])) {
+      result[idx] = (-100 * (highestHigh - closes[idx])) / range;
+    }
+  }
+  return result;
+}
 
 function computeRollingBollinger(
   values: number[],
@@ -189,12 +238,21 @@ function computeRollingBollinger(
   return { upper, middle, lower };
 }
 
-function defaultThreeMonthRange(dates: string[]): [string, string] | undefined {
+function defaultVisibleRange(
+  dates: string[],
+  timeframe: ChartTimeframe,
+): [string, string] | undefined {
   if (dates.length === 0) return undefined;
   const end = new Date(dates[dates.length - 1]);
   if (Number.isNaN(end.getTime())) return undefined;
   const start = new Date(end);
-  start.setMonth(start.getMonth() - 3);
+  if (timeframe === "monthly") {
+    start.setFullYear(start.getFullYear() - 5);
+  } else if (timeframe === "weekly") {
+    start.setFullYear(start.getFullYear() - 1);
+  } else {
+    start.setMonth(start.getMonth() - 3);
+  }
   const earliest = new Date(dates[0]);
 
   // Add ~3 trading days of padding on each side so edge candles aren't clipped
@@ -325,13 +383,20 @@ export function applyLivePriceToPayload(
 
 export function buildChartData(
   payload: DashboardPayload,
-  isWeekly: boolean,
+  timeframe: ChartTimeframe,
   overlays: ChartOverlayState,
   liveCandle?: LiveCandle | null,
   compactMode = false,
+  greenBarrierThreshold = -98,
 ) {
   const rawChart = payload.chart ?? [];
-  const baseChart = isWeekly ? resampleToWeekly(rawChart) : rawChart;
+  const isWeekly = timeframe === "weekly";
+  const isMonthly = timeframe === "monthly";
+  const baseChart = isMonthly
+    ? resampleToMonthly(rawChart)
+    : isWeekly
+      ? resampleToWeekly(rawChart)
+      : rawChart;
   const levels = payload.levels ?? [];
   const gaps = payload.gaps ?? [];
   const yoloPatterns = payload.yolo_patterns ?? [];
@@ -339,6 +404,8 @@ export function buildChartData(
   const candlePatterns = payload.candlestick_patterns ?? [];
   const hmmRegime = payload.hmm_regime ?? null;
   const ticker = payload.ticker ?? "N/A";
+  const hasHmm = hmmRegime !== null && hmmRegime.regimes.length > 0;
+  const showHmm = hasHmm && !compactMode;
 
   const hasLiveCandle =
     typeof liveCandle === "object" &&
@@ -360,12 +427,15 @@ export function buildChartData(
 
   if (hasLiveCandle && chart.length > 0) {
     const lastRow = chart[chart.length - 1];
-    const sameWeeklyBucket =
-      isWeekly &&
-      mondayWeekKey(lastRow.date) !== null &&
-      mondayWeekKey(lastRow.date) === mondayWeekKey(liveCandle.timestamp);
+    const sameTimeframeBucket =
+      (isWeekly &&
+        mondayWeekKey(lastRow.date) !== null &&
+        mondayWeekKey(lastRow.date) === mondayWeekKey(liveCandle.timestamp)) ||
+      (isMonthly &&
+        isoDateOnly(lastRow.date)?.slice(0, 7) ===
+          isoDateOnly(liveCandle.timestamp)?.slice(0, 7));
 
-    if (sameWeeklyBucket) {
+    if (sameTimeframeBucket) {
       chart[chart.length - 1] = {
         ...lastRow,
         date: liveDate ?? lastRow.date,
@@ -592,6 +662,29 @@ export function buildChartData(
     });
   }
 
+  const williamsAxis = showHmm ? "y4" : "y3";
+  const activeGreenBarrierThreshold = Math.max(
+    -100,
+    Math.min(0, greenBarrierThreshold),
+  );
+  if (overlays.greenBarrier) {
+    const williams = computeWilliamsPercentR(high, low, close);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x,
+      y: williams,
+      name: "Williams %R (14)",
+      line: { color: "#38d39f", width: 1.8 },
+      xaxis: "x",
+      yaxis: williamsAxis,
+      hoverinfo: "text+x",
+      hovertext: williams.map((value) =>
+        value === null ? "Williams %R: unavailable" : `Williams %R: ${value.toFixed(1)}`,
+      ),
+    });
+  }
+
   if (candlePatterns.length > 0) {
     const dateIndex = new Map<string, number>();
     for (let i = 0; i < x.length; i++) {
@@ -645,6 +738,80 @@ export function buildChartData(
 
   const shapes: PlotlyShape[] = [];
   const annotations: PlotlyAnnotation[] = [];
+
+  if (overlays.greenBarrier) {
+    shapes.push(
+      {
+        type: "rect",
+        xref: "paper",
+        yref: williamsAxis,
+        x0: 0,
+        x1: 1,
+        y0: -100,
+        y1: -80,
+        fillcolor: "rgba(56,211,159,0.10)",
+        line: { width: 0 },
+      },
+      {
+        type: "line",
+        xref: "paper",
+        yref: williamsAxis,
+        x0: 0,
+        x1: 1,
+        y0: -100,
+        y1: -100,
+        line: { color: "#38d39f", width: 2.5 },
+      },
+      {
+        type: "line",
+        xref: "paper",
+        yref: williamsAxis,
+        x0: 0,
+        x1: 1,
+        y0: -80,
+        y1: -80,
+        line: { color: "rgba(56,211,159,0.55)", width: 1, dash: "dot" },
+      },
+    );
+    if (activeGreenBarrierThreshold > -100) {
+      shapes.push({
+        type: "line",
+        xref: "paper",
+        yref: williamsAxis,
+        x0: 0,
+        x1: 1,
+        y0: activeGreenBarrierThreshold,
+        y1: activeGreenBarrierThreshold,
+        line: { color: "#ffcd5c", width: 1.5, dash: "dash" },
+      });
+    }
+    if (!compactMode) {
+      annotations.push(
+        {
+          xref: "paper",
+          yref: williamsAxis,
+          x: 0.99,
+          y: -100,
+          text: "BARRIER  -100",
+          showarrow: false,
+          xanchor: "right",
+          yanchor: "bottom",
+          font: { color: "#38d39f", size: 10 },
+        },
+        {
+          xref: "paper",
+          yref: williamsAxis,
+          x: 0.01,
+          y: activeGreenBarrierThreshold,
+          text: `CURRENT CONDITION ≤ ${activeGreenBarrierThreshold}`,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "top",
+          font: { color: "#ffcd5c", size: 10 },
+        },
+      );
+    }
+  }
 
   if (overlays.bollinger && !compactMode) {
     const bb = computeRollingBollinger(close, 20, 2);
@@ -945,9 +1112,6 @@ export function buildChartData(
     renderYoloGroup(weeklyYolo, true);
   }
 
-  const hasHmm = hmmRegime !== null && hmmRegime.regimes.length > 0;
-  const showHmm = hasHmm && !compactMode;
-
   if (showHmm) {
     const regimes = hmmRegime.regimes;
     // HMM regime is shown via the stacked area chart in the y3 panel
@@ -1027,19 +1191,43 @@ export function buildChartData(
     });
   }
 
-  const priceDomain: [number, number] = showHmm ? [0.38, 1] : [0.28, 1];
-  const volumeDomain: [number, number] = showHmm ? [0.20, 0.33] : [0, 0.22];
-  const regimeDomain: [number, number] = [0, 0.15];
-  const chartHeight = compactMode ? 460 : showHmm ? 700 : 580;
+  const showWilliams = overlays.greenBarrier;
+  const priceDomain: [number, number] = showWilliams
+    ? showHmm
+      ? [0.54, 1]
+      : [0.42, 1]
+    : showHmm
+      ? [0.38, 1]
+      : [0.28, 1];
+  const volumeDomain: [number, number] = showWilliams
+    ? showHmm
+      ? [0.42, 0.50]
+      : [0.26, 0.37]
+    : showHmm
+      ? [0.20, 0.33]
+      : [0, 0.22];
+  const regimeDomain: [number, number] = showWilliams ? [0.22, 0.37] : [0, 0.15];
+  const williamsDomain: [number, number] = [0, showHmm ? 0.17 : 0.20];
+  const chartHeight = compactMode
+    ? showWilliams
+      ? 600
+      : 460
+    : showWilliams
+      ? showHmm
+        ? 820
+        : 700
+      : showHmm
+        ? 700
+        : 580;
   const missingTradingDays = tradingDayRangeBreaks(x);
-  const rangeBreaks = isWeekly
+  const rangeBreaks = isWeekly || isMonthly
     ? []
     : [
         { bounds: ["sat", "mon"] },
         ...(missingTradingDays.length > 0 ? [{ values: missingTradingDays }] : []),
       ];
 
-  const initialRange = defaultThreeMonthRange(x);
+  const initialRange = defaultVisibleRange(x, timeframe);
   const visibleRows = chart.filter((row) => {
     if (!initialRange) return true;
     const rowTime = new Date(row.date).getTime();
@@ -1058,7 +1246,7 @@ export function buildChartData(
   const layout: Record<string, unknown> = {
     paper_bgcolor: "transparent",
     plot_bgcolor: "transparent",
-    uirevision: `${ticker}-${isWeekly ? "weekly" : "daily"}`,
+    uirevision: `${ticker}-${timeframe}`,
     font: { color: "#8ea0bd", size: 11 },
     margin: compactMode ? { t: 18, r: 100, b: 44, l: 52 } : { t: 40, r: 200, b: 50, l: 60 },
     dragmode: "zoom" as const,
@@ -1097,6 +1285,7 @@ export function buildChartData(
               { count: 1, step: "year", stepmode: "todate", label: "YTD" },
               { count: 1, step: "year", stepmode: "backward", label: "1Y" },
               { count: 2, step: "year", stepmode: "backward", label: "2Y" },
+              { count: 5, step: "year", stepmode: "backward", label: "5Y" },
               { step: "all", label: "ALL" },
             ],
       },
@@ -1128,6 +1317,18 @@ export function buildChartData(
       range: [0, 1.05],
       tickvals: [0, 0.5, 1],
       ticktext: ["0%", "50%", "100%"],
+    };
+  }
+
+  if (showWilliams) {
+    (layout as Record<string, unknown>)[showHmm ? "yaxis4" : "yaxis3"] = {
+      gridcolor: "rgba(255,255,255,0.04)",
+      domain: williamsDomain,
+      title: compactMode ? undefined : "%R (14)",
+      range: [-105, 5],
+      tickvals: [-100, -80, -20, 0],
+      ticktext: ["-100", "-80", "-20", "0"],
+      fixedrange: false,
     };
   }
 

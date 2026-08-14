@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { EquityTick } from "../../api/types";
 
-type TimeframeValue = "daily" | "weekly";
+type TimeframeValue = "daily" | "weekly" | "monthly";
 
 interface ChartToolbarProps {
   ticker: string | null | undefined;
@@ -58,10 +58,10 @@ export default function ChartToolbar({
         </button>
       </div>
 
-      {/* Group 2: Daily/Weekly toggle + Refresh */}
+      {/* Group 2: timeframe toggle + Refresh */}
       <div className="flex items-center gap-2">
         <div className="flex gap-1">
-          {(["daily", "weekly"] as const).map((tf) => (
+          {(["daily", "weekly", "monthly"] as const).map((tf) => (
             <button
               key={tf}
               onClick={() => onSelectTimeframe(tf)}

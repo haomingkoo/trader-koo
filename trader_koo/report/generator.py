@@ -228,6 +228,8 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "setup_evaluation": {},
         "earnings_catalysts": {},
         "tonight_key_changes": [],
+        "green_barrier_hits": [],
+        "green_barrier_coverage": {},
     }
     movers_all: list[dict[str, Any]] = []
     fundamentals_map: dict[str, dict[str, Any]] = {}
@@ -257,6 +259,21 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     except Exception as exc:
         LOG.debug("VIX metrics cache in report skipped: %s", exc)
         signals["vix_metrics"] = None
+    try:
+        from trader_koo.analysis.green_barrier import scan_green_barrier_snapshot
+
+        green_barrier = scan_green_barrier_snapshot(conn)
+        signals["green_barrier_hits"] = green_barrier["hits"]
+        signals["green_barrier_coverage"] = green_barrier["coverage"]
+        coverage = green_barrier["coverage"]
+        if (
+            int(coverage.get("stale_skipped_count") or 0) > 0
+            or int(coverage.get("invalid_date_skipped_count") or 0) > 0
+        ):
+            _report_warnings.append("green_barrier_incomplete_coverage")
+    except Exception as exc:
+        LOG.error("Green Barrier scan failed: %s", exc, exc_info=True)
+        _report_warnings.append("green_barrier_scan_failed")
     # Drain warnings accumulated by market_context functions.
     _report_warnings.extend(_mc_report_warnings)
     _mc_report_warnings.clear()
@@ -1403,6 +1420,8 @@ def fetch_report_payload(
 
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
+        if "green_barrier_incomplete_coverage" in _report_warnings:
+            payload["warnings"].append("green_barrier_incomplete_coverage")
         if SETUP_EVAL_ENABLED:
             eval_summary: dict[str, Any] = {"enabled": True, "scored_calls": 0, "open_calls": 0}
             try:
