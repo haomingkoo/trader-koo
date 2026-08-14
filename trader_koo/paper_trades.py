@@ -9,7 +9,6 @@ from typing import Any
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_impl,
-    direction_from_row as _direction_from_row_impl,
     evaluate_setup_for_paper_trade as _evaluate_setup_for_paper_trade_impl,
     qualify_setup_for_paper_trade as _qualify_setup_for_paper_trade_impl,
 )
@@ -19,8 +18,6 @@ from trader_koo.paper_trade.summary import (
     paper_trade_summary as _paper_trade_summary_impl,
 )
 from trader_koo.paper_trade.trading import (
-    compute_pnl as _compute_pnl_impl,
-    compute_r_multiple as _compute_r_multiple_impl,
     compute_trailing_stop,
     create_paper_trades_from_report as _create_paper_trades_from_report_impl,
     manually_close_trade as _manually_close_trade_impl,
@@ -104,10 +101,6 @@ def _build_config() -> PaperTradeConfig:
     )
 
 
-def _direction_from_row(row: dict[str, Any]) -> str:
-    return _direction_from_row_impl(row)
-
-
 def qualify_setup_for_paper_trade(row: dict[str, Any]) -> bool:
     return _qualify_setup_for_paper_trade_impl(row, config=_build_config())
 
@@ -135,29 +128,6 @@ def create_paper_trades_from_report(
         setup_rows=setup_rows,
         report_date=report_date,
         generated_ts=generated_ts,
-        config=_build_config(),
-    )
-
-
-def _compute_pnl(
-    direction: str,
-    entry_price: float,
-    current_price: float,
-) -> float:
-    return _compute_pnl_impl(direction, entry_price, current_price)
-
-
-def _compute_r_multiple(
-    direction: str,
-    entry_price: float,
-    exit_price: float,
-    stop_loss: float | None,
-) -> float | None:
-    return _compute_r_multiple_impl(
-        direction,
-        entry_price,
-        exit_price,
-        stop_loss,
         config=_build_config(),
     )
 

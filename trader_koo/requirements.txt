@@ -14,9 +14,6 @@ roboflow==1.3.5
 opencv-python-headless==4.10.0.84
 Pillow>=11.3.0
 protobuf>=3.20,<3.21
-pyjwt>=2.8.0
-bcrypt>=4.1.0
-redis>=5.0.0
 websocket-client>=1.7
 hmmlearn>=0.3
 scikit-learn>=1.5

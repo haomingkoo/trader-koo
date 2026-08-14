@@ -10,14 +10,14 @@ from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_decision,
     compute_position_plan as _compute_position_plan_decision,
+    direction_from_row,
 )
 from trader_koo.paper_trade.trading import (
+    compute_pnl,
+    compute_r_multiple,
     create_paper_trades_from_report as _create_paper_trades_from_report_impl,
 )
 from trader_koo.paper_trades import (
-    _compute_pnl,
-    _compute_r_multiple,
-    _direction_from_row,
     compute_stop_and_target,
     compute_trailing_stop,
     create_paper_trades_from_report,
@@ -105,19 +105,19 @@ def _make_setup_row(
 
 class TestDirectionFromRow:
     def test_bullish_family_returns_long(self):
-        assert _direction_from_row({"setup_family": "Bullish Breakout"}) == "long"
+        assert direction_from_row({"setup_family": "Bullish Breakout"}) == "long"
 
     def test_bearish_family_returns_short(self):
-        assert _direction_from_row({"setup_family": "Bearish Reversal"}) == "short"
+        assert direction_from_row({"setup_family": "Bearish Reversal"}) == "short"
 
     def test_bullish_bias_returns_long(self):
-        assert _direction_from_row({"signal_bias": "bullish"}) == "long"
+        assert direction_from_row({"signal_bias": "bullish"}) == "long"
 
     def test_bearish_bias_returns_short(self):
-        assert _direction_from_row({"signal_bias": "bearish"}) == "short"
+        assert direction_from_row({"signal_bias": "bearish"}) == "short"
 
     def test_neutral_family_and_bias_returns_neutral(self):
-        assert _direction_from_row({"setup_family": "Consolidation", "signal_bias": "neutral"}) == "neutral"
+        assert direction_from_row({"setup_family": "Consolidation", "signal_bias": "neutral"}) == "neutral"
 
 
 # ── Qualification ────────────────────────────────────────────────
@@ -328,31 +328,37 @@ class TestMLConfig:
 
 class TestComputePnl:
     def test_long_profit(self):
-        assert round(_compute_pnl("long", 100.0, 110.0), 2) == 10.0
+        assert round(compute_pnl("long", 100.0, 110.0), 2) == 10.0
 
     def test_long_loss(self):
-        assert round(_compute_pnl("long", 100.0, 95.0), 2) == -5.0
+        assert round(compute_pnl("long", 100.0, 95.0), 2) == -5.0
 
     def test_short_profit(self):
-        assert round(_compute_pnl("short", 100.0, 90.0), 2) == 10.0
+        assert round(compute_pnl("short", 100.0, 90.0), 2) == 10.0
 
     def test_short_loss(self):
-        assert round(_compute_pnl("short", 100.0, 105.0), 2) == -5.0
+        assert round(compute_pnl("short", 100.0, 105.0), 2) == -5.0
 
 
 class TestComputeRMultiple:
     def test_long_1r_win(self):
-        result = _compute_r_multiple("long", 100.0, 105.0, 95.0)
+        result = compute_r_multiple(
+            "long", 100.0, 105.0, 95.0, config=_default_trail_config(),
+        )
 
         assert result == 1.0
 
     def test_short_2r_win(self):
-        result = _compute_r_multiple("short", 100.0, 90.0, 105.0)
+        result = compute_r_multiple(
+            "short", 100.0, 90.0, 105.0, config=_default_trail_config(),
+        )
 
         assert result == 2.0
 
     def test_none_stop_uses_default(self):
-        result = _compute_r_multiple("long", 100.0, 103.0, None)
+        result = compute_r_multiple(
+            "long", 100.0, 103.0, None, config=_default_trail_config(),
+        )
 
         assert result is not None
         assert result == 1.0  # 3% default, 3/3 = 1R
