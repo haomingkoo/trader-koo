@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -261,24 +262,53 @@ class DataSourceManager:
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
 
-        # yfinance repairs isolated scale errors back to the raw, contemporaneous
-        # share scale. Apply each declared forward/reverse split cumulatively so
-        # the stored series uses today's share scale, like broker charts do.
+        # Yahoo is inconsistent about split adjustment: some downloads contain
+        # raw pre-split prices while others are already rebased. Apply a declared
+        # split only when it makes the closes immediately around the event more
+        # continuous. This avoids both missed splits and double-adjustment.
         if "stock splits" in df_copy.columns:
             split_factors = pd.to_numeric(df_copy["stock splits"], errors="coerce").fillna(0)
             for index in split_factors[split_factors > 0].index:
                 factor = float(split_factors.loc[index])
                 if factor == 1.0:
                     continue
-                before_split = df_copy["date"] < df_copy.loc[index, "date"]
+
+                split_date = df_copy.loc[index, "date"]
+                before_split = df_copy["date"] < split_date
+                on_or_after_split = df_copy["date"] >= split_date
+                comparison_before = before_split
+                if "repaired?" in df_copy.columns:
+                    repaired_rows = df_copy["repaired?"].fillna(False).astype(bool)
+                    comparison_before = before_split & ~repaired_rows
+                before_closes = pd.to_numeric(
+                    df_copy.loc[comparison_before, "close"], errors="coerce"
+                ).dropna()
+                after_closes = pd.to_numeric(
+                    df_copy.loc[on_or_after_split, "close"], errors="coerce"
+                ).dropna()
+                if before_closes.empty or after_closes.empty:
+                    continue
+
+                before_close = float(before_closes.iloc[-1])
+                after_close = float(after_closes.iloc[0])
+                if before_close <= 0 or after_close <= 0:
+                    continue
+
+                raw_gap = abs(math.log(before_close / after_close))
+                adjusted_gap = abs(math.log((before_close / factor) / after_close))
+                if adjusted_gap >= raw_gap:
+                    continue
+
                 for column in ("open", "high", "low", "close"):
                     df_copy.loc[before_split, column] = (
                         pd.to_numeric(df_copy.loc[before_split, column], errors="coerce")
                         / factor
                     )
+                df_copy["volume"] = pd.to_numeric(
+                    df_copy["volume"], errors="coerce"
+                ).astype(float)
                 df_copy.loc[before_split, "volume"] = (
-                    pd.to_numeric(df_copy.loc[before_split, "volume"], errors="coerce")
-                    * factor
+                    df_copy.loc[before_split, "volume"] * factor
                 )
 
         # A repaired row is yfinance's inferred value, not an exchange print.
