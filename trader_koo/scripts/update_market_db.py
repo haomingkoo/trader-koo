@@ -1026,10 +1026,9 @@ def run(args: argparse.Namespace) -> None:
                                 timeout_sec=args.price_timeout_sec,
                                 retry_attempts=args.price_retry_attempts,
                             )
-                            reseed_required = (
-                                not args.full_price_refresh
-                                and stored_closes_disagree(conn, tkr, price_df)
-                            )
+                            # A full refresh also audits the old scale before writing so
+                            # changed tickers are replaced atomically and reported.
+                            reseed_required = stored_closes_disagree(conn, tkr, price_df)
                             if (
                                 not args.full_price_refresh
                                 and not reseed_required
