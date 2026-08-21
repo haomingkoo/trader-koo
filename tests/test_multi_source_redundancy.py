@@ -162,6 +162,29 @@ class TestMultiIndexNormalization:
         assert result.loc[0, "volume"] == 10_000_000
         assert result.loc[1, "close"] == 45.5
 
+    def test_normalize_does_not_double_adjust_already_rebased_split(self):
+        mgr = DataSourceManager()
+        index = pd.DatetimeIndex(
+            ["2024-03-06", "2024-03-07", "2024-03-08"],
+            name="Date",
+        )
+        df = pd.DataFrame(
+            {
+                "Open": [84.0, 85.0, 86.0],
+                "High": [85.0, 86.0, 87.0],
+                "Low": [83.0, 84.0, 85.0],
+                "Close": [84.5, 85.5, 86.5],
+                "Volume": [1_000_000, 5_000_000, 4_000_000],
+                "Stock Splits": [0.0, 5.0, 0.0],
+            },
+            index=index,
+        )
+
+        result = mgr._normalize_ohlcv(df)
+
+        assert result["close"].tolist() == [84.5, 85.5, 86.5]
+        assert result["volume"].tolist() == [1_000_000, 5_000_000, 4_000_000]
+
     def test_normalize_applies_multiple_splits_cumulatively(self):
         mgr = DataSourceManager()
         index = pd.DatetimeIndex(
