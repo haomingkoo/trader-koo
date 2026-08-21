@@ -194,7 +194,11 @@ class DataSourceManager:
             "tickers": ticker,
             "auto_adjust": auto_adjust,
             "progress": False,
-            "actions": False,
+            # Keep corporate actions so normalization can put every OHLCV row
+            # on the current share scale. repair=True fixes Yahoo's occasional
+            # isolated 2x/4x rows before the declared split factors are applied.
+            "actions": True,
+            "repair": True,
             "group_by": "column",
             "threads": False,
             "timeout": timeout_sec,
@@ -251,12 +255,56 @@ class DataSourceManager:
             )
 
         df_copy["date"] = pd.to_datetime(df_copy["date"])
-        df_copy["date"] = df_copy["date"].dt.strftime("%Y-%m-%d")
 
         required = ["date", "open", "high", "low", "close", "volume"]
         missing = [col for col in required if col not in df_copy.columns]
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
+
+        # yfinance repairs isolated scale errors back to the raw, contemporaneous
+        # share scale. Apply each declared forward/reverse split cumulatively so
+        # the stored series uses today's share scale, like broker charts do.
+        if "stock splits" in df_copy.columns:
+            split_factors = pd.to_numeric(df_copy["stock splits"], errors="coerce").fillna(0)
+            for index in split_factors[split_factors > 0].index:
+                factor = float(split_factors.loc[index])
+                if factor == 1.0:
+                    continue
+                before_split = df_copy["date"] < df_copy.loc[index, "date"]
+                for column in ("open", "high", "low", "close"):
+                    df_copy.loc[before_split, column] = (
+                        pd.to_numeric(df_copy.loc[before_split, column], errors="coerce")
+                        / factor
+                    )
+                df_copy.loc[before_split, "volume"] = (
+                    pd.to_numeric(df_copy.loc[before_split, "volume"], errors="coerce")
+                    * factor
+                )
+
+        # A repaired row is yfinance's inferred value, not an exchange print.
+        # Drop it when it remains an isolated >35% outlier after split
+        # normalization; retaining that synthetic point would corrupt technicals.
+        if "repaired?" in df_copy.columns:
+            repaired = df_copy["repaired?"].fillna(False).astype(bool)
+            closes = pd.to_numeric(df_copy["close"], errors="coerce")
+            drop_indexes: list[object] = []
+            for position in range(1, len(df_copy) - 1):
+                index = df_copy.index[position]
+                if not repaired.loc[index]:
+                    continue
+                neighbors = [float(closes.iloc[position - 1]), float(closes.iloc[position + 1])]
+                reference = sum(neighbors) / len(neighbors)
+                value = float(closes.iloc[position])
+                if value > 0 and reference > 0 and max(value / reference, reference / value) > 1.35:
+                    drop_indexes.append(index)
+            if drop_indexes:
+                LOG.warning(
+                    "Dropping %d isolated repaired price row(s) after split normalization",
+                    len(drop_indexes),
+                )
+                df_copy = df_copy.drop(index=drop_indexes)
+
+        df_copy["date"] = df_copy["date"].dt.strftime("%Y-%m-%d")
 
         return df_copy[required]
 
