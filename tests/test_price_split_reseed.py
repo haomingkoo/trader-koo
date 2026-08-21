@@ -81,3 +81,18 @@ def test_real_crash_prompts_check_but_does_not_reseed(conn: sqlite3.Connection) 
 
     assert stored_prices_have_scale_break(conn, "CRASH") is True
     assert stored_closes_disagree(conn, "CRASH", crash) is False
+
+
+def test_full_history_detects_old_rebase_outside_incremental_overlap(
+    conn: sqlite3.Connection,
+) -> None:
+    full_history = pd.DataFrame(
+        {
+            "date": [*DATES, "2026-08-21"],
+            "close": [*(round(close / 8, 2) for close in PRE_SPLIT), 190.0],
+        }
+    )
+    recent_only = full_history.tail(1)
+
+    assert stored_closes_disagree(conn, "KLAC", recent_only) is False
+    assert stored_closes_disagree(conn, "KLAC", full_history) is True
