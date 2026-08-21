@@ -909,7 +909,11 @@ def run(args: argparse.Namespace) -> None:
             tickers.append(t)
 
     # Resume: skip tickers that already succeeded in today's latest run
-    already_done = get_succeeded_tickers_from_latest_run(conn)
+    # An explicit full refresh is a complete historical backfill, not a retry
+    # of today's incremental run, so it must never inherit the resume skip set.
+    already_done = (
+        set() if args.full_price_refresh else get_succeeded_tickers_from_latest_run(conn)
+    )
     if already_done:
         original_count = len(tickers)
         # Always re-fetch context tickers to keep them fresh
