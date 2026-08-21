@@ -426,6 +426,66 @@ def get_latest_price_date(conn: sqlite3.Connection, ticker: str) -> Optional[str
     return row[0]
 
 
+# Closes for a settled date only move when the series is re-based; the rest is float noise.
+REBASE_TOLERANCE = 0.01
+# Large missed splits leave an obvious discontinuity in the stored series. This
+# is only a prompt to compare against fresh full history; it never mutates data
+# on its own, so a genuine large price move is preserved.
+SCALE_BREAK_RATIO = 1.8
+
+
+def stored_closes_disagree(
+    conn: sqlite3.Connection,
+    ticker: str,
+    df: pd.DataFrame,
+    tolerance: float = REBASE_TOLERANCE,
+) -> bool:
+    """Return whether fresh closes contradict stored closes on the same dates."""
+    if df.empty:
+        return False
+    stored = dict(
+        conn.execute(
+            "SELECT date, close FROM price_daily WHERE ticker = ? AND close > 0",
+            (ticker,),
+        )
+    )
+    for row in df.itertuples():
+        prior = stored.get(str(row.date)[:10])
+        if prior and abs(float(row.close) - prior) / prior > tolerance:
+            return True
+    return False
+
+
+def stored_prices_have_scale_break(
+    conn: sqlite3.Connection,
+    ticker: str,
+    ratio: float = SCALE_BREAK_RATIO,
+) -> bool:
+    """Return whether adjacent stored closes suggest a missed split.
+
+    A full-history comparison is still required before reseeding, so a genuine
+    large price move is never rewritten merely because it crossed this gate.
+    """
+    rows = conn.execute(
+        """
+        SELECT close
+        FROM price_daily
+        WHERE ticker = ? AND close > 0
+        ORDER BY date
+        """,
+        (ticker,),
+    ).fetchall()
+    minimum_ratio = max(float(ratio), 1.0)
+    previous: float | None = None
+    for (raw_close,) in rows:
+        close = float(raw_close)
+        scale_ratio = max(previous / close, close / previous) if previous is not None else 1.0
+        if scale_ratio >= minimum_ratio:
+            return True
+        previous = close
+    return False
+
+
 def should_refresh(last_ts: str | None, min_interval_hours: float, now: dt.datetime) -> bool:
     if min_interval_hours <= 0:
         return True
@@ -867,6 +927,7 @@ def run(args: argparse.Namespace) -> None:
     run_id = f"{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     ok = 0
     fail = 0
+    reseeded_tickers: list[str] = []
     max_passes = 1 + max(0, int(args.retry_failed_passes))
     backoff_sec = max(0.0, float(args.retry_failed_backoff_sec))
     begin_run(conn, run_id=run_id, started_ts=snapshot_ts, tickers_total=len(tickers), args=args)
@@ -965,8 +1026,53 @@ def run(args: argparse.Namespace) -> None:
                                 timeout_sec=args.price_timeout_sec,
                                 retry_attempts=args.price_retry_attempts,
                             )
-                            price_rows = len(price_df)
+                            reseed_required = (
+                                not args.full_price_refresh
+                                and stored_closes_disagree(conn, tkr, price_df)
+                            )
+                            if (
+                                not args.full_price_refresh
+                                and not reseed_required
+                                and stored_prices_have_scale_break(conn, tkr)
+                            ):
+                                full_price_df, full_data_source = fetch_price_daily(
+                                    ticker=tkr,
+                                    start=args.price_start,
+                                    end=args.price_end,
+                                    auto_adjust=args.auto_adjust,
+                                    timeout_sec=args.price_timeout_sec,
+                                    retry_attempts=args.price_retry_attempts,
+                                )
+                                if stored_closes_disagree(conn, tkr, full_price_df):
+                                    price_df = full_price_df
+                                    data_source = full_data_source
+                                    price_fetch_start = args.price_start
+                                    reseed_required = True
+
+                            if reseed_required:
+                                LOG.warning(
+                                    "%s: fetched closes contradict stored history "
+                                    "(split or restatement); reseeding from %s",
+                                    tkr,
+                                    args.price_start,
+                                )
+                                if price_fetch_start != args.price_start:
+                                    price_fetch_start = args.price_start
+                                    price_df, data_source = fetch_price_daily(
+                                        ticker=tkr,
+                                        start=price_fetch_start,
+                                        end=args.price_end,
+                                        auto_adjust=args.auto_adjust,
+                                        timeout_sec=args.price_timeout_sec,
+                                        retry_attempts=args.price_retry_attempts,
+                                    )
+                                # The full fetch succeeded before deletion. Both operations
+                                # remain in this ticker's transaction and roll back together.
+                                conn.execute("DELETE FROM price_daily WHERE ticker = ?", (tkr,))
+                                reseeded_tickers.append(tkr)
+                                message_parts.append("price:reseed")
                             write_price_daily(conn, tkr, price_df, data_source=data_source)
+                            price_rows = len(price_df)
                             message_parts.append(f"price:start={price_fetch_start}")
                             message_parts.append(f"price:rows={price_rows}")
                             message_parts.append(f"price:source={data_source}")
@@ -1183,6 +1289,12 @@ def run(args: argparse.Namespace) -> None:
             tickers_failed=fail,
             error_message=final_error_message,
         )
+        if reseeded_tickers:
+            LOG.warning(
+                "run_id=%s reseeded after price re-basing (split?): %s",
+                run_id,
+                ",".join(sorted(set(reseeded_tickers))),
+            )
         LOG.info(
             "run_id=%s finished status=%s ok=%s failed=%s passes_used=%s/%s",
             run_id,
