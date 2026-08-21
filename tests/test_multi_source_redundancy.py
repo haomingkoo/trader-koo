@@ -132,6 +132,83 @@ class TestMultiIndexNormalization:
         assert list(result.columns) == ["date", "open", "high", "low", "close", "volume"]
         assert len(result) == 1
 
+    def test_normalize_applies_declared_split_to_all_prior_ohlcv(self):
+        mgr = DataSourceManager()
+        index = pd.DatetimeIndex(
+            ["2026-08-07", "2026-08-11", "2026-08-12"],
+            name="Date",
+        )
+        df = pd.DataFrame(
+            {
+                "Open": [94.0, 46.0, 45.5],
+                "High": [96.0, 47.0, 46.0],
+                "Low": [90.0, 45.0, 45.0],
+                "Close": [92.0, 45.5, 46.0],
+                "Volume": [5_000_000, 9_000_000, 8_000_000],
+                "Stock Splits": [0.0, 2.0, 0.0],
+                "Repaired?": [False, False, False],
+            },
+            index=index,
+        )
+
+        result = mgr._normalize_ohlcv(df)
+
+        assert result.loc[0, ["open", "high", "low", "close"]].tolist() == [
+            47.0,
+            48.0,
+            45.0,
+            46.0,
+        ]
+        assert result.loc[0, "volume"] == 10_000_000
+        assert result.loc[1, "close"] == 45.5
+
+    def test_normalize_applies_multiple_splits_cumulatively(self):
+        mgr = DataSourceManager()
+        index = pd.DatetimeIndex(
+            ["2020-01-02", "2022-01-03", "2024-01-02"],
+            name="Date",
+        )
+        df = pd.DataFrame(
+            {
+                "Open": [600.0, 300.0, 100.0],
+                "High": [600.0, 300.0, 100.0],
+                "Low": [600.0, 300.0, 100.0],
+                "Close": [600.0, 300.0, 100.0],
+                "Volume": [100.0, 200.0, 600.0],
+                "Stock Splits": [0.0, 2.0, 3.0],
+            },
+            index=index,
+        )
+
+        result = mgr._normalize_ohlcv(df)
+
+        assert result["close"].tolist() == [100.0, 100.0, 100.0]
+        assert result["volume"].tolist() == [600.0, 600.0, 600.0]
+
+    def test_normalize_drops_isolated_repaired_outlier(self):
+        mgr = DataSourceManager()
+        index = pd.DatetimeIndex(
+            ["2026-08-07", "2026-08-10", "2026-08-11"],
+            name="Date",
+        )
+        df = pd.DataFrame(
+            {
+                "Open": [90.0, 60.0, 46.0],
+                "High": [92.0, 61.0, 47.0],
+                "Low": [89.0, 59.0, 45.0],
+                "Close": [90.0, 60.0, 45.5],
+                "Volume": [8_000_000, 3_000_000, 9_000_000],
+                "Stock Splits": [0.0, 0.0, 2.0],
+                "Repaired?": [False, True, False],
+            },
+            index=index,
+        )
+
+        result = mgr._normalize_ohlcv(df)
+
+        assert result["date"].tolist() == ["2026-08-07", "2026-08-11"]
+        assert result["close"].tolist() == [45.0, 45.5]
+
 
 class TestSourceMetrics:
     """Test success/failure rate tracking."""
