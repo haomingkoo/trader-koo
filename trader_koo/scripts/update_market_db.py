@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import json
 import logging
+import math
 import os
 import random
 import signal
@@ -453,7 +454,7 @@ REBASE_TOLERANCE = 0.01
 # Large missed splits leave an obvious discontinuity in the stored series. This
 # is only a prompt to compare against fresh full history; it never mutates data
 # on its own, so a genuine large price move is preserved.
-SCALE_BREAK_RATIO = 1.8
+SCALE_BREAK_RATIO = 1.45
 
 
 def stored_closes_disagree(
@@ -506,6 +507,51 @@ def stored_prices_have_scale_break(
             return True
         previous = close
     return False
+
+
+def corporate_actions_require_full_history(
+    conn: sqlite3.Connection,
+    ticker: str,
+    vendor_actions: list[dict[str, Any]],
+) -> bool:
+    """Return whether vendor split evidence lacks a completed full-history audit."""
+    persisted = {
+        (str(row[0]), str(row[1])): (float(row[2]), int(row[3] or 0), str(row[4] or ""))
+        for row in conn.execute(
+            """SELECT action_date, action_type, value, applied_to_prices, evidence_json
+            FROM price_corporate_actions
+            WHERE ticker = ? AND provider = 'yfinance'
+              AND action_type IN ('split', 'reverse_split')""",
+            (ticker,),
+        ).fetchall()
+    }
+    for action in vendor_actions:
+        action_date = str(action.get("action_date") or "")
+        action_type = str(action.get("action_type") or "")
+        value = float(action.get("value") or 0.0)
+        if not action_date or action_type not in {"split", "reverse_split"} or value <= 0:
+            continue
+        prior = persisted.get((action_date, action_type))
+        if prior is None or not math.isclose(prior[0], value, rel_tol=1e-9, abs_tol=1e-12):
+            return True
+        if prior[1] == 1:
+            continue
+        try:
+            evidence = json.loads(prior[2])
+        except (TypeError, ValueError):
+            evidence = {}
+        if not bool(evidence.get("full_history_verified")):
+            return True
+    return False
+
+
+def mark_full_history_actions_verified(df: pd.DataFrame) -> None:
+    """Record that action evidence was evaluated against the complete price series."""
+    actions = [dict(action) for action in (df.attrs.get("corporate_actions") or [])]
+    for action in actions:
+        if action.get("action_type") in {"split", "reverse_split"}:
+            action["full_history_verified"] = True
+    df.attrs["corporate_actions"] = actions
 
 
 def should_refresh(last_ts: str | None, min_interval_hours: float, now: dt.datetime) -> bool:
@@ -1184,6 +1230,30 @@ def run(args: argparse.Namespace) -> None:
                                 args.full_price_refresh
                                 or stored_closes_disagree(conn, tkr, price_df)
                             )
+                            late_action_reconciliation = False
+                            if (
+                                not args.full_price_refresh
+                                and price_fetch_start != args.price_start
+                            ):
+                                from trader_koo.db.sources import get_data_source_manager
+
+                                vendor_actions = get_data_source_manager().fetch_ticker_actions(tkr)
+                                late_action_reconciliation = corporate_actions_require_full_history(
+                                    conn, tkr, vendor_actions
+                                )
+                                if late_action_reconciliation:
+                                    full_price_df, full_data_source = fetch_price_daily(
+                                        ticker=tkr,
+                                        start=args.price_start,
+                                        end=args.price_end,
+                                        auto_adjust=args.auto_adjust,
+                                        timeout_sec=args.price_timeout_sec,
+                                        retry_attempts=args.price_retry_attempts,
+                                    )
+                                    price_df = full_price_df
+                                    data_source = full_data_source
+                                    price_fetch_start = args.price_start
+                                    reseed_required = True
                             if (
                                 not args.full_price_refresh
                                 and not reseed_required
@@ -1210,6 +1280,8 @@ def run(args: argparse.Namespace) -> None:
                                     (
                                         "full price refresh requested"
                                         if args.full_price_refresh
+                                        else "new vendor corporate action requires full-history reconciliation"
+                                        if late_action_reconciliation
                                         else "fetched closes contradict stored history (split or restatement)"
                                     ),
                                     args.price_start,
@@ -1233,6 +1305,8 @@ def run(args: argparse.Namespace) -> None:
                                 )
                                 reseeded_tickers.append(tkr)
                                 message_parts.append("price:reseed")
+                            if price_fetch_start == args.price_start:
+                                mark_full_history_actions_verified(price_df)
                             write_price_daily(conn, tkr, price_df, data_source=data_source)
                             price_rows = len(price_df)
                             message_parts.append(f"price:start={price_fetch_start}")

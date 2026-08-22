@@ -8,6 +8,7 @@ import pytest
 
 from trader_koo.analysis.green_barrier import compute_williams_percent_r, resample_ohlcv
 from trader_koo.backend.services.market_data import get_data_sources
+from trader_koo.db import sources as price_sources
 from trader_koo.db.sources import DataSourceManager
 from trader_koo.scripts.update_market_db import ensure_schema, write_price_daily
 from trader_koo.db.price_contract import research_price_contract
@@ -53,7 +54,12 @@ def _continuous_prices() -> pd.DataFrame:
 
 @pytest.mark.parametrize(
     ("ticker", "factor", "action_type"),
-    [("BKNG", 20.0, "split"), ("SNDK", 0.2, "reverse_split")],
+    [
+        ("BKNG", 20.0, "split"),
+        ("SNDK", 0.2, "reverse_split"),
+        ("THREEFOR2", 1.5, "split"),
+        ("TWOFOR3", 2.0 / 3.0, "reverse_split"),
+    ],
 )
 def test_declared_action_keeps_all_williams_timeframes_on_one_basis(
     ticker: str,
@@ -126,6 +132,32 @@ def test_genuine_crash_is_preserved_but_fails_research_closed() -> None:
     assert get_data_sources(conn, "CRASH")["research_eligible"] is False
 
 
+@pytest.mark.parametrize(
+    "closes",
+    [[150.0, 100.0], [100.0, 150.0]],
+)
+def test_actionless_three_for_two_sized_move_is_preserved_but_unresolved(
+    closes: list[float],
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2026-08-20", "2026-08-21"]),
+            "Open": closes,
+            "High": [value + 1 for value in closes],
+            "Low": [value - 1 for value in closes],
+            "Close": closes,
+            "Volume": [1000.0, 2000.0],
+        }
+    ).set_index("Date")
+
+    normalized = DataSourceManager._normalize_ohlcv(frame)
+
+    assert normalized["close"].tolist() == closes
+    assert normalized.attrs["corporate_actions"] == []
+    assert normalized.attrs["basis_status"] == "unresolved"
+    assert normalized.attrs["unresolved_discontinuities"][0]["ratio"] == 1.5
+
+
 def test_action_persistence_is_idempotent_and_visible_in_chart_contract() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
@@ -146,6 +178,38 @@ def test_action_persistence_is_idempotent_and_visible_in_chart_contract() -> Non
     assert contract["basis_status"] == "verified"
     assert contract["research_eligible"] is True
     assert contract["corporate_actions"][0]["action_type"] == "split"
+
+
+def test_vendor_action_history_includes_fractional_reverse_split(monkeypatch) -> None:
+    actions = pd.DataFrame(
+        {
+            "Dividends": [0.0, 0.0],
+            "Stock Splits": [1.5, 2.0 / 3.0],
+        },
+        index=pd.to_datetime(["2025-07-01", "2026-02-02"]),
+    )
+
+    class _Ticker:
+        def get_actions(self, period="max"):
+            assert period == "max"
+            return actions
+
+    monkeypatch.setattr(price_sources.yf, "Ticker", lambda ticker: _Ticker())
+
+    result = DataSourceManager().fetch_ticker_actions("TEST", hard_timeout=1)
+
+    assert result == [
+        {
+            "action_date": "2025-07-01",
+            "action_type": "split",
+            "value": 1.5,
+        },
+        {
+            "action_date": "2026-02-02",
+            "action_type": "reverse_split",
+            "value": 2.0 / 3.0,
+        },
+    ]
 
 
 def test_mixing_price_bases_marks_whole_ticker_unresolved() -> None:

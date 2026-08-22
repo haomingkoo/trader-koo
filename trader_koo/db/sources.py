@@ -27,7 +27,10 @@ LOG = logging.getLogger(__name__)
 # yfinance is the only price source by design (see module docstring).
 SOURCE_NAME = "yfinance"
 PRICE_ADJUSTMENT_VERSION = "yfinance-actions-v1"
-SCALE_BREAK_RATIO = 1.8
+# 3-for-2 is the smallest common split whose unexplained discontinuity should
+# fail research closed. Smaller declared fractional actions are still handled
+# from vendor evidence below; they are never inferred from price movement.
+SCALE_BREAK_RATIO = 1.45
 
 # Hard timeout for any single yf.download call.  If the call does not
 # return within this many seconds, the thread is abandoned and the
@@ -183,6 +186,48 @@ class DataSourceManager:
                 success=False,
                 error=str(e),
             )
+
+    def fetch_ticker_actions(
+        self,
+        ticker: str,
+        *,
+        hard_timeout: float = _HARD_TIMEOUT_SEC,
+    ) -> list[dict]:
+        """Fetch Yahoo's full split ledger for late-action reconciliation."""
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(yf.Ticker(ticker).get_actions, period="max")
+        try:
+            raw = future.result(timeout=hard_timeout)
+        except concurrent.futures.TimeoutError as exc:
+            future.cancel()
+            raise TimeoutError(
+                f"yfinance action history hung for {ticker} (hard timeout {hard_timeout}s)"
+            ) from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        if raw is None or len(raw) == 0:
+            return []
+        frame = raw.to_frame() if isinstance(raw, pd.Series) else raw.copy()
+        if isinstance(frame.index, pd.MultiIndex):
+            frame.index = frame.index.get_level_values(0)
+        columns = {str(column).strip().lower(): column for column in frame.columns}
+        split_column = columns.get("stock splits")
+        if split_column is None:
+            return []
+        actions: list[dict] = []
+        splits = pd.to_numeric(frame[split_column], errors="coerce").fillna(0)
+        for index in splits[splits > 0].index:
+            factor = float(splits.loc[index])
+            if factor == 1.0:
+                continue
+            actions.append(
+                {
+                    "action_date": pd.Timestamp(index).date().isoformat(),
+                    "action_type": "split" if factor > 1 else "reverse_split",
+                    "value": factor,
+                }
+            )
+        return actions
 
     @staticmethod
     def _download_with_hard_timeout(
