@@ -11,8 +11,10 @@ from typing import Any
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trade.campaign import (
-    build_candidate_decision,
-    persist_candidate_decision,
+    canonical_hash,
+    decide_candidate,
+    DivergentDecisionSetError,
+    persist_decision_set,
 )
 from trader_koo.paper_trade.decision import (
     compute_position_plan,
@@ -554,8 +556,10 @@ def _create_paper_trades_from_report(
     config: PaperTradeConfig,
     report_run_id: str | None = None,
     schema_ready: bool = False,
+    report_complete: bool = True,
+    is_canonical: bool = True,
 ) -> int:
-    """Create paper trades from qualifying daily report setups."""
+    """Atomically persist one report's trades and sealed decision ledger."""
     if not report_date or not setup_rows:
         return 0
 
@@ -576,24 +580,6 @@ def _create_paper_trades_from_report(
         raise ValueError(
             f"paper-trade creation requires canonical published report run {report_run_id}"
         )
-    conn.execute(
-        """INSERT INTO paper_campaigns (
-               campaign_id, label, policy_version, status, starting_capital,
-               zero_admission_streak_limit
-           ) VALUES (?, ?, ?, 'active', ?, ?)
-           ON CONFLICT(campaign_id) DO UPDATE SET
-               policy_version = excluded.policy_version,
-               starting_capital = excluded.starting_capital,
-               zero_admission_streak_limit = excluded.zero_admission_streak_limit
-           WHERE paper_campaigns.status != 'frozen'""",
-        (
-            config.campaign_id,
-            f"Paper Campaign {config.campaign_id.removeprefix('paper-').upper()}",
-            config.decision_version,
-            config.starting_capital,
-            config.zero_admission_streak_limit,
-        ),
-    )
     register_bot_version(
         conn,
         bot_version=config.bot_version,
@@ -602,13 +588,91 @@ def _create_paper_trades_from_report(
         notes="Current champion paper-trade policy snapshot.",
         schema_ready=True,
     )
+    conn.execute("SAVEPOINT paper_report_admission")
+    try:
+        inserted = _create_paper_trades_from_report_in_transaction(
+            conn,
+            setup_rows=setup_rows,
+            report_date=report_date,
+            generated_ts=generated_ts,
+            config=config,
+            report_run_id=report_run_id,
+            report_complete=report_complete,
+            is_canonical=is_canonical,
+        )
+    except Exception:
+        conn.execute("ROLLBACK TO paper_report_admission")
+        conn.execute("RELEASE paper_report_admission")
+        raise
+    conn.execute("RELEASE paper_report_admission")
+    return inserted
 
+
+def _create_paper_trades_from_report_in_transaction(
+    conn: sqlite3.Connection,
+    *,
+    setup_rows: list[dict[str, Any]],
+    report_date: str,
+    generated_ts: str,
+    config: PaperTradeConfig,
+    report_run_id: str | None = None,
+    report_complete: bool = True,
+    is_canonical: bool = True,
+) -> int:
+    """Create paper trades from qualifying daily report setups."""
+    if not report_date:
+        return 0
+    if not report_run_id:
+        raise ValueError("paper campaign admission requires report_run_id")
+
+    campaign_row = conn.execute(
+        "SELECT status, policy_version, starting_capital FROM paper_campaigns WHERE campaign_id=?",
+        (config.campaign_id,),
+    ).fetchone()
+    if not campaign_row:
+        raise ValueError(f"paper campaign {config.campaign_id} is not registered")
+    if str(campaign_row[1]) != config.decision_version or float(campaign_row[2]) != config.starting_capital:
+        raise ValueError("runtime policy does not match immutable campaign registration")
+    campaign_active = str(campaign_row[0]) == "active"
+    request_hash = canonical_hash({
+        "report_run_id": report_run_id,
+        "report_date": report_date,
+        "generated_ts": generated_ts,
+        "campaign_id": config.campaign_id,
+        "report_complete": report_complete,
+        "is_canonical": is_canonical,
+        "policy": config_snapshot(config),
+        "candidates": setup_rows,
+    })
+    existing_set = conn.execute(
+        "SELECT request_hash FROM paper_decision_sets WHERE report_run_id=? AND campaign_id=?",
+        (report_run_id, config.campaign_id),
+    ).fetchone()
+    if existing_set:
+        if str(existing_set[0]) == request_hash:
+            return 0
+        raise DivergentDecisionSetError(
+            f"divergent retry for report_run_id={report_run_id} campaign_id={config.campaign_id}"
+        )
     open_count = conn.execute(
-        "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"
+        "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
+        (config.campaign_id,),
     ).fetchone()[0]
 
     global_block: tuple[str, str, str] | None = None
-    if open_count >= config.max_open:
+    if not report_complete or not is_canonical:
+        global_block = (
+            "report_integrity",
+            "report_not_complete_canonical",
+            "Only complete canonical reports may admit paper trades.",
+        )
+    elif not campaign_active:
+        global_block = (
+            "campaign_lifecycle",
+            "campaign_not_active",
+            "Campaign is not active; candidate is recorded in shadow mode.",
+        )
+    if global_block is None and open_count >= config.max_open:
         LOG.info(
             "Paper trades: %d open trades already at max (%d), skipping creation",
             open_count, config.max_open,
@@ -622,12 +686,13 @@ def _create_paper_trades_from_report(
     # Portfolio drawdown circuit breaker — halt new entries if drawdown exceeds limit
     try:
         snapshot_row = conn.execute(
-            "SELECT equity_index FROM paper_portfolio_snapshots ORDER BY snapshot_date DESC LIMIT 1"
+            "SELECT equity_index FROM paper_portfolio_snapshots WHERE campaign_id=? ORDER BY snapshot_date DESC LIMIT 1",
+            (config.campaign_id,),
         ).fetchone()
         if snapshot_row and snapshot_row[0] is not None:
             equity_index = float(snapshot_row[0])
             drawdown_pct = (100.0 - equity_index)  # equity starts at 100
-            if drawdown_pct >= config.max_drawdown_pct:
+            if global_block is None and drawdown_pct >= config.max_drawdown_pct:
                 LOG.warning(
                     "CIRCUIT BREAKER: portfolio drawdown %.1f%% exceeds %.1f%% limit, blocking new entries",
                     drawdown_pct, config.max_drawdown_pct,
@@ -644,11 +709,11 @@ def _create_paper_trades_from_report(
     try:
         daily_loss_row = conn.execute(
             "SELECT SUM(pnl_pct) FROM paper_trades "
-            "WHERE exit_date = ? AND status != 'open' AND pnl_pct IS NOT NULL",
-            (report_date,),
+            "WHERE campaign_id=? AND exit_date=? AND status!='open' AND pnl_pct IS NOT NULL",
+            (config.campaign_id, report_date),
         ).fetchone()
         daily_loss = float(daily_loss_row[0]) if daily_loss_row and daily_loss_row[0] else 0.0
-        if daily_loss < 0 and abs(daily_loss) >= config.max_daily_loss_pct:
+        if global_block is None and daily_loss < 0 and abs(daily_loss) >= config.max_daily_loss_pct:
             LOG.warning(
                 "CIRCUIT BREAKER: daily loss %.1f%% exceeds %.1f%% limit, blocking new entries",
                 abs(daily_loss), config.max_daily_loss_pct,
@@ -663,7 +728,8 @@ def _create_paper_trades_from_report(
 
     remaining_slots = max(0, config.max_open - open_count)
     inserted = 0
-    report_run_id = report_run_id or generated_ts or f"{report_date}:unlinked"
+    decisions: list[dict[str, Any]] = []
+    _decision_runtime_context: dict[str, Any] = {}
 
     def record_decision(
         *,
@@ -678,28 +744,21 @@ def _create_paper_trades_from_report(
         plan: dict[str, Any] | None = None,
         critic: dict[str, Any] | None = None,
     ) -> None:
-        decision = build_candidate_decision(
-            row=row,
-            rank=rank,
-            evaluation=evaluation,
-            levels=levels,
-            plan=plan,
-            critic=critic,
-            final_gate=final_gate,
-            reason_code=reason_code,
-            reasons=reasons,
-            disposition=disposition,
-            config=config,
+        if critic is not None:
+            _decision_runtime_context["critic_outcome"] = critic
+        policy_decision = decide_candidate(
+            row=row, rank=rank, config=config, context=_decision_runtime_context,
         )
-        persist_candidate_decision(
-            conn,
-            report_run_id=report_run_id,
-            report_date=report_date,
-            generated_ts=generated_ts,
-            campaign_id=config.campaign_id,
-            policy_version=config.decision_version,
-            decision=decision,
+        expected = (final_gate, reason_code, disposition)
+        actual = (
+            policy_decision["final_gate"], policy_decision["reason_code"],
+            policy_decision["disposition"],
         )
+        if actual != expected:
+            raise RuntimeError(
+                f"live policy branch drift at rank {rank}: expected {expected}, got {actual}"
+            )
+        decisions.append(policy_decision)
 
     # Pre-fetch VIX level once for position sizing (used by all trades this batch)
     _vix_level: float | None = None
@@ -716,16 +775,33 @@ def _create_paper_trades_from_report(
         pass
 
     for rank, row in enumerate(setup_rows, start=1):
+        _decision_runtime_context = {
+            "vix_level": _vix_level,
+            "campaign_active": campaign_active,
+            "portfolio_block": (
+                {"gate": global_block[0], "reason_code": global_block[1], "detail": global_block[2]}
+                if global_block else None
+            ),
+            "portfolio_context": {"open_count": open_count, "remaining_slots": remaining_slots, "inserted_this_report": inserted},
+            "source_context": {"report_date": report_date, "generated_ts": generated_ts, "report_run_id": report_run_id},
+        }
         if not isinstance(row, dict):
+            decisions.append(decide_candidate(
+                row=row, rank=rank, config=config, context=_decision_runtime_context,
+            ))
             continue
         evaluation = evaluate_setup_for_paper_trade(row, config=config)
         if not evaluation["approved"]:
+            failures = list(evaluation.get("gate_failures") or [])
+            first_failure = failures[0] if failures else {
+                "gate": "eligibility", "reason_code": "eligibility_rejected"
+            }
             record_decision(
                 row=row,
                 rank=rank,
                 evaluation=evaluation,
-                final_gate="eligibility",
-                reason_code="initial_eligibility_rejected",
+                final_gate=str(first_failure["gate"]),
+                reason_code=str(first_failure["reason_code"]),
                 reasons=list(evaluation.get("decision_reasons") or []),
             )
             continue
@@ -733,7 +809,7 @@ def _create_paper_trades_from_report(
         ticker = str(row.get("ticker") or "").upper().strip()
         if not ticker:
             record_decision(
-                row={**row, "ticker": f"__MISSING_{rank}"},
+                row=row,
                 rank=rank,
                 evaluation=evaluation,
                 final_gate="candidate_identity",
@@ -755,6 +831,11 @@ def _create_paper_trades_from_report(
             continue
 
         if inserted >= remaining_slots:
+            _decision_runtime_context["portfolio_block"] = {
+                "gate": "portfolio_capacity",
+                "reason_code": "report_slots_exhausted",
+                "detail": "Higher-ranked candidates filled all remaining policy slots.",
+            }
             record_decision(
                 row=row,
                 rank=rank,
@@ -798,6 +879,7 @@ def _create_paper_trades_from_report(
                 entry_price = round(raw_entry * (1 + slip_mult), 4)
             else:
                 entry_price = round(raw_entry * (1 - slip_mult), 4)
+            _decision_runtime_context["entry_price"] = entry_price
             levels = compute_stop_and_target(
                 row, direction, config=config, entry_price=entry_price
             )
@@ -832,6 +914,7 @@ def _create_paper_trades_from_report(
             ).fetchone()
             if vol_row and vol_row[0] and vol_row[0] > 0:
                 avg_daily_volume = float(vol_row[0])
+                _decision_runtime_context["avg_daily_volume"] = avg_daily_volume
                 position_pct = float(plan.get("position_size_pct") or 8.0)
                 position_dollars = config.starting_capital * (position_pct / 100)
                 position_shares = position_dollars / entry_price if entry_price > 0 else 0
@@ -922,6 +1005,7 @@ def _create_paper_trades_from_report(
 
         market_ctx = capture_market_context(conn, as_of_date=report_date)
         market_ctx["bot_version"] = config.bot_version
+        _decision_runtime_context["market_context"] = market_ctx
 
         # Critic review — devil's advocate that kills low-conviction trades
         critic: dict[str, Any] = {}
@@ -935,14 +1019,18 @@ def _create_paper_trades_from_report(
                 plan=plan,
                 market_ctx=market_ctx,
                 max_open=config.max_open,
+                campaign_id=config.campaign_id,
             )
+            failed_check = None
+            for raw_reason in critic.get("critic_reasons") or []:
+                text = str(raw_reason)
+                if text.startswith("FAIL [") and "]:" in text:
+                    failed_check = text.split("FAIL [", 1)[1].split("]:", 1)[0]
+                    break
+            critic["failed_check"] = failed_check
+            _decision_runtime_context["critic_outcome"] = critic
             if not critic["approved"]:
-                failed_check = "unknown"
-                for raw_reason in critic.get("critic_reasons") or []:
-                    text = str(raw_reason)
-                    if text.startswith("FAIL [") and "]:" in text:
-                        failed_check = text.split("FAIL [", 1)[1].split("]:", 1)[0]
-                        break
+                failed_check = failed_check or "unknown"
                 LOG.info(
                     "Critic REJECTED: %s %s — %s",
                     direction.upper(),
@@ -972,6 +1060,12 @@ def _create_paper_trades_from_report(
         except Exception as exc:
             if config.critic_fail_open:
                 LOG.warning("Critic check failed (allowing trade by explicit config): %s", exc)
+                critic = {
+                    "approved": True,
+                    "fail_open": True,
+                    "error": type(exc).__name__,
+                }
+                _decision_runtime_context["critic_outcome"] = critic
             else:
                 LOG.warning("Critic check failed (rejecting trade): %s", exc)
                 record_decision(
@@ -1044,7 +1138,7 @@ def _create_paper_trades_from_report(
                 ?, ?, ?,
                 ?, ?, ?
             )
-            ON CONFLICT(report_date, ticker, direction) DO NOTHING
+            ON CONFLICT(campaign_id, report_date, ticker, direction) DO NOTHING
             """,
             (
                 report_date,
@@ -1123,6 +1217,7 @@ def _create_paper_trades_from_report(
             disposition = "duplicate"
             reason_code = "duplicate_candidate"
             reasons = ["A paper trade already exists for this report date, ticker, and direction."]
+        _decision_runtime_context["duplicate"] = disposition == "duplicate"
         record_decision(
             row=row,
             rank=rank,
@@ -1136,6 +1231,31 @@ def _create_paper_trades_from_report(
             disposition=disposition,
         )
 
+    persist_decision_set(
+        conn,
+        report_run_id=report_run_id,
+        report_date=report_date,
+        generated_ts=generated_ts,
+        campaign_id=config.campaign_id,
+        policy_version=config.decision_version,
+        request_hash=request_hash,
+        policy_hash=canonical_hash(config_snapshot(config)),
+        context_hash=canonical_hash({
+            "report_date": report_date,
+            "generated_ts": generated_ts,
+            "report_complete": report_complete,
+            "is_canonical": is_canonical,
+            "campaign_active": campaign_active,
+            "portfolio_block": global_block,
+            "open_count": open_count,
+            "candidate_context_hashes": [
+                decision["context_hash"] for decision in decisions
+            ],
+        }),
+        decisions=decisions,
+        report_complete=report_complete,
+        is_canonical=is_canonical,
+    )
     return inserted
 
 
@@ -1184,16 +1304,16 @@ def _mark_to_market(
                target_price, stop_loss, high_water_mark, low_water_mark,
                stop_distance_pct, atr_at_entry
         FROM paper_trades
-        WHERE status = 'open'
+        WHERE campaign_id=? AND status = 'open'
           AND report_run_id IN ({placeholders})
         """,
-            tuple(sorted(verified_ids)),
+            (config.campaign_id, *tuple(sorted(verified_ids))),
         ).fetchall()
     else:
         open_rows = []
 
     if not open_rows:
-        update_portfolio_snapshot(conn)
+        update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
         return {"open_trades": 0, "updated": 0, "closed": 0}
 
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
@@ -1384,7 +1504,7 @@ def _mark_to_market(
             )
         updated += 1
 
-    update_portfolio_snapshot(conn)
+    update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
     return {
         "open_trades": len(open_rows) - closed,
         "updated": updated,

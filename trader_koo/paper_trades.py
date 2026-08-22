@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from dataclasses import replace
 from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
@@ -130,6 +131,8 @@ def create_paper_trades_from_report(
     generated_ts: str,
     report_run_id: str | None = None,
     schema_ready: bool = False,
+    report_complete: bool = True,
+    is_canonical: bool = True,
 ) -> int:
     return _create_paper_trades_from_report_impl(
         conn,
@@ -138,6 +141,8 @@ def create_paper_trades_from_report(
         generated_ts=generated_ts,
         report_run_id=report_run_id,
         schema_ready=schema_ready,
+        report_complete=report_complete,
+        is_canonical=is_canonical,
         config=_build_config(),
     )
 
@@ -150,8 +155,12 @@ def paper_trade_summary(
     conn: sqlite3.Connection,
     *,
     window_days: int = 180,
+    campaign_id: str | None = None,
 ) -> dict[str, Any]:
-    return _paper_trade_summary_impl(conn, window_days=window_days, config=_build_config())
+    config = _build_config()
+    if campaign_id:
+        config = replace(config, campaign_id=campaign_id)
+    return _paper_trade_summary_impl(conn, window_days=window_days, config=config)
 
 
 def manually_close_trade(
@@ -180,6 +189,7 @@ def list_paper_trades(
     from_date: str | None = None,
     to_date: str | None = None,
     limit: int = 100,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     return _list_paper_trades_impl(
         conn,
@@ -190,4 +200,5 @@ def list_paper_trades(
         from_date=from_date,
         to_date=to_date,
         limit=limit,
+        campaign_id=campaign_id,
     )

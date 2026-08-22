@@ -86,8 +86,10 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
         "qualifying_actionability": sorted(config.qualifying_actionability),
         "qualifying_directions": sorted(config.qualifying_directions),
         "tier_rank": dict(sorted(config.tier_rank.items())),
+        "debate_caution_agreement": config.debate_caution_agreement,
         "min_position_pct": config.min_position_pct,
         "max_position_pct": config.max_position_pct,
+        "risk_per_trade_pct": config.risk_per_trade_pct,
         "position_size_pct": {
             "A": config.tier_a_position_pct,
             "B": config.tier_b_position_pct,
@@ -96,12 +98,15 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
         "caution_position_scale": config.caution_position_scale,
         "high_vol_position_scale": config.high_vol_position_scale,
         "earnings_position_scale": config.earnings_position_scale,
-        "risk_per_trade_pct": config.risk_per_trade_pct,
-        "ml_enabled": config.ml_enabled,
-        "ml_min_win_prob": config.ml_min_win_prob,
-        "max_drawdown_pct": config.max_drawdown_pct,
-        "max_daily_loss_pct": config.max_daily_loss_pct,
-        "starting_capital": config.starting_capital,
+        "ml": {
+            "enabled": config.ml_enabled,
+            "min_win_prob": config.ml_min_win_prob,
+        },
+        "portfolio_risk": {
+            "max_drawdown_pct": config.max_drawdown_pct,
+            "max_daily_loss_pct": config.max_daily_loss_pct,
+            "starting_capital": config.starting_capital,
+        },
         "execution": {
             "entry_slippage_bps": config.entry_slippage_bps,
             "exit_slippage_bps": config.exit_slippage_bps,

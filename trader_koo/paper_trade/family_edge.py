@@ -38,6 +38,7 @@ def compute_family_edges(
     window_days: int = _DEFAULT_WINDOW_DAYS,
     min_trades: int = _MIN_TRADES_FOR_EDGE,
     bot_version: str | None = None,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     """Compute rolling edge metrics per setup_family × direction.
 
@@ -68,7 +69,7 @@ def compute_family_edges(
     cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=window_days)).strftime("%Y-%m-%d")
 
     version_clause = ""
-    params: list[Any] = [cutoff]
+    params: list[Any] = [campaign_id, cutoff]
     if bot_version:
         version_clause = "AND bot_version = ?"
         params.append(bot_version)
@@ -89,7 +90,8 @@ def compute_family_edges(
             SUM(CASE WHEN exit_reason = 'target_hit' THEN 1 ELSE 0 END) AS target_hits,
             SUM(CASE WHEN exit_reason = 'stopped_out' THEN 1 ELSE 0 END) AS stopped_outs
         FROM paper_trades
-        WHERE status != 'open'
+        WHERE campaign_id = ?
+          AND status != 'open'
           AND pnl_pct IS NOT NULL
           AND entry_date >= ?
           AND setup_family IS NOT NULL
@@ -143,6 +145,7 @@ def compute_regime_edges(
     *,
     window_days: int = _DEFAULT_WINDOW_DAYS,
     min_trades: int = _MIN_TRADES_FOR_EDGE,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     """Compute edge metrics per regime state.
 
@@ -160,7 +163,8 @@ def compute_regime_edges(
             AVG(pnl_pct) AS avg_pnl_pct,
             AVG(r_multiple) AS avg_r_multiple
         FROM paper_trades
-        WHERE status != 'open'
+        WHERE campaign_id = ?
+          AND status != 'open'
           AND pnl_pct IS NOT NULL
           AND entry_date >= ?
           AND regime_state_at_entry IS NOT NULL
@@ -168,7 +172,7 @@ def compute_regime_edges(
         HAVING COUNT(*) >= ?
         ORDER BY AVG(pnl_pct) DESC
         """,
-        (cutoff, min_trades),
+        (campaign_id, cutoff, min_trades),
     ).fetchall()
 
     return [
@@ -190,6 +194,7 @@ def compute_vix_bucket_edges(
     *,
     window_days: int = _DEFAULT_WINDOW_DAYS,
     min_trades: int = 3,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     """Compute edge metrics per VIX bucket at entry.
 
@@ -212,7 +217,8 @@ def compute_vix_bucket_edges(
             AVG(pnl_pct) AS avg_pnl_pct,
             AVG(r_multiple) AS avg_r_multiple
         FROM paper_trades
-        WHERE status != 'open'
+        WHERE campaign_id = ?
+          AND status != 'open'
           AND pnl_pct IS NOT NULL
           AND entry_date >= ?
           AND vix_at_entry IS NOT NULL
@@ -220,7 +226,7 @@ def compute_vix_bucket_edges(
         HAVING COUNT(*) >= ?
         ORDER BY MIN(vix_at_entry)
         """,
-        (cutoff, min_trades),
+        (campaign_id, cutoff, min_trades),
     ).fetchall()
 
     return [

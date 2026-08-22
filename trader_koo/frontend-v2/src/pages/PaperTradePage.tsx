@@ -27,15 +27,16 @@ export default function PaperTradePage() {
 
   const [statusFilter, setStatusFilter] = useState("all");
   const [dirFilter, setDirFilter] = useState("all");
+  const [campaignId, setCampaignId] = useState("paper-v2");
 
   const { data: summary, isLoading: summaryLoading } =
-    usePaperTradeSummary();
+    usePaperTradeSummary(campaignId);
   const { data: baselineData } = useNextOpenBaseline();
   const {
     data: tradesData,
     isLoading: tradesLoading,
     error,
-  } = usePaperTrades(statusFilter, dirFilter);
+  } = usePaperTrades(statusFilter, dirFilter, campaignId);
 
   const isLoading = summaryLoading || tradesLoading;
   if (isLoading) return <Spinner className="mt-12" />;
@@ -63,6 +64,29 @@ export default function PaperTradePage() {
       <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
         <strong>Simulated trades only — not real money.</strong> Results may not reflect real-execution conditions.
       </div>
+
+      <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+        Campaign ledger
+        <select
+          data-testid="paper-campaign-selector"
+          value={campaignId}
+          onChange={(event) => setCampaignId(event.target.value)}
+          className="rounded border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[var(--text)]"
+        >
+          {(summary?.campaign_health?.campaigns ?? [{
+            campaign_id: campaignId,
+            label: campaignId,
+            policy_version: "",
+            status: "selected",
+            starting_capital: 0,
+            trade_count: 0,
+          }]).map((campaign) => (
+            <option key={campaign.campaign_id} value={campaign.campaign_id}>
+              {campaign.label} ({campaign.status ?? "selected"})
+            </option>
+          ))}
+        </select>
+      </label>
 
       <PaperTradePortfolioHero overall={overall} />
 

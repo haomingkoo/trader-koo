@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 from typing import Any
+import sqlite3
 from unittest.mock import patch
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
+from trader_koo.backend.routers.admin import paper_campaigns
 from trader_koo.paper_trades import create_paper_trades_from_report
+from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 
 
 class TestPaperTradesListEndpoint:
@@ -77,8 +82,8 @@ class TestPaperTradeSummaryEndpoint:
         assert data["campaign_health"]["latest_report"]["report_run_id"] == "api-report-run-1"
         assert data["campaign_health"]["latest_report"]["ranked"] == 1
         assert data["campaign_health"]["latest_report"]["rejections_by_gate"] == [{
-            "gate": "eligibility",
-            "reason_code": "initial_eligibility_rejected",
+            "gate": "eligibility.tier",
+            "reason_code": "tier_below_minimum",
             "count": 1,
         }]
 
@@ -141,6 +146,79 @@ class TestPaperTradeSummaryEndpoint:
         assert baseline["available"] is False
         assert baseline["causal_valid"] is False
         assert baseline["decision_eligible"] is False
+
+    def test_sealed_decisions_api_preserves_exact_rank_gate_and_hashes(
+        self, test_app, seeded_conn
+    ):
+        create_paper_trades_from_report(
+            seeded_conn,
+            setup_rows=[{
+                "ticker": "REJECT", "setup_tier": "F", "score": 10.0,
+                "actionability": "watch", "signal_bias": "bullish", "close": 100.0,
+            }],
+            report_date="2026-08-21", generated_ts="api-decision-ts",
+            report_run_id="api-decision-run",
+        )
+        seeded_conn.commit()
+
+        response = test_app.get(
+            "/api/paper-trades/decisions?report_run_id=api-decision-run"
+        )
+        assert response.status_code == 200
+        decision = response.json()["decisions"][0]
+        assert (decision["candidate_rank"], decision["ticker"]) == (1, "REJECT")
+        assert (decision["final_gate"], decision["reason_code"]) == (
+            "eligibility.tier", "tier_below_minimum"
+        )
+        assert decision["tradeability"] == "not_actionable"
+        assert len(decision["inputs_hash"]) == 64
+        assert len(decision["candidates_hash"]) == 64
+
+
+def test_campaign_transition_route_requires_identity_and_audits_actor(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "campaign-admin.db"
+    conn = sqlite3.connect(db_path)
+    ensure_paper_trade_schema(conn)
+    conn.close()
+
+    def open_db():
+        return sqlite3.connect(db_path)
+
+    monkeypatch.setattr(paper_campaigns, "get_conn", open_db)
+    app = FastAPI()
+    app.include_router(paper_campaigns.router)
+    unauthenticated = TestClient(app).post(
+        "/api/admin/paper-campaigns/paper-v2/transition",
+        json={
+            "action": "activate", "reason": "paper validation approved",
+            "idempotency_key": "admin-activation-001",
+        },
+    )
+    assert unauthenticated.status_code == 401
+
+    authenticated_app = FastAPI()
+
+    @authenticated_app.middleware("http")
+    async def admin_identity(request: Request, call_next):
+        request.state.admin_identity = {"username": "campaign-owner"}
+        return await call_next(request)
+
+    authenticated_app.include_router(paper_campaigns.router)
+    response = TestClient(authenticated_app).post(
+        "/api/admin/paper-campaigns/paper-v2/transition",
+        json={
+            "action": "activate", "reason": "paper validation approved",
+            "idempotency_key": "admin-activation-001",
+        },
+    )
+    assert response.status_code == 200
+    verify = sqlite3.connect(db_path)
+    assert verify.execute(
+        "SELECT actor,reason FROM paper_campaign_audit"
+    ).fetchone() == ("campaign-owner", "paper validation approved")
+    verify.close()
 
 
 class TestPaperTradeDetailEndpoint:

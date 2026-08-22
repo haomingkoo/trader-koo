@@ -28,6 +28,9 @@ from trader_koo.backend.routers.admin.ml import router as ml_router
 from trader_koo.backend.routers.admin.pipeline import (
     router as pipeline_router,
 )
+from trader_koo.backend.routers.admin.paper_campaigns import (
+    router as paper_campaigns_router,
+)
 from trader_koo.backend.routers.admin.system import router as system_router
 from trader_koo.backend.routers.admin.telegram import (
     router as telegram_router,
@@ -40,6 +43,7 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 router.include_router(alert_quality_router)
 router.include_router(pipeline_router)
+router.include_router(paper_campaigns_router)
 router.include_router(ml_router)
 router.include_router(data_router)
 router.include_router(email_router)

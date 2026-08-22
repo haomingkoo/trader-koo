@@ -1070,6 +1070,15 @@ export interface PaperCampaignHealth {
       reason_code: string;
       count: number;
     }>;
+    candidates?: Array<{
+      rank: number;
+      ticker: string;
+      eligibility_passed: boolean;
+      final_gate: string;
+      reason_code: string;
+      disposition: "rejected" | "admitted" | "duplicate";
+      expected_r_multiple?: number | null;
+    }>;
   } | null;
 }
 

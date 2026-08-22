@@ -24,18 +24,20 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return row is not None
 
 
-def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
+def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> None:
     """Compute and persist daily portfolio metrics."""
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
     open_count = conn.execute(
-        "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"
+        "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
+        (campaign_id,),
     ).fetchone()[0]
 
     closed_rows = conn.execute(
         "SELECT pnl_pct, r_multiple FROM paper_trades "
-        "WHERE status != 'open' AND pnl_pct IS NOT NULL "
+        "WHERE campaign_id=? AND status!='open' AND pnl_pct IS NOT NULL "
         "ORDER BY exit_date, id"
+        , (campaign_id,)
     ).fetchall()
 
     total_closed = len(closed_rows)
@@ -43,11 +45,11 @@ def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT OR REPLACE INTO paper_portfolio_snapshots
-                (snapshot_date, open_trades, closed_trades_total, wins, losses,
+                (snapshot_date, campaign_id, open_trades, closed_trades_total, wins, losses,
                  equity_index)
-            VALUES (?, ?, 0, 0, 0, 100.0)
+            VALUES (?, ?, ?, 0, 0, 0, 100.0)
             """,
-            (today, open_count),
+            (today, campaign_id, open_count),
         )
         return
 
@@ -111,21 +113,21 @@ def update_portfolio_snapshot(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         INSERT OR REPLACE INTO paper_portfolio_snapshots
-            (snapshot_date, open_trades, closed_trades_total, wins, losses,
+            (snapshot_date, campaign_id, open_trades, closed_trades_total, wins, losses,
              win_rate_pct, avg_pnl_pct, avg_r_multiple, total_pnl_pct,
              max_drawdown_pct, sharpe_ratio, sortino_ratio, calmar_ratio,
              profit_factor, equity_index,
              best_trade_pct, worst_trade_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (today, open_count, total_closed, wins, losses,
+        (today, campaign_id, open_count, total_closed, wins, losses,
          win_rate, avg_pnl, avg_r, total_pnl,
          max_dd, sharpe, sortino, calmar, profit_factor, equity,
          best_trade, worst_trade),
     )
 
 
-def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str, Any]]:
+def recent_trades(conn: sqlite3.Connection, *, campaign_id: str, limit: int = 20) -> list[dict[str, Any]]:
     """Return most recent paper trades."""
     rows = conn.execute(
         """
@@ -139,13 +141,15 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
                entry_plan, exit_plan, sizing_summary,
                review_status, review_summary,
                entry_reason, entry_evidence, entry_risks,
-               ml_predicted_win_prob, ml_confidence, ml_signal, notes,
-               report_run_id
+               ml_predicted_win_prob, ml_confidence, ml_signal,
+               COALESCE(a.notes, paper_trades.notes), campaign_id, report_run_id
         FROM paper_trades
+        LEFT JOIN paper_trade_annotations a ON a.trade_id=paper_trades.id
+        WHERE campaign_id=?
         ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC
         LIMIT ?
         """,
-        (limit,),
+        (campaign_id, limit),
     ).fetchall()
     keys = [
         "id", "ticker", "direction", "entry_price", "entry_date",
@@ -159,7 +163,7 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
         "review_status", "review_summary",
         "entry_reason", "entry_evidence", "entry_risks",
         "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
-        "report_run_id",
+        "campaign_id", "report_run_id",
     ]
     trades: list[dict[str, Any]] = []
     for row in rows:
@@ -171,20 +175,21 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
     return trades
 
 
-def recent_reflections(conn: sqlite3.Connection, *, limit: int = 10) -> list[dict[str, Any]]:
+def recent_reflections(conn: sqlite3.Connection, *, campaign_id: str, limit: int = 10) -> list[dict[str, Any]]:
     """Return recent post-trade decision-memory rows."""
     if not _table_exists(conn, "paper_trade_reflections"):
         return []
     rows = conn.execute(
         """
-        SELECT trade_id, ticker, direction, setup_family, entry_date, exit_date,
-               exit_reason, pnl_pct, r_multiple, spy_return_pct, alpha_vs_spy_pct,
-               lesson_summary, created_ts
-        FROM paper_trade_reflections
-        ORDER BY exit_date DESC, id DESC
+        SELECT r.trade_id, r.ticker, r.direction, r.setup_family, r.entry_date, r.exit_date,
+               r.exit_reason, r.pnl_pct, r.r_multiple, r.spy_return_pct, r.alpha_vs_spy_pct,
+               r.lesson_summary, r.created_ts
+        FROM paper_trade_reflections r JOIN paper_trades t ON t.id=r.trade_id
+        WHERE t.campaign_id=?
+        ORDER BY r.exit_date DESC, r.id DESC
         LIMIT ?
         """,
-        (limit,),
+        (campaign_id, limit),
     ).fetchall()
     keys = [
         "trade_id", "ticker", "direction", "setup_family", "entry_date", "exit_date",
@@ -551,6 +556,7 @@ def _compute_unfiltered_baseline(
     conn: sqlite3.Connection,
     *,
     cutoff: str,
+    campaign_id: str,
 ) -> dict[str, Any] | None:
     """Return the broad setup baseline when available.
 
@@ -598,10 +604,10 @@ def _compute_unfiltered_baseline(
             """
             SELECT ticker, direction, entry_date, entry_price
             FROM paper_trades
-            WHERE entry_date >= ?
+            WHERE campaign_id = ? AND entry_date >= ?
             ORDER BY entry_date
             """,
-            (cutoff,),
+            (campaign_id, cutoff),
         ).fetchall()
 
         baseline_hold_days = 10
@@ -661,6 +667,7 @@ def paper_trade_summary(
     campaign = campaign_health(
         conn, campaign_id=config.campaign_id if config else "paper-v2"
     )
+    campaign_id = config.campaign_id if config else "paper-v2"
 
     cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=window_days)).strftime("%Y-%m-%d")
 
@@ -669,14 +676,15 @@ def paper_trade_summary(
         SELECT pnl_pct, r_multiple, direction, setup_family, setup_tier, exit_reason,
                COALESCE(position_size_pct, 8.0) AS position_size_pct
         FROM paper_trades
-        WHERE status != 'open' AND pnl_pct IS NOT NULL AND entry_date >= ?
+        WHERE campaign_id=? AND status != 'open' AND pnl_pct IS NOT NULL AND entry_date >= ?
         ORDER BY exit_date
         """,
-        (cutoff,),
+        (campaign_id, cutoff),
     ).fetchall()
 
     open_trades = conn.execute(
-        "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"
+        "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
+        (campaign_id,),
     ).fetchone()[0]
 
     total = len(all_closed)
@@ -697,8 +705,8 @@ def paper_trade_summary(
             "by_tier": {},
             "by_exit_reason": {},
             "equity_curve": [],
-            "recent_trades": recent_trades(conn, limit=20),
-            "recent_reflections": recent_reflections(conn, limit=10),
+            "recent_trades": recent_trades(conn, campaign_id=campaign_id, limit=20),
+            "recent_reflections": recent_reflections(conn, campaign_id=campaign_id, limit=10),
             "policy": _policy_snapshot(config),
             "feedback": [],
             "benchmarks": {},
@@ -737,7 +745,8 @@ def paper_trade_summary(
 
     # Unrealized P&L from open trades
     open_rows = conn.execute(
-        "SELECT unrealized_pnl_pct, position_size_pct FROM paper_trades WHERE status = 'open'"
+        "SELECT unrealized_pnl_pct,position_size_pct FROM paper_trades WHERE campaign_id=? AND status='open'",
+        (campaign_id,),
     ).fetchall()
     unrealized_pnl_dollars = 0.0
     for orow in open_rows:
@@ -822,10 +831,10 @@ def paper_trade_summary(
         """
         SELECT snapshot_date, equity_index, open_trades, closed_trades_total
         FROM paper_portfolio_snapshots
-        WHERE snapshot_date >= ?
+        WHERE campaign_id=? AND snapshot_date >= ?
         ORDER BY snapshot_date
         """,
-        (cutoff,),
+        (campaign_id, cutoff),
     ).fetchall()
     equity_curve = [
         {
@@ -850,9 +859,15 @@ def paper_trade_summary(
             generate_edge_feedback,
         )
 
-        family_edges = compute_family_edges(conn, window_days=window_days)
-        regime_edges = compute_regime_edges(conn, window_days=window_days)
-        vix_bucket_edges = compute_vix_bucket_edges(conn, window_days=window_days)
+        family_edges = compute_family_edges(
+            conn, window_days=window_days, campaign_id=campaign_id
+        )
+        regime_edges = compute_regime_edges(
+            conn, window_days=window_days, campaign_id=campaign_id
+        )
+        vix_bucket_edges = compute_vix_bucket_edges(
+            conn, window_days=window_days, campaign_id=campaign_id
+        )
         edge_feedback = generate_edge_feedback(
             family_edges,
             regime_edges,
@@ -866,8 +881,8 @@ def paper_trade_summary(
     try:
         date_range = conn.execute(
             "SELECT MIN(entry_date), MAX(COALESCE(exit_date, entry_date)) "
-            "FROM paper_trades WHERE entry_date >= ?",
-            (cutoff,),
+            "FROM paper_trades WHERE campaign_id=? AND entry_date >= ?",
+            (campaign_id, cutoff),
         ).fetchone()
         if date_range and date_range[0] and date_range[1]:
             spy_result = _compute_spy_benchmark(
@@ -878,7 +893,9 @@ def paper_trade_summary(
             if spy_result is not None:
                 benchmarks["spy_buy_hold"] = spy_result
 
-        unfiltered_result = _compute_unfiltered_baseline(conn, cutoff=cutoff)
+        unfiltered_result = _compute_unfiltered_baseline(
+            conn, cutoff=cutoff, campaign_id=campaign_id
+        )
         if unfiltered_result is not None:
             benchmarks["unfiltered_setups"] = unfiltered_result
 
@@ -919,8 +936,8 @@ def paper_trade_summary(
         "by_tier": by_tier,
         "by_exit_reason": by_exit_reason,
         "equity_curve": equity_curve,
-        "recent_trades": recent_trades(conn, limit=20),
-        "recent_reflections": recent_reflections(conn, limit=10),
+        "recent_trades": recent_trades(conn, campaign_id=campaign_id, limit=20),
+        "recent_reflections": recent_reflections(conn, campaign_id=campaign_id, limit=10),
         "policy": _policy_snapshot(config),
         "feedback": combined_feedback,
         "family_edges": family_edges,
@@ -942,12 +959,13 @@ def list_paper_trades(
     from_date: str | None = None,
     to_date: str | None = None,
     limit: int = 100,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     """List paper trades with optional filters."""
     ensure_paper_trade_schema(conn)
 
-    clauses: list[str] = []
-    params: list[Any] = []
+    clauses: list[str] = ["paper_trades.campaign_id = ?"]
+    params: list[Any] = [campaign_id]
 
     if status != "all":
         clauses.append("status = ?")
@@ -986,9 +1004,10 @@ def list_paper_trades(
                entry_plan, exit_plan, sizing_summary,
                review_status, review_summary,
                entry_reason, entry_evidence, entry_risks,
-               ml_predicted_win_prob, ml_confidence, ml_signal, notes,
-               report_run_id
+               ml_predicted_win_prob, ml_confidence, ml_signal,
+               COALESCE(a.notes, paper_trades.notes), campaign_id, report_run_id
         FROM paper_trades
+        LEFT JOIN paper_trade_annotations a ON a.trade_id=paper_trades.id
         WHERE {where}
         ORDER BY entry_date DESC, id DESC
         LIMIT ?
@@ -1011,7 +1030,7 @@ def list_paper_trades(
         "review_status", "review_summary",
         "entry_reason", "entry_evidence", "entry_risks",
         "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
-        "report_run_id",
+        "campaign_id", "report_run_id",
     ]
     trades: list[dict[str, Any]] = []
     for row in rows:

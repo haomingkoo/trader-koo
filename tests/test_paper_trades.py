@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.campaign import transition_campaign
 from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_decision,
     compute_position_plan as _compute_position_plan_decision,
@@ -141,6 +142,10 @@ def conn(tmp_path: Path):
     db.execute(
         "UPDATE report_runs SET is_generation_canonical=1 WHERE run_id=?",
         (TEST_REPORT_RUN_ID,),
+    )
+    transition_campaign(
+        db, campaign_id="paper-v2", action="activate", actor="test-admin",
+        reason="exercise active ledger", idempotency_key=f"paper-tests-{id(db)}",
     )
     db.execute("""
         CREATE TABLE IF NOT EXISTS price_daily (
@@ -493,7 +498,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row()]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-basic",
         )
 
         assert inserted == 1
@@ -518,7 +523,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row(actionability="conditional", risk_note="Watch earnings date")]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-flagged",
         )
 
         assert inserted == 1
@@ -536,7 +541,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row()]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-plan",
         )
 
         assert inserted == 1
@@ -555,7 +560,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row()]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-rationale",
         )
 
         assert inserted == 1
@@ -584,6 +589,7 @@ class TestCreatePaperTrades:
             setup_rows=[_make_setup_row()],
             report_date="2026-03-14",
             generated_ts="2026-03-14T22:00:00Z",
+            report_run_id="create-context",
         )
 
         assert inserted == 1
@@ -604,7 +610,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row(resistance_level=151.0)]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-poor-r",
         )
 
         assert inserted == 0
@@ -613,7 +619,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row(score=10.0)]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-rejected",
         )
 
         assert inserted == 0
@@ -621,9 +627,9 @@ class TestCreatePaperTrades:
     def test_deduplicates_on_same_report_date_ticker_direction(self, conn):
         rows = [_make_setup_row()]
 
-        create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts1")
+        create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts1", report_run_id="dedupe-1")
         conn.commit()
-        inserted2 = create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts2")
+        inserted2 = create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts2", report_run_id="dedupe-2")
 
         assert inserted2 == 0
         assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
@@ -639,7 +645,7 @@ class TestCreatePaperTrades:
             ]
 
             inserted = create_paper_trades_from_report(
-                conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts",
+                conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts", report_run_id="capacity",
             )
 
             assert inserted == 1
@@ -648,7 +654,7 @@ class TestCreatePaperTrades:
 
     def test_empty_rows_returns_zero(self, conn):
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=[], report_date="2026-03-14", generated_ts="ts",
+            conn, setup_rows=[], report_date="2026-03-14", generated_ts="ts", report_run_id="empty-set",
         )
 
         assert inserted == 0
@@ -664,6 +670,7 @@ class TestCreatePaperTrades:
             setup_rows=[_make_setup_row()],
             report_date="2026-03-14",
             generated_ts="ts",
+            report_run_id="critic-error",
         )
 
         assert inserted == 0
@@ -674,7 +681,11 @@ class TestCreatePaperTrades:
             raise RuntimeError("critic infra down")
 
         monkeypatch.setattr("trader_koo.paper_trade.critic.critic_review", _boom)
-        cfg = _default_trail_config(critic_fail_open=True)
+        cfg = _default_trail_config(
+            critic_fail_open=True,
+            decision_version="paper-campaign-v2.0",
+            min_reward_r_multiple=2.0,
+        )
 
         inserted = _create_paper_trades_from_report_impl(
             conn,
@@ -1354,6 +1365,12 @@ class TestPaperTradeSummary:
         base_date = dt.date.today() - dt.timedelta(days=30)
         entry_date = base_date.isoformat()
         exit_date = (base_date + dt.timedelta(days=5)).isoformat()
+        conn.execute(
+            """INSERT INTO paper_trades
+               (id,report_date,ticker,direction,entry_price,entry_date,status,campaign_id)
+               VALUES (99,?,'AAPL','long',100,?,'closed','paper-v2')""",
+            (entry_date, entry_date),
+        )
         conn.execute(
             """
             INSERT INTO paper_trade_reflections (

@@ -394,7 +394,8 @@ export function PaperCampaignHealthPanel({
         <div>
           <div className="text-sm font-semibold text-[var(--text)]">{health.label}</div>
           <div className="mt-1 text-xs text-[var(--muted)]">
-            Active campaign <span className="font-mono text-[var(--text)]">{health.campaign_id}</span>
+            Campaign <span className="font-mono text-[var(--text)]">{health.campaign_id}</span>
+            {" · status "}<span className="font-mono text-[var(--text)]">{health.status}</span>
             {" · policy "}<span className="font-mono text-[var(--text)]">{health.policy_version}</span>
             {typeof health.starting_capital === "number" && ` · ${fmtDollars(health.starting_capital)} starting capital`}
           </div>
@@ -431,6 +432,25 @@ export function PaperCampaignHealthPanel({
             <div className="mt-3 text-xs text-[var(--muted)]">
               <span className="font-semibold text-[var(--text)]">Exact rejection gates: </span>
               {report.rejections_by_gate.map((item) => `${item.gate}/${item.reason_code} (${item.count})`).join(" · ")}
+            </div>
+          )}
+          {!!report.candidates?.length && (
+            <div className="mt-4 overflow-x-auto" data-testid="paper-campaign-decisions">
+              <table className="w-full text-left text-xs">
+                <thead className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
+                  <tr><th className="py-1 pr-3">Rank</th><th className="pr-3">Ticker</th><th className="pr-3">Tradeability</th><th>Policy decision</th></tr>
+                </thead>
+                <tbody>
+                  {report.candidates.map((candidate) => (
+                    <tr key={`${report.report_run_id}-${candidate.rank}`} className="border-t border-[var(--line)]">
+                      <td className="py-1.5 pr-3 tabular-nums">{candidate.rank}</td>
+                      <td className="pr-3 font-mono font-semibold text-[var(--text)]">{candidate.ticker}</td>
+                      <td className="pr-3">{candidate.disposition === "admitted" ? "actionable" : "not actionable"}</td>
+                      <td className="text-[var(--muted)]">{candidate.final_gate}/{candidate.reason_code}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>

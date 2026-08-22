@@ -215,12 +215,19 @@ def _check_portfolio_concentration(
     row: dict[str, Any],
     *,
     max_open: int = 5,
+    campaign_id: str | None = None,
 ) -> tuple[bool, str]:
     """Limit total open trades and avoid sector/family clustering."""
     try:
-        open_trades = conn.execute(
-            "SELECT ticker, direction, setup_family FROM paper_trades WHERE status = 'open'"
-        ).fetchall()
+        if campaign_id is None:
+            open_trades = conn.execute(
+                "SELECT ticker,direction,setup_family FROM paper_trades WHERE status='open'"
+            ).fetchall()
+        else:
+            open_trades = conn.execute(
+                "SELECT ticker,direction,setup_family FROM paper_trades WHERE status='open' AND campaign_id=?",
+                (campaign_id,),
+            ).fetchall()
     except Exception:
         return True, "Could not check portfolio — allowing"
 
@@ -306,6 +313,7 @@ def _check_family_edge(
     conn: sqlite3.Connection,
     row: dict[str, Any],
     evaluation: dict[str, Any],
+    campaign_id: str | None = None,
 ) -> tuple[bool, str]:
     """Block families with proven negative edge.
 
@@ -340,12 +348,13 @@ def _check_family_edge(
         pass  # Table not yet created — fail open and fall through
 
     # Layer 2: recent paper_trades win rate (real-time, smaller sample)
+    campaign_clause = "" if campaign_id is None else "AND campaign_id=? "
+    params = (family, direction) if campaign_id is None else (campaign_id, family, direction)
     rows = conn.execute(
-        "SELECT pnl_pct FROM paper_trades "
-        "WHERE status != 'open' AND pnl_pct IS NOT NULL "
-        "AND LOWER(REPLACE(setup_family, ' ', '_')) = ? AND direction = ? "
-        "ORDER BY exit_date DESC LIMIT 10",
-        (family, direction),
+        "SELECT pnl_pct FROM paper_trades WHERE status!='open' AND pnl_pct IS NOT NULL "
+        + campaign_clause
+        + "AND LOWER(REPLACE(setup_family,' ','_'))=? AND direction=? ORDER BY exit_date DESC LIMIT 10",
+        params,
     ).fetchall()
 
     if len(rows) < FAMILY_EDGE_MIN_SAMPLE:
@@ -376,13 +385,18 @@ def _check_family_edge(
 
 def _check_rolling_expectancy(
     conn: sqlite3.Connection,
+    campaign_id: str | None = None,
 ) -> tuple[bool, str]:
     """Reject if last 20 closed trades have negative avg return."""
-    rows = conn.execute(
-        "SELECT pnl_pct FROM paper_trades "
-        "WHERE status != 'open' AND pnl_pct IS NOT NULL "
-        "ORDER BY exit_date DESC LIMIT 20",
-    ).fetchall()
+    if campaign_id is None:
+        rows = conn.execute(
+            "SELECT pnl_pct FROM paper_trades WHERE status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT pnl_pct FROM paper_trades WHERE campaign_id=? AND status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20",
+            (campaign_id,),
+        ).fetchall()
     if len(rows) < ROLLING_EXPECTANCY_MIN_SAMPLE:
         return True, f"Insufficient history ({len(rows)} trades) for expectancy check"
     avg_pnl = sum(float(r[0]) for r in rows) / len(rows)
@@ -403,6 +417,7 @@ def critic_review(
     plan: dict[str, Any],
     market_ctx: dict[str, Any],
     max_open: int = 5,
+    campaign_id: str | None = None,
 ) -> dict[str, Any]:
     """Run all critic checks against a proposed trade.
 
@@ -429,11 +444,11 @@ def critic_review(
         ("debate_strength", lambda: _check_debate_strength(row, evaluation)),
         ("risk_reward", lambda: _check_risk_reward(plan)),
         ("regime_alignment", lambda: _check_regime_alignment(row, evaluation, market_ctx)),
-        ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row, max_open=max_open)),
+        ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row, max_open=max_open, campaign_id=campaign_id)),
         ("volatility_environment", lambda: _check_volatility_environment(market_ctx)),
         ("caution_flags", lambda: _check_caution_flags(evaluation)),
-        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn)),
-        ("family_edge", lambda: _check_family_edge(conn, row, evaluation)),
+        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn, campaign_id)),
+        ("family_edge", lambda: _check_family_edge(conn, row, evaluation, campaign_id)),
     ]
 
     # Checks that depend on external data availability — fail open on error
