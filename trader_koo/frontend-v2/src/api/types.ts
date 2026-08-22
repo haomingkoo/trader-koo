@@ -1182,13 +1182,16 @@ export interface NextOpenBaselineState {
   return_basis?: string;
   benchmark_basis?: string;
   artifact_path?: string;
+  exclusions?: Array<{ call_id?: number; reason: string }>;
   summary?: {
     selected_calls: number;
     closed_trades: number;
     excluded_calls: number;
     daily_observation_count: number;
-    net_return_pct: number;
-    full_investment_spy_price_return_pct: number | null;
+    null_mark_count?: number;
+    net_return_pct: number | null;
+    full_investment_spy_net_return_pct?: number | null;
+    full_investment_spy_price_return_pct?: number | null;
     active_net_pnl: number | null;
     active_metrics_available: boolean;
     max_name_weight_pct: number;
@@ -1199,6 +1202,8 @@ export interface NextOpenBaselineState {
     input_sha256: string;
     config_sha256: string;
     implementation_sha256: string;
+    canonical_report_lineage_enforced?: boolean;
+    research_price_basis_enforced?: boolean;
   };
 }
 

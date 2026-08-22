@@ -89,8 +89,13 @@ never move a fill to a later convenient date.
 ```bash
 python -m trader_koo.scripts.run_next_open_baseline \
   --db /path/to/copied-trader-koo.db \
+  --report-dir /path/to/copied-immutable-report-artifacts \
   --output /path/to/next-open-baseline.json
 ```
+
+The report directory is required so every persisted setup call can be resolved
+through the canonical publication verifier. The copied database and artifacts
+must be from the same snapshot or the run fails closed.
 
 Alternative holding periods are diagnostics and require
 `--diagnostic-holding-sessions`; diagnostic runs cannot consume the sealed

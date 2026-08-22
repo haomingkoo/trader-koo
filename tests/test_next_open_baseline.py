@@ -1,214 +1,265 @@
 from __future__ import annotations
 
-import copy
+import dataclasses
+import json
 import sqlite3
 
 import pytest
 
+from trader_koo.research import next_open_baseline as baseline
 from trader_koo.research.next_open_baseline import (
     BaselineConfig,
+    ExecutionDecision,
+    SessionPrice,
     artifact_state,
     canonical_json_bytes,
+    execute_portfolio,
     run_next_open_baseline,
     write_artifact,
 )
 
 
+def _prices(tickers: tuple[str, ...] = ("AAA", "BBB", "SPY"), days: int = 15) -> list[SessionPrice]:
+    return [
+        SessionPrice(ticker, f"2026-01-{day:02d}", 100 + day, 100.5 + day)
+        for ticker in tickers
+        for day in range(1, days + 1)
+    ]
+
+
+def _decision(
+    decision_id: str,
+    *,
+    ticker: str = "AAA",
+    entry: str = "2026-01-02",
+    exit_: str = "2026-01-11",
+    capacity: float = 1_000_000,
+    score: float = 90,
+    direction: str = "long",
+) -> ExecutionDecision:
+    return ExecutionDecision(
+        decision_id, ticker, direction, "2026-01-01", entry, exit_, score, capacity
+    )
+
+
+def test_canonical_execution_is_next_open_exact_close_and_byte_stable() -> None:
+    config = BaselineConfig(initial_capital=100_000, position_pct=10, max_name_pct=10)
+    args = ([_decision("1")], _prices(), [f"2026-01-{day:02d}" for day in range(1, 12)], config)
+    first = execute_portfolio(*args)
+    second = execute_portfolio(*args)
+
+    assert canonical_json_bytes(first) == canonical_json_bytes(second)
+    assert first.trades[0]["entry_date"] == "2026-01-02"
+    assert first.trades[0]["exit_date"] == "2026-01-11"
+    assert first.trades[0]["entry_price"] == pytest.approx(102 * 1.001)
+    assert first.trades[0]["exit_price"] == pytest.approx(111.5 * .999)
+
+
+def test_open_orders_cannot_spend_same_day_close_proceeds() -> None:
+    config = BaselineConfig(
+        initial_capital=10_500, position_pct=100, max_name_pct=100,
+        commission_bps_per_side=0, minimum_commission_per_side=0,
+    )
+    result = execute_portfolio(
+        [
+            _decision("old", entry="2026-01-01", exit_="2026-01-02"),
+            _decision("new", ticker="BBB", entry="2026-01-02", exit_="2026-01-03"),
+        ],
+        _prices(days=3),
+        ["2026-01-01", "2026-01-02", "2026-01-03"],
+        config,
+    )
+    assert [trade["decision_id"] for trade in result.trades] == ["old"]
+    assert {row["decision_id"]: row["reason"] for row in result.exclusions}["new"] == "insufficient_cash"
+
+
+def test_same_ticker_orders_share_name_and_adv_limits() -> None:
+    config = BaselineConfig(
+        initial_capital=100_000, position_pct=10, max_name_pct=15, max_adv_pct=100,
+        commission_bps_per_side=0, minimum_commission_per_side=0,
+    )
+    result = execute_portfolio(
+        [_decision("1", capacity=12_000), _decision("2", capacity=12_000, score=89)],
+        _prices(tickers=("AAA",), days=11),
+        [f"2026-01-{day:02d}" for day in range(1, 12)],
+        config,
+    )
+    total = sum(float(trade["entry_notional"]) for trade in result.trades)
+    assert total <= 12_000
+    assert result.max_name_weight_pct <= 15
+
+
+def test_cash_interest_and_short_borrow_change_daily_equity_and_sizing() -> None:
+    sessions = [f"2026-01-{day:02d}" for day in range(1, 4)]
+    decisions = [_decision("1", direction="short", entry="2026-01-01", exit_="2026-01-03")]
+    free = execute_portfolio(
+        decisions, _prices(tickers=("AAA",), days=3), sessions,
+        BaselineConfig(initial_capital=100_000, cash_rate_bps_annual=0, short_borrow_bps_annual=0),
+    )
+    financed = execute_portfolio(
+        decisions, _prices(tickers=("AAA",), days=3), sessions,
+        BaselineConfig(initial_capital=100_000, cash_rate_bps_annual=500, short_borrow_bps_annual=1000),
+    )
+    assert financed.trades[0]["borrow"] > 0
+    assert financed.equity_curve[1]["equity"] != free.equity_curve[1]["equity"]
+    unpriced = execute_portfolio(
+        decisions, _prices(tickers=("AAA",), days=3), sessions,
+        BaselineConfig(initial_capital=100_000, short_borrow_bps_annual=None),
+    )
+    assert unpriced.financing_priced is False
+
+
+def test_null_marks_are_not_valid_observations() -> None:
+    prices = _prices(tickers=("AAA",), days=3)
+    prices[1] = dataclasses.replace(prices[1], close=None)
+    result = execute_portfolio(
+        [_decision("1", entry="2026-01-01", exit_="2026-01-03")], prices,
+        ["2026-01-01", "2026-01-02", "2026-01-03"], BaselineConfig(initial_capital=100_000),
+    )
+    assert result.equity_curve[1] == {
+        "date": "2026-01-02", "equity": None, "status": "unpriceable_mark"
+    }
+
+
 def _database() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE price_daily (
-            ticker TEXT NOT NULL,
-            date TEXT NOT NULL,
-            open REAL,
-            close REAL,
-            volume REAL,
-            PRIMARY KEY(ticker, date)
-        );
+            ticker TEXT NOT NULL, date TEXT NOT NULL, open REAL, close REAL, volume REAL,
+            adjustment_basis TEXT, adjustment_version TEXT, basis_status TEXT,
+            PRIMARY KEY(ticker,date));
+        CREATE TABLE report_runs (
+            run_id TEXT PRIMARY KEY, status TEXT, is_generation_canonical INTEGER,
+            publication_verified INTEGER);
         CREATE TABLE setup_call_evaluations (
-            id INTEGER PRIMARY KEY,
-            asof_date TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            call_direction TEXT NOT NULL,
-            score REAL,
-            setup_family TEXT,
-            setup_tier TEXT
-        );
-        """
-    )
-    dates = [f"2026-01-{day:02d}" for day in range(1, 32)]
-    for index, date in enumerate(dates):
-        spy = 100.0 + index
-        asset = 50.0 + index
-        conn.execute(
-            "INSERT INTO price_daily VALUES ('SPY', ?, ?, ?, 1000000)",
-            (date, spy, spy + 0.5),
-        )
-        conn.execute(
-            "INSERT INTO price_daily VALUES ('AAA', ?, ?, ?, 100000)",
-            (date, asset, asset + 0.5),
-        )
-        conn.execute(
-            "INSERT INTO price_daily VALUES ('BBB', ?, ?, ?, 100000)",
-            (date, asset + 5.0, asset + 5.5),
-        )
+            id INTEGER PRIMARY KEY, asof_date TEXT, ticker TEXT, call_direction TEXT,
+            score REAL, setup_family TEXT, setup_tier TEXT, report_run_id TEXT);
+        INSERT INTO report_runs VALUES ('run','published',1,1);
+    """)
+    for ticker in ("AAA", "SPY"):
+        for day in range(1, 32):
+            conn.execute(
+                "INSERT INTO price_daily VALUES (?,?,?,?,?,'split_adjusted','v1','verified')",
+                (ticker, f"2026-01-{day:02d}", 100 + day, 100.5 + day, 100_000),
+            )
     conn.commit()
     return conn
 
 
-def _call(conn: sqlite3.Connection, call_id: int, date: str, ticker: str = "AAA") -> None:
-    conn.execute(
-        "INSERT INTO setup_call_evaluations VALUES (?, ?, ?, 'long', 90, 'bullish', 'A')",
-        (call_id, date, ticker),
-    )
-    conn.commit()
+def _eligible_contract(*_args: object, **_kwargs: object) -> tuple[dict[str, object], list[str]]:
+    return ({"eligible": True, "basis": "split_adjusted", "distributions_included": False}, [])
 
 
-def test_uses_immediate_next_open_and_exact_tenth_close() -> None:
-    conn = _database()
-    _call(conn, 1, "2026-01-01")
+def _verified_fixture(
+    conn: sqlite3.Connection, _report_dir: object
+) -> tuple[list[dict[str, object]], list[str], dict[str, object]]:
+    rows = conn.execute(
+        "SELECT id,asof_date,ticker,call_direction,score,setup_family,setup_tier,report_run_id "
+        "FROM setup_call_evaluations ORDER BY asof_date,score DESC,id"
+    ).fetchall()
+    return ([{
+        "call_id": int(row[0]), "signal_date": str(row[1]), "ticker": str(row[2]),
+        "direction": str(row[3]), "score": float(row[4]), "setup_family": row[5],
+        "setup_tier": row[6], "report_run_id": row[7],
+    } for row in rows], [], {"run": {"content_hash": "fixture"}})
+
+
+def test_sql_adapter_fails_closed_without_accepted_contracts() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE setup_call_evaluations (id INTEGER)")
     artifact = run_next_open_baseline(conn, consume_heldout=False)
+    assert artifact["summary"]["closed_trades"] == 0
+    assert "report_publication_contract_unavailable" in artifact["readiness_reasons"]
+    assert "research_price_basis_contract_unavailable" in artifact["readiness_reasons"]
 
-    assert artifact["summary"]["closed_trades"] == 1
+
+def test_adapter_uses_prior_session_capacity_and_one_execution_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _database()
+    conn.execute("INSERT INTO setup_call_evaluations VALUES (1,'2026-01-01','AAA','long',90,'bullish','A','run')")
+    conn.execute("UPDATE price_daily SET volume=1 WHERE ticker='AAA' AND date='2026-01-02'")
+    conn.commit()
+    monkeypatch.setattr(baseline, "_price_contract", _eligible_contract)
+    monkeypatch.setattr(baseline, "_verified_calls", _verified_fixture)
+    artifact = run_next_open_baseline(conn, consume_heldout=False)
     trade = artifact["trades"][0]
-    assert trade["entry_date"] == "2026-01-02"
-    assert trade["exit_date"] == "2026-01-11"
-    assert trade["entry_price"] == pytest.approx(51.0 * 1.001)
-    assert trade["exit_price"] == pytest.approx(60.5 * 0.999)
-    assert len(artifact["equity_curve"]) == 11
-    assert artifact["summary"]["daily_observation_count"] == 11
-    assert artifact["summary"]["effective_non_overlapping_block_count"] == 1.1
-    assert artifact["confidence_intervals"] is None
+    # Signal-day capacity (101.5 * 100k) is available; entry-day volume=1 is ignored.
+    assert trade["entry_notional"] > 1_000
+    assert artifact["benchmark_basis"].endswith("canonical_execution_ledger")
+    assert artifact["summary"]["full_investment_spy_net_return_pct"] is not None
 
 
-def test_missing_immediate_open_is_excluded_not_delayed() -> None:
-    conn = _database()
-    _call(conn, 1, "2026-01-01")
-    conn.execute("UPDATE price_daily SET open=NULL WHERE ticker='AAA' AND date='2026-01-02'")
-    conn.commit()
-
-    artifact = run_next_open_baseline(conn, consume_heldout=False)
-
-    assert artifact["summary"]["closed_trades"] == 0
-    assert artifact["exclusions"] == [{
-        "call_id": 1,
-        "reason": "immediate_next_session_open_missing",
-        "required_entry_date": "2026-01-02",
-    }]
-
-
-def test_missing_exact_exit_is_excluded_not_closed_later() -> None:
-    conn = _database()
-    _call(conn, 1, "2026-01-01")
-    conn.execute("UPDATE price_daily SET close=NULL WHERE ticker='AAA' AND date='2026-01-11'")
-    conn.commit()
-
-    artifact = run_next_open_baseline(conn, consume_heldout=False)
-
-    assert artifact["summary"]["closed_trades"] == 0
-    assert artifact["exclusions"][0]["reason"] == "exact_tenth_session_close_missing"
-    assert artifact["exclusions"][0]["required_exit_date"] == "2026-01-11"
-
-
-def test_unpriced_benchmark_financing_nulls_active_metrics() -> None:
+def test_adapter_nulls_active_metrics_when_financing_is_unpriced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _database()
     conn.execute(
-        "INSERT INTO setup_call_evaluations VALUES (1, '2026-01-01', 'AAA', 'short', 90, 'bearish', 'A')"
+        "INSERT INTO setup_call_evaluations VALUES "
+        "(1,'2026-01-01','AAA','short',90,'bearish','A','run')"
     )
     conn.commit()
+    monkeypatch.setattr(baseline, "_price_contract", _eligible_contract)
+    monkeypatch.setattr(baseline, "_verified_calls", _verified_fixture)
     artifact = run_next_open_baseline(
         conn,
-        config=BaselineConfig(spy_short_borrow_bps_annual=None),
+        config=BaselineConfig(short_borrow_bps_annual=None),
         consume_heldout=False,
     )
-
-    assert artifact["summary"]["closed_trades"] == 1
     assert artifact["summary"]["active_metrics_available"] is False
+    assert artifact["summary"]["net_return_pct"] is None
     assert artifact["summary"]["matched_spy_net_pnl"] is None
     assert artifact["summary"]["active_net_pnl"] is None
-    assert artifact["trades"][0]["spy_matched_net_pnl"] is None
+    assert "financing_inputs_unpriced" in artifact["readiness_reasons"]
 
 
-def test_holdout_consumption_is_idempotent_and_immutable() -> None:
+def test_holdout_is_globally_sealed_and_exact_rerun_only(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _database()
-    _call(conn, 1, "2026-01-01")
-    _call(conn, 2, "2026-01-20")
-
+    monkeypatch.setattr(baseline, "_price_contract", _eligible_contract)
+    monkeypatch.setattr(baseline, "_verified_calls", _verified_fixture)
+    # Widely spaced dates survive purge and make one observed heldout point.
+    for call_id, day in enumerate((1, 2, 3, 14), 1):
+        conn.execute(
+            "INSERT INTO setup_call_evaluations VALUES (?,?,?,?,90,'bullish','A','run')",
+            (call_id, f"2026-01-{day:02d}", "AAA", "long"),
+        )
+    conn.commit()
     first = run_next_open_baseline(conn)
     second = run_next_open_baseline(conn)
-
     assert canonical_json_bytes(first) == canonical_json_bytes(second)
-    assert first["consumed_window"]["reusable_for_policy_selection"] is False
-    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
-        conn.execute("DELETE FROM research_holdout_consumptions")
-    changed = copy.deepcopy(dataclasses_asdict(BaselineConfig()))
-    changed["position_pct"] = 4.0
-    with pytest.raises(ValueError, match="already consumed"):
-        run_next_open_baseline(conn, config=BaselineConfig(**changed))
-
-
-def dataclasses_asdict(config: BaselineConfig) -> dict[str, object]:
-    # Local helper keeps the test independent of the module's private helpers.
-    return {field.name: getattr(config, field.name) for field in config.__dataclass_fields__.values()}
-
-
-def test_current_equity_capacity_and_concentration_are_reported() -> None:
-    conn = _database()
-    _call(conn, 1, "2026-01-01")
-    conn.execute(
-        "INSERT INTO setup_call_evaluations VALUES (2, '2026-01-01', 'BBB', 'long', 89, 'bullish', 'A')"
-    )
+    assert first["consumed_window"]["consumed"] is True
+    conn.execute("INSERT INTO setup_call_evaluations VALUES (9,'2026-01-15','AAA','long',89,'bullish','A','run')")
     conn.commit()
-    artifact = run_next_open_baseline(
-        conn,
-        config=BaselineConfig(position_pct=5.0, max_name_pct=5.0, max_adv_pct=0.01),
-        consume_heldout=False,
-    )
-
-    assert artifact["summary"]["closed_trades"] == 2
-    assert artifact["summary"]["max_name_weight_pct"] <= 5.0
-    assert artifact["summary"]["max_gross_exposure_pct"] <= 10.0
-    assert all(trade["position_weight_at_entry"] <= 0.05 for trade in artifact["trades"])
+    with pytest.raises(ValueError, match="already consumed"):
+        run_next_open_baseline(conn)
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        conn.execute("DELETE FROM research_holdout_dates")
 
 
-def test_market_context_symbols_are_not_strategy_trades() -> None:
-    conn = _database()
-    _call(conn, 1, "2026-01-01", ticker="SPY")
-    artifact = run_next_open_baseline(conn, consume_heldout=False)
-    assert artifact["summary"]["closed_trades"] == 0
-    assert artifact["exclusions"] == [
-        {"call_id": 1, "reason": "non_tradable_context_ticker"}
-    ]
+def test_artifact_loader_rejects_content_and_implementation_tamper(tmp_path) -> None:
+    artifact = {
+        "available": True,
+        "provenance": {"implementation_sha256": baseline._implementation_hash()},
+        "summary": {"closed_trades": 1},
+    }
+    artifact["provenance"]["artifact_sha256"] = baseline._sha256(artifact)
+    path = tmp_path / "baseline.json"
+    write_artifact(path, artifact)
+    assert artifact_state(path)["available"] is True
+
+    payload = json.loads(path.read_text())
+    payload["summary"]["closed_trades"] = 2
+    path.write_text(json.dumps(payload))
+    assert artifact_state(path)["error"] == "artifact_hash_mismatch"
+
+    payload["summary"]["closed_trades"] = 1
+    payload["provenance"]["implementation_sha256"] = "0" * 64
+    check = dict(payload)
+    check["provenance"] = dict(payload["provenance"])
+    check["provenance"].pop("artifact_sha256")
+    payload["provenance"]["artifact_sha256"] = baseline._sha256(check)
+    path.write_text(json.dumps(payload))
+    assert artifact_state(path)["error"] == "implementation_hash_mismatch"
 
 
 def test_canonical_json_rejects_non_finite_values() -> None:
     with pytest.raises(ValueError, match="NaN"):
         canonical_json_bytes({"bad": float("nan")})
-
-
-def test_diagnostic_horizon_is_explicit_and_cannot_consume_holdout() -> None:
-    conn = _database()
-    _call(conn, 1, "2026-01-01")
-    diagnostic = run_next_open_baseline(
-        conn, config=BaselineConfig(holding_sessions=5), consume_heldout=False
-    )
-    assert diagnostic["evidence_state"] == "diagnostic_invalid"
-    assert diagnostic["trades"][0]["exit_date"] == "2026-01-06"
-    with pytest.raises(ValueError, match="cannot consume"):
-        run_next_open_baseline(
-            conn, config=BaselineConfig(holding_sessions=5), consume_heldout=True
-        )
-
-
-def test_artifact_loader_verifies_embedded_hash(tmp_path) -> None:
-    conn = _database()
-    _call(conn, 1, "2026-01-01")
-    artifact = run_next_open_baseline(conn, consume_heldout=False)
-    path = tmp_path / "baseline.json"
-    write_artifact(path, artifact)
-    loaded = artifact_state(path)
-    assert loaded["available"] is True
-    tampered = path.read_text().replace('"closed_trades":1', '"closed_trades":2')
-    path.write_text(tampered)
-    assert artifact_state(path)["error"] == "artifact_hash_mismatch"

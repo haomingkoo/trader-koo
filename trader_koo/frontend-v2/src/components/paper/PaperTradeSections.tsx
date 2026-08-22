@@ -202,6 +202,14 @@ export function NextOpenBaselinePanel({
 }) {
   const summary = baseline?.summary;
   const available = baseline?.available === true;
+  const spyReturn = summary?.full_investment_spy_net_return_pct
+    ?? summary?.full_investment_spy_price_return_pct;
+  const exclusionReasons = Object.entries(
+    (baseline?.exclusions ?? []).reduce<Record<string, number>>((counts, row) => {
+      counts[row.reason] = (counts[row.reason] ?? 0) + 1;
+      return counts;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
   return (
     <section
       data-testid="next-open-baseline"
@@ -228,7 +236,7 @@ export function NextOpenBaselinePanel({
           )}
         </div>
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
         <div className="rounded-lg border border-[var(--line)] px-3 py-2">
           <div className="text-[10px] uppercase text-[var(--muted)]">Closed trades</div>
           <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.closed_trades ?? 0}</div>
@@ -247,6 +255,24 @@ export function NextOpenBaselinePanel({
           <div className="text-[10px] uppercase text-[var(--muted)]">Excluded calls</div>
           <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.excluded_calls ?? 0}</div>
         </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Matched SPY active P&amp;L</div>
+          <div className={`mt-1 text-lg font-semibold tabular-nums ${pnlColor(summary?.active_net_pnl)}`}>
+            {summary?.active_metrics_available ? fmtDollars(summary.active_net_pnl) : "Unpriced"}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Full-investment SPY</div>
+          <div className={`mt-1 text-lg font-semibold tabular-nums ${pnlColor(spyReturn)}`}>
+            {fmtPct(spyReturn, "%", true)}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-[var(--muted)] md:grid-cols-2">
+        <div><span className="font-semibold text-[var(--text)]">Return basis:</span> {readableEvidenceText(baseline?.return_basis ?? "unavailable")}</div>
+        <div><span className="font-semibold text-[var(--text)]">Benchmark basis:</span> {readableEvidenceText(baseline?.benchmark_basis ?? "unavailable")}</div>
+        <div><span className="font-semibold text-[var(--text)]">Max gross:</span> {fmtPct(summary?.max_gross_exposure_pct)}</div>
+        <div><span className="font-semibold text-[var(--text)]">Invalid marks:</span> {summary?.null_mark_count ?? 0}</div>
       </div>
       <div className="mt-3 text-xs text-[var(--muted)]">
         <div className="font-semibold text-[var(--text)]">Why this cannot authorize a campaign</div>
@@ -257,6 +283,12 @@ export function NextOpenBaselinePanel({
           ).map((reason) => <li key={reason}>{readableEvidenceText(reason)}</li>)}
         </ul>
       </div>
+      {exclusionReasons.length > 0 && (
+        <div className="mt-3 text-xs text-[var(--muted)]">
+          <span className="font-semibold text-[var(--text)]">Top exclusions: </span>
+          {exclusionReasons.slice(0, 3).map(([reason, count]) => `${readableEvidenceText(reason)} (${count})`).join(" · ")}
+        </div>
+      )}
       {baseline?.provenance?.artifact_sha256 && (
         <div data-testid="next-open-artifact-hash" className="mt-3 break-all border-t border-[var(--line)] pt-3 font-mono text-[10px] text-[var(--muted)]">
           artifact sha256:{baseline.provenance.artifact_sha256}

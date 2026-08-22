@@ -18,6 +18,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--report-dir", required=True, type=Path,
+        help="Explicit directory containing the immutable report artifacts referenced by the DB",
+    )
     parser.add_argument("--diagnostic-holding-sessions", type=int)
     parser.add_argument("--no-consume-heldout", action="store_true")
     args = parser.parse_args()
@@ -33,6 +37,7 @@ def main() -> int:
                 not args.no_consume_heldout
                 and args.diagnostic_holding_sessions is None
             ),
+            report_dir=args.report_dir,
         )
     finally:
         conn.close()
