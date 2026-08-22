@@ -1242,10 +1242,13 @@ export function PaperTradePerformanceAttribution({
 }: {
   summary: PaperTradeSummary;
 }) {
+  const byDirection = summary.by_direction ?? {};
+  const byFamily = summary.by_family ?? {};
+  const byExitReason = summary.by_exit_reason ?? {};
   const hasData =
-    Object.keys(summary.by_direction).length > 0 ||
-    Object.keys(summary.by_family).length > 0 ||
-    Object.keys(summary.by_exit_reason).length > 0;
+    Object.keys(byDirection).length > 0 ||
+    Object.keys(byFamily).length > 0 ||
+    Object.keys(byExitReason).length > 0;
 
   if (!hasData) return null;
 
@@ -1260,14 +1263,14 @@ export function PaperTradePerformanceAttribution({
       <div className="grid gap-6 border-t border-[var(--line)] px-4 py-4 sm:grid-cols-2 lg:grid-cols-3">
         <AttributionTable
           title="By Direction"
-          data={summary.by_direction}
+          data={byDirection}
           showAvgR
         />
         <AttributionTable
           title="By Setup Family"
-          data={summary.by_family}
+          data={byFamily}
         />
-        <ExitReasonTable data={summary.by_exit_reason} />
+        <ExitReasonTable data={byExitReason} />
       </div>
     </details>
   );

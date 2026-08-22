@@ -29,6 +29,23 @@ from trader_koo.db.price_contract import research_price_contract
 LOG = logging.getLogger(__name__)
 
 
+def _pending_order_hash(
+    *, order_id: str, report_run_id: str, report_date: str, generated_ts: str,
+    campaign_id: str, policy_version: str, candidate_rank: int, ticker: str,
+    direction: str, candidate_json: str, critic_json: str,
+    market_context_json: str, avg_daily_volume: float | None,
+) -> str:
+    return canonical_hash({
+        "order_id": order_id, "report_run_id": report_run_id,
+        "report_date": report_date, "generated_ts": generated_ts,
+        "campaign_id": campaign_id, "policy_version": policy_version,
+        "candidate_rank": candidate_rank, "ticker": ticker,
+        "direction": direction, "candidate_json": candidate_json,
+        "critic_json": critic_json, "market_context_json": market_context_json,
+        "avg_daily_volume": avg_daily_volume,
+    })
+
+
 def _run_owned_transaction(conn: sqlite3.Connection, operation: Any) -> Any:
     """Run a mutation in one snapshot without committing caller-owned work."""
     owned = not conn.in_transaction
@@ -46,7 +63,10 @@ def _run_owned_transaction(conn: sqlite3.Connection, operation: Any) -> Any:
 
 
 def _require_published_canonical_report(
-    conn: sqlite3.Connection, report_run_id: str
+    conn: sqlite3.Connection,
+    report_run_id: str,
+    *,
+    require_current: bool = True,
 ) -> dict[str, Any]:
     """Resolve lineage only from #230's authoritative registry."""
     table = conn.execute(
@@ -55,15 +75,26 @@ def _require_published_canonical_report(
     if not table:
         raise ValueError("paper admission requires the authoritative report_runs registry")
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(report_runs)")}
-    required = {"run_id", "status", "is_generation_canonical"}
+    required = {"run_id", "artifact_path", "publication_verified"}
     if not required.issubset(columns):
-        raise ValueError("report_runs registry does not expose canonical publication lineage")
+        raise ValueError("report_runs registry does not expose verified publication lineage")
     row = conn.execute(
-        "SELECT status,is_generation_canonical FROM report_runs WHERE run_id=?",
+        "SELECT artifact_path FROM report_runs WHERE run_id=?",
         (report_run_id,),
     ).fetchone()
-    if not row or str(row[0]) != "published" or int(row[1] or 0) != 1:
-        raise ValueError("paper admission requires a published canonical report_run_id")
+    if not row or not str(row[0] or "").strip():
+        raise ValueError("paper admission requires a verified report artifact")
+    from pathlib import Path
+    from trader_koo.report.runs import resolve_published_report
+
+    resolved = resolve_published_report(
+        conn,
+        report_dir=Path(str(row[0])).parent,
+        run_id=report_run_id,
+        require_current=require_current,
+    )
+    if resolved is None:
+        raise ValueError("paper admission requires the current verified publication")
     return {"report_complete": True, "is_canonical": True}
 
 
@@ -579,9 +610,10 @@ def _create_paper_trades_from_report(
     config: PaperTradeConfig,
     report_run_id: str | None = None,
     schema_ready: bool = False,
+    expected_price_revision: str | None = None,
 ) -> int:
     """Atomically persist one report's trades and sealed decision ledger."""
-    if not report_date or not setup_rows:
+    if not report_date:
         return 0
 
     if not schema_ready:
@@ -589,6 +621,13 @@ def _create_paper_trades_from_report(
     if not str(report_run_id or "").strip():
         raise ValueError("paper-trade creation requires canonical report-run lineage")
     lineage = _require_published_canonical_report(conn, str(report_run_id))
+    if expected_price_revision is not None:
+        current_price_contract = research_price_contract(conn)
+        if (
+            not current_price_contract.get("eligible")
+            or current_price_contract.get("revision") != expected_price_revision
+        ):
+            return 0
     fill_pending_paper_orders(conn, config=config, through_date=report_date)
     register_bot_version(
         conn,
@@ -607,8 +646,7 @@ def _create_paper_trades_from_report(
             generated_ts=generated_ts,
             config=config,
             report_run_id=report_run_id,
-            report_complete=bool(lineage["report_complete"]),
-            is_canonical=bool(lineage["is_canonical"]),
+            expected_price_revision=expected_price_revision,
         )
     except Exception:
         conn.execute("ROLLBACK TO paper_report_admission")
@@ -626,6 +664,7 @@ def _create_paper_trades_from_report_in_transaction(
     generated_ts: str,
     config: PaperTradeConfig,
     report_run_id: str | None = None,
+    expected_price_revision: str | None = None,
 ) -> int:
     """Create paper trades from qualifying daily report setups."""
     if not report_date:
@@ -871,10 +910,6 @@ def _create_paper_trades_from_report_in_transaction(
         ).fetchone()
         if member is None:
             raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
-        if not research_price_contract(conn, [ticker]).get("eligible"):
-            LOG.warning("Paper trade skipped: %s price series is unresolved", ticker)
-            continue
-
         direction = str(evaluation["direction"])
 
         # Entry price is strictly the first later-session open.  The signal
@@ -920,6 +955,25 @@ def _create_paper_trades_from_report_in_transaction(
                 final_gate="trade_plan",
                 reason_code="invalid_stop_target_or_fill",
                 reasons=[f"Trade plan could not be computed: {type(exc).__name__}."],
+            )
+            continue
+
+        if execution_ready and not research_price_contract(conn, [ticker]).get("eligible"):
+            LOG.warning("Paper trade skipped: %s price series is unresolved", ticker)
+            _decision_runtime_context["portfolio_block"] = {
+                "gate": "price_basis",
+                "reason_code": "price_series_revision_unavailable",
+                "detail": "The executable next-open price series is not revision verified.",
+            }
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                final_gate="price_basis",
+                reason_code="price_series_revision_unavailable",
+                reasons=["The executable next-open price series is not revision verified."],
             )
             continue
 
@@ -1115,23 +1169,38 @@ def _create_paper_trades_from_report_in_transaction(
                 "report_date": report_date, "ticker": ticker,
                 "direction": direction, "candidate_rank": rank,
             }
+            candidate_json = canonical_json(row)
+            critic_json = canonical_json(critic)
+            market_context_json = canonical_json(market_ctx)
+            avg_daily_volume = _decision_runtime_context.get("avg_daily_volume")
+            order_hash = _pending_order_hash(
+                order_id=order_id, report_run_id=report_run_id,
+                report_date=report_date, generated_ts=generated_ts,
+                campaign_id=config.campaign_id,
+                policy_version=config.decision_version, candidate_rank=rank,
+                ticker=ticker, direction=direction,
+                candidate_json=candidate_json, critic_json=critic_json,
+                market_context_json=market_context_json,
+                avg_daily_volume=avg_daily_volume,
+            )
             conn.execute(
                 """INSERT INTO paper_pending_orders
                    (order_id,report_run_id,report_date,generated_ts,campaign_id,
                     policy_version,candidate_rank,ticker,direction,candidate_json,
-                    critic_json,market_context_json,avg_daily_volume,status)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')
+                    critic_json,market_context_json,avg_daily_volume,order_hash,status)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')
                    ON CONFLICT(order_id) DO NOTHING""",
                 (order_id,report_run_id,report_date,generated_ts,config.campaign_id,
-                 config.decision_version,rank,ticker,direction,canonical_json(row),
-                 canonical_json(critic),canonical_json(market_ctx),
-                 _decision_runtime_context.get("avg_daily_volume")),
+                 config.decision_version,rank,ticker,direction,candidate_json,
+                 critic_json,market_context_json,avg_daily_volume,order_hash),
             )
             conn.execute(
                 """INSERT OR IGNORE INTO paper_order_events
                    (order_id,event_type,event_date,payload_json,payload_hash)
                    VALUES (?,'created',?,?,?)""",
-                (order_id,report_date,canonical_json(order_payload),canonical_hash(order_payload)),
+                (order_id,report_date,
+                 canonical_json({**order_payload, "order_hash": order_hash}),
+                 canonical_hash({**order_payload, "order_hash": order_hash})),
             )
             record_decision(
                 row=row, rank=rank, evaluation=evaluation, levels=levels, plan=plan,
@@ -1329,6 +1398,7 @@ def create_paper_trades_from_report(
     config: PaperTradeConfig,
     report_run_id: str | None = None,
     schema_ready: bool = False,
+    expected_price_revision: str | None = None,
 ) -> int:
     return _run_owned_transaction(
         conn,
@@ -1340,6 +1410,7 @@ def create_paper_trades_from_report(
             config=config,
             report_run_id=report_run_id,
             schema_ready=schema_ready,
+            expected_price_revision=expected_price_revision,
         ),
     )
 
@@ -1356,15 +1427,28 @@ def fill_pending_paper_orders(
     rows = conn.execute(
         """SELECT order_id,report_run_id,report_date,generated_ts,campaign_id,
                   policy_version,candidate_rank,ticker,direction,candidate_json,
-                  critic_json,market_context_json,avg_daily_volume
+                  critic_json,market_context_json,avg_daily_volume,order_hash
            FROM paper_pending_orders WHERE status='pending'
            ORDER BY report_date,candidate_rank,order_id"""
     ).fetchall()
     for raw in rows:
         (order_id,report_run_id,report_date,generated_ts,campaign_id,
          policy_version,rank,ticker,direction,candidate_json,critic_json,
-         market_json,avg_volume) = raw
-        _require_published_canonical_report(conn, str(report_run_id))
+         market_json,avg_volume,order_hash) = raw
+        expected_order_hash = _pending_order_hash(
+            order_id=str(order_id), report_run_id=str(report_run_id),
+            report_date=str(report_date), generated_ts=str(generated_ts),
+            campaign_id=str(campaign_id), policy_version=str(policy_version),
+            candidate_rank=int(rank), ticker=str(ticker), direction=str(direction),
+            candidate_json=str(candidate_json), critic_json=str(critic_json),
+            market_context_json=str(market_json),
+            avg_daily_volume=float(avg_volume) if avg_volume is not None else None,
+        )
+        if str(order_hash) != expected_order_hash:
+            raise ValueError(f"pending order {order_id} failed immutable hash verification")
+        _require_published_canonical_report(
+            conn, str(report_run_id), require_current=False
+        )
         query = (
             "SELECT CAST(open AS REAL),date FROM price_daily "
             "WHERE ticker=? AND date>? AND open IS NOT NULL"
@@ -1393,6 +1477,8 @@ def fill_pending_paper_orders(
             block = {"gate": "campaign_lifecycle", "reason_code": "policy_version_changed", "detail": "Pending order policy no longer matches campaign."}
         elif open_count >= config.max_open:
             block = {"gate": "portfolio_capacity", "reason_code": "max_open_positions", "detail": "No portfolio slot remained at execution."}
+        elif not research_price_contract(conn, [str(ticker)]).get("eligible"):
+            block = {"gate": "price_basis", "reason_code": "price_series_revision_unavailable", "detail": "The executable next-open price series is not revision verified."}
         raw_open = float(open_row[0])
         slip = config.entry_slippage_bps / 10_000
         entry_price = round(raw_open * (1 + slip if direction == "long" else 1 - slip), 4)

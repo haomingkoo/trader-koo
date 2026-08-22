@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from trader_koo.backend.services.database import get_conn
-from trader_koo.middleware.auth import require_admin_auth
 from trader_koo.paper_trade.campaign import record_human_approval, transition_campaign
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 
@@ -24,12 +23,12 @@ class CampaignTransition(BaseModel):
 class CampaignApproval(BaseModel):
     approval_id: str = Field(min_length=8, max_length=120)
     experiment_id: str = Field(min_length=3, max_length=120)
+    experiment_evidence_hash: str = Field(min_length=64, max_length=64)
     reason: str = Field(min_length=3, max_length=500)
     artifact: dict[str, Any]
 
 
 @router.post("/api/admin/paper-campaigns/{campaign_id}/approvals")
-@require_admin_auth
 def admin_approve_paper_campaign(
     request: Request,
     campaign_id: str,
@@ -46,6 +45,7 @@ def admin_approve_paper_campaign(
                 conn, approval_id=body.approval_id,
                 experiment_id=body.experiment_id, campaign_id=campaign_id,
                 actor=actor, reason=body.reason, artifact=body.artifact,
+                experiment_evidence_hash=body.experiment_evidence_hash,
             )
             conn.commit()
         except Exception as exc:
@@ -57,7 +57,6 @@ def admin_approve_paper_campaign(
 
 
 @router.post("/api/admin/paper-campaigns/{campaign_id}/transition")
-@require_admin_auth
 def admin_transition_paper_campaign(
     request: Request,
     campaign_id: str,

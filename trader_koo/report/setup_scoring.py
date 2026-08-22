@@ -1655,12 +1655,13 @@ def _persist_setup_call_candidates(
         )
     from trader_koo.db.price_contract import research_price_contract
 
-    current = research_price_contract(conn)
-    if not current["eligible"] or (
-        expected_price_revision is not None
-        and current.get("revision") != expected_price_revision
-    ):
-        return 0
+    if expected_price_revision is not None:
+        current = research_price_contract(conn)
+        if (
+            not current["eligible"]
+            or current.get("revision") != expected_price_revision
+        ):
+            return 0
     inserted = 0
     for row in (setup_rows or [])[:SETUP_EVAL_TRACK_LIMIT]:
         if not isinstance(row, dict):
@@ -1675,7 +1676,10 @@ def _persist_setup_call_candidates(
         ).fetchone()
         if member is None:
             raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
-        if not research_price_contract(conn, [ticker])["eligible"]:
+        if (
+            expected_price_revision is not None
+            and not research_price_contract(conn, [ticker])["eligible"]
+        ):
             continue
         direction = _setup_call_direction(row)
         if direction not in {"long", "short"}:

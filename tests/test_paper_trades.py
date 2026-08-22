@@ -40,15 +40,6 @@ from trader_koo.db.price_contract import (
 TEST_REPORT_RUN_ID = "paper-trade-test-run"
 
 
-def create_paper_trades_from_report(
-    conn: sqlite3.Connection,
-    **kwargs,
-) -> int:
-    """Exercise trade behavior with an explicit canonical report parent."""
-    kwargs.setdefault("report_run_id", TEST_REPORT_RUN_ID)
-    return _create_paper_trades_from_report(conn, **kwargs)
-
-
 @pytest.fixture()
 def conn(tmp_path: Path):
     """In-memory SQLite connection with paper trade + price schema."""
@@ -162,19 +153,20 @@ def conn(tmp_path: Path):
 
 
 def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
+    kwargs["report_run_id"] = TEST_REPORT_RUN_ID
     next_date = (
         dt.date.fromisoformat(str(kwargs["report_date"])) + dt.timedelta(days=1)
     ).isoformat()
     for row in kwargs.get("setup_rows") or []:
         if not isinstance(row, dict) or not row.get("ticker"):
             continue
-        close = float(row.get("close") or 100.0)
-        conn.execute(
-            """INSERT OR IGNORE INTO price_daily
-               (ticker,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?)""",
-            (str(row["ticker"]).upper(), next_date, close, close, close, close, 1_000_000),
-        )
-    return _public_create_paper_trades_from_report(conn, **kwargs)
+        ticker = str(row["ticker"]).upper()
+        if conn.execute(
+            "SELECT 1 FROM price_daily WHERE ticker=? AND date=?", (ticker, next_date)
+        ).fetchone() is None:
+            close = float(row.get("close") or 100.0)
+            _seed_price(conn, ticker, close, date=next_date)
+    return _create_paper_trades_from_report(conn, **kwargs)
 
 
 def _seed_price(
@@ -520,7 +512,16 @@ class TestCreatePaperTrades:
         assert trade == ("AAPL", "long", "open", "approved", "approved")
 
     def test_unresolved_price_cannot_create_trade(self, conn):
-        conn.execute("UPDATE price_daily SET basis_status='unresolved' WHERE ticker='AAPL'")
+        _seed_price(conn, "AAPL", 150.0, date="2026-03-15")
+        conn.execute("""UPDATE price_daily SET basis_status='unresolved',
+                     unresolved_reason='fixture_unresolved'
+                     WHERE ticker='AAPL' AND date='2026-03-15'""")
+        record_price_series_revision(
+            conn, "AAPL",
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                      "vendor_action_ledger": []},
+            fetch_timestamp="2026-03-15T00:00:00Z",
+        )
         conn.commit()
         inserted = create_paper_trades_from_report(
             conn,
@@ -641,7 +642,7 @@ class TestCreatePaperTrades:
 
         create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts1", report_run_id="dedupe-1")
         conn.commit()
-        inserted2 = create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts2", report_run_id="dedupe-2")
+        inserted2 = create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts1", report_run_id="dedupe-2")
 
         assert inserted2 == 0
         assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
@@ -698,11 +699,7 @@ class TestCreatePaperTrades:
             decision_version="paper-campaign-v2.0",
             min_reward_r_multiple=2.0,
         )
-        conn.execute(
-            """INSERT INTO price_daily
-               (ticker,date,open,high,low,close,volume)
-               VALUES ('AAPL','2026-03-15',150,150,150,150,1000000)"""
-        )
+        _seed_price(conn, "AAPL", 150.0, date="2026-03-15")
 
         inserted = _create_paper_trades_from_report_impl(
             conn,
@@ -1103,9 +1100,11 @@ class TestManuallyCloseTrade:
         conn.execute(
             """INSERT INTO paper_trades (
                report_date,ticker,direction,entry_price,entry_date,stop_loss,status,
-               current_price,unrealized_pnl_pct,high_water_mark,low_water_mark,generated_ts
+               current_price,unrealized_pnl_pct,high_water_mark,low_water_mark,generated_ts,
+               report_run_id
             ) VALUES ('2026-03-14','MSFT','long',300,'2026-03-14',290,'open',
-                      300,0,300,300,'ts')"""
+                      300,0,300,300,'ts',?)"""
+            , (TEST_REPORT_RUN_ID,)
         )
         conn.execute("UPDATE price_daily SET basis_status='unresolved' WHERE ticker='MSFT'")
         conn.commit()
@@ -1384,9 +1383,9 @@ class TestPaperTradeSummary:
         exit_date = (base_date + dt.timedelta(days=5)).isoformat()
         conn.execute(
             """INSERT INTO paper_trades
-               (id,report_date,ticker,direction,entry_price,entry_date,status,campaign_id)
-               VALUES (99,?,'AAPL','long',100,?,'closed','paper-v2')""",
-            (entry_date, entry_date),
+               (id,report_date,ticker,direction,entry_price,entry_date,status,campaign_id,report_run_id)
+               VALUES (99,?,'AAPL','long',100,?,'closed','paper-v2',?)""",
+            (entry_date, entry_date, TEST_REPORT_RUN_ID),
         )
         conn.execute(
             """

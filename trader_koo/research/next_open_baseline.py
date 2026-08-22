@@ -1,6 +1,6 @@
 """Locked next-open research baseline built on one deterministic execution seam.
 
-``execute_portfolio`` knows nothing about SQLite, reports, partitions, or UI
+``simulate_portfolio`` knows nothing about SQLite, reports, partitions, or UI
 artifacts. Campaign replay and challenger research can therefore use the same
 accounting path without growing another simulator.
 """
@@ -65,6 +65,9 @@ class ExecutionDecision:
     evidence_partition: str = "development"
     locked_notional: float | None = None
     metadata: tuple[tuple[str, Any], ...] = ()
+    stop_loss: float | None = None
+    target_price: float | None = None
+    max_holding_sessions: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,6 +76,9 @@ class SessionPrice:
     date: str
     open: float | None
     close: float | None
+    high: float | None = None
+    low: float | None = None
+    volume: float | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -85,6 +91,7 @@ class ExecutionResult:
     final_equity: float | None
     max_name_weight_pct: float
     max_gross_exposure_pct: float
+    open_positions: tuple[dict[str, Any], ...]
 
 
 def _finite(value: Any) -> float | None:
@@ -137,13 +144,13 @@ def _pnl(direction: str, entry: float, exit_: float, shares: int) -> float:
     return value if direction == "long" else -value
 
 
-def execute_portfolio(
+def simulate_portfolio(
     decisions: Iterable[ExecutionDecision],
     prices: Iterable[SessionPrice],
     sessions: Iterable[str],
     config: BaselineConfig,
 ) -> ExecutionResult:
-    """Execute immutable decisions with opens before same-session close exits."""
+    """Execute immutable decisions through the canonical portfolio ledger."""
     config.validate()
     session_list = tuple(sorted(set(sessions)))
     price_map = {(row.ticker, row.date): row for row in prices}
@@ -184,6 +191,33 @@ def execute_portfolio(
             )
         return total, dict(exposure)
 
+    def close_position(
+        position: dict[str, Any], raw_exit: float, date: str, reason: str
+    ) -> None:
+        nonlocal cash
+        exit_price = _adverse(
+            raw_exit, position["direction"], config.exit_slippage_bps, entry=False
+        )
+        gross = _pnl(
+            position["direction"], position["entry_price"], exit_price,
+            position["shares"],
+        )
+        exit_commission = _commission(exit_price * position["shares"], config)
+        cash += position["reserve"] + gross - exit_commission
+        trades.append({
+            **{key: value for key, value in position.items() if key != "reserve"},
+            "exit_date": date,
+            "exit_price": exit_price,
+            "exit_reason": reason,
+            "entry_notional": position["reserve"],
+            "gross_pnl": gross,
+            "commission": position["entry_commission"] + exit_commission,
+            "net_pnl": (
+                gross - position["entry_commission"] - exit_commission
+                - position["borrow"]
+            ),
+        })
+
     previous: str | None = None
     for date in session_list:
         # Accrue the interval ending at today's open. Borrow changes both daily
@@ -208,6 +242,60 @@ def execute_portfolio(
                 charge = marked_short_value * config.short_borrow_bps_annual / 10_000 / 252
                 cash -= charge
                 position["borrow"] += charge
+
+        # Barrier-managed campaign positions release capital before today's
+        # open-order admissions. Gap exits use the open; intraday collisions
+        # resolve stop-first, which is the conservative deterministic choice.
+        survivors: list[dict[str, Any]] = []
+        for position in positions:
+            if position.get("max_holding_sessions") is None:
+                survivors.append(position)
+                continue
+            if date <= position["entry_date"]:
+                survivors.append(position)
+                continue
+            position["bars_held"] += 1
+            row = price_map.get((position["ticker"], date))
+            open_ = _finite(row.open if row else None)
+            close = _finite(row.close if row else None)
+            high = _finite(row.high if row else None)
+            low = _finite(row.low if row else None)
+            if open_ is None or close is None or high is None or low is None:
+                survivors.append(position)
+                continue
+            direction = position["direction"]
+            stop = _finite(position.get("stop_loss"))
+            target = _finite(position.get("target_price"))
+            reason: str | None = None
+            raw_exit: float | None = None
+            if direction == "long" and stop is not None and target is not None:
+                if open_ <= stop:
+                    reason, raw_exit = "stopped_out", open_
+                elif open_ >= target:
+                    reason, raw_exit = "target_hit", open_
+                elif low <= stop:
+                    reason, raw_exit = "stopped_out", stop
+                elif high >= target:
+                    reason, raw_exit = "target_hit", target
+            elif direction == "short" and stop is not None and target is not None:
+                if open_ >= stop:
+                    reason, raw_exit = "stopped_out", open_
+                elif open_ <= target:
+                    reason, raw_exit = "target_hit", open_
+                elif high >= stop:
+                    reason, raw_exit = "stopped_out", stop
+                elif low <= target:
+                    reason, raw_exit = "target_hit", target
+            if (
+                reason is None
+                and position["bars_held"] >= position["max_holding_sessions"]
+            ):
+                reason, raw_exit = "expired", close
+            if reason is None or raw_exit is None:
+                survivors.append(position)
+            else:
+                close_position(position, raw_exit, date, reason)
+        positions = survivors
 
         # Today's close proceeds do not exist while open orders are admitted.
         adv_used: dict[str, float] = defaultdict(float)
@@ -278,6 +366,10 @@ def execute_portfolio(
                 "reserve": reserve,
                 "entry_commission": commission,
                 "borrow": 0.0,
+                "stop_loss": decision.stop_loss,
+                "target_price": decision.target_price,
+                "max_holding_sessions": decision.max_holding_sessions,
+                "bars_held": 0,
             })
             opening_equity, opening_exposure = mark(date, "open")
             if opening_equity is not None and opening_equity > 0:
@@ -297,18 +389,7 @@ def execute_portfolio(
                 exclusions.append({"decision_id": position["decision_id"], "reason": "exact_exit_close_missing"})
                 remaining.append(position)
                 continue
-            exit_price = _adverse(raw_close, position["direction"], config.exit_slippage_bps, entry=False)
-            gross = _pnl(position["direction"], position["entry_price"], exit_price, position["shares"])
-            exit_commission = _commission(exit_price * position["shares"], config)
-            cash += position["reserve"] + gross - exit_commission
-            trades.append({
-                **{key: value for key, value in position.items() if key != "reserve"},
-                "entry_notional": position["reserve"],
-                "exit_price": exit_price,
-                "gross_pnl": gross,
-                "commission": position["entry_commission"] + exit_commission,
-                "net_pnl": gross - position["entry_commission"] - exit_commission - position["borrow"],
-            })
+            close_position(position, raw_close, date, "scheduled_close")
         positions = remaining
 
         equity, exposure = mark(date, "close")
@@ -317,19 +398,40 @@ def execute_portfolio(
         else:
             gross = sum(exposure.values())
             name = max(exposure.values(), default=0)
+            net = sum(
+                (1 if position["direction"] == "long" else -1)
+                * position["shares"]
+                * float(exposure.get(position["ticker"], 0))
+                / max(
+                    1,
+                    sum(
+                        item["shares"] for item in positions
+                        if item["ticker"] == position["ticker"]
+                    ),
+                )
+                for position in positions
+            )
             if equity > 0:
                 max_gross, max_name = max(max_gross, gross / equity), max(max_name, name / equity)
             curve.append({
                 "date": date, "equity": equity, "cash": cash, "open_positions": len(positions),
                 "gross_exposure_pct": gross / equity * 100 if equity > 0 else None,
+                "net_exposure_pct": net / equity * 100 if equity > 0 else None,
             })
         previous = date
 
     valid = [float(row["equity"]) for row in curve if row.get("equity") is not None]
     return ExecutionResult(
         tuple(trades), tuple(exclusions), tuple(curve), financing_priced,
-        config.initial_capital, valid[-1] if valid else None, max_name * 100, max_gross * 100,
+        config.initial_capital, valid[-1] if valid else None, max_name * 100,
+        max_gross * 100,
+        tuple({key: value for key, value in row.items() if key != "reserve"} for row in positions),
     )
+
+
+# Compatibility import for callers migrated before the canonical seam was
+# named explicitly. New adapters call ``simulate_portfolio``.
+execute_portfolio = simulate_portfolio
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -532,7 +634,7 @@ def _prior_capacity(ticker: str, signal_date: str, sessions: list[str], price_ma
 def _matched_control(trade: dict[str, Any], prices: list[SessionPrice], sessions: list[str], cfg: BaselineConfig) -> ExecutionResult:
     notional = float(trade["entry_notional"])
     control_cfg = dataclasses.replace(cfg, initial_capital=max(cfg.initial_capital, notional * 2), max_positions=1, position_pct=100, max_name_pct=100, max_adv_pct=100)
-    return execute_portfolio(
+    return simulate_portfolio(
         [ExecutionDecision(str(trade["decision_id"]), "SPY", str(trade["direction"]), str(trade["signal_date"]), str(trade["entry_date"]), str(trade["exit_date"]), 0, notional, locked_notional=notional)],
         prices, [date for date in sessions if trade["signal_date"] <= date <= trade["exit_date"]], control_cfg,
     )
@@ -605,7 +707,7 @@ def _run_next_open_baseline(
         if evaluation_windows
         and min(row[0] for row in evaluation_windows) <= date <= max(row[2] for row in evaluation_windows)
     ]
-    result = execute_portfolio(decisions, prices, simulation_dates, cfg)
+    result = simulate_portfolio(decisions, prices, simulation_dates, cfg)
     exclusions.extend({"call_id": int(row["decision_id"]), "reason": row["reason"]} for row in result.exclusions)
     enriched = []
     controls_priced = True
@@ -675,7 +777,7 @@ def _run_next_open_baseline(
         full_cfg = dataclasses.replace(cfg, max_positions=1, position_pct=100, max_name_pct=100, max_adv_pct=100)
         prior_sessions = [date for date in sessions if date < start]
         if prior_sessions:
-            full = execute_portfolio(
+            full = simulate_portfolio(
                 [ExecutionDecision(
                     "full_spy", "SPY", "long", prior_sessions[-1], start, end, 0,
                     cfg.initial_capital, locked_notional=cfg.initial_capital,

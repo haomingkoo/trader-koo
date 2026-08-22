@@ -305,7 +305,7 @@ def record_promotion_experiment(
     }
     if not required_metrics.issubset(metrics):
         raise ValueError("promotion requires complete replay, walk-forward, and held-out metrics")
-    if metrics.get("engine_version") != "paper-replay-v2.0":
+    if metrics.get("engine_version") != "portfolio-execution-v1.0":
         raise ValueError("promotion replay engine version is not eligible")
     walk_forward = metrics.get("walk_forward") or {}
     held_out = metrics.get("held_out") or {}
@@ -353,22 +353,37 @@ def record_human_approval(
     campaign_id: str,
     actor: str,
     reason: str,
+    experiment_evidence_hash: str,
     artifact: dict[str, Any],
 ) -> dict[str, Any]:
     """Append an explicit immutable human approval artifact."""
     if not actor.strip() or not reason.strip() or artifact.get("approved") is not True:
         raise ValueError("actor, reason, and an explicit approved=true artifact are required")
+    experiment = conn.execute(
+        """SELECT evidence_hash,eligible FROM paper_campaign_experiments
+           WHERE experiment_id=? AND campaign_id=?""",
+        (experiment_id, campaign_id),
+    ).fetchone()
+    if (
+        experiment is None
+        or int(experiment[1]) != 1
+        or str(experiment[0]) != str(experiment_evidence_hash)
+    ):
+        raise ValueError("approval must bind the exact eligible experiment evidence hash")
     body = {
         "approval_id": approval_id, "experiment_id": experiment_id,
         "campaign_id": campaign_id, "actor": actor, "reason": reason,
+        "experiment_evidence_hash": experiment_evidence_hash,
         "artifact": artifact,
     }
     artifact_hash = canonical_hash(body)
     conn.execute(
         """INSERT INTO paper_campaign_approvals
-           (approval_id,experiment_id,campaign_id,actor,reason,artifact_json,artifact_hash)
-           VALUES (?,?,?,?,?,?,?)""",
-        (approval_id,experiment_id,campaign_id,actor,reason,canonical_json(artifact),artifact_hash),
+           (approval_id,experiment_id,campaign_id,actor,reason,
+            experiment_evidence_hash,artifact_json,artifact_hash)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (approval_id,experiment_id,campaign_id,actor,reason,
+         experiment_evidence_hash,canonical_json(artifact),artifact_hash),
     )
     return {**body, "artifact_hash": artifact_hash}
 
@@ -414,6 +429,7 @@ def transition_campaign(conn: sqlite3.Connection, *, campaign_id: str, action: s
                               SELECT 1 FROM paper_campaign_approvals a
                               WHERE a.experiment_id=e.experiment_id
                                 AND a.campaign_id=e.campaign_id
+                                AND a.experiment_evidence_hash=e.evidence_hash
                           )
                    FROM paper_campaign_experiments e
                    WHERE e.campaign_id=?

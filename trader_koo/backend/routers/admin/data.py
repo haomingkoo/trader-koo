@@ -217,7 +217,6 @@ def seed_ticker_history(
 
 
 @router.get("/api/admin/seed-ticker-history/status")
-@require_admin_auth
 def seed_ticker_history_status(request: Request) -> dict[str, Any]:
     with _seed_history_lock:
         state = dict(_seed_history_state)

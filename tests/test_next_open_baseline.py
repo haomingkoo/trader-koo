@@ -236,7 +236,7 @@ def test_sql_adapter_fails_closed_without_accepted_contracts() -> None:
     artifact = run_next_open_baseline(conn, consume_heldout=False)
     assert artifact["summary"]["closed_trades"] == 0
     assert "report_publication_contract_unavailable" in artifact["readiness_reasons"]
-    assert "research_price_basis_contract_unavailable" in artifact["readiness_reasons"]
+    assert "price_series_revision_unavailable" in artifact["readiness_reasons"]
 
 
 def test_adapter_uses_prior_session_capacity_and_one_execution_path(monkeypatch: pytest.MonkeyPatch) -> None:

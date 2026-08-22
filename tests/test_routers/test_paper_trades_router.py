@@ -1,15 +1,20 @@
 """Integration tests for the paper trades router endpoints."""
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 import sqlite3
 from unittest.mock import patch
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trader_koo.backend.routers.admin import paper_campaigns
+from trader_koo.backend.routers.admin import router as admin_router
+from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
 from trader_koo.paper_trades import create_paper_trades_from_report
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.paper_trade.campaign import (
@@ -17,6 +22,49 @@ from trader_koo.paper_trade.campaign import (
 )
 from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trades import _build_config
+from trader_koo.report.runs import complete_report_run, publish_report_run
+
+
+def _publish_report_fixture(
+    conn: sqlite3.Connection,
+    report_dir: Path,
+    *,
+    run_id: str,
+    generated_ts: str,
+) -> None:
+    ensure_paper_trade_schema(conn)
+    config_hash = hashlib.sha256(b"{}").hexdigest()
+    conn.execute(
+        """INSERT INTO report_runs
+           (run_id,report_kind,status,started_ts,config_json,config_hash,code_version,
+            is_generation_canonical,publication_verified)
+           VALUES (?,'daily','started','2026-08-21T10:00:00Z','{}',?,?,0,0)""",
+        (run_id, config_hash, "a" * 40),
+    )
+    conn.commit()
+    decision = {
+        "ticker": "REJECT", "selected_rank": 1, "decision": "accepted",
+        "reason_codes": ["selected_report_cohort"], "inputs": {},
+    }
+    report = {
+        "generated_ts": generated_ts,
+        "meta": {"report_kind": "daily", "report_run": {"run_id": run_id}},
+        "latest_data": {},
+        "signals": {"report_decisions": [decision], "scanned_universe": ["REJECT"]},
+        "counts": {}, "risk_filters": {}, "warnings": [], "ok": True,
+    }
+    stamp = generated_ts.replace("-", "").replace(":", "")
+    artifact = report_dir / f"daily_report_{stamp}_{run_id}.json"
+    markdown = report_dir / f"daily_report_{stamp}_{run_id}.md"
+    artifact.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    markdown.write_text("fixture\n", encoding="utf-8")
+    complete_report_run(
+        conn, run_id=run_id, report=report, artifact_path=artifact,
+        markdown_path=markdown,
+        content_hash=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        completed_ts="2026-08-21T12:00:00Z",
+    )
+    publish_report_run(conn, run_id=run_id, report_dir=report_dir)
 
 
 class TestPaperTradesListEndpoint:
@@ -51,7 +99,11 @@ class TestPaperTradeSummaryEndpoint:
 
         assert response.status_code == 200
 
-    def test_summary_has_overall_key(self, test_app, seeded_conn):
+    def test_summary_has_overall_key(self, test_app, seeded_conn, tmp_path):
+        _publish_report_fixture(
+            seeded_conn, tmp_path, run_id="api-report-run-1",
+            generated_ts="2026-08-21T11:00:00Z",
+        )
         create_paper_trades_from_report(
             seeded_conn,
             setup_rows=[{
@@ -153,8 +205,12 @@ class TestPaperTradeSummaryEndpoint:
         assert baseline["decision_eligible"] is False
 
     def test_sealed_decisions_api_preserves_exact_rank_gate_and_hashes(
-        self, test_app, seeded_conn
+        self, test_app, seeded_conn, tmp_path
     ):
+        _publish_report_fixture(
+            seeded_conn, tmp_path, run_id="api-decision-run",
+            generated_ts="2026-08-21T11:00:00Z",
+        )
         create_paper_trades_from_report(
             seeded_conn,
             setup_rows=[{
@@ -193,7 +249,10 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
 
     monkeypatch.setattr(paper_campaigns, "get_conn", open_db)
     app = FastAPI()
-    app.include_router(paper_campaigns.router)
+    app.state.admin_authenticator = AdminAuthenticator(
+        AdminAuthConfig(api_key="x" * 32, username="campaign-owner")
+    )
+    app.include_router(admin_router)
     unauthenticated = TestClient(app).post(
         "/api/admin/paper-campaigns/paper-v2/transition",
         json={
@@ -204,15 +263,13 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     assert unauthenticated.status_code == 401
 
     authenticated_app = FastAPI()
-
-    @authenticated_app.middleware("http")
-    async def admin_identity(request: Request, call_next):
-        request.state.admin_identity = {"username": "campaign-owner"}
-        return await call_next(request)
-
-    authenticated_app.include_router(paper_campaigns.router)
+    authenticated_app.state.admin_authenticator = AdminAuthenticator(
+        AdminAuthConfig(api_key="x" * 32, username="campaign-owner")
+    )
+    authenticated_app.include_router(admin_router)
     response = TestClient(authenticated_app).post(
         "/api/admin/paper-campaigns/paper-v2/transition",
+        headers={"X-API-Key": "x" * 32},
         json={
             "action": "activate", "reason": "paper validation approved",
             "idempotency_key": "admin-activation-001",
@@ -230,13 +287,13 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
             "active_return_gate": {"minimum_pct": 0.0},
         },
     )
-    record_promotion_experiment(
+    experiment = record_promotion_experiment(
         approval_conn, experiment_id="admin-exp", preregistration_id="admin-prereg",
         campaign_id="paper-v2",
         policy_version=config.decision_version,
         policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
         metrics={
-            "engine_version": "paper-replay-v2.0", "closed_trades": 2,
+            "engine_version": "portfolio-execution-v1.0", "closed_trades": 2,
             "conversion_rate_pct": 50.0, "average_exposure_pct": 10.0,
             "turnover_pct": 20.0, "portfolio_return_pct": 2.0,
             "matched_spy_return_pct": 1.0,
@@ -252,8 +309,10 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     approval_conn.close()
     approval_response = TestClient(authenticated_app).post(
         "/api/admin/paper-campaigns/paper-v2/approvals",
+        headers={"X-API-Key": "x" * 32},
         json={
             "approval_id": "admin-approval", "experiment_id": "admin-exp",
+            "experiment_evidence_hash": experiment["evidence_hash"],
             "reason": "approved evidence",
             "artifact": {"approved": True, "signed": True},
         },
@@ -261,6 +320,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     assert approval_response.status_code == 200
     response = TestClient(authenticated_app).post(
         "/api/admin/paper-campaigns/paper-v2/transition",
+        headers={"X-API-Key": "x" * 32},
         json={
             "action": "activate", "reason": "paper validation approved",
             "idempotency_key": "admin-activation-002",

@@ -197,35 +197,6 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_trades_report_run ON paper_trades(report_run_id)"
     )
-    conn.execute("DROP TRIGGER IF EXISTS paper_trades_require_canonical_run")
-    conn.execute("DROP TRIGGER IF EXISTS paper_trades_immutable_lineage")
-    conn.execute(
-        """
-        CREATE TRIGGER paper_trades_require_canonical_run
-        BEFORE INSERT ON paper_trades
-        WHEN NOT EXISTS (
-            SELECT 1 FROM report_runs r
-            JOIN report_run_decisions d ON d.run_id=r.run_id
-            WHERE r.run_id=NEW.report_run_id
-              AND r.status='published' AND r.publication_verified=1
-              AND r.is_generation_canonical=1
-              AND d.ticker=NEW.ticker AND d.decision='accepted'
-        )
-        BEGIN
-            SELECT RAISE(ABORT, 'paper trades require a canonical published report run with an accepted decision');
-        END
-        """
-    )
-    conn.execute(
-        """
-        CREATE TRIGGER paper_trades_immutable_lineage
-        BEFORE UPDATE OF report_run_id ON paper_trades
-        WHEN NEW.report_run_id IS NOT OLD.report_run_id
-        BEGIN
-            SELECT RAISE(ABORT, 'paper trade report lineage is immutable');
-        END
-        """
-    )
     _ensure_column(conn, "paper_trades", "campaign_id", "campaign_id TEXT")
     _ensure_column(conn, "paper_trades", "policy_version", "policy_version TEXT")
 
@@ -241,6 +212,33 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(campaign_id, status, entry_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_ticker ON paper_trades(campaign_id, ticker, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_family ON paper_trades(campaign_id, setup_family, direction, status)")
+    # Rebuilding the table removes its triggers. Install the authoritative
+    # lineage guards only after the campaign-aware unique-key migration.
+    conn.execute("DROP TRIGGER IF EXISTS paper_trades_require_canonical_run")
+    conn.execute("DROP TRIGGER IF EXISTS paper_trades_immutable_lineage")
+    conn.execute("""
+        CREATE TRIGGER paper_trades_require_canonical_run
+        BEFORE INSERT ON paper_trades
+        WHEN NOT EXISTS (
+            SELECT 1 FROM report_runs r
+            JOIN report_run_decisions d ON d.run_id=r.run_id
+            WHERE r.run_id=NEW.report_run_id
+              AND r.status='published' AND r.publication_verified=1
+              AND r.is_generation_canonical=1
+              AND d.ticker=NEW.ticker AND d.decision='accepted'
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trades require a canonical published report run with an accepted decision');
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER paper_trades_immutable_lineage
+        BEFORE UPDATE OF report_run_id ON paper_trades
+        WHEN NEW.report_run_id IS NOT OLD.report_run_id
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trade report lineage is immutable');
+        END
+    """)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_campaigns (
@@ -448,12 +446,65 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
             critic_json TEXT NOT NULL,
             market_context_json TEXT NOT NULL,
             avg_daily_volume REAL,
+            order_hash TEXT NOT NULL CHECK (
+                length(order_hash)=64 AND lower(order_hash) NOT GLOB '*[^0-9a-f]*'
+            ),
             status TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending','filled','rejected','cancelled')),
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             resolved_ts TEXT,
             UNIQUE(report_run_id,campaign_id,candidate_rank)
         )
+    """)
+    _ensure_column(conn, "paper_pending_orders", "order_hash", "order_hash TEXT")
+    # Pre-seal pending rows cannot be trusted after this migration. Preserve
+    # them as cancelled audit history; only newly hashed rows may execute.
+    conn.execute(
+        """UPDATE paper_pending_orders
+           SET status='cancelled',resolved_ts=COALESCE(resolved_ts,CURRENT_TIMESTAMP),
+               order_hash=COALESCE(order_hash,'legacy-unsealed')
+           WHERE order_hash IS NULL"""
+    )
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_valid_insert
+        BEFORE INSERT ON paper_pending_orders
+        WHEN NEW.status!='pending' OR NEW.resolved_ts IS NOT NULL
+          OR NEW.order_hash IS NULL
+          OR length(NEW.order_hash)!=64
+          OR lower(NEW.order_hash) GLOB '*[^0-9a-f]*'
+        BEGIN SELECT RAISE(ABORT, 'pending order requires a sealed immutable payload'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_immutable_payload
+        BEFORE UPDATE ON paper_pending_orders
+        WHEN NEW.order_id IS NOT OLD.order_id
+          OR NEW.report_run_id IS NOT OLD.report_run_id
+          OR NEW.report_date IS NOT OLD.report_date
+          OR NEW.generated_ts IS NOT OLD.generated_ts
+          OR NEW.campaign_id IS NOT OLD.campaign_id
+          OR NEW.policy_version IS NOT OLD.policy_version
+          OR NEW.candidate_rank IS NOT OLD.candidate_rank
+          OR NEW.ticker IS NOT OLD.ticker
+          OR NEW.direction IS NOT OLD.direction
+          OR NEW.candidate_json IS NOT OLD.candidate_json
+          OR NEW.critic_json IS NOT OLD.critic_json
+          OR NEW.market_context_json IS NOT OLD.market_context_json
+          OR NEW.avg_daily_volume IS NOT OLD.avg_daily_volume
+          OR NEW.order_hash IS NOT OLD.order_hash
+          OR NEW.created_ts IS NOT OLD.created_ts
+        BEGIN SELECT RAISE(ABORT, 'pending order payload is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_terminal_transition
+        BEFORE UPDATE OF status,resolved_ts ON paper_pending_orders
+        WHEN OLD.status!='pending' OR NEW.status NOT IN ('filled','rejected','cancelled')
+          OR NEW.resolved_ts IS NULL
+        BEGIN SELECT RAISE(ABORT, 'pending order has an invalid terminal transition'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_no_delete
+        BEFORE DELETE ON paper_pending_orders
+        BEGIN SELECT RAISE(ABORT, 'pending orders are immutable audit facts'); END
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_order_events (
@@ -519,11 +570,16 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
             campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
             actor TEXT NOT NULL,
             reason TEXT NOT NULL,
+            experiment_evidence_hash TEXT NOT NULL,
             artifact_json TEXT NOT NULL,
             artifact_hash TEXT NOT NULL UNIQUE,
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    _ensure_column(
+        conn, "paper_campaign_approvals", "experiment_evidence_hash",
+        "experiment_evidence_hash TEXT",
+    )
     for table, label in (
         ("paper_campaign_preregistrations", "paper campaign preregistrations"),
         ("paper_campaign_experiments", "paper campaign experiments"),
@@ -546,7 +602,9 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     """)
     conn.execute("""
         CREATE TRIGGER IF NOT EXISTS paper_v1_trades_no_update
-        BEFORE UPDATE ON paper_trades WHEN OLD.campaign_id = 'paper-v1'
+        BEFORE UPDATE ON paper_trades
+        WHEN OLD.campaign_id = 'paper-v1'
+          AND NEW.report_run_id IS OLD.report_run_id
         BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END
     """)
     conn.execute("""

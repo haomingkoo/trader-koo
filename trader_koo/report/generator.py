@@ -1451,6 +1451,9 @@ def fetch_report_payload(
 
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
+        price_basis = payload["signals"].get("price_contract")
+        if isinstance(price_basis, dict):
+            payload["meta"]["price_basis"] = price_basis
         for warning in (
             "price_basis_unresolved",
             "green_barrier_incomplete_coverage",

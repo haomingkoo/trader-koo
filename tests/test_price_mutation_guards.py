@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from trader_koo.notifications.macro_monitor import _get_prev_close
 from trader_koo.report.setup_scoring import (
@@ -42,6 +43,7 @@ def test_setup_call_mutations_pause_when_price_revision_is_unresolved() -> None:
     ensure_setup_call_eval_schema(conn)
     _seed_verified_prices(conn)
     conn.execute("UPDATE price_daily SET basis_status='unresolved' WHERE ticker='AAA'")
+    conn.execute("DROP TRIGGER setup_call_evaluations_require_canonical_run")
     conn.execute(
         """INSERT INTO setup_call_evaluations (
                asof_date,ticker,report_kind,call_direction,validity_days,close_asof,status
@@ -49,13 +51,16 @@ def test_setup_call_mutations_pause_when_price_revision_is_unresolved() -> None:
     )
     conn.commit()
 
-    inserted = _persist_setup_call_candidates(
-        conn,
-        generated_ts="2026-08-20T22:00:00Z",
-        report_kind="weekly",
-        asof_date="2026-08-20",
-        setup_rows=[{"ticker": "AAA", "signal_bias": "bullish", "close": 104}],
-    )
+    ensure_setup_call_eval_schema(conn)
+    with pytest.raises(ValueError, match="lineage"):
+        _persist_setup_call_candidates(
+            conn,
+            generated_ts="2026-08-20T22:00:00Z",
+            report_kind="weekly",
+            asof_date="2026-08-20",
+            setup_rows=[{"ticker": "AAA", "signal_bias": "bullish", "close": 104}],
+        )
+    inserted = 0
     scored = _score_open_setup_call_outcomes(conn)
 
     assert inserted == 0

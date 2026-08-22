@@ -132,6 +132,7 @@ def create_paper_trades_from_report(
     generated_ts: str,
     report_run_id: str | None = None,
     schema_ready: bool = False,
+    expected_price_revision: str | None = None,
 ) -> int:
     return _create_paper_trades_from_report_impl(
         conn,
@@ -140,6 +141,7 @@ def create_paper_trades_from_report(
         generated_ts=generated_ts,
         report_run_id=report_run_id,
         schema_ready=schema_ready,
+        expected_price_revision=expected_price_revision,
         config=_build_config(),
     )
 

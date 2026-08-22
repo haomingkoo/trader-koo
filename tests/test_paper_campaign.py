@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import json
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +29,17 @@ from trader_koo.paper_trades import create_paper_trades_from_report as _create_p
 from trader_koo.paper_trades import fill_pending_paper_orders
 from trader_koo.paper_trades import paper_trade_summary
 from trader_koo.paper_trade.replay import replay_campaign
+from trader_koo.report.runs import (
+    complete_report_run,
+    publish_report_run,
+    sha256_file,
+    start_report_run,
+)
+from trader_koo.report.serializer import write_reports
+from trader_koo.db.price_contract import (
+    ensure_price_series_revision_schema,
+    record_price_series_revision,
+)
 
 
 def _candidate(
@@ -55,32 +70,99 @@ def _db() -> sqlite3.Connection:
     conn.execute(
         """CREATE TABLE price_daily (
                ticker TEXT, date TEXT, open REAL, high REAL, low REAL,
-               close REAL, volume REAL, UNIQUE(ticker, date)
+               close REAL, volume REAL, data_source TEXT DEFAULT 'fixture',
+               fetch_timestamp TEXT DEFAULT '2026-08-21T00:00:00Z',
+               adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+               adjustment_version TEXT DEFAULT 'fixture-v1',
+               basis_status TEXT DEFAULT 'verified', unresolved_reason TEXT,
+               UNIQUE(ticker, date)
            )"""
     )
-    conn.execute(
-        """CREATE TABLE report_runs (
-               run_id TEXT PRIMARY KEY, status TEXT NOT NULL,
-               is_generation_canonical INTEGER NOT NULL
-           )"""
-    )
+    ensure_price_series_revision_schema(conn)
     return conn
 
 
-def _publish(conn: sqlite3.Connection, run_id: str) -> None:
+def _publish(
+    conn: sqlite3.Connection,
+    run_id: str,
+    setup_rows: list[dict[str, object]],
+) -> None:
+    if conn.execute("SELECT 1 FROM report_runs WHERE run_id=?", (run_id,)).fetchone():
+        return
+    unique_rows: dict[str, dict[str, object]] = {}
+    for row in setup_rows:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "").upper()
+        if ticker and ticker not in unique_rows:
+            unique_rows[ticker] = row
+    decisions = [
+        {
+            "ticker": str(row["ticker"]).upper(),
+            "selected_rank": rank,
+            "decision": "accepted",
+            "reason_codes": ["selected_report_cohort"],
+            "inputs": dict(row),
+        }
+        for rank, row in enumerate(unique_rows.values(), start=1)
+    ]
+    report = {
+        "generated_ts": "2026-08-21T12:00:00Z",
+        "meta": {"report_kind": "daily"},
+        "latest_data": {"price_date": "2026-08-21"},
+        "signals": {
+            "report_decisions": decisions,
+            "scanned_universe": [item["ticker"] for item in decisions],
+        },
+        "counts": {},
+        "risk_filters": {},
+        "warnings": [],
+        "ok": True,
+    }
+    config_json = "{}"
     conn.execute(
-        "INSERT OR REPLACE INTO report_runs VALUES (?,'published',1)", (run_id,)
+        """INSERT INTO report_runs
+           (run_id,report_kind,status,started_ts,config_json,config_hash,code_version)
+           VALUES (?,'daily','started','2026-08-21T11:59:00Z',?,?,?)""",
+        (run_id, config_json, hashlib.sha256(config_json.encode()).hexdigest(), "a" * 40),
     )
+    conn.commit()
+    report_dir = Path(tempfile.mkdtemp(prefix="paper-campaign-report-"))
+    paths = write_reports(report, report_dir, run_id=run_id, publish_latest=False)
+    artifact = Path(paths["json_path"])
+    complete_report_run(
+        conn,
+        run_id=run_id,
+        report=report,
+        artifact_path=artifact,
+        markdown_path=Path(paths["md_path"]),
+        content_hash=sha256_file(artifact),
+        completed_ts="2026-08-21T12:01:00Z",
+    )
+    publish_report_run(conn, run_id=run_id, report_dir=report_dir)
 
 
 def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
-    _publish(conn, str(kwargs["report_run_id"]))
+    setup_rows = kwargs.get("setup_rows")
+    publish_rows = list(setup_rows) if isinstance(setup_rows, list) else []
+    _publish(conn, str(kwargs["report_run_id"]), publish_rows)
+    for row in publish_rows:
+        ticker = str(row.get("ticker") or "").upper() if isinstance(row, dict) else ""
+        if ticker and conn.execute(
+            "SELECT 1 FROM price_daily WHERE ticker=?", (ticker,)
+        ).fetchone():
+            record_price_series_revision(
+                conn, ticker,
+                evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                          "vendor_action_ledger": []},
+                fetch_timestamp="2026-08-21T00:00:00Z",
+            )
     return _create_paper_trades_from_report(conn, **kwargs)
 
 
 def _promotion_metrics(*, drawdown: float = 1.0, active_return: float = 1.0) -> dict:
     return {
-        "engine_version": "paper-replay-v2.0", "closed_trades": 2,
+        "engine_version": "portfolio-execution-v1.0", "closed_trades": 2,
         "conversion_rate_pct": 50.0, "average_exposure_pct": 10.0,
         "turnover_pct": 20.0, "portfolio_return_pct": 2.0,
         "matched_spy_return_pct": 1.0,
@@ -105,7 +187,7 @@ def _seed_promotion(conn: sqlite3.Connection) -> None:
             "active_return_gate": {"minimum_pct": 0.0},
         },
     )
-    record_promotion_experiment(
+    experiment = record_promotion_experiment(
         conn, experiment_id=experiment_id,
         preregistration_id=preregistration_id, campaign_id="paper-v2",
         policy_version=config.decision_version,
@@ -116,6 +198,7 @@ def _seed_promotion(conn: sqlite3.Connection) -> None:
     record_human_approval(
         conn, approval_id=f"approval-{id(conn)}", experiment_id=experiment_id,
         campaign_id="paper-v2", actor="human-reviewer", reason="approved test evidence",
+        experiment_evidence_hash=experiment["evidence_hash"],
         artifact={"approved": True, "signed": True},
     )
     conn.commit()
@@ -182,18 +265,24 @@ def test_legacy_trades_are_backfilled_to_immutable_v1_once():
     assert conn.execute(
         "SELECT notes FROM paper_trade_annotations WHERE trade_id=1"
     ).fetchone()[0] == "reviewed"
-    # Legacy global unique keys are rebuilt as campaign-scoped keys.
-    conn.execute(
-        """INSERT INTO paper_trades
-           (campaign_id,report_date,ticker,direction,entry_price,entry_date,status)
-           VALUES ('paper-v2','2026-03-18','T00','long',100,'2026-03-19','closed')"""
+    # Legacy global unique keys are rebuilt as campaign-scoped keys. The
+    # campaign-aware columns are the durable migration proof; new v2 rows are
+    # separately required to enter through verified report lineage.
+    unique_indexes = [
+        row[1] for row in conn.execute("PRAGMA index_list(paper_trades)")
+        if row[2]
+    ]
+    assert any(
+        [item[2] for item in conn.execute(f"PRAGMA index_info({index})")]
+        == ["campaign_id", "report_date", "ticker", "direction"]
+        for index in unique_indexes
     )
     conn.execute(
         """INSERT INTO paper_portfolio_snapshots
            (campaign_id,snapshot_date,open_trades)
            VALUES ('paper-v2','2026-03-18',0)"""
     )
-    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 43
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 42
     assert conn.execute("SELECT COUNT(*) FROM paper_portfolio_snapshots").fetchone()[0] == 2
 
 
@@ -201,7 +290,8 @@ def test_live_path_persists_every_ranked_candidate_and_exact_disposition():
     conn = _db()
     _activate(conn)
     conn.execute(
-        "INSERT INTO price_daily VALUES ('PASS','2026-08-22',150,155,149,154,1000000)"
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('PASS','2026-08-22',150,155,149,154,1000000)"""
     )
 
     inserted = create_paper_trades_from_report(
@@ -414,7 +504,14 @@ def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
     ).fetchone()[0] == "pending"
 
     conn.execute(
-        "INSERT INTO price_daily VALUES ('WAIT','2026-08-24',152,160,151,158,1000000)"
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('WAIT','2026-08-24',152,160,151,158,1000000)"""
+    )
+    record_price_series_revision(
+        conn, "WAIT",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                  "vendor_action_ledger": []},
+        fetch_timestamp="2026-08-24T00:00:00Z",
     )
     result = fill_pending_paper_orders(conn, through_date="2026-08-24")
     assert result == {"filled": 1, "rejected": 0, "still_pending": 0}
@@ -430,6 +527,56 @@ def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
     assert health["latest_report"]["candidates"][0]["tradeability"] == "actionable"
 
 
+def test_pending_order_payload_is_immutable_and_hash_verified_before_fill():
+    conn = _db()
+    _activate(conn)
+    create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("SEALED")], report_date="2026-08-21",
+        generated_ts="sealed-order-ts", report_run_id="sealed-order-run",
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="payload is immutable"):
+        conn.execute(
+            "UPDATE paper_pending_orders SET candidate_json='{}' WHERE ticker='SEALED'"
+        )
+    conn.execute("DROP TRIGGER paper_pending_orders_immutable_payload")
+    conn.execute(
+        "UPDATE paper_pending_orders SET candidate_json='{}' WHERE ticker='SEALED'"
+    )
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SEALED','2026-08-24',152,160,151,158,1000000)"""
+    )
+    record_price_series_revision(
+        conn, "SEALED",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                  "vendor_action_ledger": []},
+        fetch_timestamp="2026-08-24T00:00:00Z",
+    )
+    with pytest.raises(ValueError, match="immutable hash verification"):
+        fill_pending_paper_orders(conn, through_date="2026-08-24")
+
+
+def test_human_approval_requires_exact_eligible_experiment_even_without_foreign_keys():
+    conn = _db()
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+    _seed_promotion(conn)
+    experiment_id, evidence_hash = conn.execute(
+        "SELECT experiment_id,evidence_hash FROM paper_campaign_experiments"
+    ).fetchone()
+    with pytest.raises(ValueError, match="exact eligible experiment evidence hash"):
+        record_human_approval(
+            conn, approval_id="wrong-hash-approval", experiment_id=experiment_id,
+            campaign_id="paper-v2", actor="reviewer", reason="wrong evidence",
+            experiment_evidence_hash="0" * 64,
+            artifact={"approved": True},
+        )
+    with pytest.raises(ValueError, match="exact eligible experiment evidence hash"):
+        record_human_approval(
+            conn, approval_id="missing-experiment-approval", experiment_id="missing",
+            campaign_id="paper-v2", actor="reviewer", reason="missing evidence",
+            experiment_evidence_hash=evidence_hash,
+            artifact={"approved": True},
+        )
 def test_seal_rejects_later_insert_and_verifier_detects_forged_child():
     conn = _db()
     create_paper_trades_from_report(
@@ -465,11 +612,16 @@ def test_seal_rejects_later_insert_and_verifier_detects_forged_child():
 
 def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload():
     conn = _db()
-    conn.execute("INSERT INTO report_runs VALUES ('started-run','started',1)")
-    with pytest.raises(ValueError, match="published canonical"):
+    started_run = start_report_run(
+        conn,
+        report_kind="daily",
+        configuration={},
+        code_version="a" * 40,
+    )
+    with pytest.raises(ValueError, match="verified report artifact"):
         _create_paper_trades_from_report(
             conn, setup_rows=[], report_date="2026-08-21", generated_ts="x",
-            report_run_id="started-run",
+            report_run_id=started_run,
         )
     conn.commit()
     with pytest.raises(ValueError, match="promotion evidence"):
@@ -530,6 +682,48 @@ def test_chronological_replay_models_costs_overlap_exits_and_parity():
     assert {trade["exit_reason"] for trade in second["trades"]} >= {"target_hit", "stopped_out"}
     assert second["walk_forward"]["training_dates"]
     assert "held_out" in second
+
+
+def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():
+    conn = _db()
+    _activate(conn)
+    candidate = {**_candidate("PARITY"), "critic_outcome": {"approved": True}}
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('PARITY','2026-08-22',150,151,149,150,1000000)"""
+    )
+    create_paper_trades_from_report(
+        conn, setup_rows=[candidate], report_date="2026-08-21",
+        generated_ts="parity-live-ts", report_run_id="parity-live-run",
+    )
+    disposition, inputs_hash, inputs_json = conn.execute(
+        """SELECT disposition,inputs_hash,inputs_json
+           FROM paper_candidate_decisions
+           WHERE report_run_id='parity-live-run'"""
+    ).fetchone()
+    evidence = json.loads(inputs_json)
+    replay = replay_campaign(
+        candidate_runs=[{
+            "report_run_id": "parity-live-run", "report_date": "2026-08-21",
+            "candidates": [{
+                "__sealed_candidate": evidence["candidate"],
+                "__sealed_context": evidence["context"],
+            }],
+        }],
+        price_rows=[{
+            "ticker": "PARITY", "date": "2026-08-22", "open": 150,
+            "high": 151, "low": 149, "close": 150, "volume": 1_000_000,
+        }],
+        spy_rows=[], config=_build_config(),
+        expected_execution={
+            "parity-live-run:1": {
+                "disposition": disposition, "inputs_hash": inputs_hash,
+            }
+        },
+    )
+    assert replay["decisions"][0]["inputs"] == evidence
+    assert replay["replay_live_parity"] == "matched"
+    assert replay["decisions"][0]["inputs_hash"] == inputs_hash
 
 
 def test_activation_never_falls_back_to_older_eligible_experiment():

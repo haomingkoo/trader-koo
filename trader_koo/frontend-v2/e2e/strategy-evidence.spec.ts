@@ -86,7 +86,7 @@ async function mockApi(page: Page, evidence: Record<string, unknown> = productio
   await page.route("**/api/paper-trades?*", async (route) => {
     await route.fulfill({ json: { ok: true, count: 0, trades: [] } });
   });
-  await page.route("**/api/paper-trades/summary", async (route) => {
+  await page.route("**/api/paper-trades/summary*", async (route) => {
     await route.fulfill({ json: summaryPayload(evidence) });
   });
   await page.route("**/api/research/next-open-baseline", async (route) => {

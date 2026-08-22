@@ -120,7 +120,28 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
             superseded_by_run_id TEXT REFERENCES report_runs(run_id)
         )"""
     )
+    # Older installations and lightweight API fixtures may already have a
+    # three-column ``report_runs`` registry.  Add the complete evidence shape
+    # before creating indexes or triggers that reference it.
     for column, ddl in (
+        ("report_kind", "report_kind TEXT"),
+        ("started_ts", "started_ts TEXT"),
+        ("completed_ts", "completed_ts TEXT"),
+        ("failed_ts", "failed_ts TEXT"),
+        ("published_ts", "published_ts TEXT"),
+        ("generated_ts", "generated_ts TEXT"),
+        ("scanned_universe_json", "scanned_universe_json TEXT"),
+        ("ranked_candidates_json", "ranked_candidates_json TEXT"),
+        ("decisions_json", "decisions_json TEXT"),
+        ("inputs_json", "inputs_json TEXT"),
+        ("source_timestamps_json", "source_timestamps_json TEXT"),
+        ("config_json", "config_json TEXT"),
+        ("config_hash", "config_hash TEXT"),
+        ("code_version", "code_version TEXT"),
+        ("content_hash", "content_hash TEXT"),
+        ("artifact_path", "artifact_path TEXT"),
+        ("markdown_path", "markdown_path TEXT"),
+        ("error_message", "error_message TEXT"),
         ("generation_key", "generation_key TEXT"),
         ("is_generation_canonical", "is_generation_canonical INTEGER NOT NULL DEFAULT 0"),
         ("publication_verified", "publication_verified INTEGER NOT NULL DEFAULT 0"),
@@ -840,6 +861,12 @@ def admit_published_report(
     ]
     source_timestamps = json.loads(str(row[2] or "{}"))
     asof_date = str(source_timestamps.get("price_date") or "").strip()
+    linked_payload = resolved[1]
+    linked_meta = linked_payload.get("meta") if isinstance(linked_payload.get("meta"), dict) else {}
+    price_basis = linked_meta.get("price_basis") if isinstance(linked_meta.get("price_basis"), dict) else None
+    expected_price_revision = (
+        str(price_basis.get("revision") or "").strip() if price_basis is not None else None
+    ) or None
     ensure_setup_call_eval_schema(conn)
     ensure_paper_trade_schema(conn)
     calls = trades = 0
@@ -849,11 +876,13 @@ def admit_published_report(
             calls = _persist_setup_call_candidates(
                 conn, generated_ts=str(row[0]), report_kind=str(row[1]), asof_date=asof_date,
                 setup_rows=setups, report_run_id=run_id,
+                expected_price_revision=expected_price_revision,
             )
         if PAPER_TRADE_ENABLED and asof_date and setups:
             trades = create_paper_trades_from_report(
                 conn, setup_rows=setups, report_date=asof_date, generated_ts=str(row[0]),
                 report_run_id=run_id, schema_ready=True,
+                expected_price_revision=expected_price_revision,
             )
         conn.commit()
     except Exception:

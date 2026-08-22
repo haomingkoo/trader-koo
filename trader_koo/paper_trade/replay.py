@@ -1,5 +1,4 @@
-"""Chronological paper-campaign replay using the production decision policy."""
-
+"""Paper-campaign adapter for the canonical portfolio execution ledger."""
 from __future__ import annotations
 
 import math
@@ -7,27 +6,23 @@ import statistics
 from collections import defaultdict
 from typing import Any
 
-from trader_koo.paper_trade.campaign import (
-    canonical_hash,
-    decide_candidate,
-    record_promotion_experiment,
-)
+from trader_koo.paper_trade.campaign import canonical_hash, decide_candidate, record_promotion_experiment
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.decision import direction_from_row
+from trader_koo.research.next_open_baseline import (
+    BaselineConfig, ExecutionDecision, SessionPrice, simulate_portfolio,
+)
+
+ENGINE_VERSION = "portfolio-execution-v1.0"
 
 
 def _max_drawdown(values: list[float]) -> float:
-    peak = values[0] if values else 1.0
-    worst = 0.0
+    peak, worst = (values[0] if values else 1.0), 0.0
     for value in values:
         peak = max(peak, value)
         if peak:
             worst = max(worst, (peak - value) / peak * 100)
     return worst
-
-
-def _ratio(mean: float, downside: float) -> float | None:
-    return mean / downside * math.sqrt(252) if downside > 0 else None
 
 
 def _confidence_interval(values: list[float]) -> list[float] | None:
@@ -40,357 +35,268 @@ def _confidence_interval(values: list[float]) -> list[float] | None:
     return [round(mean - margin, 6), round(mean + margin, 6)]
 
 
-def _trade_metrics(
-    trades: list[dict[str, Any]],
-    *,
-    starting_capital: float,
-    equity_curve: list[dict[str, Any]],
-    spy_buy_hold_return_pct: float,
-    matched_spy_return_pct: float,
-    candidate_count: int,
-    admitted_count: int,
-    exposure_samples: list[float],
-) -> dict[str, Any]:
+def _trade_metrics(trades: list[dict[str, Any]], *, starting_capital: float,
+                   equity_curve: list[dict[str, Any]], spy_return_pct: float,
+                   matched_spy_return_pct: float, candidate_count: int,
+                   admitted_count: int) -> dict[str, Any]:
     pnls = [float(item["net_pnl"]) for item in trades]
     returns = [float(item["net_return_pct"]) for item in trades]
+    priced = [float(item["equity"]) for item in equity_curve if item.get("equity") is not None]
+    final_equity = priced[-1] if priced else starting_capital
+    daily = [after / before - 1 for before, after in zip(priced, priced[1:]) if before]
+    mean = statistics.fmean(daily) if daily else 0.0
+    volatility = statistics.stdev(daily) if len(daily) > 1 else 0.0
+    downside = [min(value, 0.0) for value in daily]
+    downside_vol = statistics.pstdev(downside) if len(downside) > 1 else 0.0
+    max_dd = _max_drawdown(priced)
     gross_profit = sum(value for value in pnls if value > 0)
     gross_loss = abs(sum(value for value in pnls if value < 0))
-    final_equity = float(equity_curve[-1]["equity"]) if equity_curve else starting_capital
     portfolio_return = (final_equity / starting_capital - 1) * 100
-    daily_returns: list[float] = []
-    for before, after in zip(equity_curve, equity_curve[1:]):
-        base = float(before["equity"])
-        if base:
-            daily_returns.append(float(after["equity"]) / base - 1)
-    mean_daily = statistics.fmean(daily_returns) if daily_returns else 0.0
-    volatility = statistics.stdev(daily_returns) if len(daily_returns) > 1 else 0.0
-    downside_values = [min(value, 0.0) for value in daily_returns]
-    downside = statistics.pstdev(downside_values) if len(downside_values) > 1 else 0.0
-    max_dd = _max_drawdown([float(item["equity"]) for item in equity_curve])
-    annual_return = mean_daily * 252 * 100
+    exposure = [float(item["gross_exposure_pct"]) for item in equity_curve
+                if item.get("gross_exposure_pct") is not None]
     return {
-        "candidate_count": candidate_count,
-        "admitted_count": admitted_count,
+        "candidate_count": candidate_count, "admitted_count": admitted_count,
         "closed_trades": len(trades),
+        "open_positions": int(equity_curve[-1].get("open_positions", 0)) if equity_curve else 0,
         "conversion_rate_pct": round(admitted_count / candidate_count * 100, 6) if candidate_count else 0.0,
-        "average_exposure_pct": round(statistics.fmean(exposure_samples), 6) if exposure_samples else 0.0,
+        "average_exposure_pct": round(statistics.fmean(exposure), 6) if exposure else 0.0,
         "turnover_pct": round(sum(float(item["notional"]) for item in trades) / starting_capital * 100, 6),
         "portfolio_return_pct": round(portfolio_return, 6),
-        "spy_return_pct": round(spy_buy_hold_return_pct, 6),
+        "spy_return_pct": round(spy_return_pct, 6),
         "matched_spy_return_pct": round(matched_spy_return_pct, 6),
         "matched_spy_active_return_pct": round(portfolio_return - matched_spy_return_pct, 6),
         "max_drawdown_pct": round(max_dd, 6),
-        "sharpe_ratio": round(mean_daily / volatility * math.sqrt(252), 6) if volatility > 0 else None,
-        "sortino_ratio": round(_ratio(mean_daily, downside), 6) if downside > 0 else None,
-        "calmar_ratio": round(annual_return / max_dd, 6) if max_dd > 0 else None,
-        "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss > 0 else None,
+        "sharpe_ratio": round(mean / volatility * math.sqrt(252), 6) if volatility else None,
+        "sortino_ratio": round(mean / downside_vol * math.sqrt(252), 6) if downside_vol else None,
+        "calmar_ratio": round(mean * 252 * 100 / max_dd, 6) if max_dd else None,
+        "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss else None,
         "win_rate_pct": round(sum(value > 0 for value in pnls) / len(pnls) * 100, 6) if pnls else 0.0,
         "mean_trade_return_pct_ci95": _confidence_interval(returns),
     }
 
 
-def replay_campaign(
-    *,
-    candidate_runs: list[dict[str, Any]],
-    price_rows: list[dict[str, Any]],
-    spy_rows: list[dict[str, Any]],
-    config: PaperTradeConfig,
-    expected_execution: dict[str, dict[str, Any]] | None = None,
-    _include_splits: bool = True,
-) -> dict[str, Any]:
-    """Replay signal cohorts and portfolio state in strict event-time order.
-
-    Candidate critic outcomes are part of each historical input. Missing critic
-    evidence rejects by the same fail-closed policy used live.
-    """
+def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict[str, Any]],
+                     config: PaperTradeConfig) -> tuple[list[dict[str, Any]], list[ExecutionDecision], list[SessionPrice], list[str]]:
     by_ticker: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    prices: list[SessionPrice] = []
     for raw in price_rows:
         row = dict(raw)
-        row["ticker"] = str(row.get("ticker") or "").upper()
-        row["date"] = str(row.get("date") or "")
-        by_ticker[row["ticker"]].append(row)
+        ticker, date = str(row.get("ticker") or "").upper(), str(row.get("date") or "")
+        row.update(ticker=ticker, date=date)
+        by_ticker[ticker].append(row)
+        prices.append(SessionPrice(ticker, date, row.get("open"), row.get("close"),
+                                   row.get("high"), row.get("low"), row.get("volume")))
     for rows in by_ticker.values():
         rows.sort(key=lambda item: item["date"])
-
-    fill_events: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    candidate_count = 0
+    sessions = sorted({row.date for row in prices})
+    session_index = {date: index for index, date in enumerate(sessions)}
+    decisions: list[dict[str, Any]] = []
+    executable: list[ExecutionDecision] = []
     for run in sorted(candidate_runs, key=lambda item: (str(item["report_date"]), str(item["report_run_id"]))):
         report_date = str(run["report_date"])
-        for rank, candidate in enumerate(run.get("candidates") or [], start=1):
-            candidate_count += 1
-            ticker = str(candidate.get("ticker") or "").upper()
-            next_bar = next((bar for bar in by_ticker.get(ticker, []) if bar["date"] > report_date and bar.get("open") is not None), None)
-            if not next_bar:
-                continue
-            fill_events[next_bar["date"]].append({
-                "run": run, "rank": rank, "candidate": candidate,
-                "bar": next_bar,
-            })
-
-    all_dates = sorted({str(row["date"]) for row in price_rows})
-    capital = float(config.starting_capital)
-    positions: list[dict[str, Any]] = []
-    trades: list[dict[str, Any]] = []
-    decisions: list[dict[str, Any]] = []
-    equity_curve: list[dict[str, Any]] = []
-    exposure_samples: list[float] = []
-    net_exposure_samples: list[float] = []
-    admitted_count = 0
-    policy = config_snapshot(config)
-
-    for date in all_dates:
-        # Exits precede new entries. If stop and target both touch inside one
-        # daily bar, the conservative stop-first assumption is deterministic.
-        survivors: list[dict[str, Any]] = []
-        for position in positions:
-            bar = next((item for item in by_ticker[position["ticker"]] if item["date"] == date), None)
-            if not bar:
-                survivors.append(position)
-                continue
-            position["bars_held"] += 1
-            direction = position["direction"]
-            stop = float(position["stop_loss"])
-            target = float(position["target_price"])
-            open_price = float(bar["open"])
-            low = float(bar["low"])
-            high = float(bar["high"])
-            reason = None
-            raw_exit = None
-            if direction == "long":
-                if open_price <= stop:
-                    reason, raw_exit = "stopped_out", open_price
-                elif open_price >= target:
-                    reason, raw_exit = "target_hit", open_price
-                elif low <= stop:
-                    reason, raw_exit = "stopped_out", stop
-                elif high >= target:
-                    reason, raw_exit = "target_hit", target
-            else:
-                if open_price >= stop:
-                    reason, raw_exit = "stopped_out", open_price
-                elif open_price <= target:
-                    reason, raw_exit = "target_hit", open_price
-                elif high >= stop:
-                    reason, raw_exit = "stopped_out", stop
-                elif low <= target:
-                    reason, raw_exit = "target_hit", target
-            if reason is None and position["bars_held"] >= config.expiry_days:
-                reason, raw_exit = "expired", float(bar["close"])
-            if reason is None:
-                survivors.append(position)
-                continue
-            exit_slip = config.exit_slippage_bps / 10_000
-            exit_price = float(raw_exit) * (1 - exit_slip if direction == "long" else 1 + exit_slip)
-            signed = (exit_price / position["entry_price"] - 1) * (1 if direction == "long" else -1)
-            borrow = position["notional"] * config.short_borrow_annual_pct / 100 / 252 * position["bars_held"] if direction == "short" else 0.0
-            pnl = position["notional"] * signed - 2 * config.commission_per_trade - borrow
-            capital += pnl
-            trades.append({
-                **position, "exit_date": date, "exit_price": round(exit_price, 6),
-                "exit_reason": reason, "borrow_cost": round(borrow, 6),
-                "net_pnl": round(pnl, 6),
-                "net_return_pct": round(pnl / position["notional"] * 100, 6),
-            })
-        positions = survivors
-
-        for event in sorted(fill_events.get(date, []), key=lambda item: (int(item["rank"]), str(item["candidate"].get("ticker") or ""))):
-            candidate = event["candidate"]
-            direction = direction_from_row(candidate)
-            raw_open = float(event["bar"]["open"])
-            slip = config.entry_slippage_bps / 10_000
-            entry = raw_open * (1 + slip if direction == "long" else 1 - slip)
-            historical_volumes = [
-                float(bar["volume"])
-                for bar in by_ticker.get(str(candidate.get("ticker") or "").upper(), [])
-                if bar["date"] <= date and bar.get("volume") not in (None, 0)
-            ][-20:]
-            avg_daily_volume = (
-                statistics.fmean(historical_volumes) if historical_volumes else None
+        for rank, raw_candidate in enumerate(run.get("candidates") or [], start=1):
+            sealed = raw_candidate.get("__sealed_context") if isinstance(raw_candidate, dict) else None
+            candidate = (
+                dict(raw_candidate.get("__sealed_candidate") or {})
+                if isinstance(raw_candidate, dict) and "__sealed_candidate" in raw_candidate
+                else raw_candidate
             )
-            portfolio_block = None
-            if len(positions) >= config.max_open:
-                portfolio_block = {"gate": "portfolio_capacity", "reason_code": "max_open_positions", "detail": "Replay portfolio is at capacity."}
+            ticker = str(candidate.get("ticker") or "").upper()
+            next_bar = next((bar for bar in by_ticker.get(ticker, [])
+                             if bar["date"] > report_date and bar.get("open") is not None), None)
+            execution_key = f"{run['report_run_id']}:{rank}"
+            raw_entry = float(next_bar["open"]) if next_bar else None
+            direction = direction_from_row(candidate) if isinstance(candidate, dict) else "long"
+            slip = config.entry_slippage_bps / 10_000
+            entry = (
+                round(raw_entry * (1 + slip if direction == "long" else 1 - slip), 4)
+                if raw_entry is not None else None
+            )
+            volumes = [float(bar["volume"]) for bar in by_ticker.get(ticker, [])
+                       if next_bar and bar["date"] <= next_bar["date"] and bar.get("volume") not in (None, 0)][-20:]
             context = {
                 "entry_price": entry,
-                "avg_daily_volume": avg_daily_volume,
-                "portfolio_block": portfolio_block,
+                "avg_daily_volume": statistics.fmean(volumes) if volumes else None,
+                "portfolio_block": None,
                 "critic_outcome": candidate.get("critic_outcome") or {"approved": False, "error": "missing_replay_critic_evidence"},
                 "campaign_active": True, "duplicate": False,
-                "execution_ready": True,
+                "execution_ready": next_bar is not None,
                 "market_context": candidate.get("market_context") or {},
-                "portfolio_context": {"open_count": len(positions)},
-                "source_context": {"report_run_id": event["run"]["report_run_id"], "price_date": date},
+                "portfolio_context": {},
+                "source_context": {"report_run_id": run["report_run_id"],
+                                   "price_date": next_bar["date"] if next_bar else None},
             }
-            decision = decide_candidate(row=candidate, rank=int(event["rank"]), config=config, context=context)
-            execution_key = f"{event['run']['report_run_id']}:{event['rank']}"
+            if isinstance(sealed, dict):
+                context.update(sealed)
+                context.update(
+                    entry_price=entry,
+                    avg_daily_volume=statistics.fmean(volumes) if volumes else None,
+                    execution_ready=next_bar is not None,
+                )
+            decision = decide_candidate(row=candidate, rank=rank, config=config, context=context)
             decisions.append({"execution_key": execution_key, **decision})
-            if decision["disposition"] != "admitted":
+            if decision["disposition"] != "admitted" or next_bar is None:
                 continue
-            admitted_count += 1
-            position_pct = float(decision["sizing"].get("position_size_pct") or 0.0)
-            notional = min(capital, config.starting_capital * position_pct / 100)
-            positions.append({
-                "execution_key": execution_key, "ticker": decision["ticker"],
-                "direction": direction, "entry_date": date,
-                "entry_price": round(entry, 6), "notional": notional,
-                "stop_loss": float(decision["stop_loss"]),
-                "target_price": float(decision["target_price"]), "bars_held": 0,
-            })
-        exposure_samples.append(sum(float(item["notional"]) for item in positions) / config.starting_capital * 100)
-        net_exposure_samples.append(sum(
-            float(item["notional"]) * (1 if item["direction"] == "long" else -1)
-            for item in positions
-        ) / config.starting_capital)
-        equity_curve.append({"date": date, "equity": round(capital, 6), "open_positions": len(positions)})
+            entry_index = session_index[next_bar["date"]]
+            exit_index = min(len(sessions) - 1, entry_index + config.expiry_days)
+            position_pct = float(decision["sizing"].get("position_size_pct") or 0)
+            locked_notional = config.starting_capital * position_pct / 100
+            capacity = statistics.fmean(volumes) * raw_entry * config.max_adv_pct / 100 if volumes and raw_entry else 0.0
+            executable.append(ExecutionDecision(
+                execution_key, ticker, direction, report_date,
+                next_bar["date"], sessions[exit_index], float(candidate.get("score") or 0),
+                capacity, locked_notional=locked_notional,
+                metadata=(("execution_key", execution_key),),
+                stop_loss=float(decision["stop_loss"]), target_price=float(decision["target_price"]),
+                max_holding_sessions=config.expiry_days,
+            ))
+    return decisions, executable, prices, sessions
 
-    # Close residual positions at their final available close so held-out return
-    # and turnover are defined without silently discarding open risk.
-    for position in positions:
-        last_bar = by_ticker[position["ticker"]][-1]
-        exit_price = float(last_bar["close"])
-        signed = (exit_price / position["entry_price"] - 1) * (1 if position["direction"] == "long" else -1)
-        borrow = position["notional"] * config.short_borrow_annual_pct / 100 / 252 * position["bars_held"] if position["direction"] == "short" else 0.0
-        pnl = position["notional"] * signed - 2 * config.commission_per_trade - borrow
-        capital += pnl
-        trades.append({**position, "exit_date": last_bar["date"], "exit_price": exit_price, "exit_reason": "end_of_replay", "borrow_cost": borrow, "net_pnl": pnl, "net_return_pct": pnl / position["notional"] * 100})
-    if equity_curve:
-        equity_curve[-1]["equity"] = round(capital, 6)
 
+def _matched_spy_return(curve: list[dict[str, Any]], spy_rows: list[dict[str, Any]]) -> tuple[float, float]:
     spy = sorted(spy_rows, key=lambda item: str(item["date"]))
-    spy_return = 0.0
-    if len(spy) >= 2 and float(spy[0]["open"]):
-        spy_return = (float(spy[-1]["close"]) / float(spy[0]["open"]) - 1) * 100
-    spy_by_date = {str(row["date"]): row for row in spy}
-    matched_spy_return = 0.0
-    matched_observations = 0
-    previous_close: float | None = None
-    for index, curve_point in enumerate(equity_curve):
-        bar = spy_by_date.get(str(curve_point["date"]))
+    buy_hold = 0.0
+    if len(spy) >= 2 and spy[0].get("open") and spy[-1].get("close") is not None:
+        buy_hold = (float(spy[-1]["close"]) / float(spy[0]["open"]) - 1) * 100
+    by_date = {str(row["date"]): row for row in spy}
+    matched, previous_close = 0.0, None
+    for point in curve:
+        bar = by_date.get(str(point["date"]))
         if not bar or bar.get("close") is None:
             continue
         close = float(bar["close"])
-        if bar.get("open") is not None:
-            base = float(bar["open"])
-            exposure = net_exposure_samples[index] if index < len(net_exposure_samples) else 0.0
-        elif previous_close is not None:
-            base = previous_close
-            exposure = net_exposure_samples[index - 1] if index else 0.0
-        else:
-            previous_close = close
-            continue
+        base = float(bar["open"]) if bar.get("open") is not None else previous_close
         if base:
-            matched_spy_return += (close / base - 1) * exposure * 100
-            matched_observations += 1
+            matched += (close / base - 1) * float(point.get("net_exposure_pct") or 0)
         previous_close = close
-    if matched_observations == 0 and exposure_samples:
-        matched_spy_return = spy_return * statistics.fmean(exposure_samples) / 100
-    metrics = _trade_metrics(
-        trades, starting_capital=config.starting_capital, equity_curve=equity_curve,
-        spy_buy_hold_return_pct=spy_return,
-        matched_spy_return_pct=matched_spy_return, candidate_count=candidate_count,
-        admitted_count=admitted_count, exposure_samples=exposure_samples,
-    )
-    mismatches: list[str] = []
-    if expected_execution is not None:
-        actual = {item["execution_key"]: {"disposition": item["disposition"], "inputs_hash": item["inputs_hash"]} for item in decisions}
-        for key in sorted(set(actual) | set(expected_execution)):
-            if actual.get(key) != expected_execution.get(key):
-                mismatches.append(key)
-    parity = "matched" if expected_execution is not None and not mismatches else "diverged" if expected_execution is not None else "not_measured"
+    return buy_hold, matched
+
+
+def replay_campaign(*, candidate_runs: list[dict[str, Any]], price_rows: list[dict[str, Any]],
+                    spy_rows: list[dict[str, Any]], config: PaperTradeConfig,
+                    expected_execution: dict[str, dict[str, Any]] | None = None,
+                    _include_splits: bool = True) -> dict[str, Any]:
+    """Adapt campaign candidates to the one canonical execution ledger."""
+    decisions, executable, prices, sessions = _campaign_inputs(candidate_runs, price_rows, config)
+    execution = simulate_portfolio(executable, prices, sessions, BaselineConfig(
+        initial_capital=config.starting_capital, max_positions=config.max_open,
+        position_pct=config.max_position_pct, max_name_pct=config.max_position_pct,
+        max_adv_pct=config.max_adv_pct, entry_slippage_bps=config.entry_slippage_bps,
+        exit_slippage_bps=config.exit_slippage_bps, commission_bps_per_side=0,
+        minimum_commission_per_side=config.commission_per_trade,
+        short_borrow_bps_annual=config.short_borrow_annual_pct * 100,
+        cash_rate_bps_annual=0, holding_sessions=max(2, config.expiry_days),
+    ))
+    trades: list[dict[str, Any]] = []
+    for raw in execution.trades:
+        item = dict(raw)
+        item["notional"] = float(item["entry_notional"])
+        item["borrow_cost"] = float(item.get("borrow") or 0)
+        item["net_return_pct"] = float(item["net_pnl"]) / item["notional"] * 100 if item["notional"] else 0
+        trades.append(item)
+    curve = [dict(item) for item in execution.equity_curve]
+    spy_return, matched_spy = _matched_spy_return(curve, spy_rows)
+    actual = {item["execution_key"]: {"disposition": item["disposition"], "inputs_hash": item["inputs_hash"]}
+              for item in decisions}
+    mismatches = [] if expected_execution is None else [key for key in sorted(set(actual) | set(expected_execution))
+                                                        if actual.get(key) != expected_execution.get(key)]
+    parity = "not_measured" if expected_execution is None else "matched" if not mismatches else "diverged"
     dates = sorted({str(run["report_date"]) for run in candidate_runs})
-    split = min(len(dates) - 1, max(1, int(len(dates) * 0.8))) if len(dates) > 1 else len(dates)
-    training_dates = dates[:split]
-    held_out_dates = dates[split:]
-    walk_forward: dict[str, Any] = {
-        "training_dates": training_dates,
-        "held_out_dates": held_out_dates,
-    }
-    held_out: dict[str, Any] = {
-        "dates": held_out_dates, "metrics": None, "trades": [],
-    }
+    split = min(len(dates) - 1, max(1, int(len(dates) * .8))) if len(dates) > 1 else len(dates)
+    training_dates, held_out_dates = dates[:split], dates[split:]
+    walk_forward: dict[str, Any] = {"training_dates": training_dates, "held_out_dates": held_out_dates}
+    held_out: dict[str, Any] = {"dates": held_out_dates, "metrics": None, "trades": []}
     if _include_splits and training_dates:
-        training_result = replay_campaign(
-            candidate_runs=[run for run in candidate_runs if str(run["report_date"]) in training_dates],
-            price_rows=price_rows, spy_rows=spy_rows, config=config,
-            expected_execution=None, _include_splits=False,
-        )
-        walk_forward["training_metrics"] = training_result["metrics"]
-        walk_forward["training_trades"] = training_result["trades"]
-        fold_count = min(5, max(0, len(dates) - 1))
-        folds: list[dict[str, Any]] = []
+        training = replay_campaign(candidate_runs=[run for run in candidate_runs if str(run["report_date"]) in training_dates],
+                                   price_rows=price_rows, spy_rows=spy_rows, config=config, _include_splits=False)
+        walk_forward.update(training_metrics=training["metrics"], training_trades=training["trades"])
+        folds, fold_count = [], min(5, max(0, len(dates) - 1))
         for fold_index in range(fold_count):
-            validation_index = max(
-                1, round((fold_index + 1) * (len(dates) - 1) / fold_count)
-            )
-            validation_date = dates[validation_index]
-            fold_result = replay_campaign(
-                candidate_runs=[
-                    run for run in candidate_runs
-                    if str(run["report_date"]) == validation_date
-                ],
-                price_rows=price_rows, spy_rows=spy_rows, config=config,
-                expected_execution=None, _include_splits=False,
-            )
-            folds.append({
-                "training_dates": dates[:validation_index],
-                "validation_date": validation_date,
-                "metrics": fold_result["metrics"],
-                "trades": fold_result["trades"],
-            })
+            index = max(1, round((fold_index + 1) * (len(dates) - 1) / fold_count))
+            validation_date = dates[index]
+            fold = replay_campaign(candidate_runs=[run for run in candidate_runs if str(run["report_date"]) == validation_date],
+                                   price_rows=price_rows, spy_rows=spy_rows, config=config, _include_splits=False)
+            folds.append({"training_dates": dates[:index], "validation_date": validation_date,
+                          "metrics": fold["metrics"], "trades": fold["trades"]})
         walk_forward["folds"] = folds
     if _include_splits and held_out_dates:
-        held_result = replay_campaign(
-            candidate_runs=[run for run in candidate_runs if str(run["report_date"]) in held_out_dates],
-            price_rows=price_rows, spy_rows=spy_rows, config=config,
-            expected_execution=None, _include_splits=False,
-        )
-        held_out = {
-            "dates": held_out_dates, "metrics": held_result["metrics"],
-            "trades": held_result["trades"],
-        }
-    return {
-        "engine_version": "paper-replay-v2.0",
-        "policy_hash": canonical_hash(policy),
-        "dataset_hash": canonical_hash({"candidate_runs": candidate_runs, "price_rows": price_rows, "spy_rows": spy_rows}),
-        "metrics": metrics,
-        "trades": trades,
-        "decisions": decisions,
-        "equity_curve": equity_curve,
-        "replay_live_parity": parity,
-        "parity_mismatches": mismatches,
-        "walk_forward": walk_forward,
-        "held_out": held_out,
-    }
-
-
-def replay_and_seal_promotion(
-    conn,
-    *,
-    experiment_id: str,
-    preregistration_id: str,
-    campaign_id: str,
-    candidate_runs: list[dict[str, Any]],
-    price_rows: list[dict[str, Any]],
-    spy_rows: list[dict[str, Any]],
-    config: PaperTradeConfig,
-    expected_execution: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    """Run the real engine, measure parity, then seal promotion evidence."""
-    result = replay_campaign(
-        candidate_runs=candidate_runs, price_rows=price_rows, spy_rows=spy_rows,
-        config=config, expected_execution=expected_execution,
+        held = replay_campaign(candidate_runs=[run for run in candidate_runs if str(run["report_date"]) in held_out_dates],
+                               price_rows=price_rows, spy_rows=spy_rows, config=config, _include_splits=False)
+        held_out = {"dates": held_out_dates, "metrics": held["metrics"], "trades": held["trades"]}
+    metrics = _trade_metrics(
+        trades, starting_capital=config.starting_capital, equity_curve=curve,
+        spy_return_pct=spy_return, matched_spy_return_pct=matched_spy,
+        candidate_count=sum(len(run.get("candidates") or []) for run in candidate_runs),
+        admitted_count=sum(item["disposition"] == "admitted" for item in decisions),
     )
-    promotion_metrics = {
-        **result["metrics"],
-        "engine_version": result["engine_version"],
-        "walk_forward": result["walk_forward"],
-        "held_out": result["held_out"],
+    return {
+        "engine_version": ENGINE_VERSION, "policy_hash": canonical_hash(config_snapshot(config)),
+        "dataset_hash": canonical_hash({"candidate_runs": candidate_runs, "price_rows": price_rows, "spy_rows": spy_rows}),
+        "metrics": metrics, "trades": trades,
+        "open_positions": [dict(item) for item in execution.open_positions],
+        "exclusions": [dict(item) for item in execution.exclusions],
+        "decisions": decisions, "equity_curve": curve, "replay_live_parity": parity,
+        "parity_mismatches": mismatches, "walk_forward": walk_forward, "held_out": held_out,
     }
+
+
+def replay_and_seal_promotion(conn, *, experiment_id: str, preregistration_id: str,
+                              campaign_id: str, candidate_runs: list[dict[str, Any]],
+                              price_rows: list[dict[str, Any]], spy_rows: list[dict[str, Any]],
+                              config: PaperTradeConfig) -> dict[str, Any]:
+    """Compare replay with sealed live facts, then persist promotion evidence."""
+    run_ids = sorted({str(run["report_run_id"]) for run in candidate_runs})
+    if not run_ids:
+        raise ValueError("promotion parity requires sealed live report runs")
+    placeholders = ",".join("?" for _ in run_ids)
+    live_rows = conn.execute(
+        f"""SELECT d.report_run_id,d.candidate_rank,
+                   CASE WHEN d.disposition='pending' AND po.status='filled'
+                        THEN json_extract(ev.payload_json,'$.decision.disposition')
+                        WHEN d.disposition='pending' AND po.status='rejected'
+                        THEN 'rejected' ELSE d.disposition END,
+                   CASE WHEN d.disposition='pending' AND ev.payload_json IS NOT NULL
+                        THEN json_extract(ev.payload_json,'$.decision.inputs_hash')
+                        ELSE d.inputs_hash END,
+                   d.inputs_json
+            FROM paper_candidate_decisions d
+            LEFT JOIN paper_pending_orders po
+              ON po.report_run_id=d.report_run_id AND po.campaign_id=d.campaign_id
+             AND po.candidate_rank=d.candidate_rank
+            LEFT JOIN paper_order_events ev
+              ON ev.order_id=po.order_id AND ev.event_type IN ('filled','rejected')
+            WHERE d.campaign_id=? AND d.report_run_id IN ({placeholders})
+            ORDER BY d.report_run_id,d.candidate_rank""",
+        (campaign_id, *run_ids),
+    ).fetchall()
+    expected_execution = {
+        f"{row[0]}:{row[1]}": {"disposition": row[2], "inputs_hash": row[3]}
+        for row in live_rows
+    }
+    if len(expected_execution) != sum(len(run.get("candidates") or []) for run in candidate_runs):
+        raise ValueError("promotion parity requires one sealed live fact per candidate")
+    live_inputs = {
+        (str(row[0]), int(row[1])): json.loads(str(row[4])) for row in live_rows
+    }
+    sealed_candidate_runs = []
+    for run in candidate_runs:
+        run_id = str(run["report_run_id"])
+        sealed_candidates = []
+        for rank, _candidate in enumerate(run.get("candidates") or [], start=1):
+            evidence = live_inputs[(run_id, rank)]
+            sealed_candidates.append({
+                "__sealed_candidate": evidence["candidate"],
+                "__sealed_context": evidence["context"],
+            })
+        sealed_candidate_runs.append({**run, "candidates": sealed_candidates})
+    result = replay_campaign(candidate_runs=sealed_candidate_runs, price_rows=price_rows, spy_rows=spy_rows,
+                             config=config, expected_execution=expected_execution)
     evidence = record_promotion_experiment(
         conn, experiment_id=experiment_id, preregistration_id=preregistration_id,
-        campaign_id=campaign_id,
-        policy_version=config.decision_version, policy_hash=result["policy_hash"],
-        dataset_hash=result["dataset_hash"],
-        metrics=promotion_metrics, parity_status=result["replay_live_parity"],
+        campaign_id=campaign_id, policy_version=config.decision_version,
+        policy_hash=result["policy_hash"], dataset_hash=result["dataset_hash"],
+        metrics={**result["metrics"], "engine_version": result["engine_version"],
+                 "walk_forward": result["walk_forward"], "held_out": result["held_out"]},
+        parity_status=result["replay_live_parity"],
     )
     return {**result, "promotion_evidence": evidence}
