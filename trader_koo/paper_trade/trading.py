@@ -17,8 +17,25 @@ from trader_koo.paper_trade.decision import (
 )
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema, register_bot_version
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
+from trader_koo.db.price_contract import research_price_contract
 
 LOG = logging.getLogger(__name__)
+
+
+def _run_owned_transaction(conn: sqlite3.Connection, operation: Any) -> Any:
+    """Run a mutation in one snapshot without committing caller-owned work."""
+    owned = not conn.in_transaction
+    if owned:
+        conn.execute("BEGIN")
+    try:
+        result = operation()
+        if owned:
+            conn.commit()
+        return result
+    except Exception:
+        if owned:
+            conn.rollback()
+        raise
 
 
 def _build_review(
@@ -524,7 +541,7 @@ def _close_trade(
     )
 
 
-def create_paper_trades_from_report(
+def _create_paper_trades_from_report(
     conn: sqlite3.Connection,
     *,
     setup_rows: list[dict[str, Any]],
@@ -657,6 +674,9 @@ def create_paper_trades_from_report(
         ).fetchone()
         if member is None:
             raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
+        if not research_price_contract(conn, [ticker]).get("eligible"):
+            LOG.warning("Paper trade skipped: %s price series is unresolved", ticker)
+            continue
 
         direction = str(evaluation["direction"])
 
@@ -932,7 +952,27 @@ def create_paper_trades_from_report(
     return inserted
 
 
-def mark_to_market(
+def create_paper_trades_from_report(
+    conn: sqlite3.Connection,
+    *,
+    setup_rows: list[dict[str, Any]],
+    report_date: str,
+    generated_ts: str,
+    config: PaperTradeConfig,
+) -> int:
+    return _run_owned_transaction(
+        conn,
+        lambda: _create_paper_trades_from_report(
+            conn,
+            setup_rows=setup_rows,
+            report_date=report_date,
+            generated_ts=generated_ts,
+            config=config,
+        ),
+    )
+
+
+def _mark_to_market(
     conn: sqlite3.Connection,
     *,
     config: PaperTradeConfig,
@@ -972,11 +1012,21 @@ def mark_to_market(
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     updated = 0
     closed = 0
+    blocked: list[dict[str, Any]] = []
 
     for row in open_rows:
         trade_id, ticker, direction, entry_price, entry_date = row[:5]
         target_price, stop_loss, high_water_mark, low_water_mark = row[5:9]
         stop_distance_pct, atr_at_entry = row[9:]
+
+        contract = research_price_contract(conn, [str(ticker)])
+        if not contract.get("eligible"):
+            blocked.append({
+                "trade_id": int(trade_id),
+                "ticker": str(ticker),
+                "reason": str(contract.get("reason") or "price_series_unresolved"),
+            })
+            continue
 
         price_row = conn.execute(
             "SELECT CAST(close AS REAL), date, "
@@ -1148,10 +1198,23 @@ def mark_to_market(
         updated += 1
 
     update_portfolio_snapshot(conn)
-    return {"open_trades": len(open_rows) - closed, "updated": updated, "closed": closed}
+    return {
+        "open_trades": len(open_rows) - closed,
+        "updated": updated,
+        "closed": closed,
+        "blocked": blocked,
+    }
 
 
-def manually_close_trade(
+def mark_to_market(
+    conn: sqlite3.Connection,
+    *,
+    config: PaperTradeConfig,
+) -> dict[str, Any]:
+    return _run_owned_transaction(conn, lambda: _mark_to_market(conn, config=config))
+
+
+def _manually_close_trade(
     conn: sqlite3.Connection,
     *,
     trade_id: int,
@@ -1169,6 +1232,11 @@ def manually_close_trade(
     ticker, direction, entry_price, stop_loss, status = row
     if status != "open":
         raise ValueError(f"Paper trade {trade_id} is already {status}")
+    contract = research_price_contract(conn, [str(ticker)])
+    if not contract.get("eligible"):
+        raise ValueError(
+            f"Price series for {ticker} is unresolved; trade remains open"
+        )
 
     if exit_price is None:
         price_row = conn.execute(
@@ -1191,8 +1259,6 @@ def manually_close_trade(
         stop_loss,
         config=config,
     )
-    conn.commit()
-
     pnl = round(compute_pnl(direction, entry_price, exit_price), 2)
     return {
         "trade_id": trade_id,
@@ -1202,3 +1268,23 @@ def manually_close_trade(
         "pnl_pct": pnl,
         "status": "closed",
     }
+
+
+def manually_close_trade(
+    conn: sqlite3.Connection,
+    *,
+    trade_id: int,
+    exit_price: float | None = None,
+    exit_reason: str = "manual_close",
+    config: PaperTradeConfig,
+) -> dict[str, Any]:
+    return _run_owned_transaction(
+        conn,
+        lambda: _manually_close_trade(
+            conn,
+            trade_id=trade_id,
+            exit_price=exit_price,
+            exit_reason=exit_reason,
+            config=config,
+        ),
+    )

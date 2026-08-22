@@ -262,6 +262,8 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
                 "unresolved_reason": row[5] or contract["reason"],
                 "corporate_actions": actions,
                 "distributions_included": contract["distributions_included"],
+                "price_revision": contract.get("revision"),
+                "managed_window": contract.get("managed_window"),
             }
     except Exception as exc:
         LOG.warning("Failed to get data sources for %s: %s", ticker, exc)

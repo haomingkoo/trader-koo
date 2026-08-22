@@ -56,6 +56,7 @@ from trader_koo.backend.services.report_loader import latest_report_hmm_for_tick
 from trader_koo.structure.hmm_regime import predict_regimes as hmm_predict_regimes
 from trader_koo.backend.services.market_data import get_data_sources
 from trader_koo.backend.services.report_loader import latest_report_setup_for_ticker
+from trader_koo.db.price_contract import research_price_contract
 
 LOG = logging.getLogger("trader_koo.services.chart_builder")
 
@@ -993,6 +994,9 @@ def _prepare_model_and_features(
     Returns all intermediate artifacts needed by both the quick and
     full dashboard builders so the heavy DataFrame work runs once.
     """
+    price_contract = research_price_contract(conn, [ticker])
+    if not price_contract.get("eligible"):
+        raise HTTPException(status_code=409, detail="Price series is not research eligible")
     prices = get_price_df(conn, ticker)
     if prices.empty:
         raise HTTPException(
@@ -1001,7 +1005,9 @@ def _prepare_model_and_features(
 
     max_date = prices["date"].max()
     db_path = _conn_db_path(conn)
-    cache_key = (db_path, ticker, int(months), str(max_date)) if db_path else None
+    cache_key = (
+        db_path, ticker, int(months), str(max_date), price_contract.get("revision")
+    ) if db_path else None
     if cache_key is not None:
         cached = _get_prepared_features(cache_key)
         if cached is not None:

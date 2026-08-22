@@ -73,6 +73,18 @@ def test_ordinary_price_moves_do_not_look_like_scale_breaks(conn: sqlite3.Connec
     assert stored_prices_have_scale_break(conn, "KLAC") is False
 
 
+def test_downloaded_split_missing_from_vendor_ledger_fails_closed() -> None:
+    frame = DataSourceManager._normalize_ohlcv(
+        _already_adjusted_action_frame(action_date=DATES[1], factor=2.0)
+    )
+    reconcile_vendor_action_ledger(frame, [])
+    assert frame.attrs["basis_status"] == "unresolved"
+    assert any(
+        item["reason"] == "download_vendor_ledger_contradiction"
+        for item in frame.attrs["unresolved_discontinuities"]
+    )
+
+
 def test_real_crash_prompts_check_but_does_not_reseed(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM price_daily")
     crash = pd.DataFrame(

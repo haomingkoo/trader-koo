@@ -15,6 +15,7 @@ from trader_koo.analysis.green_barrier import (
     scan_green_barriers,
 )
 from trader_koo.backend.services import chart_builder
+from trader_koo.db.price_contract import record_price_series_revision
 from trader_koo.notifications.morning_summary import (
     _select_green_barrier_attachments,
     send_morning_summary,
@@ -52,6 +53,13 @@ def _make_price_db(path: Path) -> sqlite3.Connection:
         (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
+    for ticker in ("HIT", "CLEAR"):
+        record_price_series_revision(
+            conn,
+            ticker,
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-22T00:00:00Z",
+        )
     conn.commit()
     return conn
 
@@ -206,7 +214,8 @@ def test_scan_snapshot_counts_insufficient_timeframe_history(tmp_path: Path) -> 
         """CREATE TABLE price_daily (
         ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
         adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
-        adjustment_version TEXT DEFAULT 'test-v1', basis_status TEXT DEFAULT 'verified')"""
+        adjustment_version TEXT DEFAULT 'test-v1', basis_status TEXT DEFAULT 'verified',
+        unresolved_reason TEXT)"""
     )
     rows = [
         ("SHORT", date.date().isoformat(), 10, 11, 9, 10, 100)
@@ -216,6 +225,12 @@ def test_scan_snapshot_counts_insufficient_timeframe_history(tmp_path: Path) -> 
         """INSERT INTO price_daily
         (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
         rows,
+    )
+    record_price_series_revision(
+        conn,
+        "SHORT",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+        fetch_timestamp="2026-08-22T00:00:00Z",
     )
     conn.commit()
     try:
@@ -298,6 +313,12 @@ def test_chart_is_bound_to_report_asof_and_value(tmp_path: Path) -> None:
             """INSERT INTO price_daily
             (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
             ("HIT", "2025-07-31", 110, 120, 80, 120, 1000),
+        )
+        record_price_series_revision(
+            conn,
+            "HIT",
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-22T00:00:00Z",
         )
         conn.commit()
 

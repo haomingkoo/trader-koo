@@ -8,6 +8,16 @@ import pandas as pd
 
 from trader_koo.ml import trainer as trainer_mod
 from trader_koo.ml.trainer import _apply_target_mode, _save_model, build_dataset
+from trader_koo.db.price_contract import record_price_series_revision
+
+
+def _seal_spy(conn: sqlite3.Connection) -> None:
+    record_price_series_revision(
+        conn,
+        "SPY",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+        fetch_timestamp="2025-01-05T00:00:00Z",
+    )
 
 
 def test_apply_target_mode_return_sign_keeps_time_expired_samples():
@@ -38,15 +48,16 @@ def test_apply_target_mode_barrier_treats_time_expiry_as_no_target_hit():
 def test_build_dataset_keeps_time_expired_labels_by_default(monkeypatch):
     conn = sqlite3.connect(":memory:")
     conn.execute("""CREATE TABLE price_daily (
-        ticker TEXT, date TEXT, close REAL,
+        ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
         adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
         adjustment_version TEXT DEFAULT 'test-v1',
-        basis_status TEXT DEFAULT 'verified'
+        basis_status TEXT DEFAULT 'verified', unresolved_reason TEXT
     )""")
     conn.executemany(
-        "INSERT INTO price_daily (ticker, date, close) VALUES (?, ?, ?)",
-        [("SPY", f"2025-01-{day:02d}", 100.0 + day) for day in range(1, 6)],
+        "INSERT INTO price_daily (ticker, date, close, open, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [("SPY", f"2025-01-{day:02d}", 100.0 + day, 100.0 + day, 100.0 + day, 100.0 + day, 1) for day in range(1, 6)],
     )
+    _seal_spy(conn)
 
     def fake_features(*_args, **_kwargs):
         return pd.DataFrame({"ret_1d": [0.01]}, index=pd.Index(["AAPL"], name="ticker"))
@@ -83,15 +94,16 @@ def test_build_dataset_keeps_time_expired_labels_by_default(monkeypatch):
 def test_build_dataset_can_drop_time_expired_labels(monkeypatch):
     conn = sqlite3.connect(":memory:")
     conn.execute("""CREATE TABLE price_daily (
-        ticker TEXT, date TEXT, close REAL,
+        ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
         adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
         adjustment_version TEXT DEFAULT 'test-v1',
-        basis_status TEXT DEFAULT 'verified'
+        basis_status TEXT DEFAULT 'verified', unresolved_reason TEXT
     )""")
     conn.executemany(
-        "INSERT INTO price_daily (ticker, date, close) VALUES (?, ?, ?)",
-        [("SPY", f"2025-01-{day:02d}", 100.0 + day) for day in range(1, 6)],
+        "INSERT INTO price_daily (ticker, date, close, open, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [("SPY", f"2025-01-{day:02d}", 100.0 + day, 100.0 + day, 100.0 + day, 100.0 + day, 1) for day in range(1, 6)],
     )
+    _seal_spy(conn)
 
     def fake_features(*_args, **_kwargs):
         return pd.DataFrame({"ret_1d": [0.01]}, index=pd.Index(["AAPL"], name="ticker"))

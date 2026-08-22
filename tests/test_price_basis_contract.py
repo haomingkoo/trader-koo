@@ -14,7 +14,11 @@ from trader_koo.analysis.green_barrier import (
 from trader_koo.backend.services.market_data import get_data_sources
 from trader_koo.db import sources as price_sources
 from trader_koo.db.sources import DataSourceManager
-from trader_koo.scripts.update_market_db import ensure_schema, write_price_daily
+from trader_koo.scripts.update_market_db import (
+    ensure_schema,
+    reconcile_vendor_action_ledger,
+    write_price_daily,
+)
 from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.benchmark import run_benchmark
 from trader_koo.ml.trainer import build_dataset
@@ -271,6 +275,10 @@ def test_action_persistence_is_idempotent_and_visible_in_chart_contract() -> Non
     normalized = DataSourceManager._normalize_ohlcv(
         _raw_frame(_continuous_prices(), action_date="2025-07-01", factor=20.0)
     )
+    reconcile_vendor_action_ledger(
+        normalized,
+        [{"action_date": "2025-07-01", "action_type": "split", "value": 20.0}],
+    )
 
     write_price_daily(conn, "BKNG", normalized, fetch_timestamp="2026-08-22T00:00:00Z")
     write_price_daily(conn, "BKNG", normalized, fetch_timestamp="2026-08-22T00:00:00Z")
@@ -290,6 +298,25 @@ def test_action_persistence_is_idempotent_and_visible_in_chart_contract() -> Non
     )
     assert contract["corporate_actions"][0]["evidence_json"]["applied_to_prices"] is True
     assert contract["corporate_actions"][0]["full_history_verified"] is False
+    sealed = research_price_contract(conn, ["BKNG"])
+    assert sealed["revision"]
+    assert sealed["ticker_contracts"]["BKNG"]["action_sha256"]
+
+    conn.execute("DELETE FROM price_corporate_actions WHERE ticker='BKNG'")
+    assert research_price_contract(conn, ["BKNG"])["eligible"] is False
+
+
+def test_direct_sql_basis_flags_cannot_forge_revision_evidence() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    conn.execute(
+        """INSERT INTO price_daily (
+            ticker,date,open,high,low,close,volume,adjustment_basis,
+            adjustment_version,basis_status
+        ) VALUES ('FORGED','2026-08-21',99,101,98,100,1000,
+                  'split_adjusted_price_only','forged-v1','verified')"""
+    )
+    assert research_price_contract(conn, ["FORGED"])["eligible"] is False
 
 
 @pytest.mark.parametrize(

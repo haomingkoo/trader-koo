@@ -32,6 +32,10 @@ from trader_koo.paper_trades import (
     paper_trade_summary,
     qualify_setup_for_paper_trade,
 )
+from trader_koo.db.price_contract import (
+    ensure_price_series_revision_schema,
+    record_price_series_revision,
+)
 
 TEST_REPORT_RUN_ID = "paper-trade-test-run"
 
@@ -142,10 +146,16 @@ def conn(tmp_path: Path):
         CREATE TABLE IF NOT EXISTS price_daily (
             ticker TEXT NOT NULL,
             date TEXT NOT NULL,
-            open REAL, high REAL, low REAL, close REAL, volume INTEGER,
+            open REAL, high REAL, low REAL, close REAL, volume REAL,
+            data_source TEXT, fetch_timestamp TEXT,
+            adjustment_basis TEXT, adjustment_version TEXT,
+            basis_status TEXT, unresolved_reason TEXT,
             UNIQUE(ticker, date)
         )
     """)
+    ensure_price_series_revision_schema(db)
+    for ticker, close in (("AAPL", 150.0), ("MSFT", 300.0)):
+        _seed_price(db, ticker, close)
     db.commit()
     return db
 
@@ -160,13 +170,23 @@ def _seed_price(
     open_: float | None = None,
 ) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO price_daily (ticker, date, close, high, low, open) VALUES (?, ?, ?, ?, ?, ?)",
+        """INSERT OR REPLACE INTO price_daily (
+               ticker,date,close,high,low,open,volume,data_source,fetch_timestamp,
+               adjustment_basis,adjustment_version,basis_status,unresolved_reason
+           ) VALUES (?,?,?,?,?,?,100000,'fixture','2026-03-14T00:00:00Z',
+                     'split_adjusted_price_only','fixture-v1','verified',NULL)""",
         (
             ticker, date, close,
             high if high is not None else close,
             low if low is not None else close,
             open_ if open_ is not None else close,
         ),
+    )
+    record_price_series_revision(
+        conn,
+        ticker,
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True, "vendor_action_ledger": []},
+        fetch_timestamp="2026-03-14T00:00:00Z",
     )
     conn.commit()
 
@@ -482,6 +502,18 @@ class TestCreatePaperTrades:
         ).fetchone()
         assert trade == ("AAPL", "long", "open", "approved", "approved")
 
+    def test_unresolved_price_cannot_create_trade(self, conn):
+        conn.execute("UPDATE price_daily SET basis_status='unresolved' WHERE ticker='AAPL'")
+        conn.commit()
+        inserted = create_paper_trades_from_report(
+            conn,
+            setup_rows=[_make_setup_row()],
+            report_date="2026-03-14",
+            generated_ts="2026-03-14T22:00:00Z",
+        )
+        assert inserted == 0
+        assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
     def test_stores_decision_metadata_for_flagged_trade(self, conn):
         rows = [_make_setup_row(actionability="conditional", risk_note="Watch earnings date")]
 
@@ -733,6 +765,24 @@ class TestMarkToMarket:
         assert conn.execute(
             "SELECT current_price FROM paper_trades WHERE ticker='AAPL'"
         ).fetchone() == (100.0,)
+
+    def test_unresolved_price_cannot_mutate_or_close_trade(self, conn):
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=90.0)
+        _seed_price(conn, "AAPL", 5.0, high=5.0, low=5.0, open_=5.0)
+        conn.execute(
+            """UPDATE price_daily SET basis_status='unresolved',
+               unresolved_reason='split contradiction' WHERE ticker='AAPL'"""
+        )
+        conn.commit()
+
+        result = mark_to_market(conn)
+
+        trade = conn.execute(
+            "SELECT status,exit_price,pnl_pct FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade == ("open", None, None)
+        assert result["updated"] == 0
+        assert result["blocked"][0]["ticker"] == "AAPL"
 
     def test_triggers_stop_loss(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0)
@@ -1020,6 +1070,24 @@ class TestManuallyCloseTrade:
         assert result["pnl_pct"] > 0
         assert result["status"] == "closed"
         assert result["ticker"] == "MSFT"
+
+    def test_unresolved_price_rejects_even_explicit_manual_exit(self, conn):
+        conn.execute(
+            """INSERT INTO paper_trades (
+               report_date,ticker,direction,entry_price,entry_date,stop_loss,status,
+               current_price,unrealized_pnl_pct,high_water_mark,low_water_mark,generated_ts
+            ) VALUES ('2026-03-14','MSFT','long',300,'2026-03-14',290,'open',
+                      300,0,300,300,'ts')"""
+        )
+        conn.execute("UPDATE price_daily SET basis_status='unresolved' WHERE ticker='MSFT'")
+        conn.commit()
+        trade_id = conn.execute("SELECT id FROM paper_trades").fetchone()[0]
+
+        with pytest.raises(ValueError, match="remains open"):
+            manually_close_trade(conn, trade_id=trade_id, exit_price=320.0)
+        assert conn.execute(
+            "SELECT status FROM paper_trades WHERE id=?", (trade_id,)
+        ).fetchone()[0] == "open"
 
     def test_raises_on_already_closed(self, conn):
         conn.execute(

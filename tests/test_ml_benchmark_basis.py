@@ -7,6 +7,7 @@ import pandas as pd
 
 from trader_koo.ml import benchmark
 from trader_koo.scripts.update_market_db import ensure_schema
+from trader_koo.db.price_contract import record_price_series_revision
 
 
 def test_successful_benchmark_persists_price_estimand(monkeypatch, tmp_path):
@@ -17,6 +18,12 @@ def test_successful_benchmark_persists_price_estimand(monkeypatch, tmp_path):
         ticker, date, close, adjustment_basis, adjustment_version, basis_status
         ) VALUES ('SPY', '2026-01-02', 100, ?, ?, 'verified')""",
         ("split_adjusted_price_only", "test-v1"),
+    )
+    record_price_series_revision(
+        conn,
+        "SPY",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+        fetch_timestamp="2026-01-02T00:00:00Z",
     )
     dataset = pd.DataFrame(
         {

@@ -16,6 +16,7 @@ from trader_koo.ml.scorer import (
     score_single_ticker,
     score_universe,
 )
+from trader_koo.db.price_contract import record_price_series_revision
 
 
 class _Model:
@@ -27,13 +28,20 @@ def _verified_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.execute(
         """CREATE TABLE price_daily (
-        ticker TEXT, date TEXT, close REAL,
-        adjustment_basis TEXT, adjustment_version TEXT, basis_status TEXT)"""
+        ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
+        adjustment_basis TEXT, adjustment_version TEXT, basis_status TEXT,
+        unresolved_reason TEXT)"""
     )
     for ticker in ("AAA", "SPY"):
         conn.execute(
-            "INSERT INTO price_daily VALUES (?, '2026-08-20', 100, ?, ?, 'verified')",
+            "INSERT INTO price_daily VALUES (?, '2026-08-20', 100, 100, 100, 100, 1, ?, ?, 'verified', NULL)",
             (ticker, "split_adjusted_price_only", "test-v1"),
+        )
+        record_price_series_revision(
+            conn,
+            ticker,
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-20T00:00:00Z",
         )
     return conn
 

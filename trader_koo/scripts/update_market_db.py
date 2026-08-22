@@ -37,7 +37,7 @@ from trader_koo.config import (
     get_options_config,
 )
 from trader_koo.db.schema import ensure_ohlcv_schema
-from trader_koo.db.price_contract import valid_price_provenance
+from trader_koo.db.price_contract import record_price_series_revision, valid_price_provenance
 from trader_koo.options_research import (
     fetch_yfinance_options_rows,
     write_options_rows as write_options_snapshot_rows,
@@ -353,6 +353,22 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (ticker, action_date, action_type, provider)
         );
 
+        CREATE TABLE IF NOT EXISTS price_series_revisions (
+            ticker TEXT PRIMARY KEY,
+            managed_start TEXT NOT NULL,
+            managed_end TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            adjustment_basis TEXT NOT NULL,
+            adjustment_version TEXT NOT NULL,
+            price_sha256 TEXT NOT NULL,
+            action_sha256 TEXT NOT NULL,
+            evidence_sha256 TEXT NOT NULL,
+            revision_sha256 TEXT NOT NULL,
+            status TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            fetch_timestamp TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS options_iv (
             snapshot_ts TEXT NOT NULL,
             ticker TEXT NOT NULL,
@@ -580,7 +596,7 @@ def reconcile_vendor_action_ledger(
     actions = [dict(action) for action in (df.attrs.get("corporate_actions") or [])]
     unresolved = list(df.attrs.get("unresolved_discontinuities") or [])
     downloaded = {
-        str(action.get("action_date")): action
+        (str(action.get("action_date")), str(action.get("action_type"))): action
         for action in actions
         if action.get("action_type") in {"split", "reverse_split"}
     }
@@ -598,7 +614,7 @@ def reconcile_vendor_action_ledger(
             or (configured_end is not None and action_day >= configured_end)
         ):
             continue
-        observed = downloaded.get(action_date)
+        observed = downloaded.get((action_date, action_type))
         observed_value = float(observed.get("value") or 0.0) if observed else None
         if observed is not None and math.isclose(
             observed_value or 0.0, value, rel_tol=1e-9, abs_tol=1e-12
@@ -630,10 +646,42 @@ def reconcile_vendor_action_ledger(
                 "reason": "vendor_ledger_download_contradiction",
             }
         )
-    if any(item.get("reason") == "vendor_ledger_download_contradiction" for item in unresolved):
+    ledger = {
+        (str(action.get("action_date")), str(action.get("action_type"))): action
+        for action in vendor_actions
+        if action.get("action_type") in {"split", "reverse_split"}
+    }
+    for key, observed in downloaded.items():
+        action_date, action_type = key
+        action_day = pd.Timestamp(action_date).date()
+        if (
+            action_day < configured_start
+            or action_day < first_date
+            or action_day > last_date
+            or (configured_end is not None and action_day >= configured_end)
+        ):
+            continue
+        declared = ledger.get(key)
+        observed_value = float(observed.get("value") or 0.0)
+        declared_value = float(declared.get("value") or 0.0) if declared else None
+        if declared is not None and math.isclose(
+            observed_value, declared_value or 0.0, rel_tol=1e-9, abs_tol=1e-12
+        ):
+            continue
+        observed["basis_evidence"] = "download_vendor_ledger_contradiction"
+        unresolved.append({
+            "action_date": action_date,
+            "action_type": action_type,
+            "ledger_value": declared_value,
+            "download_value": observed_value,
+            "reason": "download_vendor_ledger_contradiction",
+        })
+    if any("ledger" in str(item.get("reason")) for item in unresolved):
         df.attrs["basis_status"] = "unresolved"
     df.attrs["corporate_actions"] = actions
     df.attrs["unresolved_discontinuities"] = unresolved
+    df.attrs["vendor_action_ledger_checked"] = True
+    df.attrs["vendor_action_ledger"] = [dict(action) for action in vendor_actions]
 
 
 def mark_full_history_actions_verified(df: pd.DataFrame) -> None:
@@ -912,8 +960,9 @@ def write_price_daily(
     unresolved_reason = json.dumps(unresolved, sort_keys=True) if unresolved else None
     actions = list(df.attrs.get("corporate_actions") or [])
     evidence_present = {
-        "corporate_actions", "unresolved_discontinuities"
-    }.issubset(df.attrs)
+        "corporate_actions", "unresolved_discontinuities",
+        "vendor_action_ledger_checked", "vendor_action_ledger",
+    }.issubset(df.attrs) and df.attrs.get("vendor_action_ledger_checked") is True
     split_evidence_present = all(
         action.get("action_type") not in {"split", "reverse_split"}
         or action.get("basis_evidence") in {
@@ -1081,6 +1130,18 @@ def write_price_daily(
                 json.dumps(evidence, sort_keys=True),
             ),
         )
+    record_price_series_revision(
+        conn,
+        ticker,
+        evidence={
+            "provider": data_source,
+            "vendor_action_ledger_checked": df.attrs.get("vendor_action_ledger_checked") is True,
+            "vendor_action_ledger": list(df.attrs.get("vendor_action_ledger") or []),
+            "normalization_actions": actions,
+            "unresolved_discontinuities": unresolved,
+        },
+        fetch_timestamp=fetch_timestamp,
+    )
 
 
 def fetch_options_rows(
