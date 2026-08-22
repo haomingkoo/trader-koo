@@ -46,12 +46,38 @@ class TestPaperTradeSummaryEndpoint:
         assert "overall" in data
         assert "policy" in data
         assert "feedback" in data
+        evidence = data["strategy_evidence"]
+        assert evidence["readiness_status"] == "insufficient_history"
+        assert evidence["observation_count"] == 20
+        assert evidence["traded_signal_date_count"] == 4
+        assert evidence["effective_non_overlapping_block_count"] == 2.0
+        assert evidence["consumed_window"]["reusable_for_policy_selection"] is False
+        assert evidence["causal_validity"]["valid"] is False
+        assert evidence["return_basis"] == "split_adjusted_price_return_only_dividends_omitted"
 
     def test_summary_ok_is_true(self, test_app):
         response = test_app.get("/api/paper-trades/summary")
         data = response.json()
 
         assert data["ok"] is True
+
+    def test_exact_evidence_provenance_route(self, test_app):
+        summary = test_app.get("/api/paper-trades/summary").json()
+        provenance = summary["strategy_evidence"]["provenance"]
+
+        response = test_app.get(provenance["href"])
+
+        assert response.status_code == 200
+        state = response.json()["strategy_evidence"]
+        assert state["provenance"]["artifact_sha256"] == provenance["artifact_sha256"]
+        assert state["provenance"]["input_hash_sha256"] == provenance["input_hash_sha256"]
+
+    def test_wrong_evidence_hash_fails_closed(self, test_app):
+        response = test_app.get(
+            f"/api/research/strategy-evidence/{'0' * 64}/inputs/{'1' * 64}"
+        )
+
+        assert response.status_code == 404
 
 
 class TestPaperTradeDetailEndpoint:

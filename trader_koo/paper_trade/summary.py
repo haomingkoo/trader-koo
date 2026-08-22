@@ -11,6 +11,7 @@ from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.schema import decode_json_list, ensure_paper_trade_schema
+from trader_koo.research.strategy_evidence import evidence_allows_action, strategy_evidence_state
 
 LOG = logging.getLogger(__name__)
 
@@ -357,6 +358,42 @@ def _benchmark_feedback(
     ]
 
 
+def _evidence_bounded_feedback(
+    items: list[dict[str, Any]],
+    evidence_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Make descriptive observations non-actionable until evidence is eligible."""
+    if evidence_allows_action(evidence_state):
+        return items
+
+    replacements = {
+        " shows edge": ": descriptive result",
+        " negative edge": ": descriptive result",
+        " is working": ": descriptive result",
+        "Best regime:": "Highest observed regime average:",
+        "Worst regime:": "Lowest observed regime average:",
+        "Overall expectancy is positive": "Observed expectancy is positive in this sample",
+        "Overall expectancy is still negative": "Observed expectancy is negative in this sample",
+        "Pipeline is beating SPY": "Observed portfolio return is above SPY",
+        "Pipeline is trailing SPY": "Observed portfolio return is below SPY",
+        "Pipeline is near SPY": "Observed portfolio return is near SPY",
+    }
+    bounded: list[dict[str, Any]] = []
+    for item in items:
+        safe = dict(item)
+        title = str(safe.get("title") or "")
+        for source, replacement in replacements.items():
+            title = title.replace(source, replacement)
+        safe["title"] = title
+        if safe.get("severity") == "green":
+            safe["severity"] = "amber"
+        safe["action"] = (
+            "Research only. Accumulate prospective evidence; do not change allocation or admission."
+        )
+        bounded.append(safe)
+    return bounded
+
+
 def _compute_core_satellite_benchmark(
     *,
     starting_capital: float,
@@ -615,6 +652,7 @@ def paper_trade_summary(
 ) -> dict[str, Any]:
     """Return comprehensive paper trading performance metrics."""
     ensure_paper_trade_schema(conn)
+    evidence_state = strategy_evidence_state()
 
     cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=window_days)).strftime("%Y-%m-%d")
 
@@ -652,6 +690,7 @@ def paper_trade_summary(
             "policy": _policy_snapshot(config),
             "feedback": [],
             "benchmarks": {},
+            "strategy_evidence": evidence_state,
         }
 
     pnls = [float(row[0]) for row in all_closed]
@@ -801,7 +840,11 @@ def paper_trade_summary(
         family_edges = compute_family_edges(conn, window_days=window_days)
         regime_edges = compute_regime_edges(conn, window_days=window_days)
         vix_bucket_edges = compute_vix_bucket_edges(conn, window_days=window_days)
-        edge_feedback = generate_edge_feedback(family_edges, regime_edges)
+        edge_feedback = generate_edge_feedback(
+            family_edges,
+            regime_edges,
+            actionable=evidence_allows_action(evidence_state),
+        )
     except Exception as exc:
         LOG.warning("Edge computation failed (non-fatal): %s", exc)
 
@@ -847,6 +890,11 @@ def paper_trade_summary(
         benchmarks=benchmarks,
     )
 
+    combined_feedback = _evidence_bounded_feedback(
+        benchmark_feedback + base_feedback + edge_feedback,
+        evidence_state,
+    )
+
     return {
         "overall": overall,
         "by_direction": by_direction,
@@ -857,11 +905,12 @@ def paper_trade_summary(
         "recent_trades": recent_trades(conn, limit=20),
         "recent_reflections": recent_reflections(conn, limit=10),
         "policy": _policy_snapshot(config),
-        "feedback": benchmark_feedback + base_feedback + edge_feedback,
+        "feedback": combined_feedback,
         "family_edges": family_edges,
         "regime_edges": regime_edges,
         "vix_bucket_edges": vix_bucket_edges,
         "benchmarks": benchmarks,
+        "strategy_evidence": evidence_state,
     }
 
 

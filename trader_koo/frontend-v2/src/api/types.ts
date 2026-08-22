@@ -1086,6 +1086,43 @@ export interface PaperTradeBenchmarks {
   core_satellite?: CoreSatelliteBenchmark;
 }
 
+export type StrategyEvidenceReadiness =
+  | "evidence_unavailable"
+  | "insufficient_history"
+  | "prospectively_accumulating"
+  | "eligible_for_human_promotion_review";
+
+export interface StrategyEvidenceState {
+  schema_version: string;
+  snapshot_asof: string | null;
+  lifecycle_stage: "descriptive" | "prospective" | "promotion_review";
+  readiness_status: StrategyEvidenceReadiness;
+  readiness_reasons: string[];
+  observation_count: number;
+  traded_signal_date_count: number;
+  effective_non_overlapping_block_count: number;
+  closed_trade_count: number;
+  expected_block_length_sessions?: number;
+  consumed_window: {
+    consumed: boolean;
+    reusable_for_policy_selection: boolean;
+    status: string;
+  };
+  causal_validity: {
+    valid: boolean;
+    reasons: string[];
+  };
+  return_basis: string;
+  decision_eligible: boolean;
+  provenance: {
+    artifact_name: string | null;
+    artifact_sha256: string | null;
+    input_hash_sha256: string | null;
+    artifact_spec_hash_sha256: string | null;
+    href: string | null;
+  };
+}
+
 export interface PaperTradeSummary {
   ok: boolean;
   overall: PaperTradeSummaryOverall;
@@ -1102,6 +1139,7 @@ export interface PaperTradeSummary {
   regime_edges?: PaperTradeRegimeEdgeRow[];
   vix_bucket_edges?: PaperTradeVixBucketEdgeRow[];
   benchmarks?: PaperTradeBenchmarks;
+  strategy_evidence?: StrategyEvidenceState;
 }
 
 /* ── Crypto ── */

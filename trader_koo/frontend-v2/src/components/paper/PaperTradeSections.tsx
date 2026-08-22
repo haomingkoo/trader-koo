@@ -9,6 +9,7 @@ import type {
   PaperTradeReflection,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
+  StrategyEvidenceState,
 } from "../../api/types";
 import { useUpdateTradeNotes } from "../../api/hooks";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
@@ -43,6 +44,133 @@ const fmtDollars = (value: number | null | undefined, compact = false): string =
   }
   return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
+
+const evidenceAllowsAction = (evidence?: StrategyEvidenceState): boolean =>
+  evidence?.readiness_status === "eligible_for_human_promotion_review" &&
+  evidence.lifecycle_stage === "promotion_review" &&
+  evidence.decision_eligible === true &&
+  evidence.causal_validity.valid === true;
+
+const readableEvidenceText = (value: string): string =>
+  value.replace(/_/g, " ").replace(/\bspy\b/gi, "SPY");
+
+export function StrategyEvidenceStatePanel({
+  evidence,
+}: {
+  evidence?: StrategyEvidenceState;
+}) {
+  const actionable = evidenceAllowsAction(evidence);
+  const readiness = evidence?.readiness_status ?? "evidence_unavailable";
+  const provenance = evidence?.provenance;
+  const provenanceHref = provenance?.href ?? undefined;
+  const statusLabel = actionable
+    ? "Human promotion review eligible"
+    : readiness === "prospectively_accumulating"
+      ? "Research only / prospectively accumulating"
+      : readiness === "insufficient_history"
+        ? "Research only / insufficient history"
+        : "Research only / evidence unavailable";
+
+  return (
+    <section
+      data-testid="strategy-evidence-state"
+      className={`rounded-xl border p-4 ${
+        actionable
+          ? "border-[var(--green)]/30 bg-[var(--green)]/5"
+          : "border-[var(--amber)]/30 bg-[var(--amber)]/5"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Strategy evidence</div>
+          <div
+            data-testid="strategy-evidence-status"
+            className={`mt-1 text-sm font-bold ${actionable ? "text-[var(--green)]" : "text-[var(--amber)]"}`}
+          >
+            {statusLabel}
+          </div>
+          <p className="mt-1 max-w-3xl text-xs text-[var(--muted)]">
+            {actionable
+              ? "Evidence may be reviewed by a human. No allocation changes are automatic."
+              : "Results are descriptive. They cannot change admission, ranking, or allocation."}
+          </p>
+        </div>
+        {evidence?.snapshot_asof && (
+          <span className="text-[10px] text-[var(--muted)]">Snapshot {evidence.snapshot_asof}</span>
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Daily observations</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{evidence?.observation_count ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Traded signal dates</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{evidence?.traded_signal_date_count ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Effective blocks</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">
+            {(evidence?.effective_non_overlapping_block_count ?? 0).toFixed(1)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Causal validity</div>
+          <div className={`mt-1 text-sm font-semibold ${evidence?.causal_validity.valid ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+            {evidence?.causal_validity.valid ? "Valid" : "Invalid / unresolved"}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div className="text-xs text-[var(--muted)]">
+          <div className="font-semibold text-[var(--text)]">
+            {actionable ? "Evidence gates passed" : "Why it is not actionable"}
+          </div>
+          <ul className="mt-1 list-disc space-y-1 pl-4">
+            {(evidence?.readiness_reasons?.length
+              ? evidence.readiness_reasons
+              : [actionable ? "no_unresolved_readiness_gates" : "strategy_evidence_unavailable"]
+            ).map((reason) => (
+              <li key={reason}>{readableEvidenceText(reason)}</li>
+            ))}
+          </ul>
+        </div>
+        <dl className="space-y-2 text-xs text-[var(--muted)]">
+          <div>
+            <dt className="font-semibold text-[var(--text)]">Return basis</dt>
+            <dd>{readableEvidenceText(evidence?.return_basis ?? "unknown")}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold text-[var(--text)]">Selection window</dt>
+            <dd>{readableEvidenceText(evidence?.consumed_window.status ?? "unknown fail closed")}</dd>
+          </div>
+        </dl>
+      </div>
+
+      {provenance?.artifact_sha256 && provenance.input_hash_sha256 && provenanceHref && (
+        <div className="mt-3 border-t border-[var(--line)] pt-3 text-[10px] text-[var(--muted)]">
+          <div className="font-semibold text-[var(--text)]">Exact audited provenance</div>
+          <a
+            data-testid="strategy-artifact-hash"
+            href={provenanceHref}
+            className="mt-1 block break-all font-mono text-[var(--accent)] hover:underline"
+          >
+            artifact sha256:{provenance.artifact_sha256}
+          </a>
+          <a
+            data-testid="strategy-input-hash"
+            href={provenanceHref}
+            className="mt-1 block break-all font-mono text-[var(--accent)] hover:underline"
+          >
+            input sha256:{provenance.input_hash_sha256}
+          </a>
+        </div>
+      )}
+    </section>
+  );
+}
 
 const pnlColor = (value: number | null | undefined): string => {
   if (value == null) return "";
@@ -663,17 +791,37 @@ const feedbackTone = (severity: string): string => {
 
 export function PaperTradeFeedbackPanel({
   feedback,
+  evidence,
 }: {
   feedback?: PaperTradeFeedbackItem[];
+  evidence?: StrategyEvidenceState;
 }) {
-  const items = (feedback ?? []).filter((item) => item.title || item.detail || item.action);
+  const actionable = evidenceAllowsAction(evidence);
+  const items = (feedback ?? [])
+    .filter((item) => item.title || item.detail || item.action)
+    .map((item) =>
+      actionable
+        ? item
+        : {
+            ...item,
+            severity: item.severity === "green" ? "amber" : item.severity,
+            title: item.title
+              .replace(/ shows edge/gi, ": descriptive result")
+              .replace(/ negative edge/gi, ": descriptive result")
+              .replace(/ is working/gi, ": descriptive result")
+              .replace(/best regime:/gi, "Highest observed regime average:"),
+            action: "Research only. Accumulate prospective evidence; do not change allocation or admission.",
+          },
+    );
   if (items.length === 0) return null;
 
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-[var(--text)]">Actionable Review</div>
-        <span className="text-[10px] text-[var(--muted)]">{items.length} signal(s)</span>
+        <div className="text-sm font-semibold text-[var(--text)]">
+          {actionable ? "Promotion Review" : "Descriptive Review"}
+        </div>
+        <span className="text-[10px] text-[var(--muted)]">{items.length} observation(s)</span>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         {items.map((item, index) => (

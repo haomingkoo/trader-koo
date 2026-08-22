@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from trader_koo.backend.services.database import get_conn
 from trader_koo.paper_trades import ensure_paper_trade_schema, list_paper_trades, paper_trade_summary
+from trader_koo.research.strategy_evidence import evidence_snapshot_by_hash
 
 
 class NotesUpdate(BaseModel):
@@ -56,6 +57,15 @@ def api_paper_trade_summary(
         return {"ok": True, **summary}
     finally:
         conn.close()
+
+
+@router.get("/api/research/strategy-evidence/{artifact_hash}/inputs/{input_hash}")
+def api_strategy_evidence_provenance(artifact_hash: str, input_hash: str) -> dict[str, Any]:
+    """Resolve the exact audited evidence manifest identified by both hashes."""
+    state = evidence_snapshot_by_hash(artifact_hash, input_hash)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Strategy evidence snapshot not found")
+    return {"ok": True, "strategy_evidence": state}
 
 
 @router.get("/api/paper-trades/{trade_id}")

@@ -965,6 +965,8 @@ class TestPaperTradeSummary:
         assert result["policy"]["bot_version"] == "v1.0.0"
         assert result["policy"]["decision_version"] == "paper-trade-eval-v1"
         assert result["feedback"] == []
+        assert result["strategy_evidence"]["readiness_status"] == "insufficient_history"
+        assert result["strategy_evidence"]["decision_eligible"] is False
 
     def test_summary_with_closed_trades(self, conn):
         for ticker, pnl, r in [("AAPL", 5.0, 1.0), ("MSFT", -3.0, -0.6), ("GOOG", 8.0, 1.6)]:
@@ -1082,7 +1084,8 @@ class TestPaperTradeSummary:
 
         assert result["feedback"][0]["kind"] == "benchmark"
         assert result["feedback"][0]["severity"] == "high"
-        assert "trailing SPY" in result["feedback"][0]["title"]
+        assert result["feedback"][0]["title"] == "Observed portfolio return is below SPY"
+        assert "Research only" in result["feedback"][0]["action"]
 
     def test_summary_includes_core_satellite_benchmark(self, conn):
         base_date = dt.date.today() - dt.timedelta(days=30)
@@ -1168,6 +1171,13 @@ class TestPaperTradeSummary:
         assert result["family_edges"]
         assert result["regime_edges"]
         assert result["vix_bucket_edges"]
+        serialized_feedback = " ".join(
+            f"{item['title']} {item['action']}" for item in result["feedback"]
+        ).lower()
+        assert "size up" not in serialized_feedback
+        assert "priority allocation" not in serialized_feedback
+        assert "shows edge" not in serialized_feedback
+        assert "research only" in serialized_feedback
 
 
 # ── Regime Alignment Policy ────────────────────────────────────

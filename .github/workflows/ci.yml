@@ -80,3 +80,9 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+      - name: Install Chromium for browser contract tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser contract tests
+        run: npm run test:e2e

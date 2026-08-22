@@ -20,6 +20,9 @@ Documentation = "https://github.com/haomingkoo/trader-koo/blob/main/ARCHITECTURE
 where = ["."]
 include = ["trader_koo*"]
 
+[tool.setuptools.package-data]
+"trader_koo.research" = ["*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

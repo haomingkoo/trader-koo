@@ -15,6 +15,7 @@ import {
   PaperTradeMLCalibration,
   PaperTradeFilters,
   PaperTradeLogTable,
+  StrategyEvidenceStatePanel,
 } from "../components/paper/PaperTradeSections";
 
 export default function PaperTradePage() {
@@ -61,6 +62,8 @@ export default function PaperTradePage() {
       </div>
 
       <PaperTradePortfolioHero overall={overall} />
+
+      <StrategyEvidenceStatePanel evidence={summary?.strategy_evidence} />
 
       <PaperTradeDecisionFlow overall={overall} policy={summary?.policy} />
 
@@ -111,7 +114,10 @@ export default function PaperTradePage() {
         benchmarks={summary?.benchmarks}
       />
 
-      <PaperTradeFeedbackPanel feedback={summary?.feedback} />
+      <PaperTradeFeedbackPanel
+        feedback={summary?.feedback}
+        evidence={summary?.strategy_evidence}
+      />
 
       <PaperTradeDecisionMemory reflections={summary?.recent_reflections} />
 
