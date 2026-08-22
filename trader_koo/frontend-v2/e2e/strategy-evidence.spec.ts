@@ -12,7 +12,7 @@ const inputsPath = fileURLToPath(
 const artifactBytes = readFileSync(artifactPath);
 const inputBytes = readFileSync(inputsPath);
 const nextOpenArtifactPath = fileURLToPath(
-  new URL("../../research/next_open_baseline_artifact_20260823.json", import.meta.url),
+  new URL("../../../tests/fixtures/next_open_baseline_schema_v2.json", import.meta.url),
 );
 const nextOpenBaseline = {
   ...JSON.parse(readFileSync(nextOpenArtifactPath, "utf8")),
@@ -151,10 +151,14 @@ test("portfolio cannot render an actionable recommendation from inadequate evide
   const baseline = page.getByTestId("next-open-baseline");
   await expect(baseline).toBeVisible();
   await expect(baseline).toContainText("Descriptive only / not promotion eligible");
-  await expect(baseline).toContainText("-0.21%");
+  await expect(baseline).toContainText("0.45%");
   await expect(baseline).toContainText("Return basis:");
   await expect(baseline).toContainText("Benchmark basis:");
   await expect(baseline).toContainText("Full-investment SPY");
+  await expect(baseline).toContainText("1.67%");
+  await expect(baseline).toContainText("-1.21%");
+  await expect(baseline).toContainText("Matched SPY target / filled:");
+  await expect(baseline).toContainText("$49,927.88 / $49,747.70");
   await expect(baseline).toContainText("Top exclusions:");
   await expect(page.getByTestId("next-open-artifact-hash")).toContainText(
     nextOpenBaseline.provenance.artifact_sha256,

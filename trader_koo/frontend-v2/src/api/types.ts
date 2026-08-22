@@ -1188,11 +1188,14 @@ export interface NextOpenBaselineState {
     closed_trades: number;
     excluded_calls: number;
     daily_observation_count: number;
+    equity_point_count: number;
     null_mark_count?: number;
     net_return_pct: number | null;
     full_investment_spy_net_return_pct?: number | null;
     opportunity_cost_vs_full_spy_pct?: number | null;
     active_net_pnl: number | null;
+    matched_spy_target_notional: number | null;
+    matched_spy_filled_notional: number | null;
     active_metrics_available: boolean;
     max_name_weight_pct: number;
     max_gross_exposure_pct: number;

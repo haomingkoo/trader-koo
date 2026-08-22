@@ -273,6 +273,10 @@ export function NextOpenBaselinePanel({
         <div><span className="font-semibold text-[var(--text)]">Max gross:</span> {fmtPct(summary?.max_gross_exposure_pct)}</div>
         <div><span className="font-semibold text-[var(--text)]">Invalid marks:</span> {summary?.null_mark_count ?? 0}</div>
         <div><span className="font-semibold text-[var(--text)]">Opportunity cost vs SPY:</span> {fmtPct(summary?.opportunity_cost_vs_full_spy_pct, "%", true)}</div>
+        <div>
+          <span className="font-semibold text-[var(--text)]">Matched SPY target / filled:</span>{" "}
+          {fmtDollars(summary?.matched_spy_target_notional)} / {fmtDollars(summary?.matched_spy_filled_notional)}
+        </div>
       </div>
       <div className="mt-3 text-xs text-[var(--muted)]">
         <div className="font-semibold text-[var(--text)]">Why this cannot authorize a campaign</div>

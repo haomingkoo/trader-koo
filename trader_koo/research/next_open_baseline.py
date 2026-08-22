@@ -246,7 +246,16 @@ def execute_portfolio(
                 continue
             reserve = shares * entry_price
             commission = _commission(reserve, config)
-            while shares > 0 and reserve + commission > cash:
+            while shares > 0:
+                slippage_loss = abs(entry_price - raw_open) * shares
+                post_fill_equity = equity - commission - slippage_loss
+                post_fill_name = exposure.get(decision.ticker, 0) + shares * raw_open
+                within_name_cap = (
+                    post_fill_equity > 0
+                    and post_fill_name / post_fill_equity <= config.max_name_pct / 100
+                )
+                if reserve + commission <= cash and within_name_cap:
+                    break
                 shares -= 1
                 reserve = shares * entry_price
                 commission = _commission(reserve, config) if shares else 0.0
@@ -270,6 +279,12 @@ def execute_portfolio(
                 "entry_commission": commission,
                 "borrow": 0.0,
             })
+            opening_equity, opening_exposure = mark(date, "open")
+            if opening_equity is not None and opening_equity > 0:
+                opening_gross = sum(opening_exposure.values())
+                opening_name = max(opening_exposure.values(), default=0)
+                max_gross = max(max_gross, opening_gross / opening_equity)
+                max_name = max(max_name, opening_name / opening_equity)
 
         remaining: list[dict[str, Any]] = []
         for position in positions:
@@ -552,6 +567,7 @@ def _run_next_open_baseline(
     reveal = consume_heldout and observed and not diagnostic
     exclusions: list[dict[str, Any]] = []
     decisions: list[ExecutionDecision] = []
+    evaluation_windows: list[tuple[str, str, str]] = []
     if not reasons:
         for call in calls:
             call_id, ticker = int(call["call_id"]), str(call["ticker"])
@@ -566,8 +582,6 @@ def _run_next_open_baseline(
                 exclusions.append({"call_id": call_id, "reason": "heldout_not_revealed"}); continue
             if call["direction"] not in {"long", "short"}:
                 exclusions.append({"call_id": call_id, "reason": "unsupported_direction"}); continue
-            if call["score"] is None or call["score"] < cfg.minimum_score:
-                exclusions.append({"call_id": call_id, "reason": "below_minimum_score"}); continue
             entry_i = indices[call["signal_date"]] + 1
             exit_i = entry_i + cfg.holding_sessions - 1
             if exit_i >= len(sessions):
@@ -577,16 +591,20 @@ def _run_next_open_baseline(
                 exclusions.append({"call_id": call_id, "reason": "immediate_next_session_open_missing", "required_entry_date": entry}); continue
             if _finite(getattr(price_map.get((ticker, exit_)), "close", None)) is None:
                 exclusions.append({"call_id": call_id, "reason": "exact_tenth_session_close_missing", "required_exit_date": exit_}); continue
+            evaluation_windows.append((call["signal_date"], entry, exit_))
+            if call["score"] is None or call["score"] < cfg.minimum_score:
+                exclusions.append({"call_id": call_id, "reason": "below_minimum_score"}); continue
             capacity = _prior_capacity(ticker, call["signal_date"], sessions, price_map, volumes, cfg.max_adv_pct)
             if capacity is None:
                 exclusions.append({"call_id": call_id, "reason": "causal_capacity_unknown"}); continue
             metadata = tuple(sorted({"call_id": call_id, "report_run_id": call["report_run_id"], "setup_family": call["setup_family"], "setup_tier": call["setup_tier"]}.items()))
             decisions.append(ExecutionDecision(str(call_id), ticker, call["direction"], call["signal_date"], entry, exit_, float(call["score"]), capacity, part, metadata=metadata))
 
-    simulation_dates = (
-        [date for date in sessions if min(row.signal_date for row in decisions) <= date <= max(row.exit_date for row in decisions)]
-        if decisions else []
-    )
+    simulation_dates = [
+        date for date in sessions
+        if evaluation_windows
+        and min(row[0] for row in evaluation_windows) <= date <= max(row[2] for row in evaluation_windows)
+    ]
     result = execute_portfolio(decisions, prices, simulation_dates, cfg)
     exclusions.extend({"call_id": int(row["decision_id"]), "reason": row["reason"]} for row in result.exclusions)
     enriched = []
@@ -629,28 +647,60 @@ def _run_next_open_baseline(
     if null_marks:
         reasons.append("unpriceable_daily_marks")
     traded_dates = {trade["entry_date"] for trade in enriched}
-    effective_blocks = len(valid_curve) / cfg.holding_sessions
-    if len(valid_curve) < 120: reasons.append("fewer_than_120_valid_daily_observations")
+    return_intervals = sum(
+        left.get("equity") is not None and right.get("equity") is not None
+        for left, right in zip(result.equity_curve, result.equity_curve[1:])
+    )
+    effective_blocks = return_intervals / cfg.holding_sessions
+    if return_intervals < 120: reasons.append("fewer_than_120_valid_daily_observations")
     if len(traded_dates) < 20: reasons.append("fewer_than_20_traded_signal_dates")
     if effective_blocks < 12: reasons.append("fewer_than_12_effective_non_overlapping_blocks")
-    reasons = sorted(set(reasons))
     final_equity = result.final_equity
     matched_values = [trade["spy_matched_net_pnl"] for trade in enriched]
     matched_net = sum(float(v) for v in matched_values) if matched_values and all(v is not None for v in matched_values) else None
+    matched_targets = [float(trade["spy_matched_target_notional"]) for trade in enriched]
+    matched_fills = [trade["spy_matched_filled_notional"] for trade in enriched]
+    matched_target_notional = sum(matched_targets) if matched_targets else None
+    matched_filled_notional = (
+        sum(float(value) for value in matched_fills)
+        if matched_fills and all(value is not None for value in matched_fills)
+        else None
+    )
     realized = sum(float(trade["net_pnl"]) for trade in enriched)
 
     full_spy = None
-    if enriched:
-        start, end = min(str(t["entry_date"]) for t in enriched), max(str(t["exit_date"]) for t in enriched)
+    if evaluation_windows:
+        start = min(row[1] for row in evaluation_windows)
+        end = max(row[2] for row in evaluation_windows)
         full_cfg = dataclasses.replace(cfg, max_positions=1, position_pct=100, max_name_pct=100, max_adv_pct=100)
         prior_sessions = [date for date in sessions if date < start]
-        full_signal = prior_sessions[-1] if prior_sessions else start
-        if full_signal < start:
-            full = execute_portfolio([ExecutionDecision("full_spy", "SPY", "long", full_signal, start, end, 0, cfg.initial_capital, locked_notional=cfg.initial_capital)], prices, [date for date in sessions if full_signal <= date <= end], full_cfg)
+        if prior_sessions:
+            full = execute_portfolio(
+                [ExecutionDecision(
+                    "full_spy", "SPY", "long", prior_sessions[-1], start, end, 0,
+                    cfg.initial_capital, locked_notional=cfg.initial_capital,
+                )],
+                prices, [date for date in sessions if prior_sessions[-1] <= date <= end], full_cfg,
+            )
         else:
-            full = ExecutionResult((), (), (), False, cfg.initial_capital, None, 0.0, 0.0)
-        if full.final_equity is not None and full.financing_priced:
+            full = None
+        full_complete = (
+            full is not None
+            and len(full.trades) == 1
+            and not full.exclusions
+            and full.financing_priced
+            and full.final_equity is not None
+            and bool(full.equity_curve)
+            and all(row.get("equity") is not None for row in full.equity_curve)
+        )
+        if full_complete:
+            assert full is not None and full.final_equity is not None
             full_spy = (full.final_equity / full.initial_equity - 1) * 100
+        else:
+            reasons.append("full_investment_spy_unpriced")
+    else:
+        reasons.append("evaluation_window_unavailable")
+    reasons = sorted(set(reasons))
 
     artifact = {
         "schema_version": SCHEMA_VERSION, "method": METHOD,
@@ -666,13 +716,16 @@ def _run_next_open_baseline(
                                "exit": f"exact session {cfg.holding_sessions} SPY close", "capacity": "prior-session close times prior-session volume", "delayed_fill_allowed": False},
         "config": config_payload, "splits": split, "consumed_window": consumption,
         "summary": {"selected_calls": len(calls), "closed_trades": len(enriched), "excluded_calls": len(exclusions),
-                    "daily_observation_count": len(valid_curve), "null_mark_count": null_marks,
+                    "daily_observation_count": return_intervals, "equity_point_count": len(valid_curve),
+                    "null_mark_count": null_marks,
                     "signal_date_count": len(signal_dates), "traded_signal_date_count": len(traded_dates),
                     "effective_non_overlapping_block_count": effective_blocks, "initial_capital": cfg.initial_capital,
                     "final_equity": final_equity if result.financing_priced and not null_marks else None,
                     "net_return_pct": (final_equity / cfg.initial_capital - 1) * 100 if final_equity is not None and result.financing_priced and not null_marks else None,
                     "realized_net_pnl": realized if result.financing_priced and not null_marks else None,
                     "matched_spy_net_pnl": matched_net if not null_marks else None,
+                    "matched_spy_target_notional": matched_target_notional,
+                    "matched_spy_filled_notional": matched_filled_notional,
                     "active_net_pnl": realized - matched_net if matched_net is not None and result.financing_priced and not null_marks else None,
                     "full_investment_spy_net_return_pct": full_spy if not null_marks else None,
                     "opportunity_cost_vs_full_spy_pct": ((final_equity / cfg.initial_capital - 1) * 100 - full_spy)
@@ -731,7 +784,13 @@ def _valid_artifact_shape(payload: dict[str, Any]) -> bool:
         return False
     if payload.get("causal_valid") is not False or payload.get("decision_eligible") is not False:
         return False
-    scalar_strings = ("artifact_scope", "evidence_state", "readiness_status", "return_basis", "benchmark_basis")
+    if payload.get("evidence_state") not in {"descriptive_invalid", "diagnostic_invalid"}:
+        return False
+    if payload.get("readiness_status") != "insufficient_or_noncausal_evidence":
+        return False
+    if payload.get("artifact_scope") != "copied_database_research_run":
+        return False
+    scalar_strings = ("return_basis", "benchmark_basis")
     if any(not isinstance(payload.get(key), str) or not payload[key] for key in scalar_strings):
         return False
     dict_fields = ("data_window", "execution_contract", "config", "splits", "consumed_window", "summary", "provenance")
@@ -740,21 +799,122 @@ def _valid_artifact_shape(payload: dict[str, Any]) -> bool:
         return False
     if any(not isinstance(payload.get(key), list) for key in list_fields):
         return False
+    if any(not all(isinstance(item, str) and item for item in payload[key])
+           for key in ("readiness_reasons", "causal_limitations")):
+        return False
+    execution = payload["execution_contract"]
+    if not all(key in execution for key in ("signal", "entry", "exit", "capacity", "delayed_fill_allowed")):
+        return False
+    if execution.get("delayed_fill_allowed") is not False:
+        return False
+    config = payload["config"]
+    if set(config) != {field.name for field in dataclasses.fields(BaselineConfig)}:
+        return False
+    integer_config = ("max_positions", "holding_sessions")
+    if any(not isinstance(config[key], int) or isinstance(config[key], bool) for key in integer_config):
+        return False
+    numeric_config = set(config) - set(integer_config) - {"short_borrow_bps_annual", "cash_rate_bps_annual"}
+    if any(_finite(config[key]) is None for key in numeric_config):
+        return False
+    if any(config[key] is not None and _finite(config[key]) is None
+           for key in ("short_borrow_bps_annual", "cash_rate_bps_annual")):
+        return False
+    try:
+        BaselineConfig(**config).validate()
+    except (TypeError, ValueError):
+        return False
+    splits = payload["splits"]
+    if not all(
+        isinstance(splits.get(key), list)
+        and all(isinstance(item, str) and item for item in splits[key])
+        for key in ("development", "validation", "heldout")
+    ):
+        return False
+    if any(not isinstance(splits.get(key), int) or isinstance(splits[key], bool) or splits[key] < 0
+           for key in ("purge_sessions", "embargo_sessions")):
+        return False
+    consumed = payload["consumed_window"]
+    if not isinstance(consumed.get("consumed"), bool) or not isinstance(
+        consumed.get("reusable_for_policy_selection"), bool
+    ) or not isinstance(consumed.get("status"), str):
+        return False
     required_summary = {
         "selected_calls", "closed_trades", "excluded_calls", "daily_observation_count",
         "null_mark_count", "initial_capital", "net_return_pct", "active_metrics_available",
     }
-    if not required_summary.issubset(payload["summary"]):
+    required_summary |= {
+        "equity_point_count", "signal_date_count", "traded_signal_date_count",
+        "effective_non_overlapping_block_count", "final_equity", "realized_net_pnl",
+        "matched_spy_net_pnl", "active_net_pnl", "full_investment_spy_net_return_pct",
+        "matched_spy_target_notional", "matched_spy_filled_notional",
+        "opportunity_cost_vs_full_spy_pct", "max_name_weight_pct", "max_gross_exposure_pct",
+    }
+    summary = payload["summary"]
+    if not required_summary.issubset(summary):
+        return False
+    count_fields = {
+        "selected_calls", "closed_trades", "excluded_calls", "daily_observation_count",
+        "equity_point_count", "null_mark_count", "signal_date_count", "traded_signal_date_count",
+    }
+    if any(not isinstance(summary.get(key), int) or isinstance(summary[key], bool) or summary[key] < 0
+           for key in count_fields):
+        return False
+    numeric_fields = required_summary - count_fields - {"active_metrics_available"}
+    if any(value is not None and _finite(value) is None for key in numeric_fields
+           if (value := summary.get(key)) is not None):
+        return False
+    if _finite(summary.get("initial_capital")) is None or float(summary["initial_capital"]) <= 0:
+        return False
+    if not isinstance(summary.get("active_metrics_available"), bool):
+        return False
+    if summary["closed_trades"] != len(payload["trades"]) or summary["excluded_calls"] != len(payload["exclusions"]):
+        return False
+    if any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("reason"), str)
+        or ("call_id" in row and (not isinstance(row["call_id"], int) or isinstance(row["call_id"], bool)))
+        for row in payload["exclusions"]
+    ):
+        return False
+    if any(
+        not isinstance(row, dict)
+        or not all(key in row for key in ("decision_id", "ticker", "entry_date", "exit_date", "net_pnl"))
+        or _finite(row.get("net_pnl")) is None
+        for row in payload["trades"]
+    ):
+        return False
+    if any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("date"), str)
+        or (row.get("equity") is not None and _finite(row["equity"]) is None)
+        for row in payload["equity_curve"]
+    ):
+        return False
+    valid_points = sum(row.get("equity") is not None for row in payload["equity_curve"])
+    valid_intervals = sum(
+        left.get("equity") is not None and right.get("equity") is not None
+        for left, right in zip(payload["equity_curve"], payload["equity_curve"][1:])
+    )
+    if summary["equity_point_count"] != valid_points:
+        return False
+    if summary["null_mark_count"] != len(payload["equity_curve"]) - valid_points:
+        return False
+    if summary["daily_observation_count"] != valid_intervals:
         return False
     provenance = payload["provenance"]
     hashes = ("config_sha256", "input_sha256", "implementation_sha256", "artifact_sha256")
-    if any(not isinstance(provenance.get(key), str) or len(provenance[key]) != 64 for key in hashes):
+    if any(
+        not isinstance(provenance.get(key), str)
+        or len(provenance[key]) != 64
+        or any(char not in "0123456789abcdef" for char in provenance[key])
+        for key in hashes
+    ):
         return False
     if not isinstance(provenance.get("canonical_report_lineage_enforced"), bool):
         return False
     if not isinstance(provenance.get("research_price_basis_enforced"), bool):
         return False
-    return isinstance(payload["summary"].get("active_metrics_available"), bool)
+    return True
 
 
 def artifact_state(path: Path | None = None) -> dict[str, Any]:

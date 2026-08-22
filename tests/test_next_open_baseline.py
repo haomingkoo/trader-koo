@@ -148,6 +148,33 @@ def test_short_entry_respects_marked_name_cap() -> None:
     assert result.max_name_weight_pct <= 10
 
 
+def test_short_entry_respects_cap_after_slippage_and_commission() -> None:
+    prices = [
+        SessionPrice("AAA", "2026-01-01", 100, 100),
+        SessionPrice("AAA", "2026-01-02", 100, 100),
+    ]
+    result = execute_portfolio(
+        [_decision("1", direction="short", signal="2025-12-31", entry="2026-01-01", exit_="2026-01-02")],
+        prices,
+        ["2026-01-01", "2026-01-02"],
+        BaselineConfig(initial_capital=100_000, position_pct=10, max_name_pct=10),
+    )
+    assert result.trades[0]["shares"] == 99
+    assert result.max_name_weight_pct <= 10
+
+
+def test_same_session_exit_still_records_opening_risk() -> None:
+    result = execute_portfolio(
+        [_decision("1", signal="2025-12-31", entry="2026-01-01", exit_="2026-01-01")],
+        [SessionPrice("AAA", "2026-01-01", 100, 101)],
+        ["2026-01-01"],
+        BaselineConfig(initial_capital=100_000, position_pct=10, max_name_pct=10),
+    )
+    assert result.trades
+    assert 0 < result.max_name_weight_pct <= 10
+    assert 0 < result.max_gross_exposure_pct <= 10
+
+
 def test_null_marks_are_not_valid_observations() -> None:
     prices = _prices(tickers=("AAA",), days=3)
     prices[1] = dataclasses.replace(prices[1], close=None)
@@ -225,6 +252,51 @@ def test_adapter_uses_prior_session_capacity_and_one_execution_path(monkeypatch:
     assert trade["entry_notional"] > 1_000
     assert artifact["benchmark_basis"].endswith("canonical_execution_ledger")
     assert artifact["summary"]["full_investment_spy_net_return_pct"] is not None
+
+
+def test_zero_trade_policy_still_reports_cash_and_spy_opportunity_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _database()
+    conn.execute("INSERT INTO setup_call_evaluations VALUES (1,'2026-01-01','AAA','long',90,'bullish','A','run')")
+    conn.commit()
+    monkeypatch.setattr(baseline, "_price_contract", _eligible_contract)
+    monkeypatch.setattr(baseline, "_verified_calls", _verified_fixture)
+    artifact = run_next_open_baseline(
+        conn, config=BaselineConfig(minimum_score=100), consume_heldout=False,
+    )
+    assert artifact["summary"]["closed_trades"] == 0
+    assert artifact["summary"]["net_return_pct"] == pytest.approx(0)
+    assert artifact["summary"]["full_investment_spy_net_return_pct"] is not None
+    assert artifact["summary"]["opportunity_cost_vs_full_spy_pct"] is not None
+
+
+def test_failed_full_spy_path_is_unpriced(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _database()
+    conn.execute("INSERT INTO setup_call_evaluations VALUES (1,'2026-01-01','AAA','long',90,'bullish','A','run')")
+    conn.execute("UPDATE price_daily SET open=NULL WHERE ticker='SPY' AND date='2026-01-02'")
+    conn.commit()
+    monkeypatch.setattr(baseline, "_price_contract", _eligible_contract)
+    monkeypatch.setattr(baseline, "_verified_calls", _verified_fixture)
+    artifact = run_next_open_baseline(conn, consume_heldout=False)
+    assert artifact["summary"]["closed_trades"] == 1
+    assert artifact["summary"]["full_investment_spy_net_return_pct"] is None
+    assert artifact["summary"]["opportunity_cost_vs_full_spy_pct"] is None
+    assert "full_investment_spy_unpriced" in artifact["readiness_reasons"]
+
+
+def test_effective_sample_counts_return_intervals(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _database()
+    conn.execute("INSERT INTO setup_call_evaluations VALUES (1,'2026-01-01','AAA','long',90,'bullish','A','run')")
+    conn.commit()
+    monkeypatch.setattr(baseline, "_price_contract", _eligible_contract)
+    monkeypatch.setattr(baseline, "_verified_calls", _verified_fixture)
+    artifact = run_next_open_baseline(conn, consume_heldout=False)
+    summary = artifact["summary"]
+    assert summary["equity_point_count"] == summary["daily_observation_count"] + 1
+    assert summary["effective_non_overlapping_block_count"] == pytest.approx(
+        summary["daily_observation_count"] / 10
+    )
 
 
 def test_adapter_nulls_active_metrics_when_financing_is_unpriced(
@@ -334,7 +406,7 @@ def test_artifact_loader_rejects_content_and_implementation_tamper(
     payload = json.loads(path.read_text())
     payload["summary"]["closed_trades"] = 2
     path.write_text(json.dumps(payload))
-    assert artifact_state(path)["error"] == "artifact_hash_mismatch"
+    assert artifact_state(path)["error"] == "artifact_schema_invalid"
 
     payload["summary"]["closed_trades"] = artifact["summary"]["closed_trades"]
     payload["provenance"]["implementation_sha256"] = "0" * 64
@@ -346,6 +418,34 @@ def test_artifact_loader_rejects_content_and_implementation_tamper(
     assert artifact_state(path)["error"] == "implementation_hash_mismatch"
 
 
+def test_artifact_loader_rejects_malformed_hash_valid_payload(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _database()
+    conn.execute("INSERT INTO setup_call_evaluations VALUES (1,'2026-01-01','AAA','long',90,'bullish','A','run')")
+    conn.commit()
+    monkeypatch.setattr(baseline, "_price_contract", _eligible_contract)
+    monkeypatch.setattr(baseline, "_verified_calls", _verified_fixture)
+    payload = run_next_open_baseline(conn, consume_heldout=False)
+    payload.update({"evidence_state": "promotion_ready", "readiness_status": "eligible"})
+    payload["summary"].update({"selected_calls": "forged", "closed_trades": -99, "initial_capital": "money"})
+    payload["config"] = {}
+    payload["execution_contract"] = {}
+    payload["provenance"]["config_sha256"] = "z" * 64
+    payload["provenance"].pop("artifact_sha256")
+    payload["provenance"]["artifact_sha256"] = baseline._sha256(payload)
+    path = tmp_path / "forged.json"
+    write_artifact(path, payload)
+    assert artifact_state(path)["error"] == "artifact_schema_invalid"
+
+
 def test_canonical_json_rejects_non_finite_values() -> None:
     with pytest.raises(ValueError, match="NaN"):
         canonical_json_bytes({"bad": float("nan")})
+
+
+def test_checked_in_browser_fixture_passes_backend_loader() -> None:
+    fixture = baseline.IMPLEMENTATION_PATH.resolve().parents[2] / "tests/fixtures/next_open_baseline_schema_v2.json"
+    state = artifact_state(fixture)
+    assert state["available"] is True
+    assert state["schema_version"] == baseline.SCHEMA_VERSION
