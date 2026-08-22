@@ -894,6 +894,31 @@ def write_price_daily(
             "provider": data_source,
             "adjustment_version": version,
         }
+        prior_action = conn.execute(
+            """SELECT value, evidence_json
+            FROM price_corporate_actions
+            WHERE ticker = ? AND action_date = ? AND action_type = ? AND provider = ?""",
+            (
+                ticker,
+                action["action_date"],
+                action["action_type"],
+                data_source,
+            ),
+        ).fetchone()
+        if prior_action is not None and math.isclose(
+            float(prior_action[0]),
+            float(action["value"]),
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            try:
+                prior_evidence = json.loads(str(prior_action[1] or ""))
+            except (TypeError, ValueError):
+                prior_evidence = {}
+            if isinstance(prior_evidence, dict) and bool(
+                prior_evidence.get("full_history_verified")
+            ):
+                evidence["full_history_verified"] = True
         conn.execute(
             """
             INSERT INTO price_corporate_actions (
