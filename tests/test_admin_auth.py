@@ -14,6 +14,7 @@ from trader_koo.middleware.auth import (
     route_uses_admin_dependency,
 )
 from trader_koo.ratelimit.integration import initialize_rate_limiting
+from trader_koo.ratelimit.middleware import RateLimitMiddleware
 
 
 def _app(
@@ -154,6 +155,7 @@ def test_every_production_admin_route_has_the_native_dependency():
     app.state.admin_authenticator = AdminAuthenticator(
         AdminAuthConfig(api_key="x" * 32)
     )
+    app.add_middleware(RateLimitMiddleware)
     app.include_router(production_admin_router)
     initialize_rate_limiting(app)
     admin_routes = [
@@ -206,6 +208,36 @@ def test_every_production_admin_route_has_the_native_dependency():
         )
         assert override.status_code == 200
         assert override.json()["success"] is True
+
+
+def test_authenticated_override_controls_the_enforcement_middleware():
+    app = FastAPI()
+    app.state.admin_authenticator = AdminAuthenticator(
+        AdminAuthConfig(api_key="x" * 32)
+    )
+    app.add_middleware(RateLimitMiddleware)
+    app.include_router(production_admin_router)
+    limiter = initialize_rate_limiting(app)
+
+    @app.get("/api/probe")
+    def probe():
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/admin/ratelimit/override",
+            headers={"X-API-Key": "x" * 32},
+            json={
+                "key": "ip:testclient",
+                "limit": 1,
+                "window_seconds": 3600,
+                "duration_seconds": 3600,
+            },
+        )
+        assert response.status_code == 200
+        status = limiter.get_status("ip:testclient")
+        assert status is not None and status["has_override"] is True
+        assert client.get("/api/probe").status_code == 429
 
 
 def test_openapi_marks_the_admin_surface_with_the_api_key_scheme():

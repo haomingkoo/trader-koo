@@ -41,15 +41,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             config: Rate limit configuration. Uses defaults if not provided.
         """
         super().__init__(app)
-        self.rate_limiter = rate_limiter or RateLimiter(config)
-        self.config = config or RateLimitConfig()
+        self.rate_limiter = rate_limiter
+        self.config = config or (rate_limiter.config if rate_limiter else RateLimitConfig())
         LOG.info("RateLimitMiddleware initialized")
+
+    def _resolve_rate_limiter(self, request: Request) -> RateLimiter:
+        """Use the application service so admin controls affect enforcement."""
+        if self.rate_limiter is not None:
+            return self.rate_limiter
+        app_limiter = getattr(request.app.state, "rate_limiter", None)
+        if isinstance(app_limiter, RateLimiter):
+            return app_limiter
+        # Standalone/test apps without the production initializer still use one
+        # stable limiter instead of creating a new instance per request.
+        self.rate_limiter = RateLimiter(self.config)
+        return self.rate_limiter
 
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP address from request."""
         return _client_ip(request)
 
-    def _get_rate_limit_key(self, request: Request) -> tuple[str, int, timedelta]:
+    def _get_rate_limit_key(
+        self,
+        request: Request,
+        config: RateLimitConfig,
+    ) -> tuple[str, int, timedelta]:
         """Determine rate limit key and limits based on request.
 
         Returns different limits for:
@@ -75,21 +91,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Export endpoints have stricter limits
         if "/export" in path:
             key = f"user:{user_id}" if user_id else f"ip:{self._get_client_ip(request)}"
-            return (key, self.config.export_limit, self.config.export_window)
+            return (key, config.export_limit, config.export_window)
 
         # Authenticated endpoints use per-user limits
         if user_id:
             return (
                 f"user:{user_id}",
-                self.config.authenticated_limit,
-                self.config.authenticated_window,
+                config.authenticated_limit,
+                config.authenticated_window,
             )
 
         # Public endpoints use per-IP limits
         return (
             f"ip:{self._get_client_ip(request)}",
-            self.config.public_limit,
-            self.config.public_window,
+            config.public_limit,
+            config.public_window,
         )
 
     async def dispatch(
@@ -112,10 +128,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Get rate limit parameters
-        key, limit, window = self._get_rate_limit_key(request)
+        rate_limiter = self._resolve_rate_limiter(request)
+        key, limit, window = self._get_rate_limit_key(request, rate_limiter.config)
 
         # Check rate limit
-        result = self.rate_limiter.check_rate_limit(key, limit, window)
+        result = rate_limiter.check_rate_limit(key, limit, window)
 
         # Add rate limit headers to response
         if result.allowed:
