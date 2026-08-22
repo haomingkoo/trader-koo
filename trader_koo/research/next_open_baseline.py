@@ -16,7 +16,9 @@ import os
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
+from trader_koo.ml.features import ML_CONTEXT_TICKERS
 
 
 SCHEMA_VERSION = "1.0"
@@ -396,6 +398,9 @@ def run_next_open_baseline(
     exclusions: list[dict[str, Any]] = []
     scheduled: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for call in calls:
+        if call["ticker"] in ML_CONTEXT_TICKERS or call["ticker"].startswith("^"):
+            exclusions.append({"call_id": call["call_id"], "reason": "non_tradable_context_ticker"})
+            continue
         if call["signal_date"] not in session_index:
             exclusions.append({"call_id": call["call_id"], "reason": "signal_date_not_spy_session"})
             continue

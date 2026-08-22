@@ -49,6 +49,10 @@ def _database() -> sqlite3.Connection:
             "INSERT INTO price_daily VALUES ('AAA', ?, ?, ?, 100000)",
             (date, asset, asset + 0.5),
         )
+        conn.execute(
+            "INSERT INTO price_daily VALUES ('BBB', ?, ?, ?, 100000)",
+            (date, asset + 5.0, asset + 5.5),
+        )
     conn.commit()
     return conn
 
@@ -151,7 +155,7 @@ def test_current_equity_capacity_and_concentration_are_reported() -> None:
     conn = _database()
     _call(conn, 1, "2026-01-01")
     conn.execute(
-        "INSERT INTO setup_call_evaluations VALUES (2, '2026-01-01', 'SPY', 'long', 89, 'bullish', 'A')"
+        "INSERT INTO setup_call_evaluations VALUES (2, '2026-01-01', 'BBB', 'long', 89, 'bullish', 'A')"
     )
     conn.commit()
     artifact = run_next_open_baseline(
@@ -164,6 +168,16 @@ def test_current_equity_capacity_and_concentration_are_reported() -> None:
     assert artifact["summary"]["max_name_weight_pct"] <= 5.0
     assert artifact["summary"]["max_gross_exposure_pct"] <= 10.0
     assert all(trade["position_weight_at_entry"] <= 0.05 for trade in artifact["trades"])
+
+
+def test_market_context_symbols_are_not_strategy_trades() -> None:
+    conn = _database()
+    _call(conn, 1, "2026-01-01", ticker="SPY")
+    artifact = run_next_open_baseline(conn, consume_heldout=False)
+    assert artifact["summary"]["closed_trades"] == 0
+    assert artifact["exclusions"] == [
+        {"call_id": 1, "reason": "non_tradable_context_ticker"}
+    ]
 
 
 def test_canonical_json_rejects_non_finite_values() -> None:

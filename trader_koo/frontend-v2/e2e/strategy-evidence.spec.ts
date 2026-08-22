@@ -151,7 +151,7 @@ test("portfolio cannot render an actionable recommendation from inadequate evide
   const baseline = page.getByTestId("next-open-baseline");
   await expect(baseline).toBeVisible();
   await expect(baseline).toContainText("Descriptive only / not promotion eligible");
-  await expect(baseline).toContainText("-0.73%");
+  await expect(baseline).toContainText("-0.21%");
   await expect(page.getByTestId("next-open-artifact-hash")).toContainText(
     nextOpenBaseline.provenance.artifact_sha256,
   );
