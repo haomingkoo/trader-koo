@@ -122,12 +122,16 @@ def create_paper_trades_from_report(
     setup_rows: list[dict[str, Any]],
     report_date: str,
     generated_ts: str,
+    report_run_id: str | None = None,
+    schema_ready: bool = False,
 ) -> int:
     return _create_paper_trades_from_report_impl(
         conn,
         setup_rows=setup_rows,
         report_date=report_date,
         generated_ts=generated_ts,
+        report_run_id=report_run_id,
+        schema_ready=schema_ready,
         config=_build_config(),
     )
 

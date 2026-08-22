@@ -603,7 +603,9 @@ Phase 3: Report generation (generate_daily_report.py)
     ├── Pattern highlights (highest confidence across all layers)
     ├── Earnings preview (upcoming week)
     ├── Sentiment composite (Fear & Greed style)
-    └── Write daily_report_latest.json + .md + timestamped archive
+    ├── Persist immutable run snapshot + accepted/rejected decisions
+    ├── Write and SHA-256 verify run-specific JSON/Markdown artifacts
+    └── Publish the verified run manifest, then update compatibility copies
 ```
 
 Reports are served via `/api/report/daily` and optionally emailed to subscribers.
@@ -717,9 +719,18 @@ TRADER_KOO_REPORT_EMAIL_TO=YOUR_EMAIL
 ### Report format
 
 Reports are written to `$TRADER_KOO_REPORT_DIR` (default `/data/reports`) after each daily update run:
-- `daily_report_latest.json` — always the most recent (overwritten each run)
+- `daily_report_latest.manifest.json` — derived compatibility metadata for the latest run
+- `daily_report_latest.json` — compatibility copy of that published artifact
 - `daily_report_latest.md` — Markdown version
-- `daily_report_YYYYMMDDTHHMMSSZ.json` — timestamped archive
+- `daily_report_YYYYMMDDTHHMMSSZ_<run-id>.json` — immutable, SHA-256-sealed run artifact
+- `daily_report_YYYYMMDDTHHMMSSZ_<run-id>.md` — immutable, SHA-256-sealed Markdown artifact
+
+Canonical readers resolve SQLite publication ownership first, then verify both
+artifact hashes, run identity, chronology, configuration, and decision snapshot.
+The manifest and `latest` files are rebuilt compatibility copies, not authority.
+A completed, failed, interrupted, or hash-mismatched run is never selected by
+timestamp. Pre-migration reports remain readable but are labelled `unlinked
+legacy`; no run identity or publication lineage is inferred for them.
 
 ---
 

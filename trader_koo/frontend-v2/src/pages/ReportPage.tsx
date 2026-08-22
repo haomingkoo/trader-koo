@@ -111,6 +111,7 @@ export default function ReportPage() {
 
       <EvidenceSourceStrip
         generatedTs={latest.generated_ts}
+        reportRun={latest.report_run}
         latestData={latest.latest_data}
         freshness={latest.freshness}
         warnings={latest.warnings ?? []}

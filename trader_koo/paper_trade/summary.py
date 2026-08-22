@@ -139,7 +139,8 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
                entry_plan, exit_plan, sizing_summary,
                review_status, review_summary,
                entry_reason, entry_evidence, entry_risks,
-               ml_predicted_win_prob, ml_confidence, ml_signal, notes
+               ml_predicted_win_prob, ml_confidence, ml_signal, notes,
+               report_run_id
         FROM paper_trades
         ORDER BY COALESCE(exit_date, entry_date) DESC, id DESC
         LIMIT ?
@@ -158,12 +159,14 @@ def recent_trades(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str
         "review_status", "review_summary",
         "entry_reason", "entry_evidence", "entry_risks",
         "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
+        "report_run_id",
     ]
     trades: list[dict[str, Any]] = []
     for row in rows:
         trade = dict(zip(keys, row))
         trade["entry_evidence"] = decode_json_list(trade.get("entry_evidence"))
         trade["entry_risks"] = decode_json_list(trade.get("entry_risks"))
+        trade["lineage"] = "linked" if trade.get("report_run_id") else "unlinked legacy"
         trades.append(trade)
     return trades
 
@@ -968,7 +971,8 @@ def list_paper_trades(
                entry_plan, exit_plan, sizing_summary,
                review_status, review_summary,
                entry_reason, entry_evidence, entry_risks,
-               ml_predicted_win_prob, ml_confidence, ml_signal, notes
+               ml_predicted_win_prob, ml_confidence, ml_signal, notes,
+               report_run_id
         FROM paper_trades
         WHERE {where}
         ORDER BY entry_date DESC, id DESC
@@ -992,6 +996,7 @@ def list_paper_trades(
         "review_status", "review_summary",
         "entry_reason", "entry_evidence", "entry_risks",
         "ml_predicted_win_prob", "ml_confidence", "ml_signal", "notes",
+        "report_run_id",
     ]
     trades: list[dict[str, Any]] = []
     for row in rows:
@@ -1000,5 +1005,6 @@ def list_paper_trades(
         trade["risk_flags"] = decode_json_list(trade.get("risk_flags"))
         trade["entry_evidence"] = decode_json_list(trade.get("entry_evidence"))
         trade["entry_risks"] = decode_json_list(trade.get("entry_risks"))
+        trade["lineage"] = "linked" if trade.get("report_run_id") else "unlinked legacy"
         trades.append(trade)
     return trades

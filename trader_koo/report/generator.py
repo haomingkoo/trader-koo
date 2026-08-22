@@ -17,7 +17,6 @@ from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.llm_narrative import llm_enabled, llm_status
 from trader_koo.paper_trades import (
     PAPER_TRADE_ENABLED,
-    create_paper_trades_from_report,
     mark_to_market,
 )
 from trader_koo.report.market_context import (
@@ -49,7 +48,6 @@ from trader_koo.report.setup_scoring import (
     _apply_options_research_context,
     _apply_setup_eval_fields,
     _describe_setup,
-    _persist_setup_call_candidates,
     _refresh_setup_eval_surfaces,
     _score_open_setup_call_outcomes,
     _score_setup_from_confluence,
@@ -223,7 +221,10 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "candle_patterns_today": [],
         "sector_heatmap": [],
         "setup_quality_top": [],
+        "setup_quality_all": [],
         "setup_quality_lookup": {},
+        "report_decisions": [],
+        "scanned_universe": [],
         "watchlist_candidates": [],
         "setup_evaluation": {},
         "earnings_catalysts": {},
@@ -1106,6 +1107,7 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
                 )
 
                 _apply_llm_narrative_overrides(setup_rows, source="daily_report")
+                signals["setup_quality_all"] = setup_rows
                 signals["setup_quality_top"] = setup_rows[:40]
                 signals["suggestions"] = build_suggestions(signals["setup_quality_top"])
                 signals["watchlist_candidates"] = [
@@ -1287,6 +1289,7 @@ def fetch_report_payload(
     run_log: Path,
     tail_lines: int,
     report_kind: str = "daily",
+    report_run_id: str | None = None,
 ) -> dict[str, Any]:
     global _report_warnings
     _report_warnings = []
@@ -1297,6 +1300,11 @@ def fetch_report_payload(
         "meta": {
             "report_kind": report_kind_norm,
             "llm": llm_status(),
+            "report_run": {
+                "run_id": report_run_id,
+                "state": "started" if report_run_id else "unlinked_legacy",
+                "lineage": "linked" if report_run_id else "unlinked legacy",
+            },
         },
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
@@ -1430,16 +1438,6 @@ def fetch_report_payload(
                 ensure_setup_call_eval_schema(conn)
                 signals_ref = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}
                 setup_rows_ref = signals_ref.get("setup_quality_top") if isinstance(signals_ref.get("setup_quality_top"), list) else []
-                asof_for_eval = str((payload.get("latest_data") or {}).get("price_date") or "").strip()
-                inserted_calls = 0
-                if asof_for_eval and setup_rows_ref:
-                    inserted_calls = _persist_setup_call_candidates(
-                        conn,
-                        generated_ts=str(payload.get("generated_ts") or ""),
-                        report_kind=report_kind_norm,
-                        asof_date=asof_for_eval,
-                        setup_rows=setup_rows_ref,
-                    )
                 scored_this_run = _score_open_setup_call_outcomes(conn)
                 conn.commit()
                 summary, reliability_lookup = _summarize_setup_call_evaluations(
@@ -1473,7 +1471,11 @@ def fetch_report_payload(
                 signals_ref["suggestions"] = build_suggestions(setup_rows_ref)
                 eval_summary = summary or {"enabled": True}
                 eval_summary["tracked_this_run"] = int(min(len(setup_rows_ref), SETUP_EVAL_TRACK_LIMIT))
-                eval_summary["inserted_calls"] = int(inserted_calls)
+                eval_summary["inserted_calls"] = 0
+                if report_run_id:
+                    eval_summary["admission_state"] = "pending_verified_publication"
+                else:
+                    eval_summary["admission_state"] = "requires_report_run_publication"
                 eval_summary["scored_this_run"] = int(scored_this_run)
                 eval_summary["calibration"] = calibration
             except Exception as exc:
@@ -1492,25 +1494,12 @@ def fetch_report_payload(
         paper_trade_result: dict[str, Any] = {"enabled": PAPER_TRADE_ENABLED}
         if PAPER_TRADE_ENABLED:
             try:
-                asof_date_pt = str((payload.get("latest_data") or {}).get("price_date") or "").strip()
-                setup_rows_pt = (
-                    (payload.get("signals") or {}).get("setup_quality_top")
-                    if isinstance((payload.get("signals") or {}).get("setup_quality_top"), list)
-                    else []
+                paper_trade_result["inserted"] = 0
+                paper_trade_result["admission_state"] = (
+                    "pending_verified_publication"
+                    if report_run_id
+                    else "requires_report_run_publication"
                 )
-                generated_ts_pt = str(payload.get("generated_ts") or "")
-                if asof_date_pt and setup_rows_pt:
-                    inserted_pt = create_paper_trades_from_report(
-                        conn,
-                        setup_rows=setup_rows_pt,
-                        report_date=asof_date_pt,
-                        generated_ts=generated_ts_pt,
-                    )
-                    conn.commit()
-                    paper_trade_result["inserted"] = inserted_pt
-                else:
-                    paper_trade_result["inserted"] = 0
-                    paper_trade_result["skipped_reason"] = "no_date_or_setups"
 
                 mtm_result = mark_to_market(conn)
                 conn.commit()
@@ -1621,7 +1610,48 @@ def fetch_report_payload(
                 payload["warnings"].append("llm_degraded")
 
         payload["risk_filters"] = build_no_trade_conditions(payload)
+        signals = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}
+        all_rows = signals.get("setup_quality_all") if isinstance(signals, dict) else []
+        all_rows = all_rows if isinstance(all_rows, list) else []
+        selected_rows = signals.get("setup_quality_top") if isinstance(signals, dict) else []
+        selected_rows = selected_rows if isinstance(selected_rows, list) else []
+        selected_tickers = {
+            str(row.get("ticker") or "").upper().strip()
+            for row in selected_rows
+            if isinstance(row, dict) and str(row.get("ticker") or "").strip()
+        }
+        ordered_rows = [dict(row) for row in selected_rows if isinstance(row, dict)]
+        ordered_rows.extend(
+            dict(row)
+            for row in all_rows
+            if isinstance(row, dict)
+            and str(row.get("ticker") or "").upper().strip() not in selected_tickers
+        )
+        decisions: list[dict[str, Any]] = []
+        for rank, row in enumerate(ordered_rows, start=1):
+            ticker = str(row.get("ticker") or "").upper().strip()
+            if not ticker:
+                continue
+            accepted = ticker in selected_tickers
+            decisions.append(
+                {
+                    "ticker": ticker,
+                    "selected_rank": rank,
+                    "decision": "accepted" if accepted else "rejected",
+                    "reason_codes": (
+                        list(row.get("selection_reason_codes") or [])
+                        or (["selected_report_cohort"] if accepted else ["outside_report_selection_limit"])
+                    ),
+                    "inputs": row,
+                }
+            )
+        if isinstance(signals, dict):
+            signals["report_decisions"] = decisions
+            signals["scanned_universe"] = [row["ticker"] for row in decisions]
         payload["generation_warnings"] = list(_report_warnings)
+        for warning in _report_warnings:
+            if warning not in payload["warnings"]:
+                payload["warnings"].append(warning)
         payload["ok"] = len(payload["warnings"]) == 0
         return payload
     finally:

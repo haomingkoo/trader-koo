@@ -358,6 +358,20 @@ export interface GreenBarrierCoverage {
 
 export interface ReportLatest {
   generated_ts: string | null;
+  report_run?: {
+    run_id: string | null;
+    state: "started" | "completed" | "failed" | "published" | "unlinked_legacy";
+    lineage: "linked" | "unlinked legacy";
+    started_ts?: string | null;
+    completed_ts?: string | null;
+    published_ts?: string | null;
+    content_hash?: string | null;
+    config_hash?: string | null;
+    code_version?: string | null;
+    generation_key?: string | null;
+    canonical_generation?: boolean;
+    superseded_by_run_id?: string | null;
+  };
   counts: ReportCounts;
   yolo: YoloBlock;
   latest_ingest_run: IngestRun;

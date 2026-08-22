@@ -53,6 +53,9 @@ def decode_json_list(raw: Any) -> list[str]:
 
 def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     """Create paper_trades and paper_portfolio_snapshots tables."""
+    from trader_koo.report.runs import ensure_report_run_schema
+
+    ensure_report_run_schema(conn)
     db_path = _resolve_main_db_path(conn)
     # In-memory DBs (path '' or ':memory:') are never cached: each connection
     # is a distinct database, so the full ensure must always run.
@@ -67,6 +70,7 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             report_date TEXT NOT NULL,
             generated_ts TEXT,
+            report_run_id TEXT REFERENCES report_runs(run_id),
             ticker TEXT NOT NULL,
             direction TEXT NOT NULL CHECK (direction IN ('long', 'short')),
             entry_price REAL NOT NULL,
@@ -146,8 +150,37 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "ml_confidence", "ml_confidence REAL")
     _ensure_column(conn, "paper_trades", "ml_signal", "ml_signal TEXT")
     _ensure_column(conn, "paper_trades", "notes", "notes TEXT DEFAULT ''")
+    _ensure_column(conn, "paper_trades", "report_run_id", "report_run_id TEXT")
     _ensure_column(conn, "paper_trades", "directional_regime_at_entry", "directional_regime_at_entry TEXT")
     _ensure_column(conn, "paper_trades", "directional_regime_confidence", "directional_regime_confidence REAL")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_trades_report_run ON paper_trades(report_run_id)"
+    )
+    conn.execute("DROP TRIGGER IF EXISTS paper_trades_require_canonical_run")
+    conn.execute("DROP TRIGGER IF EXISTS paper_trades_immutable_lineage")
+    conn.execute(
+        """
+        CREATE TRIGGER paper_trades_require_canonical_run
+        BEFORE INSERT ON paper_trades
+        WHEN NOT EXISTS (
+            SELECT 1 FROM report_publication_ownership
+            WHERE run_id = NEW.report_run_id AND admits_new = 1
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trades require a canonical published report run');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER paper_trades_immutable_lineage
+        BEFORE UPDATE OF report_run_id ON paper_trades
+        WHEN NEW.report_run_id IS NOT OLD.report_run_id
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trade report lineage is immutable');
+        END
+        """
+    )
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bot_versions (
@@ -234,8 +267,10 @@ def register_bot_version(
     decision_version: str | None,
     config_json: str | None = None,
     notes: str | None = None,
+    schema_ready: bool = False,
 ) -> None:
-    ensure_paper_trade_schema(conn)
+    if not schema_ready:
+        ensure_paper_trade_schema(conn)
     if not bot_version:
         return
     conn.execute(

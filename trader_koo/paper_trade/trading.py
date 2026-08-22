@@ -531,18 +531,35 @@ def create_paper_trades_from_report(
     report_date: str,
     generated_ts: str,
     config: PaperTradeConfig,
+    report_run_id: str | None = None,
+    schema_ready: bool = False,
 ) -> int:
     """Create paper trades from qualifying daily report setups."""
     if not report_date or not setup_rows:
         return 0
 
-    ensure_paper_trade_schema(conn)
+    if not schema_ready:
+        ensure_paper_trade_schema(conn)
+    if not str(report_run_id or "").strip():
+        raise ValueError("paper-trade creation requires canonical report-run lineage")
+    run = conn.execute(
+        "SELECT admits_new FROM report_publication_ownership WHERE run_id = ?",
+        (report_run_id,),
+    ).fetchone()
+    if (
+        run is None
+        or not int(run[0] or 0)
+    ):
+        raise ValueError(
+            f"paper-trade creation requires canonical published report run {report_run_id}"
+        )
     register_bot_version(
         conn,
         bot_version=config.bot_version,
         decision_version=config.decision_version,
         config_json=json.dumps(config_snapshot(config)),
         notes="Current champion paper-trade policy snapshot.",
+        schema_ready=True,
     )
 
     open_count = conn.execute(
@@ -793,7 +810,7 @@ def create_paper_trades_from_report(
         conn.execute(
             """
             INSERT INTO paper_trades (
-                report_date, generated_ts, ticker, direction,
+                report_date, generated_ts, report_run_id, ticker, direction,
                 entry_price, entry_date, target_price, stop_loss, atr_at_entry,
                 status, current_price, unrealized_pnl_pct,
                 high_water_mark, low_water_mark,
@@ -813,7 +830,7 @@ def create_paper_trades_from_report(
                 directional_regime_at_entry, directional_regime_confidence,
                 ml_predicted_win_prob, ml_confidence, ml_signal
             ) VALUES (
-                ?, ?, ?, ?,
+                ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 'open', ?, 0.0,
                 ?, ?,
@@ -838,6 +855,7 @@ def create_paper_trades_from_report(
             (
                 report_date,
                 generated_ts,
+                report_run_id,
                 ticker,
                 direction,
                 entry_price,
@@ -918,7 +936,13 @@ def mark_to_market(
         SELECT id, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, high_water_mark, low_water_mark,
                stop_distance_pct, atr_at_entry
-        FROM paper_trades WHERE status = 'open'
+        FROM paper_trades
+        WHERE status = 'open'
+          AND report_run_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM report_publication_ownership
+              WHERE report_publication_ownership.run_id = paper_trades.report_run_id
+          )
         """
     ).fetchall()
 

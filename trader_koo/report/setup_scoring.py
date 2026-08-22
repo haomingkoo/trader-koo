@@ -1441,6 +1441,9 @@ def _apply_news_research_context(
 
 
 def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
+    from trader_koo.report.runs import ensure_report_run_schema
+
+    ensure_report_run_schema(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS setup_call_evaluations (
@@ -1449,6 +1452,7 @@ def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
             ticker TEXT NOT NULL,
             report_kind TEXT NOT NULL DEFAULT 'daily',
             generated_ts TEXT,
+            report_run_id TEXT REFERENCES report_runs(run_id),
             call_direction TEXT NOT NULL,
             validity_days INTEGER NOT NULL DEFAULT 5,
             valid_target_date TEXT,
@@ -1468,7 +1472,7 @@ def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
             raw_return_pct REAL,
             signed_return_pct REAL,
             direction_hit INTEGER,
-            UNIQUE(asof_date, ticker, report_kind)
+            UNIQUE(report_run_id, ticker)
         )
         """
     )
@@ -1480,6 +1484,106 @@ def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_tier ON setup_call_evaluations(setup_tier, asof_date)"
+    )
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(setup_call_evaluations)")}
+    if "report_run_id" not in columns:
+        conn.execute("ALTER TABLE setup_call_evaluations ADD COLUMN report_run_id TEXT")
+    legacy_unique = any(
+        int(index_row[2] or 0) == 1
+        and [
+            str(column_row[2])
+            for column_row in conn.execute(
+                f"PRAGMA index_info({index_row[1]})"
+            ).fetchall()
+        ] == ["asof_date", "ticker", "report_kind"]
+        for index_row in conn.execute("PRAGMA index_list(setup_call_evaluations)").fetchall()
+    )
+    if legacy_unique:
+        # SQLite cannot drop the legacy table-level UNIQUE constraint. Rebuild
+        # once so retries can persist an independent call for each report run;
+        # copied rows retain NULL lineage and remain visibly legacy.
+        conn.execute("ALTER TABLE setup_call_evaluations RENAME TO setup_call_evaluations_legacy")
+        conn.execute(
+            """
+            CREATE TABLE setup_call_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asof_date TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                report_kind TEXT NOT NULL DEFAULT 'daily',
+                generated_ts TEXT,
+                report_run_id TEXT REFERENCES report_runs(run_id),
+                call_direction TEXT NOT NULL,
+                validity_days INTEGER NOT NULL DEFAULT 5,
+                valid_target_date TEXT,
+                setup_family TEXT,
+                setup_tier TEXT,
+                signal_bias TEXT,
+                actionability TEXT,
+                score REAL,
+                close_asof REAL NOT NULL,
+                yolo_pattern TEXT,
+                yolo_recency TEXT,
+                created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                status TEXT NOT NULL DEFAULT 'open',
+                evaluated_date TEXT,
+                close_evaluated REAL,
+                raw_return_pct REAL,
+                signed_return_pct REAL,
+                direction_hit INTEGER,
+                UNIQUE(report_run_id, ticker)
+            )
+            """
+        )
+        legacy_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(setup_call_evaluations_legacy)")
+        }
+        new_columns = [
+            str(row[1]) for row in conn.execute("PRAGMA table_info(setup_call_evaluations)")
+        ]
+        copied_columns = [column for column in new_columns if column in legacy_columns]
+        column_list = ", ".join(copied_columns)
+        conn.execute(
+            f"INSERT INTO setup_call_evaluations ({column_list}) "
+            f"SELECT {column_list} FROM setup_call_evaluations_legacy"
+        )
+        conn.execute("DROP TABLE setup_call_evaluations_legacy")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_status ON setup_call_evaluations(status, asof_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_family ON setup_call_evaluations(setup_family, call_direction, asof_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_tier ON setup_call_evaluations(setup_tier, asof_date)"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_setup_call_eval_report_run ON setup_call_evaluations(report_run_id)"
+    )
+    conn.execute("DROP TRIGGER IF EXISTS setup_call_evaluations_require_canonical_run")
+    conn.execute("DROP TRIGGER IF EXISTS setup_call_evaluations_immutable_lineage")
+    conn.execute(
+        """
+        CREATE TRIGGER setup_call_evaluations_require_canonical_run
+        BEFORE INSERT ON setup_call_evaluations
+        WHEN NOT EXISTS (
+            SELECT 1 FROM report_publication_ownership
+            WHERE run_id = NEW.report_run_id AND admits_new = 1
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'setup calls require a canonical published report run');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER setup_call_evaluations_immutable_lineage
+        BEFORE UPDATE OF report_run_id ON setup_call_evaluations
+        WHEN NEW.report_run_id IS NOT OLD.report_run_id
+        BEGIN
+            SELECT RAISE(ABORT, 'setup call report lineage is immutable');
+        END
+        """
     )
 
 
@@ -1525,9 +1629,23 @@ def _persist_setup_call_candidates(
     report_kind: str,
     asof_date: str | None,
     setup_rows: list[dict[str, Any]],
+    report_run_id: str | None = None,
 ) -> int:
     if not asof_date:
         return 0
+    if not str(report_run_id or "").strip():
+        raise ValueError("setup-call creation requires canonical report-run lineage")
+    run = conn.execute(
+        "SELECT admits_new FROM report_publication_ownership WHERE run_id = ?",
+        (report_run_id,),
+    ).fetchone()
+    if (
+        run is None
+        or not int(run[0] or 0)
+    ):
+        raise ValueError(
+            f"setup-call creation requires canonical published report run {report_run_id}"
+        )
     inserted = 0
     for row in (setup_rows or [])[:SETUP_EVAL_TRACK_LIMIT]:
         if not isinstance(row, dict):
@@ -1556,6 +1674,7 @@ def _persist_setup_call_candidates(
                 ticker,
                 report_kind,
                 generated_ts,
+                report_run_id,
                 call_direction,
                 validity_days,
                 setup_family,
@@ -1567,14 +1686,15 @@ def _persist_setup_call_candidates(
                 yolo_pattern,
                 yolo_recency,
                 status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
-            ON CONFLICT(asof_date, ticker, report_kind) DO NOTHING
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+            ON CONFLICT DO NOTHING
             """,
             (
                 asof_date,
                 ticker,
                 report_kind,
                 generated_ts,
+                report_run_id,
                 direction,
                 int(validity_days),
                 row.get("setup_family"),
@@ -1598,6 +1718,11 @@ def _score_open_setup_call_outcomes(conn: sqlite3.Connection) -> int:
         SELECT id, ticker, asof_date, call_direction, validity_days, close_asof
         FROM setup_call_evaluations
         WHERE status = 'open'
+          AND report_run_id IS NOT NULL
+          AND EXISTS (
+                  SELECT 1 FROM report_publication_ownership
+                  WHERE report_publication_ownership.run_id = setup_call_evaluations.report_run_id
+          )
         ORDER BY asof_date ASC, id ASC
         """
     ).fetchall()
@@ -1872,7 +1997,15 @@ def _summarize_setup_call_evaluations(
     cutoff_date = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=max(30, int(window_days)))).isoformat()
     open_calls = int(
         (
-            conn.execute("SELECT COUNT(*) FROM setup_call_evaluations WHERE status = 'open'").fetchone() or [0]
+            conn.execute(
+                """SELECT COUNT(*) FROM setup_call_evaluations
+                   WHERE status = 'open'
+                     AND report_run_id IS NOT NULL
+                     AND EXISTS (
+                         SELECT 1 FROM report_publication_ownership
+                         WHERE report_publication_ownership.run_id = setup_call_evaluations.report_run_id
+                     )"""
+            ).fetchone() or [0]
         )[0]
         or 0
     )
@@ -1892,6 +2025,11 @@ def _summarize_setup_call_evaluations(
             FROM setup_call_evaluations
             WHERE status = 'scored'
               AND asof_date >= ?
+              AND report_run_id IS NOT NULL
+              AND EXISTS (
+                      SELECT 1 FROM report_publication_ownership
+                      WHERE report_publication_ownership.run_id = setup_call_evaluations.report_run_id
+              )
             ORDER BY asof_date DESC, id DESC
             """,
             (cutoff_date,),

@@ -5,10 +5,17 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 LOG = logging.getLogger(__name__)
+
+_MANAGED_REPORT_FILE_RE = re.compile(
+    r"^daily_report_\d{8}T\d{6}Z_[0-9a-f]{8}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:json|md)$",
+    re.IGNORECASE,
+)
 
 
 def _md_line(k: str, v: Any) -> str:
@@ -540,7 +547,7 @@ def _parse_report_snapshot_ts(path: Path) -> dt.datetime | None:
     prefix = "daily_report_"
     if not stem.startswith(prefix):
         return None
-    ts = stem[len(prefix):]
+    ts = stem[len(prefix):].split("_", 1)[0]
     if ts == "latest":
         return None
     try:
@@ -583,6 +590,11 @@ def _prune_report_snapshots(out_dir: Path) -> dict[str, int]:
     deleted_snapshots = 0
     retained_snapshots = 0
     for idx, (snap_ts, paths) in enumerate(snapshots):
+        # Report-run artifacts are immutable registry evidence. They also need
+        # to survive the completed/published crash window before a marker exists.
+        if any(_MANAGED_REPORT_FILE_RE.fullmatch(path.name) for path in paths):
+            retained_snapshots += 1
+            continue
         age_days = max(0.0, (now_utc - snap_ts).total_seconds() / 86400.0)
         should_delete = idx >= keep_files or age_days > float(max_age_days)
         if should_delete:
@@ -605,11 +617,30 @@ def _prune_report_snapshots(out_dir: Path) -> dict[str, int]:
     }
 
 
-def write_reports(report: dict[str, Any], out_dir: Path) -> dict[str, Any]:
+def write_reports(
+    report: dict[str, Any],
+    out_dir: Path,
+    *,
+    run_id: str | None = None,
+    publish_latest: bool = True,
+) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    json_path = out_dir / f"daily_report_{ts}.json"
-    md_path = out_dir / f"daily_report_{ts}.md"
+    generated = report.get("generated_ts")
+    if run_id:
+        if not isinstance(report.get("meta"), dict):
+            report["meta"] = {}
+        run_meta = report["meta"].get("report_run")
+        if not isinstance(run_meta, dict):
+            run_meta = {}
+            report["meta"]["report_run"] = run_meta
+        run_meta["run_id"] = run_id
+    try:
+        ts = dt.datetime.strptime(str(generated), "%Y-%m-%dT%H:%M:%SZ").strftime("%Y%m%dT%H%M%SZ")
+    except ValueError:
+        ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    suffix = f"_{run_id}" if run_id else ""
+    json_path = out_dir / f"daily_report_{ts}{suffix}.json"
+    md_path = out_dir / f"daily_report_{ts}{suffix}.md"
     latest_json = out_dir / "daily_report_latest.json"
     latest_md = out_dir / "daily_report_latest.md"
 
@@ -617,15 +648,16 @@ def write_reports(report: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     md_text = to_markdown(report)
     json_path.write_text(json_text + "\n", encoding="utf-8")
     md_path.write_text(md_text + "\n", encoding="utf-8")
-    latest_json.write_text(json_text + "\n", encoding="utf-8")
-    latest_md.write_text(md_text + "\n", encoding="utf-8")
+    if publish_latest:
+        latest_json.write_text(json_text + "\n", encoding="utf-8")
+        latest_md.write_text(md_text + "\n", encoding="utf-8")
     prune_info = _prune_report_snapshots(out_dir)
 
     return {
         "json_path": str(json_path),
         "md_path": str(md_path),
-        "latest_json": str(latest_json),
-        "latest_md": str(latest_md),
+        "latest_json": str(latest_json) if publish_latest else None,
+        "latest_md": str(latest_md) if publish_latest else None,
         "retained_snapshots": prune_info["retained_snapshots"],
         "pruned_snapshots": prune_info["deleted_snapshots"],
         "pruned_files": prune_info["deleted_files"],
