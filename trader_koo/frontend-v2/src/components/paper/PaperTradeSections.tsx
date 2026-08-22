@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useMemo, useState, useCallback } from "react";
 import type {
   PaperTrade,
+  PaperCampaignHealth,
   PaperTradeBenchmarks,
   PaperTradeDirectionStats,
   PaperTradeFeedbackItem,
@@ -373,6 +374,75 @@ function TradeNotes({ trade }: { trade: PaperTrade }) {
     >
       {hasNotes ? trade.notes : "+ note"}
     </button>
+  );
+}
+
+export function PaperCampaignHealthPanel({
+  health,
+}: {
+  health?: PaperCampaignHealth;
+}) {
+  if (!health?.available) return null;
+  const report = health.latest_report;
+  const healthy = health.healthy !== false;
+  return (
+    <section
+      data-testid="paper-campaign-health"
+      className={`rounded-xl border p-4 ${healthy ? "border-[var(--line)] bg-[var(--panel)]" : "border-[var(--red)]/35 bg-[var(--red)]/5"}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">{health.label}</div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            Active campaign <span className="font-mono text-[var(--text)]">{health.campaign_id}</span>
+            {" · policy "}<span className="font-mono text-[var(--text)]">{health.policy_version}</span>
+            {typeof health.starting_capital === "number" && ` · ${fmtDollars(health.starting_capital)} starting capital`}
+          </div>
+        </div>
+        <Badge variant={healthy ? "green" : "red"}>{healthy ? "healthy" : "unhealthy"}</Badge>
+      </div>
+      {report ? (
+        <>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {[
+              ["Ranked", report.ranked],
+              ["Eligible", report.eligible],
+              ["Rejected", report.rejected],
+              ["Admitted", report.admitted],
+              ["Exposure", `${report.exposure_pct.toFixed(1)}%`],
+              ["Conversion", `${report.conversion_rate_pct.toFixed(1)}%`],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</div>
+                <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 grid gap-3 text-xs text-[var(--muted)] md:grid-cols-2">
+            <div>
+              Consecutive eligible reports with zero admissions: {health.consecutive_eligible_zero_admission_reports ?? 0}/{health.zero_admission_streak_limit ?? 0}
+            </div>
+            <div>Replay/live parity: {String(health.replay_live_parity ?? "not measured").replace(/_/g, " ")}</div>
+          </div>
+          <div className="mt-2 text-xs text-[var(--muted)]">
+            SPY comparison is campaign health and promotion evidence only; it is not a candidate admission gate.
+          </div>
+          {!!report.rejections_by_gate?.length && (
+            <div className="mt-3 text-xs text-[var(--muted)]">
+              <span className="font-semibold text-[var(--text)]">Exact rejection gates: </span>
+              {report.rejections_by_gate.map((item) => `${item.gate}/${item.reason_code} (${item.count})`).join(" · ")}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="mt-3 text-xs text-[var(--muted)]">Campaign is ready; no completed report decisions are recorded yet.</p>
+      )}
+      {!!health.campaigns?.length && (
+        <div className="mt-3 border-t border-[var(--line)] pt-3 text-[10px] text-[var(--muted)]">
+          {health.campaigns.map((campaign) => `${campaign.label}: ${campaign.trade_count} ${campaign.status === "frozen" ? "immutable " : ""}trade(s), ${campaign.status}`).join(" · ")}
+        </div>
+      )}
+    </section>
   );
 }
 

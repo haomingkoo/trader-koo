@@ -1022,10 +1022,55 @@ export interface PaperTradePolicy {
   caution_position_scale: number;
   high_vol_position_scale: number;
   earnings_position_scale: number;
+  campaign_id?: string;
+  zero_admission_streak_limit?: number;
   core_satellite?: {
     core_allocation_pct: number;
     satellite_allocation_pct: number;
   };
+}
+
+export interface PaperCampaignHealth {
+  available: boolean;
+  campaign_id: string;
+  label?: string;
+  policy_version?: string;
+  status?: string;
+  starting_capital?: number;
+  reports_observed?: number;
+  consecutive_eligible_zero_admission_reports?: number;
+  zero_admission_streak_limit?: number;
+  replay_live_parity?: string;
+  healthy?: boolean;
+  health_reasons?: string[];
+  benchmark_evidence?: {
+    role: string;
+    spy_buy_hold?: SpyBuyHoldBenchmark | null;
+  };
+  campaigns?: Array<{
+    campaign_id: string;
+    label: string;
+    policy_version: string;
+    status: string;
+    starting_capital: number;
+    trade_count: number;
+  }>;
+  latest_report?: {
+    report_run_id: string;
+    report_date: string;
+    generated_ts: string;
+    ranked: number;
+    eligible: number;
+    rejected: number;
+    admitted: number;
+    exposure_pct: number;
+    conversion_rate_pct: number;
+    rejections_by_gate?: Array<{
+      gate: string;
+      reason_code: string;
+      count: number;
+    }>;
+  } | null;
 }
 
 export interface PaperTradeFeedbackItem {
@@ -1232,6 +1277,7 @@ export interface PaperTradeSummary {
   vix_bucket_edges?: PaperTradeVixBucketEdgeRow[];
   benchmarks?: PaperTradeBenchmarks;
   strategy_evidence?: StrategyEvidenceState;
+  campaign_health?: PaperCampaignHealth;
 }
 
 /* ── Crypto ── */

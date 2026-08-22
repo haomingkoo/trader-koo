@@ -656,6 +656,11 @@ def paper_trade_summary(
     """Return comprehensive paper trading performance metrics."""
     ensure_paper_trade_schema(conn)
     evidence_state = strategy_evidence_state()
+    from trader_koo.paper_trade.campaign import campaign_health
+
+    campaign = campaign_health(
+        conn, campaign_id=config.campaign_id if config else "paper-v2"
+    )
 
     cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=window_days)).strftime("%Y-%m-%d")
 
@@ -676,6 +681,10 @@ def paper_trade_summary(
 
     total = len(all_closed)
     if total == 0:
+        campaign["benchmark_evidence"] = {
+            "role": "campaign_health_and_promotion_evidence_only",
+            "spy_buy_hold": None,
+        }
         return {
             "overall": {
                 "total_trades": 0, "open_count": open_trades,
@@ -694,6 +703,7 @@ def paper_trade_summary(
             "feedback": [],
             "benchmarks": {},
             "strategy_evidence": evidence_state,
+            "campaign_health": campaign,
         }
 
     pnls = [float(row[0]) for row in all_closed]
@@ -892,6 +902,10 @@ def paper_trade_summary(
         overall=overall,
         benchmarks=benchmarks,
     )
+    campaign["benchmark_evidence"] = {
+        "role": "campaign_health_and_promotion_evidence_only",
+        "spy_buy_hold": benchmarks.get("spy_buy_hold"),
+    }
 
     combined_feedback = _evidence_bounded_feedback(
         benchmark_feedback + base_feedback + edge_feedback,
@@ -914,6 +928,7 @@ def paper_trade_summary(
         "vix_bucket_edges": vix_bucket_edges,
         "benchmarks": benchmarks,
         "strategy_evidence": evidence_state,
+        "campaign_health": campaign,
     }
 
 

@@ -5,6 +5,7 @@ import Spinner from "../components/ui/Spinner";
 import Badge from "../components/ui/Badge";
 import {
   PaperTradePortfolioHero,
+  PaperCampaignHealthPanel,
   PaperTradeDecisionFlow,
   PaperTradeOpenPositions,
   PaperTradeEquityCurve,
@@ -70,6 +71,8 @@ export default function PaperTradePage() {
       <NextOpenBaselinePanel baseline={baselineData?.baseline} />
 
       <PaperTradeDecisionFlow overall={overall} policy={summary?.policy} />
+
+      <PaperCampaignHealthPanel health={summary?.campaign_health} />
 
       {/* How it works — collapsible explainer */}
       <details className="group rounded-xl border border-[var(--line)] bg-[var(--panel)]">

@@ -10,6 +10,10 @@ from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.config import config_snapshot
+from trader_koo.paper_trade.campaign import (
+    build_candidate_decision,
+    persist_candidate_decision,
+)
 from trader_koo.paper_trade.decision import (
     compute_position_plan,
     compute_stop_and_target,
@@ -572,6 +576,24 @@ def _create_paper_trades_from_report(
         raise ValueError(
             f"paper-trade creation requires canonical published report run {report_run_id}"
         )
+    conn.execute(
+        """INSERT INTO paper_campaigns (
+               campaign_id, label, policy_version, status, starting_capital,
+               zero_admission_streak_limit
+           ) VALUES (?, ?, ?, 'active', ?, ?)
+           ON CONFLICT(campaign_id) DO UPDATE SET
+               policy_version = excluded.policy_version,
+               starting_capital = excluded.starting_capital,
+               zero_admission_streak_limit = excluded.zero_admission_streak_limit
+           WHERE paper_campaigns.status != 'frozen'""",
+        (
+            config.campaign_id,
+            f"Paper Campaign {config.campaign_id.removeprefix('paper-').upper()}",
+            config.decision_version,
+            config.starting_capital,
+            config.zero_admission_streak_limit,
+        ),
+    )
     register_bot_version(
         conn,
         bot_version=config.bot_version,
@@ -585,12 +607,17 @@ def _create_paper_trades_from_report(
         "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"
     ).fetchone()[0]
 
+    global_block: tuple[str, str, str] | None = None
     if open_count >= config.max_open:
         LOG.info(
             "Paper trades: %d open trades already at max (%d), skipping creation",
             open_count, config.max_open,
         )
-        return 0
+        global_block = (
+            "portfolio_capacity",
+            "max_open_positions",
+            f"Open positions {open_count} reached policy maximum {config.max_open}.",
+        )
 
     # Portfolio drawdown circuit breaker — halt new entries if drawdown exceeds limit
     try:
@@ -605,7 +632,11 @@ def _create_paper_trades_from_report(
                     "CIRCUIT BREAKER: portfolio drawdown %.1f%% exceeds %.1f%% limit, blocking new entries",
                     drawdown_pct, config.max_drawdown_pct,
                 )
-                return 0
+                global_block = (
+                    "portfolio_risk",
+                    "max_drawdown_circuit_breaker",
+                    f"Portfolio drawdown {drawdown_pct:.1f}% reached {config.max_drawdown_pct:.1f}% limit.",
+                )
     except Exception as exc:
         LOG.debug("Drawdown check skipped: %s", exc)
 
@@ -622,12 +653,53 @@ def _create_paper_trades_from_report(
                 "CIRCUIT BREAKER: daily loss %.1f%% exceeds %.1f%% limit, blocking new entries",
                 abs(daily_loss), config.max_daily_loss_pct,
             )
-            return 0
+            global_block = (
+                "portfolio_risk",
+                "max_daily_loss_circuit_breaker",
+                f"Daily loss {abs(daily_loss):.1f}% reached {config.max_daily_loss_pct:.1f}% limit.",
+            )
     except Exception as exc:
         LOG.debug("Daily loss check skipped: %s", exc)
 
-    remaining_slots = config.max_open - open_count
+    remaining_slots = max(0, config.max_open - open_count)
     inserted = 0
+    report_run_id = report_run_id or generated_ts or f"{report_date}:unlinked"
+
+    def record_decision(
+        *,
+        row: dict[str, Any],
+        rank: int,
+        evaluation: dict[str, Any],
+        final_gate: str,
+        reason_code: str,
+        reasons: list[str],
+        disposition: str = "rejected",
+        levels: dict[str, Any] | None = None,
+        plan: dict[str, Any] | None = None,
+        critic: dict[str, Any] | None = None,
+    ) -> None:
+        decision = build_candidate_decision(
+            row=row,
+            rank=rank,
+            evaluation=evaluation,
+            levels=levels,
+            plan=plan,
+            critic=critic,
+            final_gate=final_gate,
+            reason_code=reason_code,
+            reasons=reasons,
+            disposition=disposition,
+            config=config,
+        )
+        persist_candidate_decision(
+            conn,
+            report_run_id=report_run_id,
+            report_date=report_date,
+            generated_ts=generated_ts,
+            campaign_id=config.campaign_id,
+            policy_version=config.decision_version,
+            decision=decision,
+        )
 
     # Pre-fetch VIX level once for position sizing (used by all trades this batch)
     _vix_level: float | None = None
@@ -643,29 +715,54 @@ def _create_paper_trades_from_report(
     except Exception:
         pass
 
-    # Current portfolio equity for position sizing (adapts as equity changes)
-    _current_equity = config.starting_capital
-    try:
-        _eq_row = conn.execute(
-            "SELECT equity_index FROM paper_portfolio_snapshots "
-            "ORDER BY snapshot_date DESC LIMIT 1"
-        ).fetchone()
-        if _eq_row and _eq_row[0] is not None:
-            _current_equity = config.starting_capital * (float(_eq_row[0]) / 100.0)
-    except Exception:
-        pass
-
-    for row in setup_rows:
-        if inserted >= remaining_slots:
-            break
+    for rank, row in enumerate(setup_rows, start=1):
         if not isinstance(row, dict):
             continue
         evaluation = evaluate_setup_for_paper_trade(row, config=config)
         if not evaluation["approved"]:
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate="eligibility",
+                reason_code="initial_eligibility_rejected",
+                reasons=list(evaluation.get("decision_reasons") or []),
+            )
             continue
 
         ticker = str(row.get("ticker") or "").upper().strip()
         if not ticker:
+            record_decision(
+                row={**row, "ticker": f"__MISSING_{rank}"},
+                rank=rank,
+                evaluation=evaluation,
+                final_gate="candidate_identity",
+                reason_code="missing_ticker",
+                reasons=["Candidate ticker is missing."],
+            )
+            continue
+
+        if global_block is not None:
+            gate, code, detail = global_block
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate=gate,
+                reason_code=code,
+                reasons=[detail],
+            )
+            continue
+
+        if inserted >= remaining_slots:
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate="portfolio_capacity",
+                reason_code="report_slots_exhausted",
+                reasons=["Higher-ranked candidates filled all remaining policy slots."],
+            )
             continue
         member = conn.execute(
             """SELECT 1 FROM report_run_decisions
@@ -683,30 +780,45 @@ def _create_paper_trades_from_report(
         # Entry price = NEXT DAY OPEN (signal generates after close,
         # earliest possible entry is next trading day's open).
         # Fall back to today's close if next-day open not yet available.
-        next_open_row = conn.execute(
-            "SELECT CAST(open AS REAL), date FROM price_daily "
-            "WHERE ticker = ? AND date > ? ORDER BY date ASC LIMIT 1",
-            (ticker, report_date),
-        ).fetchone()
-        if next_open_row and next_open_row[0] is not None:
-            raw_entry = float(next_open_row[0])
-            entry_date_actual = next_open_row[1]
-        else:
-            # Next day data not available yet (live trading edge);
-            # use today's close as best estimate
-            raw_entry = float(row["close"])
-            entry_date_actual = report_date
+        try:
+            next_open_row = conn.execute(
+                "SELECT CAST(open AS REAL), date FROM price_daily "
+                "WHERE ticker = ? AND date > ? ORDER BY date ASC LIMIT 1",
+                (ticker, report_date),
+            ).fetchone()
+            if next_open_row and next_open_row[0] is not None:
+                raw_entry = float(next_open_row[0])
+                entry_date_actual = next_open_row[1]
+            else:
+                raw_entry = float(row["close"])
+                entry_date_actual = report_date
 
-        # Apply entry slippage on top of open price.
-        # Entry price must be computed FIRST — stops and targets are anchored
-        # to this actual fill price so stop distance reflects real trade risk.
-        slip_mult = config.entry_slippage_bps / 10_000
-        if direction == "long":
-            entry_price = round(raw_entry * (1 + slip_mult), 4)
-        else:
-            entry_price = round(raw_entry * (1 - slip_mult), 4)
-        levels = compute_stop_and_target(row, direction, config=config, entry_price=entry_price)
-        plan = compute_position_plan(row, evaluation, levels, config=config, vix_level=_vix_level, entry_price=entry_price)
+            slip_mult = config.entry_slippage_bps / 10_000
+            if direction == "long":
+                entry_price = round(raw_entry * (1 + slip_mult), 4)
+            else:
+                entry_price = round(raw_entry * (1 - slip_mult), 4)
+            levels = compute_stop_and_target(
+                row, direction, config=config, entry_price=entry_price
+            )
+            plan = compute_position_plan(
+                row,
+                evaluation,
+                levels,
+                config=config,
+                vix_level=_vix_level,
+                entry_price=entry_price,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate="trade_plan",
+                reason_code="invalid_stop_target_or_fill",
+                reasons=[f"Trade plan could not be computed: {type(exc).__name__}."],
+            )
+            continue
 
         # ADV liquidity check: reject if position > max_adv_pct of daily volume
         try:
@@ -729,21 +841,44 @@ def _create_paper_trades_from_report(
                         "Paper trade skipped: %s %s position is %.1f%% of ADV (> %.1f%% max)",
                         direction.upper(), ticker, adv_pct, config.max_adv_pct,
                     )
+                    record_decision(
+                        row=row,
+                        rank=rank,
+                        evaluation=evaluation,
+                        levels=levels,
+                        plan=plan,
+                        final_gate="liquidity",
+                        reason_code="position_exceeds_adv_limit",
+                        reasons=[
+                            f"Planned position is {adv_pct:.1f}% of ADV; policy maximum is {config.max_adv_pct:.1f}%."
+                        ],
+                    )
                     continue
         except Exception as exc:
             LOG.debug("ADV check skipped: %s", exc)
 
         expected_r_multiple = plan.get("expected_r_multiple")
-        if (
-            isinstance(expected_r_multiple, (int, float))
-            and expected_r_multiple < config.min_reward_r_multiple
+        if not isinstance(expected_r_multiple, (int, float)) or (
+            expected_r_multiple < config.min_reward_r_multiple
         ):
             LOG.info(
                 "Paper trade skipped: %s %s only offers %.2fR (< %.2fR minimum)",
                 direction.upper(),
                 ticker,
-                float(expected_r_multiple),
+                float(expected_r_multiple or 0),
                 config.min_reward_r_multiple,
+            )
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                final_gate="reward_risk",
+                reason_code="minimum_reward_r_not_met",
+                reasons=[
+                    f"Expected {float(expected_r_multiple or 0):.2f}R is below policy minimum {config.min_reward_r_multiple:.2f}R."
+                ],
             )
             continue
 
@@ -802,11 +937,28 @@ def _create_paper_trades_from_report(
                 max_open=config.max_open,
             )
             if not critic["approved"]:
+                failed_check = "unknown"
+                for raw_reason in critic.get("critic_reasons") or []:
+                    text = str(raw_reason)
+                    if text.startswith("FAIL [") and "]:" in text:
+                        failed_check = text.split("FAIL [", 1)[1].split("]:", 1)[0]
+                        break
                 LOG.info(
                     "Critic REJECTED: %s %s — %s",
                     direction.upper(),
                     ticker,
                     critic["rejections"][0] if critic["rejections"] else "failed critic review",
+                )
+                record_decision(
+                    row=row,
+                    rank=rank,
+                    evaluation=evaluation,
+                    levels=levels,
+                    plan=plan,
+                    critic=critic,
+                    final_gate=f"critic.{failed_check}",
+                    reason_code=f"critic_{failed_check}_rejected",
+                    reasons=list(critic.get("rejections") or ["Critic rejected candidate."]),
                 )
                 continue
             LOG.info(
@@ -822,6 +974,17 @@ def _create_paper_trades_from_report(
                 LOG.warning("Critic check failed (allowing trade by explicit config): %s", exc)
             else:
                 LOG.warning("Critic check failed (rejecting trade): %s", exc)
+                record_decision(
+                    row=row,
+                    rank=rank,
+                    evaluation=evaluation,
+                    levels=levels,
+                    plan=plan,
+                    critic={"approved": False, "error": type(exc).__name__},
+                    final_gate="critic",
+                    reason_code="critic_infrastructure_error",
+                    reasons=["Critic infrastructure failed; policy rejects by default."],
+                )
                 continue
 
         rationale = _build_entry_rationale(
@@ -857,7 +1020,8 @@ def _create_paper_trades_from_report(
                 bot_version, vix_at_entry, vix_percentile_at_entry,
                 regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry,
                 directional_regime_at_entry, directional_regime_confidence,
-                ml_predicted_win_prob, ml_confidence, ml_signal
+                ml_predicted_win_prob, ml_confidence, ml_signal,
+                campaign_id, report_run_id, policy_version
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -877,6 +1041,7 @@ def _create_paper_trades_from_report(
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?,
+                ?, ?, ?,
                 ?, ?, ?
             )
             ON CONFLICT(report_date, ticker, direction) DO NOTHING
@@ -939,6 +1104,9 @@ def _create_paper_trades_from_report(
                 ml_prediction.get("predicted_win_prob"),
                 ml_prediction.get("confidence"),
                 ml_prediction.get("signal"),
+                config.campaign_id,
+                report_run_id,
+                config.decision_version,
             ),
         )
         if conn.total_changes > before_changes:
@@ -948,6 +1116,25 @@ def _create_paper_trades_from_report(
                 direction.upper(), ticker, entry_price,
                 levels["stop_loss"], levels["target_price"], rationale["entry_reason"],
             )
+            disposition = "admitted"
+            reason_code = "admitted"
+            reasons = ["Candidate passed the versioned paper campaign policy."]
+        else:
+            disposition = "duplicate"
+            reason_code = "duplicate_candidate"
+            reasons = ["A paper trade already exists for this report date, ticker, and direction."]
+        record_decision(
+            row=row,
+            rank=rank,
+            evaluation=evaluation,
+            levels=levels,
+            plan=plan,
+            critic=critic,
+            final_gate="admission",
+            reason_code=reason_code,
+            reasons=reasons,
+            disposition=disposition,
+        )
 
     return inserted
 

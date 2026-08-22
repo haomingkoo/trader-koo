@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from trader_koo.paper_trades import create_paper_trades_from_report
+
 
 class TestPaperTradesListEndpoint:
     def test_paper_trades_returns_200(self, test_app):
@@ -39,7 +41,22 @@ class TestPaperTradeSummaryEndpoint:
 
         assert response.status_code == 200
 
-    def test_summary_has_overall_key(self, test_app):
+    def test_summary_has_overall_key(self, test_app, seeded_conn):
+        create_paper_trades_from_report(
+            seeded_conn,
+            setup_rows=[{
+                "ticker": "REJECT",
+                "setup_tier": "F",
+                "score": 10.0,
+                "actionability": "watch",
+                "signal_bias": "bullish",
+                "close": 100.0,
+            }],
+            report_date="2026-08-21",
+            generated_ts="generated-1",
+            report_run_id="api-report-run-1",
+        )
+        seeded_conn.commit()
         response = test_app.get("/api/paper-trades/summary")
         data = response.json()
 
@@ -54,6 +71,16 @@ class TestPaperTradeSummaryEndpoint:
         assert evidence["consumed_window"]["reusable_for_policy_selection"] is False
         assert evidence["causal_validity"]["valid"] is False
         assert evidence["return_basis"] == "split_adjusted_price_return_only_dividends_omitted"
+        assert data["campaign_health"]["campaign_id"] == "paper-v2"
+        assert data["campaign_health"]["policy_version"] == "paper-campaign-v2.0"
+        assert data["campaign_health"]["campaigns"][0]["campaign_id"] == "paper-v1"
+        assert data["campaign_health"]["latest_report"]["report_run_id"] == "api-report-run-1"
+        assert data["campaign_health"]["latest_report"]["ranked"] == 1
+        assert data["campaign_health"]["latest_report"]["rejections_by_gate"] == [{
+            "gate": "eligibility",
+            "reason_code": "initial_eligibility_rejected",
+            "count": 1,
+        }]
 
     def test_summary_ok_is_true(self, test_app):
         response = test_app.get("/api/paper-trades/summary")

@@ -14,8 +14,6 @@ import pytest
 from trader_koo.paper_trade.critic import (
     CAUTION_FLAGS_HARD_BLOCK,
     CAUTION_FLAGS_WARN,
-    BENCHMARK_MIN_CLOSED_TRADES,
-    BENCHMARK_UNDERPERFORM_BLOCK_PP,
     CONVICTION_A_GRADE_SCORE,
     CONVICTION_A_HIGH,
     CONVICTION_A_MIN,
@@ -28,7 +26,6 @@ from trader_koo.paper_trade.critic import (
     FAMILY_EDGE_MIN_SAMPLE,
     FAMILY_EDGE_WEAK_WINRATE,
     GOOD_REWARD_R,
-    MIN_REWARD_R,
     REGIME_AMBIGUOUS_MIN_SCORE,
     REGIME_REVERSAL_MIN_SCORE,
     REGIME_VIX_EXTREME,
@@ -43,7 +40,6 @@ from trader_koo.paper_trade.critic import (
     _check_regime_alignment,
     _check_risk_reward,
     _check_rolling_expectancy,
-    _check_spy_benchmark,
     _check_volatility_environment,
     critic_review,
 )
@@ -82,7 +78,10 @@ def _eval(
 
 
 def _plan(expected_r: float = 2.5) -> dict:
-    return {"expected_r_multiple": expected_r}
+    return {
+        "expected_r_multiple": expected_r,
+        "minimum_reward_r_multiple": 2.0,
+    }
 
 
 def _ctx(
@@ -217,8 +216,8 @@ class TestRiskReward:
     @pytest.mark.parametrize("r_multiple,expected_pass", [
         (GOOD_REWARD_R, True),          # exactly at good threshold
         (GOOD_REWARD_R + 0.5, True),    # above good
-        (MIN_REWARD_R, True),           # exactly at minimum
-        (MIN_REWARD_R - 0.1, False),    # just below minimum
+        (2.0, True),                     # exactly at policy minimum
+        (1.9, False),                    # just below policy minimum
         (0.0, False),                    # zero R
         (1.0, False),                    # 1R is not enough
     ])
@@ -416,69 +415,6 @@ class TestRollingExpectancy:
             _insert_closed(conn, pnl=1.0)
 
         passed, reason = _check_rolling_expectancy(conn)
-        assert passed is True, reason
-
-
-# ---------------------------------------------------------------------------
-# _check_spy_benchmark
-# ---------------------------------------------------------------------------
-
-class TestSpyBenchmark:
-    def test_insufficient_history_passes(self):
-        conn = _make_conn()
-        for _ in range(BENCHMARK_MIN_CLOSED_TRADES - 1):
-            _insert_closed(conn, pnl=1.0)
-
-        passed, reason = _check_spy_benchmark(conn)
-
-        assert passed is True
-        assert "insufficient" in reason.lower()
-
-    def test_underperformance_at_block_boundary_blocks(self):
-        conn = _make_conn()
-        conn.executemany(
-            "INSERT INTO price_daily (ticker, date, close) VALUES ('SPY', ?, ?)",
-            [("2026-01-01", 100.0), ("2026-01-20", 105.0)],
-        )
-        for idx in range(BENCHMARK_MIN_CLOSED_TRADES):
-            conn.execute(
-                """
-                INSERT INTO paper_trades (
-                    ticker, direction, status, pnl_pct, setup_family,
-                    entry_date, exit_date, position_size_pct
-                )
-                VALUES (?, 'long', 'closed', 0.0, 'bullish_breakout', '2026-01-01', '2026-01-20', 8.0)
-                """,
-                (f"T{idx}",),
-            )
-        conn.commit()
-
-        passed, reason = _check_spy_benchmark(conn)
-
-        assert passed is False
-        assert f"{BENCHMARK_UNDERPERFORM_BLOCK_PP:.2f}pp" in reason
-
-    def test_spread_above_block_boundary_passes(self):
-        conn = _make_conn()
-        conn.executemany(
-            "INSERT INTO price_daily (ticker, date, close) VALUES ('SPY', ?, ?)",
-            [("2026-01-01", 100.0), ("2026-01-20", 104.0)],
-        )
-        for idx in range(BENCHMARK_MIN_CLOSED_TRADES):
-            conn.execute(
-                """
-                INSERT INTO paper_trades (
-                    ticker, direction, status, pnl_pct, setup_family,
-                    entry_date, exit_date, position_size_pct
-                )
-                VALUES (?, 'long', 'closed', 0.0, 'bullish_breakout', '2026-01-01', '2026-01-20', 8.0)
-                """,
-                (f"T{idx}",),
-            )
-        conn.commit()
-
-        passed, reason = _check_spy_benchmark(conn)
-
         assert passed is True, reason
 
 

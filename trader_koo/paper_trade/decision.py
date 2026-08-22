@@ -411,6 +411,7 @@ def compute_position_plan(
         "expected_r_multiple": round(expected_r_multiple, 2)
         if isinstance(expected_r_multiple, (int, float))
         else None,
+        "minimum_reward_r_multiple": config.min_reward_r_multiple,
         "entry_plan": entry_plan,
         "exit_plan": exit_plan,
         "sizing_summary": "; ".join(sizing_notes + [sizing_summary]),

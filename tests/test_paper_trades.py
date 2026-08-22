@@ -598,7 +598,7 @@ class TestCreatePaperTrades:
         version_row = conn.execute(
             "SELECT bot_version, decision_version FROM bot_versions WHERE bot_version = 'v1.0.0'",
         ).fetchone()
-        assert version_row == ("v1.0.0", "paper-trade-eval-v1")
+        assert version_row == ("v1.0.0", "paper-campaign-v2.0")
 
     def test_skips_trade_with_poor_reward_to_risk(self, conn):
         rows = [_make_setup_row(resistance_level=151.0)]
@@ -1187,7 +1187,7 @@ class TestPaperTradeSummary:
         assert result["by_direction"] == {}
         assert result["equity_curve"] == []
         assert result["policy"]["bot_version"] == "v1.0.0"
-        assert result["policy"]["decision_version"] == "paper-trade-eval-v1"
+        assert result["policy"]["decision_version"] == "paper-campaign-v2.0"
         assert result["feedback"] == []
         assert result["strategy_evidence"]["readiness_status"] == "insufficient_history"
         assert result["strategy_evidence"]["decision_eligible"] is False

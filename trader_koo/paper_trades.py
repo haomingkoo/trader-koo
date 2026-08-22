@@ -33,7 +33,11 @@ PAPER_TRADE_MAX_OPEN = int(os.getenv("TRADER_KOO_PAPER_TRADE_MAX_OPEN", "20"))
 PAPER_TRADE_EXPIRY_DAYS = int(os.getenv("TRADER_KOO_PAPER_TRADE_EXPIRY_DAYS", "10"))
 PAPER_TRADE_STOP_ATR_MULT = float(os.getenv("TRADER_KOO_PAPER_TRADE_STOP_ATR_MULT", "1.5"))
 PAPER_TRADE_DEFAULT_STOP_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_DEFAULT_STOP_PCT", "3.0"))
-PAPER_TRADE_MIN_REWARD_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_REWARD_R", "1.5"))
+PAPER_TRADE_MIN_REWARD_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_REWARD_R", "2.0"))
+PAPER_TRADE_CAMPAIGN_ID = os.getenv("TRADER_KOO_PAPER_TRADE_CAMPAIGN_ID", "paper-v2")
+PAPER_TRADE_ZERO_ADMISSION_STREAK = int(
+    os.getenv("TRADER_KOO_PAPER_TRADE_ZERO_ADMISSION_STREAK", "3")
+)
 PAPER_TRADE_MIN_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_POSITION_PCT", "2.0"))
 PAPER_TRADE_MAX_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_MAX_POSITION_PCT", "14.0"))
 PAPER_TRADE_TIER_A_POSITION_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_TIER_A_POSITION_PCT", "12.0"))
@@ -58,7 +62,7 @@ _QUALIFYING_ACTIONABILITY = frozenset({"higher-probability", "conditional"})
 _QUALIFYING_DIRECTIONS = frozenset({"long", "short"})
 
 _TIER_RANK = {"A": 1, "B": 2, "C": 3, "D": 4, "F": 5}
-_PAPER_DECISION_VERSION = "paper-trade-eval-v1"
+_PAPER_DECISION_VERSION = "paper-campaign-v2.0"
 _DEBATE_CAUTION_AGREEMENT = 60.0
 _HIGH_VOL_ATR_PCT = 6.0
 
@@ -98,6 +102,8 @@ def _build_config() -> PaperTradeConfig:
         trail_tight_cushion_r=PAPER_TRADE_TRAIL_TIGHT_CUSHION_R,
         expiry_use_trading_days=PAPER_TRADE_EXPIRY_USE_TRADING_DAYS,
         critic_fail_open=os.getenv("TRADER_KOO_PAPER_TRADE_CRITIC_FAIL_OPEN", "0") == "1",
+        campaign_id=PAPER_TRADE_CAMPAIGN_ID,
+        zero_admission_streak_limit=PAPER_TRADE_ZERO_ADMISSION_STREAK,
     )
 
 
