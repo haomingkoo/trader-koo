@@ -652,7 +652,7 @@ def run_next_open_baseline(
             ),
             "revealed": partition != "heldout" or reveal_heldout,
         }
-    effective_blocks = len({trade["entry_date"] for trade in trades}) / cfg.holding_sessions
+    effective_blocks = len(equity_curve) / cfg.holding_sessions
     readiness_reasons = list(causal_reasons)
     if len(equity_curve) < 120:
         readiness_reasons.append("fewer_than_120_daily_observations")
@@ -694,6 +694,7 @@ def run_next_open_baseline(
             "selected_calls": len(calls),
             "closed_trades": len(trades),
             "excluded_calls": len(exclusions),
+            "daily_observation_count": len(equity_curve),
             "signal_date_count": len(signal_dates),
             "traded_signal_date_count": len({trade["entry_date"] for trade in trades}),
             "effective_non_overlapping_block_count": effective_blocks,

@@ -1186,6 +1186,7 @@ export interface NextOpenBaselineState {
     selected_calls: number;
     closed_trades: number;
     excluded_calls: number;
+    daily_observation_count: number;
     net_return_pct: number;
     full_investment_spy_price_return_pct: number | null;
     active_net_pnl: number | null;

@@ -77,6 +77,8 @@ def test_uses_immediate_next_open_and_exact_tenth_close() -> None:
     assert trade["entry_price"] == pytest.approx(51.0 * 1.001)
     assert trade["exit_price"] == pytest.approx(60.5 * 0.999)
     assert len(artifact["equity_curve"]) == 11
+    assert artifact["summary"]["daily_observation_count"] == 11
+    assert artifact["summary"]["effective_non_overlapping_block_count"] == 1.1
     assert artifact["confidence_intervals"] is None
 
 
