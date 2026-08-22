@@ -22,7 +22,6 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from trader_koo.backend.services.database import DB_PATH, table_exists
-from trader_koo.middleware.auth import require_admin_auth
 
 LOG = logging.getLogger("trader_koo.routers.admin.alert_quality")
 
@@ -134,7 +133,6 @@ def _score_alert(
 
 
 @router.get("/api/admin/alert-quality")
-@require_admin_auth
 def get_alert_quality(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=200, ge=1, le=1000),

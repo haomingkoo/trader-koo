@@ -14,7 +14,6 @@ import asyncio
 import datetime as dt
 import logging
 import os
-import secrets
 import sqlite3
 import sys
 from contextlib import asynccontextmanager
@@ -22,9 +21,9 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # ---------------------------------------------------------------------------
@@ -41,11 +40,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from trader_koo.config import validate_config, ConfigError
 from trader_koo.middleware.cors import RestrictiveCORSMiddleware
-from trader_koo.middleware.auth import (
-    auto_register_admin_endpoints,
-    verify_all_admin_endpoints_protected,
-    require_admin_auth,
-)
+from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
 from trader_koo.security.logging_filter import install_secret_redaction_filter
 from trader_koo.security.error_middleware import ErrorSanitizationMiddleware
 from trader_koo.audit import AuditLogger, ensure_audit_schema
@@ -60,7 +55,6 @@ from trader_koo.ratelimit.integration import initialize_rate_limiting
 
 from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.frontend_routes import SPA_ROUTE_PATHS
-from trader_koo.backend.utils import client_ip as _client_ip
 from trader_koo.backend.services.scheduler import create_scheduler
 from trader_koo.backend.services.pipeline import (
     AUTO_RESUME_INTERRUPTED_PIPELINE,
@@ -89,7 +83,6 @@ from trader_koo.backend.routers.email import router as email_router
 from trader_koo.backend.routers.usage import router as usage_router
 from trader_koo.backend.routers.admin import router as admin_router
 from trader_koo.backend.routers.crypto import router as crypto_router
-from trader_koo.backend.routers.data_sync import router as data_sync_router
 from trader_koo.backend.routers.streaming import router as streaming_router
 from trader_koo.backend.routers.alerts import router as alerts_router
 try:
@@ -110,19 +103,6 @@ from trader_koo.backend.routers.usage import (
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DIST_DIR = (PROJECT_DIR / ".." / "dist-v2").resolve()
-API_KEY = os.getenv("TRADER_KOO_API_KEY", "")
-ADMIN_USER = str(os.getenv("TRADER_KOO_ADMIN_USERNAME", "admin") or "admin").strip() or "admin"
-ADMIN_STRICT_API_KEY = str(os.getenv("ADMIN_STRICT_API_KEY", "1")).strip().lower() in {
-    "1", "true", "yes", "on",
-}
-DEVELOPMENT_MODE = str(os.getenv("TRADER_KOO_DEVELOPMENT_MODE", "0")).strip().lower() in {
-    "1", "true", "yes", "on",
-}
-ADMIN_AUTH_WINDOW_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_WINDOW_SEC", "300")))
-ADMIN_AUTH_MAX_FAILS = max(3, int(os.getenv("TRADER_KOO_ADMIN_AUTH_MAX_FAILS", "20")))
-ADMIN_AUTH_BLOCK_SEC = max(30, int(os.getenv("TRADER_KOO_ADMIN_AUTH_BLOCK_SEC", "600")))
-ADMIN_API_PREFIX = "/api/admin/"
-
 _ALLOWED_ORIGIN = os.getenv("TRADER_KOO_ALLOWED_ORIGIN", "https://trader.kooexperience.com")
 
 
@@ -169,73 +149,12 @@ if not any(
     except Exception as exc:
         LOG.warning("Failed to attach rotating file logger at %s: %s", API_LOG_PATH, exc)
 
-# ---------------------------------------------------------------------------
-# In-memory admin auth rate-limit state
-# ---------------------------------------------------------------------------
-
-import threading
-
-_ADMIN_AUTH_LOCK = threading.Lock()
-_ADMIN_AUTH_STATE: dict[str, dict[str, float]] = {}
-
-
-def _prune_admin_auth_state(now_ts: float) -> None:
-    max_age = max(ADMIN_AUTH_WINDOW_SEC, ADMIN_AUTH_BLOCK_SEC) * 3
-    stale_keys = [
-        ip
-        for ip, entry in _ADMIN_AUTH_STATE.items()
-        if now_ts - float(entry.get("updated_ts", 0.0)) > max_age
-    ]
-    for ip in stale_keys:
-        _ADMIN_AUTH_STATE.pop(ip, None)
-
-
-def _admin_auth_blocked(client_ip: str, now_ts: float) -> tuple[bool, int]:
-    with _ADMIN_AUTH_LOCK:
-        _prune_admin_auth_state(now_ts)
-        entry = _ADMIN_AUTH_STATE.get(client_ip)
-        if not entry:
-            return False, 0
-        blocked_until = float(entry.get("blocked_until", 0.0))
-        if blocked_until > now_ts:
-            return True, max(1, int(blocked_until - now_ts))
-        return False, 0
-
-
-def _admin_auth_record_failure(client_ip: str, now_ts: float) -> tuple[bool, int, int]:
-    with _ADMIN_AUTH_LOCK:
-        _prune_admin_auth_state(now_ts)
-        entry = _ADMIN_AUTH_STATE.get(client_ip) or {}
-        window_start = float(entry.get("window_start", now_ts))
-        if now_ts - window_start > ADMIN_AUTH_WINDOW_SEC:
-            window_start = now_ts
-            count = 0
-        else:
-            count = int(entry.get("count", 0))
-        count += 1
-        blocked_until = float(entry.get("blocked_until", 0.0))
-        blocked = False
-        if count >= ADMIN_AUTH_MAX_FAILS:
-            blocked = True
-            blocked_until = now_ts + ADMIN_AUTH_BLOCK_SEC
-        _ADMIN_AUTH_STATE[client_ip] = {
-            "window_start": window_start,
-            "count": float(count),
-            "blocked_until": blocked_until,
-            "updated_ts": now_ts,
-        }
-        retry_after = max(1, int(blocked_until - now_ts)) if blocked else 0
-        return blocked, retry_after, count
-
-
-def _admin_auth_clear(client_ip: str) -> None:
-    with _ADMIN_AUTH_LOCK:
-        _ADMIN_AUTH_STATE.pop(client_ip, None)
-
-
-def _get_audit_logger() -> AuditLogger:
+def _record_admin_auth_attempt(**payload: Any) -> None:
     conn = sqlite3.connect(str(DB_PATH))
-    return AuditLogger(conn)
+    try:
+        log_auth_attempt(AuditLogger(conn), **payload)
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -262,26 +181,6 @@ async def lifespan(_app: FastAPI):
 
     # Store scheduler in app state so routers can access it
     _app.state.scheduler = _scheduler
-
-    # Register all admin endpoints and verify authentication
-    auto_register_admin_endpoints(_app)
-    all_protected, unprotected = verify_all_admin_endpoints_protected()
-    if not all_protected:
-        error_msg = (
-            f"FATAL: {len(unprotected)} admin endpoint(s) lack authentication. "
-            f"All /api/admin/* endpoints must have @require_admin_auth decorator. "
-            f"Unprotected endpoints: {', '.join(unprotected)}"
-        )
-        LOG.error(error_msg)
-        if config.admin_strict_api_key:
-            raise RuntimeError(error_msg)
-        else:
-            LOG.warning(
-                "Running in development mode (ADMIN_STRICT_API_KEY=0). "
-                "Unprotected admin endpoints are allowed but not recommended."
-            )
-    else:
-        LOG.info("All admin endpoints are properly protected with authentication")
 
     # Initialize database schemas (skip if DB doesn't exist yet)
     if DB_PATH.exists():
@@ -530,6 +429,10 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan,
 )
+app.state.admin_authenticator = AdminAuthenticator(
+    AdminAuthConfig.from_env(),
+    audit_recorder=_record_admin_auth_attempt,
+)
 if os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1":
     app.docs_url = "/docs"
     app.redoc_url = "/redoc"
@@ -575,124 +478,6 @@ app.add_middleware(RateLimitMiddleware)
 
 
 # ---------------------------------------------------------------------------
-# Admin auth middleware
-# ---------------------------------------------------------------------------
-
-
-@app.middleware("http")
-async def api_key_middleware(request: Request, call_next):
-    """Require a valid X-API-Key on /api/admin/* routes."""
-    path = request.url.path
-    if path.startswith(ADMIN_API_PREFIX):
-        client_ip = _client_ip(request)
-        user_agent = request.headers.get("user-agent", "-")
-
-        blocked, retry_after = _admin_auth_blocked(
-            client_ip, dt.datetime.now(dt.timezone.utc).timestamp()
-        )
-        if blocked:
-            LOG.warning(
-                "Admin auth throttled method=%s path=%s client_ip=%s retry_after_sec=%s",
-                request.method, path, client_ip, retry_after,
-            )
-            return JSONResponse(
-                {"detail": "Too many unauthorized attempts. Try again later."},
-                status_code=429,
-                headers={"Retry-After": str(retry_after)},
-            )
-
-        if not API_KEY:
-            if ADMIN_STRICT_API_KEY:
-                LOG.error(
-                    "Admin endpoint denied because TRADER_KOO_API_KEY is not configured (path=%s, client_ip=%s)",
-                    path, client_ip,
-                )
-                return JSONResponse(
-                    {"detail": "Admin API key is not configured on server."},
-                    status_code=503,
-                )
-            if not DEVELOPMENT_MODE:
-                LOG.error(
-                    "Admin access denied: no API key and TRADER_KOO_DEVELOPMENT_MODE is not set "
-                    "(path=%s, client_ip=%s). Set TRADER_KOO_DEVELOPMENT_MODE=1 for local dev.",
-                    path, client_ip,
-                )
-                return JSONResponse(
-                    {"detail": "Admin API key required. Set TRADER_KOO_DEVELOPMENT_MODE=1 for local dev."},
-                    status_code=503,
-                )
-            LOG.warning("OPEN-ADMIN: %s %s from %s (dev mode)", request.method, path, client_ip)
-            request.state.admin_identity = {"username": "local-dev", "mode": "open-admin"}
-            try:
-                audit_logger = _get_audit_logger()
-                log_auth_attempt(
-                    audit_logger,
-                    success=True,
-                    username="local-dev",
-                    ip_address=client_ip,
-                    user_agent=user_agent,
-                    auth_method="local_dev",
-                )
-                audit_logger.conn.close()
-            except Exception as exc:
-                LOG.warning("Failed to log auth attempt: %s", exc)
-            return await call_next(request)
-
-        provided = request.headers.get("X-API-Key", "")
-        if not secrets.compare_digest(provided, API_KEY):
-            blocked_now, retry_after, fail_count = _admin_auth_record_failure(
-                client_ip, dt.datetime.now(dt.timezone.utc).timestamp()
-            )
-            ua = request.headers.get("user-agent", "-")
-            referer = request.headers.get("referer", "-")
-            LOG.warning(
-                "Unauthorized request blocked method=%s path=%s client_ip=%s "
-                "fail_count=%s blocked=%s user_agent=%s referer=%s",
-                request.method, path, client_ip, fail_count, blocked_now, ua, referer,
-            )
-            try:
-                audit_logger = _get_audit_logger()
-                log_auth_attempt(
-                    audit_logger,
-                    success=False,
-                    username=None,
-                    ip_address=client_ip,
-                    user_agent=ua,
-                    auth_method="api_key",
-                    reason="invalid_api_key",
-                )
-                audit_logger.conn.close()
-            except Exception as exc:
-                LOG.warning("Failed to log auth attempt: %s", exc)
-            if blocked_now:
-                return JSONResponse(
-                    {"detail": "Too many unauthorized attempts. Try again later."},
-                    status_code=429,
-                    headers={"Retry-After": str(retry_after)},
-                )
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-
-        _admin_auth_clear(client_ip)
-        username = ADMIN_USER or "admin"
-        request.state.admin_identity = {"username": username, "mode": "api_key", "user_id": username}
-        try:
-            audit_logger = _get_audit_logger()
-            log_auth_attempt(
-                audit_logger,
-                success=True,
-                username=username,
-                ip_address=client_ip,
-                user_agent=user_agent,
-                auth_method="api_key",
-            )
-            audit_logger.conn.close()
-        except Exception as exc:
-            LOG.warning("Failed to log auth attempt: %s", exc)
-
-    return await call_next(request)
-
-
-# ---------------------------------------------------------------------------
 # Root: serve React app at /
 # ---------------------------------------------------------------------------
 
@@ -723,7 +508,6 @@ app.include_router(paper_trades_router)
 app.include_router(email_router)
 app.include_router(usage_router)
 app.include_router(admin_router)
-app.include_router(data_sync_router)
 app.include_router(crypto_router)
 app.include_router(streaming_router)
 app.include_router(alerts_router)

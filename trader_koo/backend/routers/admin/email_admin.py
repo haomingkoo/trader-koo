@@ -23,7 +23,6 @@ from trader_koo.llm_health import (
     llm_degraded_threshold,
     llm_health_summary,
 )
-from trader_koo.middleware.auth import require_admin_auth
 from trader_koo.report_email import (
     build_report_email_bodies,
     build_report_email_subject,
@@ -54,7 +53,6 @@ from trader_koo.backend.routers.email import (
 
 
 @router.get("/api/admin/smtp-health")
-@require_admin_auth
 def smtp_health() -> dict[str, Any]:
     """Return email delivery config health (without secrets)."""
     smtp = _smtp_settings()
@@ -144,7 +142,6 @@ def smtp_health() -> dict[str, Any]:
 
 
 @router.post("/api/admin/email-latest-report")
-@require_admin_auth
 def email_latest_report(
     to: str | None = Query(default=None),
     include_markdown: bool = Query(default=True),

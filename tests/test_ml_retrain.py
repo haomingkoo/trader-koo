@@ -231,8 +231,7 @@ class TestRetrainEndpointLogic:
         mock_request.state = MagicMock()
         mock_request.state.admin_identity = "test-admin"
 
-        # Call the underlying function (bypass auth decorator via __wrapped__)
-        result = ml_module.retrain_ml_model.__wrapped__(
+        result = ml_module.retrain_ml_model(
             mock_request,
             start_date="2025-01-01",
             target_mode="invalid_mode",
@@ -252,7 +251,7 @@ class TestRetrainEndpointLogic:
         mock_request.state = MagicMock()
         mock_request.state.admin_identity = "test-admin"
 
-        result = ml_module.retrain_status.__wrapped__(mock_request)
+        result = ml_module.retrain_status(mock_request)
 
         assert result["running"] is False
         assert "No retrain" in result.get("message", "")

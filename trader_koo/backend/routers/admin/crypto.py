@@ -10,7 +10,6 @@ from fastapi import APIRouter, Query, Request
 
 from trader_koo.backend.services.database import DB_PATH
 from trader_koo.crypto.storage import get_crypto_data_status
-from trader_koo.middleware.auth import require_admin_auth
 
 LOG = logging.getLogger("trader_koo.admin.crypto")
 
@@ -28,7 +27,6 @@ _BACKFILL_TARGETS: dict[str, int] = {
 
 
 @router.post("/api/admin/crypto/backfill")
-@require_admin_auth
 def admin_crypto_backfill(
     request: Request,
     symbol: str = Query(default=""),
@@ -64,7 +62,6 @@ def admin_crypto_backfill(
 
 
 @router.get("/api/admin/crypto/data-status")
-@require_admin_auth
 def admin_crypto_data_status(request: Request) -> dict[str, Any]:
     """Row counts and freshness per symbol/interval in crypto_bars."""
     from trader_koo.crypto.service import get_crypto_ws_health

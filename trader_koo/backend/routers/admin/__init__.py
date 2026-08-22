@@ -6,7 +6,7 @@ Consumers import this exactly as before::
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from trader_koo.backend.routers.admin.alert_quality import (
     router as alert_quality_router,
@@ -32,8 +32,10 @@ from trader_koo.backend.routers.admin.system import router as system_router
 from trader_koo.backend.routers.admin.telegram import (
     router as telegram_router,
 )
+from trader_koo.backend.routers.data_sync import router as data_sync_router
+from trader_koo.middleware.auth import require_admin
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 router.include_router(alert_quality_router)
 router.include_router(pipeline_router)
@@ -45,5 +47,6 @@ router.include_router(telegram_router)
 router.include_router(backups_router)
 router.include_router(market_monitor_router)
 router.include_router(crypto_router)
+router.include_router(data_sync_router)
 
 __all__ = ["router"]

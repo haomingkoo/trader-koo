@@ -19,7 +19,6 @@ from trader_koo.audit.api import (
 )
 from trader_koo.audit.export import get_exporter_from_env
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
-from trader_koo.middleware.auth import require_admin_auth
 
 from trader_koo.backend.routers.admin._shared import (
     LOG_DIR,
@@ -33,7 +32,6 @@ router = APIRouter(tags=["admin", "admin-data"])
 
 
 @router.post("/api/admin/cleanup-storage")
-@require_admin_auth
 def cleanup_storage(
     dry_run: bool = Query(default=True),
 ) -> dict[str, Any]:
@@ -48,7 +46,6 @@ def cleanup_storage(
 
 
 @router.post("/api/admin/seed-ticker-history")
-@require_admin_auth
 def seed_ticker_history(
     request: Request,
     tickers: str = Query(
@@ -101,7 +98,6 @@ def seed_ticker_history(
 
 
 @router.get("/api/admin/database-stats")
-@require_admin_auth
 def admin_database_stats() -> dict[str, Any]:
     """Return database statistics including record counts and date ranges."""
     if not DB_PATH.exists():
@@ -191,7 +187,6 @@ def admin_database_stats() -> dict[str, Any]:
 
 
 @router.get("/api/admin/audit-logs")
-@require_admin_auth
 def admin_audit_logs(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
@@ -222,7 +217,6 @@ def admin_audit_logs(
 
 
 @router.get("/api/admin/audit-logs/export")
-@require_admin_auth
 def admin_audit_logs_export(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
@@ -258,7 +252,6 @@ def admin_audit_logs_export(
 
 
 @router.get("/api/admin/audit-logs/summary")
-@require_admin_auth
 def admin_audit_logs_summary(
     days: int = Query(default=7, ge=1, le=365),
 ) -> dict[str, Any]:
@@ -272,7 +265,6 @@ def admin_audit_logs_summary(
 
 
 @router.get("/api/admin/audit-logs/stats")
-@require_admin_auth
 def admin_audit_logs_stats() -> dict[str, Any]:
     """Get audit log statistics and retention info."""
     conn = sqlite3.connect(str(DB_PATH))
@@ -284,7 +276,6 @@ def admin_audit_logs_stats() -> dict[str, Any]:
 
 
 @router.post("/api/admin/audit-logs/retention")
-@require_admin_auth
 def admin_audit_logs_retention(
     retention_days: int = Query(default=90, ge=30, le=3650),
     dry_run: bool = Query(default=True),
@@ -324,7 +315,6 @@ def admin_audit_logs_retention(
 
 
 @router.post("/api/admin/audit-logs/external-export")
-@require_admin_auth
 def admin_audit_logs_external_export(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),

@@ -24,7 +24,6 @@ from trader_koo.backend.services.report_loader import (
     daily_report_response,
 )
 from trader_koo.backend.services.scheduler import _run_daily_update
-from trader_koo.middleware.auth import require_admin_auth
 from trader_koo.report.market_context import (
     _build_regime_context as _report_build_regime_context,
 )
@@ -45,7 +44,6 @@ router = APIRouter(tags=["admin", "admin-pipeline"])
 
 
 @router.post("/api/admin/trigger-update")
-@require_admin_auth
 def trigger_update(
     request: Request,
     mode: str = Query(default="full"),
@@ -114,7 +112,6 @@ def trigger_update(
 
 
 @router.post("/api/admin/force-cancel-run")
-@require_admin_auth
 def force_cancel_run(request: Request) -> dict[str, Any]:
     """Force-cancel all running ingest runs by marking them as failed.
 
@@ -169,7 +166,6 @@ def force_cancel_run(request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/admin/pipeline-status")
-@require_admin_auth
 def pipeline_status_endpoint(
     log_lines: int = Query(default=120, ge=20, le=1000),
 ) -> dict[str, Any]:
@@ -187,7 +183,6 @@ def pipeline_status_endpoint(
 
 
 @router.get("/api/admin/daily-report")
-@require_admin_auth
 def admin_daily_report(
     limit: int = Query(default=20, ge=1, le=200),
     include_markdown: bool = Query(default=False),
@@ -206,7 +201,6 @@ def admin_daily_report(
 
 
 @router.get("/api/admin/logs")
-@require_admin_auth
 def admin_logs(
     name: str = Query(
         default="cron",
@@ -225,7 +219,6 @@ def admin_logs(
 
 
 @router.post("/api/admin/run-yolo-seed")
-@require_admin_auth
 def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
     """Trigger full YOLO seed for all tickers in background."""
     timeframe_norm = str(timeframe or "both").strip().lower() or "both"
@@ -271,7 +264,6 @@ def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
 
 
 @router.get("/api/admin/yolo-status")
-@require_admin_auth
 def yolo_status(
     log_lines: int = Query(default=40, ge=0, le=400),
 ) -> dict[str, Any]:
@@ -297,7 +289,6 @@ def yolo_status(
 
 
 @router.get("/api/admin/yolo-events")
-@require_admin_auth
 def yolo_events(
     limit: int = Query(default=200, ge=1, le=1000),
     run_id: str = Query(default=""),

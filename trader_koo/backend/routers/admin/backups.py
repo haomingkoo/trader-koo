@@ -6,7 +6,6 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
-from trader_koo.middleware.auth import require_admin_auth
 from trader_koo.scripts.backup_db import (
     DEFAULT_BACKUP_DIR,
     latest_backup_path,
@@ -17,7 +16,6 @@ router = APIRouter(tags=["admin", "admin-backups"])
 
 
 @router.get("/api/admin/backups")
-@require_admin_auth
 def admin_list_backups() -> dict[str, Any]:
     """List available database backups with size and timestamp."""
     backups = list_backups(DEFAULT_BACKUP_DIR)
@@ -32,7 +30,6 @@ def admin_list_backups() -> dict[str, Any]:
 
 
 @router.get("/api/admin/backups/latest")
-@require_admin_auth
 def admin_download_latest_backup() -> Any:
     """Download the most recent backup file."""
     path = latest_backup_path(DEFAULT_BACKUP_DIR)
