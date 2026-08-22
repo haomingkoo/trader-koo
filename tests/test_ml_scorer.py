@@ -3,14 +3,51 @@ from __future__ import annotations
 import sqlite3
 
 import numpy as np
+import pandas as pd
 import pytest
 
+from trader_koo.ml import scorer
 from trader_koo.ml.scorer import (
     _as_probability,
     _prediction_label,
     _signal_from_probability,
+    model_status,
+    require_model_price_contract,
+    score_single_ticker,
     score_universe,
 )
+
+
+class _Model:
+    def predict(self, values):
+        return np.full(len(values), 0.7)
+
+
+def _verified_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """CREATE TABLE price_daily (
+        ticker TEXT, date TEXT, close REAL,
+        adjustment_basis TEXT, adjustment_version TEXT, basis_status TEXT)"""
+    )
+    for ticker in ("AAA", "SPY"):
+        conn.execute(
+            "INSERT INTO price_daily VALUES (?, '2026-08-20', 100, ?, ?, 'verified')",
+            (ticker, "split_adjusted_price_only", "test-v1"),
+        )
+    return conn
+
+
+def _meta(**overrides):
+    value = {
+        "feature_columns": ["feature"],
+        "target_mode": "barrier",
+        "return_basis": "split_adjusted_price_only",
+        "adjustment_version": "test-v1",
+        "distributions_included": False,
+    }
+    value.update(overrides)
+    return value
 
 
 def test_as_probability_keeps_lightgbm_probability_outputs():
@@ -54,3 +91,69 @@ def test_scoring_fails_closed_for_unresolved_price_basis():
 
     with pytest.raises(ValueError, match="not research eligible"):
         score_universe(conn, as_of_date="2026-08-20")
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        None,
+        _meta(return_basis="unknown"),
+        _meta(adjustment_version="legacy-v0"),
+        _meta(distributions_included=True),
+    ],
+)
+def test_model_contract_missing_or_mismatch_fails_closed(meta):
+    current = {
+        "basis": "split_adjusted_price_only",
+        "version": "test-v1",
+        "distributions_included": False,
+    }
+    with pytest.raises(ValueError, match="incompatible"):
+        require_model_price_contract(meta, current)
+
+
+def test_scoring_requires_matching_saved_model_contract(monkeypatch):
+    conn = _verified_conn()
+    monkeypatch.setattr(scorer, "load_model", lambda: (_Model(), _meta()))
+    monkeypatch.setattr(
+        scorer,
+        "extract_features_for_universe",
+        lambda *args, **kwargs: pd.DataFrame({"feature": [1.0]}, index=["AAA"]),
+    )
+
+    universe = score_universe(
+        conn, as_of_date="2026-08-20", tickers=["AAA"], top_n=1
+    )
+    single = score_single_ticker(conn, ticker="AAA", as_of_date="2026-08-20")
+
+    assert universe[0]["return_basis"] == "split_adjusted_price_only"
+    assert universe[0]["adjustment_version"] == "test-v1"
+    assert universe[0]["distributions_included"] is False
+    assert single["return_basis"] == universe[0]["return_basis"]
+    status = model_status(conn)
+    assert status["basis_compatible"] is True
+    assert status["basis_error"] is None
+    assert status["model_price_contract"]["adjustment_version"] == "test-v1"
+
+
+def test_score_and_model_status_expose_mismatch_and_do_not_predict(monkeypatch):
+    conn = _verified_conn()
+    bad_meta = _meta(adjustment_version="old-v0")
+    monkeypatch.setattr(scorer, "load_model", lambda: (_Model(), bad_meta))
+    monkeypatch.setattr(
+        scorer,
+        "extract_features_for_universe",
+        lambda *args, **kwargs: pytest.fail("features must not run on a basis mismatch"),
+    )
+
+    with pytest.raises(ValueError, match="adjustment_version"):
+        score_universe(conn, as_of_date="2026-08-20", tickers=["AAA"])
+    with pytest.raises(ValueError, match="adjustment_version"):
+        score_single_ticker(conn, ticker="AAA", as_of_date="2026-08-20")
+
+    status = model_status(conn)
+    assert status["loaded"] is True
+    assert status["basis_compatible"] is False
+    assert "adjustment_version" in status["basis_error"]
+    assert status["model_price_contract"]["adjustment_version"] == "old-v0"
+    assert status["current_price_contract"]["version"] == "test-v1"

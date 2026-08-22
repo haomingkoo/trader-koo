@@ -1013,6 +1013,26 @@ def infer_market_data_state(conn: sqlite3.Connection, run_id: str) -> dict[str, 
     }
 
 
+def require_complete_dataset(
+    final_errors: dict[str, str],
+    *,
+    ticker_count: int,
+    max_passes: int,
+    required: bool,
+) -> None:
+    """Make every residual ticker failure fatal for full-history jobs."""
+    if not required or not final_errors:
+        return
+    failed_preview = ",".join(sorted(final_errors)[:25])
+    if len(final_errors) > 25:
+        failed_preview += ",..."
+    raise RuntimeError(
+        "require_full_dataset enabled: "
+        f"{len(final_errors)}/{ticker_count} ticker(s) failed after {max_passes} pass(es). "
+        f"failed_tickers={failed_preview}"
+    )
+
+
 def run(args: argparse.Namespace) -> None:
     if not LOG.handlers:
         setup_logging(level="INFO", log_file=None)
@@ -1393,17 +1413,12 @@ def run(args: argparse.Namespace) -> None:
                 len(soft_fail_errors),
             )
 
-        if blocking_errors and args.require_full_dataset:
-            failed_preview = ",".join(sorted(blocking_errors.keys())[:25])
-            if len(blocking_errors) > 25:
-                failed_preview += ",..."
-            raise RuntimeError(
-                (
-                    "require_full_dataset enabled: "
-                    f"{len(blocking_errors)}/{len(tickers)} blocking ticker(s) failed after {max_passes} pass(es). "
-                    f"failed_tickers={failed_preview}"
-                )
-            )
+        require_complete_dataset(
+            final_errors,
+            ticker_count=len(tickers),
+            max_passes=max_passes,
+            required=bool(args.require_full_dataset),
+        )
 
         final_status = "ok" if fail == 0 else ("failed" if ok == 0 else "partial_failed")
         final_error_message: str | None = None

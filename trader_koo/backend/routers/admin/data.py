@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import sqlite3
 import subprocess
@@ -46,6 +47,7 @@ def _seed_history_command(tickers: list[str], start_date: str) -> list[str]:
         "--price-lookback-days",
         "0",
         "--full-price-refresh",
+        "--require-full-dataset",
         "--db-path",
         str(DB_PATH),
         "--log-file",
@@ -53,12 +55,89 @@ def _seed_history_command(tickers: list[str], start_date: str) -> list[str]:
     ]
 
 
+def _verify_seed_history_ingest(
+    started_at: str | None,
+    tickers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return the ingest run started by this job, failing closed if absent/partial."""
+    try:
+        job_start = dt.datetime.fromisoformat(str(started_at or "").replace("Z", "+00:00"))
+        if job_start.tzinfo is None:
+            job_start = job_start.replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return {"ok": False, "error": "invalid_job_start_time"}
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT run_id, started_ts, finished_ts, status,
+                   tickers_total, tickers_ok, tickers_failed, error_message,
+                   args_json
+            FROM ingest_runs ORDER BY started_ts DESC LIMIT 20
+            """
+        ).fetchall()
+    except Exception as exc:
+        return {"ok": False, "error": f"ingest_run_not_observable:{exc}"}
+    finally:
+        if "conn" in locals():
+            conn.close()
+    for row in rows:
+        try:
+            run_start = dt.datetime.fromisoformat(
+                str(row["started_ts"] or "").replace("Z", "+00:00")
+            )
+            if run_start.tzinfo is None:
+                run_start = run_start.replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            continue
+        if run_start < job_start:
+            continue
+        if tickers:
+            try:
+                args = json.loads(str(row["args_json"] or "{}"))
+            except (TypeError, ValueError):
+                continue
+            requested = {
+                item.strip().upper()
+                for item in str(args.get("tickers") or "").split(",")
+                if item.strip()
+            }
+            if requested != set(tickers):
+                continue
+        result = dict(row)
+        result.pop("args_json", None)
+        result["ok"] = (
+            str(row["status"] or "") == "ok"
+            and int(row["tickers_failed"] or 0) == 0
+        )
+        if not result["ok"]:
+            result["error"] = f"ingest_run_{row['status'] or 'unknown'}"
+        return result
+    return {"ok": False, "error": "ingest_run_not_observed"}
+
+
 def _run_seed_history(command: list[str]) -> None:
     global _seed_history_state
     try:
         completed = subprocess.run(command, capture_output=False, check=False)
-        status = "succeeded" if completed.returncode == 0 else "failed"
-        error = None if completed.returncode == 0 else f"process_exit_{completed.returncode}"
+        verification = (
+            _verify_seed_history_ingest(
+                _seed_history_state.get("started_at"),
+                _seed_history_state.get("tickers"),
+            )
+            if completed.returncode == 0
+            else None
+        )
+        succeeded = completed.returncode == 0 and bool(verification and verification.get("ok"))
+        status = "succeeded" if succeeded else "failed"
+        error = (
+            None
+            if succeeded
+            else f"process_exit_{completed.returncode}"
+            if completed.returncode != 0
+            else str((verification or {}).get("error") or "ingest_run_not_verified")
+        )
     except Exception as exc:
         status = "failed"
         error = str(exc)
@@ -70,6 +149,7 @@ def _run_seed_history(command: list[str]) -> None:
             "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "returncode": completed.returncode if completed is not None else None,
             "error": error,
+            "ingest_run": verification if completed is not None else None,
         }
 
 

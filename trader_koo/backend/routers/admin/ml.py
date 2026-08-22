@@ -182,7 +182,11 @@ def ml_model_status(request: Request) -> dict[str, Any]:
     try:
         from trader_koo.ml.scorer import model_status
 
-        status = model_status()
+        conn = get_conn()
+        try:
+            status = model_status(conn)
+        finally:
+            conn.close()
         status["training_active"] = training_active
         if _ml_train_result:
             status["last_train_result"] = _ml_train_result
@@ -232,7 +236,7 @@ def macro_snapshot(request: Request) -> dict[str, Any]:
 def ml_shap_analysis(request: Request) -> dict[str, Any]:
     """Run SHAP analysis on the current model to explain feature importance."""
     try:
-        from trader_koo.ml.scorer import load_model
+        from trader_koo.ml.scorer import load_model, require_model_price_contract
         from trader_koo.ml.features import (
             FEATURE_COLUMNS,
             extract_features_for_universe,
@@ -258,13 +262,19 @@ def ml_shap_analysis(request: Request) -> dict[str, Any]:
                     "error": f"Price basis is not research eligible: {price_contract['reason']}",
                     "price_contract": price_contract,
                 }
+            model_contract = require_model_price_contract(meta, price_contract)
             today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
             features = extract_features_for_universe(conn, as_of_date=today)
             if features.empty:
                 return {"ok": False, "error": "No feature data available"}
             X = features.reindex(columns=feature_cols)
             result = compute_shap_summary(model, X)
-            return {"ok": True, **result}
+            return {
+                "ok": True,
+                **result,
+                "model_price_contract": model_contract,
+                "current_price_contract": price_contract,
+            }
         finally:
             conn.close()
     except Exception as exc:
