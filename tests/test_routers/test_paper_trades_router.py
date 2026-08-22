@@ -101,6 +101,20 @@ class TestPaperTradeSummaryEndpoint:
 
         assert response.status_code == 404
 
+    def test_missing_next_open_artifact_is_visible_and_fails_closed(
+        self, test_app, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv(
+            "TRADER_KOO_NEXT_OPEN_BASELINE_ARTIFACT",
+            str(tmp_path / "missing.json"),
+        )
+        response = test_app.get("/api/research/next-open-baseline")
+        assert response.status_code == 200
+        baseline = response.json()["baseline"]
+        assert baseline["available"] is False
+        assert baseline["causal_valid"] is False
+        assert baseline["decision_eligible"] is False
+
 
 class TestPaperTradeDetailEndpoint:
     def test_nonexistent_trade_returns_404(self, test_app):

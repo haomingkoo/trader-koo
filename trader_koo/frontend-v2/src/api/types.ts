@@ -1169,6 +1169,43 @@ export interface StrategyEvidenceState {
   };
 }
 
+export interface NextOpenBaselineState {
+  available: boolean;
+  snapshot_asof?: string | null;
+  artifact_scope?: string;
+  evidence_state: "descriptive_invalid" | "diagnostic_invalid" | "evidence_unavailable";
+  readiness_status?: string;
+  readiness_reasons?: string[];
+  causal_valid: false;
+  causal_limitations?: string[];
+  decision_eligible: false;
+  return_basis?: string;
+  benchmark_basis?: string;
+  artifact_path?: string;
+  summary?: {
+    selected_calls: number;
+    closed_trades: number;
+    excluded_calls: number;
+    net_return_pct: number;
+    full_investment_spy_price_return_pct: number | null;
+    active_net_pnl: number | null;
+    active_metrics_available: boolean;
+    max_name_weight_pct: number;
+    max_gross_exposure_pct: number;
+  };
+  provenance?: {
+    artifact_sha256: string;
+    input_sha256: string;
+    config_sha256: string;
+    implementation_sha256: string;
+  };
+}
+
+export interface NextOpenBaselinePayload {
+  ok: boolean;
+  baseline: NextOpenBaselineState;
+}
+
 export interface PaperTradeSummary {
   ok: boolean;
   overall: PaperTradeSummaryOverall;

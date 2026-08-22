@@ -10,6 +10,7 @@ import type {
   PaperTradeSummary,
   PaperTradeSummaryOverall,
   StrategyEvidenceState,
+  NextOpenBaselineState,
 } from "../../api/types";
 import { useUpdateTradeNotes } from "../../api/hooks";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
@@ -188,6 +189,77 @@ export function StrategyEvidenceStatePanel({
           >
             input sha256:{provenance.input_hash_sha256}
           </a>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function NextOpenBaselinePanel({
+  baseline,
+}: {
+  baseline?: NextOpenBaselineState;
+}) {
+  const summary = baseline?.summary;
+  const available = baseline?.available === true;
+  return (
+    <section
+      data-testid="next-open-baseline"
+      className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Locked next-open baseline</div>
+          <div className="mt-1 text-sm font-bold text-[var(--amber)]">
+            {available ? "Descriptive only / not promotion eligible" : "Evidence unavailable"}
+          </div>
+          <p className="mt-1 max-w-3xl text-xs text-[var(--muted)]">
+            Signal-close decisions enter only at the immediate next session open and exit at the exact tenth-session close. Missing bars are excluded, never delayed.
+          </p>
+        </div>
+        <div className="text-right">
+          <span className="rounded-full border border-[var(--amber)]/30 px-2 py-1 text-[10px] font-semibold text-[var(--amber)]">
+            causal valid: no
+          </span>
+          {baseline?.snapshot_asof && (
+            <div className="mt-2 text-[10px] text-[var(--muted)]">
+              Source through {baseline.snapshot_asof}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Closed trades</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.closed_trades ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Net return</div>
+          <div className={`mt-1 text-lg font-semibold tabular-nums ${pnlColor(summary?.net_return_pct)}`}>
+            {fmtPct(summary?.net_return_pct, "%", true)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Max name weight</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{fmtPct(summary?.max_name_weight_pct)}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Excluded calls</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.excluded_calls ?? 0}</div>
+        </div>
+      </div>
+      <div className="mt-3 text-xs text-[var(--muted)]">
+        <div className="font-semibold text-[var(--text)]">Why this cannot authorize a campaign</div>
+        <ul className="mt-1 list-disc space-y-1 pl-4">
+          {(baseline?.causal_limitations?.length
+            ? baseline.causal_limitations
+            : ["no hash-verified baseline artifact is configured"]
+          ).map((reason) => <li key={reason}>{readableEvidenceText(reason)}</li>)}
+        </ul>
+      </div>
+      {baseline?.provenance?.artifact_sha256 && (
+        <div data-testid="next-open-artifact-hash" className="mt-3 break-all border-t border-[var(--line)] pt-3 font-mono text-[10px] text-[var(--muted)]">
+          artifact sha256:{baseline.provenance.artifact_sha256}
         </div>
       )}
     </section>

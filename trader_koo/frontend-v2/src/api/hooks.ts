@@ -8,6 +8,7 @@ import type {
   DashboardCommentaryPayload,
   PaperTradeSummary,
   PaperTradeList,
+  NextOpenBaselinePayload,
   OpportunitiesPayload,
   OptionsPremiumPayload,
   EarningsPayload,
@@ -65,6 +66,14 @@ export function usePaperTradeSummary() {
     queryKey: ["paper-trades-summary"],
     queryFn: () => apiFetch<PaperTradeSummary>("/api/paper-trades/summary"),
     staleTime: 2 * 60 * 1000,
+  });
+}
+
+export function useNextOpenBaseline() {
+  return useQuery({
+    queryKey: ["next-open-baseline"],
+    queryFn: () => apiFetch<NextOpenBaselinePayload>("/api/research/next-open-baseline"),
+    staleTime: 5 * 60 * 1000,
   });
 }
 

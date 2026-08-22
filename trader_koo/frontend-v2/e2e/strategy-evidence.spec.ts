@@ -11,6 +11,14 @@ const inputsPath = fileURLToPath(
 );
 const artifactBytes = readFileSync(artifactPath);
 const inputBytes = readFileSync(inputsPath);
+const nextOpenArtifactPath = fileURLToPath(
+  new URL("../../research/next_open_baseline_artifact_20260823.json", import.meta.url),
+);
+const nextOpenBaseline = {
+  ...JSON.parse(readFileSync(nextOpenArtifactPath, "utf8")),
+  available: true,
+  artifact_path: "next_open_baseline_artifact_20260823.json",
+};
 const productionEvidence = {
   ...JSON.parse(artifactBytes.toString("utf8")),
   provenance: {
@@ -81,6 +89,9 @@ async function mockApi(page: Page, evidence: Record<string, unknown> = productio
   await page.route("**/api/paper-trades/summary", async (route) => {
     await route.fulfill({ json: summaryPayload(evidence) });
   });
+  await page.route("**/api/research/next-open-baseline", async (route) => {
+    await route.fulfill({ json: { ok: true, baseline: nextOpenBaseline } });
+  });
   await page.route("**/api/daily-report?*", async (route) => {
     await route.fulfill({
       json: {
@@ -137,6 +148,13 @@ test("portfolio cannot render an actionable recommendation from inadequate evide
   await expect(page.getByText(/observed portfolio return is above/i)).toBeVisible();
   await expect(page.getByText(/observed taken-trade average is above/i)).toBeVisible();
   await expect(page.getByText(/do not change allocation or admission/i)).toBeVisible();
+  const baseline = page.getByTestId("next-open-baseline");
+  await expect(baseline).toBeVisible();
+  await expect(baseline).toContainText("Descriptive only / not promotion eligible");
+  await expect(baseline).toContainText("-0.73%");
+  await expect(page.getByTestId("next-open-artifact-hash")).toContainText(
+    nextOpenBaseline.provenance.artifact_sha256,
+  );
 });
 
 test("forged eligibility assertions cannot bypass missing evidence gates", async ({ page }) => {

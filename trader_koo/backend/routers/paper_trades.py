@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from trader_koo.backend.services.database import get_conn
 from trader_koo.paper_trades import ensure_paper_trade_schema, list_paper_trades, paper_trade_summary
 from trader_koo.research.strategy_evidence import evidence_snapshot_by_hash
+from trader_koo.research.next_open_baseline import artifact_state
 
 
 class NotesUpdate(BaseModel):
@@ -66,6 +67,12 @@ def api_strategy_evidence_provenance(artifact_hash: str, input_hash: str) -> dic
     if state is None:
         raise HTTPException(status_code=404, detail="Strategy evidence snapshot not found")
     return {"ok": True, "strategy_evidence": state}
+
+
+@router.get("/api/research/next-open-baseline")
+def api_next_open_baseline() -> dict[str, Any]:
+    """Return the latest hash-verified baseline, or an ineligible unavailable state."""
+    return {"ok": True, "baseline": artifact_state()}
 
 
 @router.get("/api/paper-trades/{trade_id}")

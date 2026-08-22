@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
+import { useNextOpenBaseline, usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTradeSummaryOverall } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 import Badge from "../components/ui/Badge";
@@ -16,6 +16,7 @@ import {
   PaperTradeFilters,
   PaperTradeLogTable,
   StrategyEvidenceStatePanel,
+  NextOpenBaselinePanel,
 } from "../components/paper/PaperTradeSections";
 
 export default function PaperTradePage() {
@@ -28,6 +29,7 @@ export default function PaperTradePage() {
 
   const { data: summary, isLoading: summaryLoading } =
     usePaperTradeSummary();
+  const { data: baselineData } = useNextOpenBaseline();
   const {
     data: tradesData,
     isLoading: tradesLoading,
@@ -64,6 +66,8 @@ export default function PaperTradePage() {
       <PaperTradePortfolioHero overall={overall} />
 
       <StrategyEvidenceStatePanel evidence={summary?.strategy_evidence} />
+
+      <NextOpenBaselinePanel baseline={baselineData?.baseline} />
 
       <PaperTradeDecisionFlow overall={overall} policy={summary?.policy} />
 

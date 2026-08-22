@@ -78,6 +78,25 @@ If a provider is unavailable, the app should show a degraded, stale, or
 missing-provider state. That makes the data quality visible instead of hiding it
 behind a polished answer.
 
+## Reproduce the Locked Baseline
+
+The primary descriptive baseline enters only at the immediate next market
+session open and exits at the exact tenth-session close. It includes adverse
+slippage, commissions, short borrow, overlapping positions, capacity limits,
+daily marks, and same-exposure SPY controls. Missing bars are exclusions; they
+never move a fill to a later convenient date.
+
+```bash
+python -m trader_koo.scripts.run_next_open_baseline \
+  --db /path/to/copied-trader-koo.db \
+  --output /path/to/next-open-baseline.json
+```
+
+Alternative holding periods are diagnostics and require
+`--diagnostic-holding-sessions`; diagnostic runs cannot consume the sealed
+held-out window. The Paper Trades page shows the latest hash-verified artifact
+and its causal limitations. A backtest never activates a paper campaign.
+
 ## Product Tour
 
 1. **Guide** - what the app does, what is paper-only, and how evidence flows.
