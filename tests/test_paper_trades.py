@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from trader_koo.paper_trade.config import PaperTradeConfig
-from trader_koo.paper_trade.campaign import transition_campaign
 from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_decision,
     compute_position_plan as _compute_position_plan_decision,
@@ -143,10 +142,7 @@ def conn(tmp_path: Path):
         "UPDATE report_runs SET is_generation_canonical=1 WHERE run_id=?",
         (TEST_REPORT_RUN_ID,),
     )
-    transition_campaign(
-        db, campaign_id="paper-v2", action="activate", actor="test-admin",
-        reason="exercise active ledger", idempotency_key=f"paper-tests-{id(db)}",
-    )
+    db.execute("UPDATE paper_campaigns SET status='active' WHERE campaign_id='paper-v2'")
     db.execute("""
         CREATE TABLE IF NOT EXISTS price_daily (
             ticker TEXT NOT NULL,
@@ -163,6 +159,22 @@ def conn(tmp_path: Path):
         _seed_price(db, ticker, close)
     db.commit()
     return db
+
+
+def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
+    next_date = (
+        dt.date.fromisoformat(str(kwargs["report_date"])) + dt.timedelta(days=1)
+    ).isoformat()
+    for row in kwargs.get("setup_rows") or []:
+        if not isinstance(row, dict) or not row.get("ticker"):
+            continue
+        close = float(row.get("close") or 100.0)
+        conn.execute(
+            """INSERT OR IGNORE INTO price_daily
+               (ticker,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?)""",
+            (str(row["ticker"]).upper(), next_date, close, close, close, close, 1_000_000),
+        )
+    return _public_create_paper_trades_from_report(conn, **kwargs)
 
 
 def _seed_price(
@@ -685,6 +697,11 @@ class TestCreatePaperTrades:
             critic_fail_open=True,
             decision_version="paper-campaign-v2.0",
             min_reward_r_multiple=2.0,
+        )
+        conn.execute(
+            """INSERT INTO price_daily
+               (ticker,date,open,high,low,close,volume)
+               VALUES ('AAPL','2026-03-15',150,150,150,150,1000000)"""
         )
 
         inserted = _create_paper_trades_from_report_impl(

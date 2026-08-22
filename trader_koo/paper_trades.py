@@ -21,6 +21,7 @@ from trader_koo.paper_trade.summary import (
 from trader_koo.paper_trade.trading import (
     compute_trailing_stop,
     create_paper_trades_from_report as _create_paper_trades_from_report_impl,
+    fill_pending_paper_orders as _fill_pending_paper_orders_impl,
     manually_close_trade as _manually_close_trade_impl,
     mark_to_market as _mark_to_market_impl,
 )
@@ -131,8 +132,6 @@ def create_paper_trades_from_report(
     generated_ts: str,
     report_run_id: str | None = None,
     schema_ready: bool = False,
-    report_complete: bool = True,
-    is_canonical: bool = True,
 ) -> int:
     return _create_paper_trades_from_report_impl(
         conn,
@@ -141,14 +140,20 @@ def create_paper_trades_from_report(
         generated_ts=generated_ts,
         report_run_id=report_run_id,
         schema_ready=schema_ready,
-        report_complete=report_complete,
-        is_canonical=is_canonical,
         config=_build_config(),
     )
 
 
 def mark_to_market(conn: sqlite3.Connection) -> dict[str, Any]:
     return _mark_to_market_impl(conn, config=_build_config())
+
+
+def fill_pending_paper_orders(
+    conn: sqlite3.Connection, *, through_date: str | None = None
+) -> dict[str, int]:
+    return _fill_pending_paper_orders_impl(
+        conn, config=_build_config(), through_date=through_date
+    )
 
 
 def paper_trade_summary(

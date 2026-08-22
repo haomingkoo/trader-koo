@@ -11,12 +11,20 @@ from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
     DivergentDecisionSetError,
+    EvidenceIntegrityError,
     decide_candidate,
+    record_experiment_preregistration,
+    record_human_approval,
+    record_promotion_experiment,
     transition_campaign,
+    verify_decision_set,
 )
 from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trades import _build_config
-from trader_koo.paper_trades import create_paper_trades_from_report, paper_trade_summary
+from trader_koo.paper_trades import create_paper_trades_from_report as _create_paper_trades_from_report
+from trader_koo.paper_trades import fill_pending_paper_orders
+from trader_koo.paper_trades import paper_trade_summary
+from trader_koo.paper_trade.replay import replay_campaign
 
 
 def _candidate(
@@ -50,10 +58,71 @@ def _db() -> sqlite3.Connection:
                close REAL, volume REAL, UNIQUE(ticker, date)
            )"""
     )
+    conn.execute(
+        """CREATE TABLE report_runs (
+               run_id TEXT PRIMARY KEY, status TEXT NOT NULL,
+               is_generation_canonical INTEGER NOT NULL
+           )"""
+    )
     return conn
 
 
+def _publish(conn: sqlite3.Connection, run_id: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO report_runs VALUES (?,'published',1)", (run_id,)
+    )
+
+
+def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
+    _publish(conn, str(kwargs["report_run_id"]))
+    return _create_paper_trades_from_report(conn, **kwargs)
+
+
+def _promotion_metrics(*, drawdown: float = 1.0, active_return: float = 1.0) -> dict:
+    return {
+        "engine_version": "paper-replay-v2.0", "closed_trades": 2,
+        "conversion_rate_pct": 50.0, "average_exposure_pct": 10.0,
+        "turnover_pct": 20.0, "portfolio_return_pct": 2.0,
+        "matched_spy_return_pct": 1.0,
+        "matched_spy_active_return_pct": active_return,
+        "max_drawdown_pct": drawdown, "profit_factor": 1.5,
+        "mean_trade_return_pct_ci95": [-1.0, 2.0],
+        "walk_forward": {"folds": [{"metrics": {"closed_trades": 1}}]},
+        "held_out": {"metrics": {"closed_trades": 1}, "trades": []},
+    }
+
+
+def _seed_promotion(conn: sqlite3.Connection) -> None:
+    config = _build_config()
+    experiment_id = f"experiment-{id(conn)}"
+    preregistration_id = f"prereg-{id(conn)}"
+    record_experiment_preregistration(
+        conn, preregistration_id=preregistration_id, campaign_id="paper-v2",
+        policy_version=config.decision_version,
+        policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
+        gates={
+            "risk_gates": {"max_drawdown_pct": 10.0},
+            "active_return_gate": {"minimum_pct": 0.0},
+        },
+    )
+    record_promotion_experiment(
+        conn, experiment_id=experiment_id,
+        preregistration_id=preregistration_id, campaign_id="paper-v2",
+        policy_version=config.decision_version,
+        policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
+        metrics=_promotion_metrics(),
+        parity_status="matched",
+    )
+    record_human_approval(
+        conn, approval_id=f"approval-{id(conn)}", experiment_id=experiment_id,
+        campaign_id="paper-v2", actor="human-reviewer", reason="approved test evidence",
+        artifact={"approved": True, "signed": True},
+    )
+    conn.commit()
+
+
 def _activate(conn: sqlite3.Connection) -> None:
+    _seed_promotion(conn)
     transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="test-admin",
         reason="test activation", idempotency_key=f"activate-{id(conn)}",
@@ -131,6 +200,9 @@ def test_legacy_trades_are_backfilled_to_immutable_v1_once():
 def test_live_path_persists_every_ranked_candidate_and_exact_disposition():
     conn = _db()
     _activate(conn)
+    conn.execute(
+        "INSERT INTO price_daily VALUES ('PASS','2026-08-22',150,155,149,154,1000000)"
+    )
 
     inserted = create_paper_trades_from_report(
         conn,
@@ -183,10 +255,7 @@ def test_three_eligible_zero_admission_reports_make_campaign_unhealthy():
     ]
     assert health["consecutive_eligible_zero_admission_reports"] == 3
     assert health["healthy"] is False
-    assert health["health_reasons"] == [
-        "eligible_candidate_zero_admission_streak",
-        "replay_live_parity_not_measured",
-    ]
+    assert health["health_reasons"] == ["eligible_candidate_zero_admission_streak"]
 
 
 def test_candidate_decision_rows_are_immutable():
@@ -222,6 +291,7 @@ def test_inactive_campaign_records_sealed_shadow_set_without_trading():
 
 def test_lifecycle_is_idempotent_audited_atomic_and_reversible():
     conn = _db()
+    _seed_promotion(conn)
     first = transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="alice",
         reason="paper validation approved", idempotency_key="activate-paper-v2-001",
@@ -248,22 +318,22 @@ def test_decision_sets_preserve_duplicate_ranks_empty_partial_and_retry_identity
     rows = [_candidate("DUP", tier="F"), _candidate("DUP", tier="F"), "bad-row"]
     create_paper_trades_from_report(
         conn, setup_rows=rows, report_date="2026-08-21", generated_ts="set-ts",
-        report_run_id="set-run", report_complete=False,
+        report_run_id="set-run",
     )
     assert conn.execute(
         "SELECT candidate_count,report_complete FROM paper_decision_sets WHERE report_run_id='set-run'"
-    ).fetchone() == (3, 0)
+    ).fetchone() == (3, 1)
     assert conn.execute(
         "SELECT candidate_rank,ticker FROM paper_candidate_decisions ORDER BY candidate_rank"
     ).fetchall() == [(1, "DUP"), (2, "DUP"), (3, "__MALFORMED_3")]
     assert create_paper_trades_from_report(
         conn, setup_rows=rows, report_date="2026-08-21", generated_ts="set-ts",
-        report_run_id="set-run", report_complete=False,
+        report_run_id="set-run",
     ) == 0
     with pytest.raises(DivergentDecisionSetError):
         create_paper_trades_from_report(
-            conn, setup_rows=[_candidate("CHANGED", tier="F")], report_date="2026-08-21",
-            generated_ts="set-ts", report_run_id="set-run", report_complete=False,
+                conn, setup_rows=[_candidate("CHANGED", tier="F")], report_date="2026-08-21",
+                generated_ts="set-ts", report_run_id="set-run",
         )
     create_paper_trades_from_report(
         conn, setup_rows=[], report_date="2026-08-22", generated_ts="empty-ts",
@@ -325,3 +395,172 @@ def test_live_and_replay_share_policy_and_hash_every_effective_knob():
     )
     assert changed["inputs_hash"] != live["inputs_hash"]
     assert changed["policy_hash"] != live["policy_hash"]
+
+
+def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
+    conn = _db()
+    _activate(conn)
+    inserted = create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("WAIT")], report_date="2026-08-21",
+        generated_ts="wait-ts", report_run_id="wait-run",
+    )
+    assert inserted == 0
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT disposition,tradeability FROM paper_candidate_decisions"
+    ).fetchone() == ("pending", "pending_next_open")
+    assert conn.execute(
+        "SELECT status FROM paper_pending_orders"
+    ).fetchone()[0] == "pending"
+
+    conn.execute(
+        "INSERT INTO price_daily VALUES ('WAIT','2026-08-24',152,160,151,158,1000000)"
+    )
+    result = fill_pending_paper_orders(conn, through_date="2026-08-24")
+    assert result == {"filled": 1, "rejected": 0, "still_pending": 0}
+    trade = conn.execute(
+        "SELECT entry_price,entry_date,report_run_id FROM paper_trades"
+    ).fetchone()
+    assert trade == (152.152, "2026-08-24", "wait-run")
+    assert conn.execute(
+        "SELECT event_type FROM paper_order_events ORDER BY id"
+    ).fetchall() == [("created",), ("filled",)]
+    health = paper_trade_summary(conn)["campaign_health"]
+    assert health["latest_report"]["admitted"] == 1
+    assert health["latest_report"]["candidates"][0]["tradeability"] == "actionable"
+
+
+def test_seal_rejects_later_insert_and_verifier_detects_forged_child():
+    conn = _db()
+    create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("ONE", tier="F")], report_date="2026-08-21",
+        generated_ts="sealed-ts", report_run_id="sealed-run",
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="not appendable"):
+        conn.execute(
+            """INSERT INTO paper_candidate_decisions
+               (report_run_id,report_date,generated_ts,campaign_id,policy_version,
+                ticker,candidate_rank,rank_inputs_json,eligibility_passed,final_gate,
+                reason_code,reasons_json,inputs_hash,policy_hash,context_hash,disposition)
+               SELECT report_run_id,report_date,generated_ts,campaign_id,policy_version,
+                      'FORGED',2,rank_inputs_json,eligibility_passed,final_gate,
+                      reason_code,reasons_json,inputs_hash,policy_hash,context_hash,disposition
+               FROM paper_candidate_decisions WHERE candidate_rank=1"""
+        )
+    verify_decision_set(conn, report_run_id="sealed-run", campaign_id="paper-v2")
+    conn.execute("DROP TRIGGER paper_candidate_decisions_no_insert_after_seal")
+    conn.execute(
+        """INSERT INTO paper_candidate_decisions
+           (report_run_id,report_date,generated_ts,campaign_id,policy_version,
+            ticker,candidate_rank,rank_inputs_json,eligibility_passed,final_gate,
+            reason_code,reasons_json,inputs_hash,policy_hash,context_hash,disposition)
+           SELECT report_run_id,report_date,generated_ts,campaign_id,policy_version,
+                  'FORGED',2,rank_inputs_json,eligibility_passed,final_gate,
+                  reason_code,reasons_json,inputs_hash,policy_hash,context_hash,disposition
+           FROM paper_candidate_decisions WHERE candidate_rank=1"""
+    )
+    with pytest.raises(EvidenceIntegrityError, match="count/hash mismatch"):
+        verify_decision_set(conn, report_run_id="sealed-run", campaign_id="paper-v2")
+
+
+def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload():
+    conn = _db()
+    conn.execute("INSERT INTO report_runs VALUES ('started-run','started',1)")
+    with pytest.raises(ValueError, match="published canonical"):
+        _create_paper_trades_from_report(
+            conn, setup_rows=[], report_date="2026-08-21", generated_ts="x",
+            report_run_id="started-run",
+        )
+    conn.commit()
+    with pytest.raises(ValueError, match="promotion evidence"):
+        transition_campaign(
+            conn, campaign_id="paper-v2", action="activate", actor="alice",
+            reason="attempt without evidence", idempotency_key="no-evidence-001",
+        )
+    _seed_promotion(conn)
+    transition_campaign(
+        conn, campaign_id="paper-v2", action="activate", actor="alice",
+        reason="approved evidence", idempotency_key="payload-bound-001",
+    )
+    with pytest.raises(ValueError, match="different request payload"):
+        transition_campaign(
+            conn, campaign_id="paper-v2", action="activate", actor="mallory",
+            reason="changed reason", idempotency_key="payload-bound-001",
+        )
+
+
+def test_chronological_replay_models_costs_overlap_exits_and_parity():
+    config = replace(_build_config(), max_open=2, expiry_days=2)
+    runs = [
+        {"report_run_id": "r1", "report_date": "2026-08-20", "candidates": [
+            {**_candidate("AAA"), "critic_outcome": {"approved": True}},
+            {**_candidate("BBB"), "critic_outcome": {"approved": True}},
+        ]},
+        {"report_run_id": "r2", "report_date": "2026-08-21", "candidates": [
+            {**_candidate("CCC"), "critic_outcome": {"approved": True}},
+        ]},
+    ]
+    prices = [
+        {"ticker": "AAA", "date": "2026-08-21", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
+        {"ticker": "BBB", "date": "2026-08-21", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
+        {"ticker": "AAA", "date": "2026-08-24", "open": 150, "high": 166, "low": 149, "close": 165, "volume": 1_000_000},
+        {"ticker": "BBB", "date": "2026-08-24", "open": 150, "high": 151, "low": 140, "close": 141, "volume": 1_000_000},
+        {"ticker": "CCC", "date": "2026-08-24", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
+        {"ticker": "CCC", "date": "2026-08-25", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
+    ]
+    spy = [
+        {"date": "2026-08-21", "open": 100},
+        {"date": "2026-08-25", "close": 101},
+    ]
+    first = replay_campaign(candidate_runs=runs, price_rows=prices, spy_rows=spy, config=config)
+    expected = {
+        item["execution_key"]: {
+            "disposition": item["disposition"], "inputs_hash": item["inputs_hash"]
+        }
+        for item in first["decisions"]
+    }
+    second = replay_campaign(
+        candidate_runs=runs, price_rows=prices, spy_rows=spy, config=config,
+        expected_execution=expected,
+    )
+    assert second["replay_live_parity"] == "matched"
+    assert second["metrics"]["admitted_count"] == 3
+    assert second["metrics"]["turnover_pct"] > 0
+    assert second["metrics"]["matched_spy_active_return_pct"] is not None
+    assert {trade["exit_reason"] for trade in second["trades"]} >= {"target_hit", "stopped_out"}
+    assert second["walk_forward"]["training_dates"]
+    assert "held_out" in second
+
+
+def test_activation_never_falls_back_to_older_eligible_experiment():
+    conn = _db()
+    _seed_promotion(conn)
+    with pytest.raises(sqlite3.IntegrityError, match="preregistrations are immutable"):
+        conn.execute(
+            "UPDATE paper_campaign_preregistrations SET gates_json='{}'"
+        )
+    conn.rollback()
+    config = _build_config()
+    record_experiment_preregistration(
+        conn, preregistration_id="newer-failed-prereg", campaign_id="paper-v2",
+        policy_version=config.decision_version,
+        policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="e" * 64,
+        gates={
+            "risk_gates": {"max_drawdown_pct": 5.0},
+            "active_return_gate": {"minimum_pct": 1.0},
+        },
+    )
+    record_promotion_experiment(
+        conn, experiment_id="newer-failed",
+        preregistration_id="newer-failed-prereg", campaign_id="paper-v2",
+        policy_version=config.decision_version,
+        policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="e" * 64,
+        metrics=_promotion_metrics(drawdown=12.0, active_return=-2.0),
+        parity_status="matched",
+    )
+    conn.commit()
+    with pytest.raises(ValueError, match="promotion evidence"):
+        transition_campaign(
+            conn, campaign_id="paper-v2", action="activate", actor="alice",
+            reason="must not use stale evidence", idempotency_key="stale-evidence-001",
+        )

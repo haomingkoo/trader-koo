@@ -415,14 +415,28 @@ def to_markdown(report: dict[str, Any]) -> str:
     if setup_rows:
         lines.append("")
         lines.append("## Confluence Score (Top Candidates)")
-        lines.append("| ticker | score | tier | bias | reliability_signal | validity | historical_reliability | observation | reasonable_action | risk_note |")
-        lines.append("|---|---:|---|---|---|---|---|---|---|---|")
+        lines.append("| ticker | score | tier | bias | tradeability | disposition | rejection | reliability_signal | validity | historical_reliability | observation | reasonable_action | risk_note |")
+        lines.append("|---|---:|---|---|---|---|---|---|---|---|---|---|---|")
         for r in setup_rows:
+            disposition = r.get("paper_disposition") or "rejected"
+            if disposition == "admitted":
+                ranked_action = r.get("action") or "-"
+            elif disposition == "pending":
+                ranked_action = "Pending a valid next-session open; not yet actionable."
+            else:
+                ranked_action = (
+                    "Not actionable — paper policy rejected at "
+                    f"{r.get('paper_policy_gate') or r.get('paper_rejection_gate') or 'unknown'}/"
+                    f"{r.get('paper_policy_reason') or r.get('paper_rejection_reason') or 'unknown'}."
+                )
             lines.append(
                 f"| {r.get('ticker')} | {r.get('score')} | {r.get('setup_tier') or '-'} | "
-                f"{r.get('signal_bias') or '-'} | {r.get('reliability_signal') or '-'} | "
-                f"{r.get('validity_label') or '-'} | {r.get('reliability_label') or '-'} | "
-                f"{r.get('observation') or '-'} | {r.get('action') or '-'} | {r.get('risk_note') or '-'} |"
+                f"{r.get('signal_bias') or '-'} | {r.get('paper_tradeability') or 'not_actionable'} | "
+                f"{r.get('paper_disposition') or 'rejected'} | "
+                f"{r.get('paper_rejection_reason') or '-'} | "
+                f"{r.get('reliability_signal') or '-'} | {r.get('validity_label') or '-'} | "
+                f"{r.get('reliability_label') or '-'} | "
+                f"{r.get('observation') or '-'} | {ranked_action} | {r.get('risk_note') or '-'} |"
             )
 
     setup_eval = signals.get("setup_evaluation", {})

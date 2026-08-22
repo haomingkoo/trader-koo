@@ -445,7 +445,13 @@ export function PaperCampaignHealthPanel({
                     <tr key={`${report.report_run_id}-${candidate.rank}`} className="border-t border-[var(--line)]">
                       <td className="py-1.5 pr-3 tabular-nums">{candidate.rank}</td>
                       <td className="pr-3 font-mono font-semibold text-[var(--text)]">{candidate.ticker}</td>
-                      <td className="pr-3">{candidate.disposition === "admitted" ? "actionable" : "not actionable"}</td>
+                      <td className="pr-3">{
+                        candidate.tradeability === "actionable" || candidate.disposition === "admitted"
+                          ? "actionable"
+                          : candidate.tradeability === "pending_next_open" || candidate.disposition === "pending"
+                            ? "pending next open"
+                            : "not actionable"
+                      }</td>
                       <td className="text-[var(--muted)]">{candidate.final_gate}/{candidate.reason_code}</td>
                     </tr>
                   ))}

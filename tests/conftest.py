@@ -97,6 +97,15 @@ def _create_test_db() -> sqlite3.Connection:
             UNIQUE(run_id, ticker)
         );
 
+        CREATE TABLE report_runs (
+            run_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            is_generation_canonical INTEGER NOT NULL
+        );
+
+        INSERT INTO report_runs VALUES ('api-report-run-1','published',1);
+        INSERT INTO report_runs VALUES ('api-decision-run','published',1);
+
         CREATE TABLE pipeline_runs (
             run_id TEXT PRIMARY KEY,
             started_ts TEXT NOT NULL,

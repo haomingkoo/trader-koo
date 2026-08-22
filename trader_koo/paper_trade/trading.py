@@ -12,6 +12,7 @@ from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
+    canonical_json,
     decide_candidate,
     DivergentDecisionSetError,
     persist_decision_set,
@@ -42,6 +43,28 @@ def _run_owned_transaction(conn: sqlite3.Connection, operation: Any) -> Any:
         if owned:
             conn.rollback()
         raise
+
+
+def _require_published_canonical_report(
+    conn: sqlite3.Connection, report_run_id: str
+) -> dict[str, Any]:
+    """Resolve lineage only from #230's authoritative registry."""
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_runs'"
+    ).fetchone()
+    if not table:
+        raise ValueError("paper admission requires the authoritative report_runs registry")
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(report_runs)")}
+    required = {"run_id", "status", "is_generation_canonical"}
+    if not required.issubset(columns):
+        raise ValueError("report_runs registry does not expose canonical publication lineage")
+    row = conn.execute(
+        "SELECT status,is_generation_canonical FROM report_runs WHERE run_id=?",
+        (report_run_id,),
+    ).fetchone()
+    if not row or str(row[0]) != "published" or int(row[1] or 0) != 1:
+        raise ValueError("paper admission requires a published canonical report_run_id")
+    return {"report_complete": True, "is_canonical": True}
 
 
 def _build_review(
@@ -556,8 +579,6 @@ def _create_paper_trades_from_report(
     config: PaperTradeConfig,
     report_run_id: str | None = None,
     schema_ready: bool = False,
-    report_complete: bool = True,
-    is_canonical: bool = True,
 ) -> int:
     """Atomically persist one report's trades and sealed decision ledger."""
     if not report_date or not setup_rows:
@@ -567,19 +588,8 @@ def _create_paper_trades_from_report(
         ensure_paper_trade_schema(conn)
     if not str(report_run_id or "").strip():
         raise ValueError("paper-trade creation requires canonical report-run lineage")
-    run = conn.execute(
-        """SELECT 1 FROM report_runs
-           WHERE run_id=? AND status='published' AND publication_verified=1
-             AND is_generation_canonical=1""",
-        (report_run_id,),
-    ).fetchone()
-    if (
-        run is None
-        or not int(run[0] or 0)
-    ):
-        raise ValueError(
-            f"paper-trade creation requires canonical published report run {report_run_id}"
-        )
+    lineage = _require_published_canonical_report(conn, str(report_run_id))
+    fill_pending_paper_orders(conn, config=config, through_date=report_date)
     register_bot_version(
         conn,
         bot_version=config.bot_version,
@@ -597,8 +607,8 @@ def _create_paper_trades_from_report(
             generated_ts=generated_ts,
             config=config,
             report_run_id=report_run_id,
-            report_complete=report_complete,
-            is_canonical=is_canonical,
+            report_complete=bool(lineage["report_complete"]),
+            is_canonical=bool(lineage["is_canonical"]),
         )
     except Exception:
         conn.execute("ROLLBACK TO paper_report_admission")
@@ -616,23 +626,32 @@ def _create_paper_trades_from_report_in_transaction(
     generated_ts: str,
     config: PaperTradeConfig,
     report_run_id: str | None = None,
-    report_complete: bool = True,
-    is_canonical: bool = True,
 ) -> int:
     """Create paper trades from qualifying daily report setups."""
     if not report_date:
         return 0
     if not report_run_id:
         raise ValueError("paper campaign admission requires report_run_id")
+    lineage = _require_published_canonical_report(conn, report_run_id)
+    report_complete = bool(lineage["report_complete"])
+    is_canonical = bool(lineage["is_canonical"])
 
     campaign_row = conn.execute(
-        "SELECT status, policy_version, starting_capital FROM paper_campaigns WHERE campaign_id=?",
+        "SELECT status, policy_version, starting_capital, policy_hash FROM paper_campaigns WHERE campaign_id=?",
         (config.campaign_id,),
     ).fetchone()
     if not campaign_row:
         raise ValueError(f"paper campaign {config.campaign_id} is not registered")
+    runtime_policy_hash = canonical_hash(config_snapshot(config))
     if str(campaign_row[1]) != config.decision_version or float(campaign_row[2]) != config.starting_capital:
         raise ValueError("runtime policy does not match immutable campaign registration")
+    if str(campaign_row[3] or "") and str(campaign_row[3]) != runtime_policy_hash:
+        raise ValueError("runtime policy hash does not match sealed campaign registration")
+    if not str(campaign_row[3] or ""):
+        conn.execute(
+            "UPDATE paper_campaigns SET policy_hash=? WHERE campaign_id=?",
+            (runtime_policy_hash, config.campaign_id),
+        )
     campaign_active = str(campaign_row[0]) == "active"
     request_hash = canonical_hash({
         "report_run_id": report_run_id,
@@ -858,9 +877,8 @@ def _create_paper_trades_from_report_in_transaction(
 
         direction = str(evaluation["direction"])
 
-        # Entry price = NEXT DAY OPEN (signal generates after close,
-        # earliest possible entry is next trading day's open).
-        # Fall back to today's close if next-day open not yet available.
+        # Entry price is strictly the first later-session open.  The signal
+        # close may be used to preflight the plan, never as an executable fill.
         try:
             next_open_row = conn.execute(
                 "SELECT CAST(open AS REAL), date FROM price_daily "
@@ -870,9 +888,11 @@ def _create_paper_trades_from_report_in_transaction(
             if next_open_row and next_open_row[0] is not None:
                 raw_entry = float(next_open_row[0])
                 entry_date_actual = next_open_row[1]
+                execution_ready = True
             else:
                 raw_entry = float(row["close"])
-                entry_date_actual = report_date
+                entry_date_actual = None
+                execution_ready = False
 
             slip_mult = config.entry_slippage_bps / 10_000
             if direction == "long":
@@ -880,6 +900,7 @@ def _create_paper_trades_from_report_in_transaction(
             else:
                 entry_price = round(raw_entry * (1 - slip_mult), 4)
             _decision_runtime_context["entry_price"] = entry_price
+            _decision_runtime_context["execution_ready"] = execution_ready
             levels = compute_stop_and_target(
                 row, direction, config=config, entry_price=entry_price
             )
@@ -907,10 +928,10 @@ def _create_paper_trades_from_report_in_transaction(
             vol_row = conn.execute(
                 "SELECT AVG(vol) FROM ("
                 "  SELECT CAST(volume AS REAL) AS vol FROM price_daily"
-                "  WHERE ticker = ? AND volume IS NOT NULL"
+                "  WHERE ticker = ? AND volume IS NOT NULL AND date <= ?"
                 "  ORDER BY date DESC LIMIT 20"
                 ")",
-                (ticker,),
+                (ticker, entry_date_actual or report_date),
             ).fetchone()
             if vol_row and vol_row[0] and vol_row[0] > 0:
                 avg_daily_volume = float(vol_row[0])
@@ -1080,6 +1101,46 @@ def _create_paper_trades_from_report_in_transaction(
                     reasons=["Critic infrastructure failed; policy rejects by default."],
                 )
                 continue
+
+        if not execution_ready:
+            order_id = canonical_hash({
+                "report_run_id": report_run_id,
+                "campaign_id": config.campaign_id,
+                "candidate_rank": rank,
+                "ticker": ticker,
+                "direction": direction,
+            })
+            order_payload = {
+                "order_id": order_id, "report_run_id": report_run_id,
+                "report_date": report_date, "ticker": ticker,
+                "direction": direction, "candidate_rank": rank,
+            }
+            conn.execute(
+                """INSERT INTO paper_pending_orders
+                   (order_id,report_run_id,report_date,generated_ts,campaign_id,
+                    policy_version,candidate_rank,ticker,direction,candidate_json,
+                    critic_json,market_context_json,avg_daily_volume,status)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')
+                   ON CONFLICT(order_id) DO NOTHING""",
+                (order_id,report_run_id,report_date,generated_ts,config.campaign_id,
+                 config.decision_version,rank,ticker,direction,canonical_json(row),
+                 canonical_json(critic),canonical_json(market_ctx),
+                 _decision_runtime_context.get("avg_daily_volume")),
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO paper_order_events
+                   (order_id,event_type,event_date,payload_json,payload_hash)
+                   VALUES (?,'created',?,?,?)""",
+                (order_id,report_date,canonical_json(order_payload),canonical_hash(order_payload)),
+            )
+            record_decision(
+                row=row, rank=rank, evaluation=evaluation, levels=levels, plan=plan,
+                critic=critic, final_gate="execution.next_open",
+                reason_code="awaiting_next_session_open",
+                reasons=["Order is pending until a valid later-session open is available."],
+                disposition="pending",
+            )
+            continue
 
         rationale = _build_entry_rationale(
             ticker=ticker,
@@ -1266,6 +1327,8 @@ def create_paper_trades_from_report(
     report_date: str,
     generated_ts: str,
     config: PaperTradeConfig,
+    report_run_id: str | None = None,
+    schema_ready: bool = False,
 ) -> int:
     return _run_owned_transaction(
         conn,
@@ -1275,8 +1338,119 @@ def create_paper_trades_from_report(
             report_date=report_date,
             generated_ts=generated_ts,
             config=config,
+            report_run_id=report_run_id,
+            schema_ready=schema_ready,
         ),
     )
+
+
+def fill_pending_paper_orders(
+    conn: sqlite3.Connection,
+    *,
+    config: PaperTradeConfig,
+    through_date: str | None = None,
+) -> dict[str, int]:
+    """Resolve pending signals only from a real later-session open."""
+    ensure_paper_trade_schema(conn)
+    resolved = {"filled": 0, "rejected": 0, "still_pending": 0}
+    rows = conn.execute(
+        """SELECT order_id,report_run_id,report_date,generated_ts,campaign_id,
+                  policy_version,candidate_rank,ticker,direction,candidate_json,
+                  critic_json,market_context_json,avg_daily_volume
+           FROM paper_pending_orders WHERE status='pending'
+           ORDER BY report_date,candidate_rank,order_id"""
+    ).fetchall()
+    for raw in rows:
+        (order_id,report_run_id,report_date,generated_ts,campaign_id,
+         policy_version,rank,ticker,direction,candidate_json,critic_json,
+         market_json,avg_volume) = raw
+        _require_published_canonical_report(conn, str(report_run_id))
+        query = (
+            "SELECT CAST(open AS REAL),date FROM price_daily "
+            "WHERE ticker=? AND date>? AND open IS NOT NULL"
+        )
+        params: list[Any] = [ticker, report_date]
+        if through_date:
+            query += " AND date<=?"
+            params.append(through_date)
+        query += " ORDER BY date ASC LIMIT 1"
+        open_row = conn.execute(query, params).fetchone()
+        if not open_row:
+            resolved["still_pending"] += 1
+            continue
+        campaign = conn.execute(
+            "SELECT status,policy_version FROM paper_campaigns WHERE campaign_id=?",
+            (campaign_id,),
+        ).fetchone()
+        open_count = int(conn.execute(
+            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
+            (campaign_id,),
+        ).fetchone()[0])
+        block = None
+        if not campaign or str(campaign[0]) != "active":
+            block = {"gate": "campaign_lifecycle", "reason_code": "campaign_not_active", "detail": "Campaign is not active at execution."}
+        elif str(campaign[1]) != str(policy_version):
+            block = {"gate": "campaign_lifecycle", "reason_code": "policy_version_changed", "detail": "Pending order policy no longer matches campaign."}
+        elif open_count >= config.max_open:
+            block = {"gate": "portfolio_capacity", "reason_code": "max_open_positions", "detail": "No portfolio slot remained at execution."}
+        raw_open = float(open_row[0])
+        slip = config.entry_slippage_bps / 10_000
+        entry_price = round(raw_open * (1 + slip if direction == "long" else 1 - slip), 4)
+        row = json.loads(str(candidate_json))
+        context = {
+            "entry_price": entry_price, "avg_daily_volume": avg_volume,
+            "portfolio_block": block, "critic_outcome": json.loads(str(critic_json)),
+            "campaign_active": bool(campaign and str(campaign[0]) == "active"),
+            "duplicate": False, "execution_ready": True,
+            "market_context": json.loads(str(market_json)),
+            "portfolio_context": {"open_count": open_count},
+            "source_context": {"report_run_id": report_run_id, "price_date": open_row[1]},
+        }
+        decision = decide_candidate(row=row, rank=int(rank), config=config, context=context)
+        event_payload = {
+            "decision": decision, "raw_open": raw_open,
+            "entry_price": entry_price, "entry_date": open_row[1],
+        }
+        if decision["disposition"] == "admitted":
+            levels = decision["levels"]
+            plan = decision["plan"]
+            conn.execute(
+                """INSERT INTO paper_trades
+                   (report_date,generated_ts,ticker,direction,entry_price,entry_date,
+                    target_price,stop_loss,atr_at_entry,status,current_price,
+                    high_water_mark,low_water_mark,setup_family,setup_tier,score,
+                    signal_bias,actionability,position_size_pct,risk_budget_pct,
+                    stop_distance_pct,expected_reward_pct,expected_r_multiple,
+                    entry_plan,exit_plan,sizing_summary,campaign_id,report_run_id,
+                    policy_version,decision_version,decision_state)
+                   VALUES (?,?,?,?,?,?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(campaign_id,report_date,ticker,direction) DO NOTHING""",
+                (report_date,generated_ts,ticker,direction,entry_price,open_row[1],
+                 levels.get("target_price"),levels.get("stop_loss"),levels.get("atr_at_entry"),
+                 entry_price,entry_price,entry_price,row.get("setup_family"),row.get("setup_tier"),
+                 row.get("score"),row.get("signal_bias"),row.get("actionability"),
+                 plan.get("position_size_pct"),plan.get("risk_budget_pct"),
+                 plan.get("stop_distance_pct"),plan.get("expected_reward_pct"),
+                 plan.get("expected_r_multiple"),plan.get("entry_plan"),plan.get("exit_plan"),
+                 plan.get("sizing_summary"),campaign_id,report_run_id,policy_version,
+                 policy_version,"admitted"),
+            )
+            status = "filled"
+            resolved["filled"] += 1
+        else:
+            status = "rejected"
+            resolved["rejected"] += 1
+        conn.execute(
+            "UPDATE paper_pending_orders SET status=?,resolved_ts=CURRENT_TIMESTAMP WHERE order_id=? AND status='pending'",
+            (status, order_id),
+        )
+        conn.execute(
+            """INSERT INTO paper_order_events
+               (order_id,event_type,event_date,payload_json,payload_hash)
+               VALUES (?,?,?,?,?)""",
+            (order_id,status,str(open_row[1]),canonical_json(event_payload),canonical_hash(event_payload)),
+        )
+    return resolved
 
 
 def _mark_to_market(

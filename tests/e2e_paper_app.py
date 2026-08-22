@@ -16,6 +16,15 @@ from trader_koo.paper_trades import create_paper_trades_from_report, ensure_pape
 
 conn = sqlite3.connect(DB_PATH)
 ensure_paper_trade_schema(conn)
+conn.execute(
+    """CREATE TABLE report_runs (
+           run_id TEXT PRIMARY KEY, status TEXT NOT NULL,
+           is_generation_canonical INTEGER NOT NULL
+       )"""
+)
+conn.execute(
+    "INSERT INTO report_runs VALUES ('browser-real-api-report','published',1)"
+)
 create_paper_trades_from_report(
     conn,
     setup_rows=[{

@@ -1076,7 +1076,9 @@ export interface PaperCampaignHealth {
       eligibility_passed: boolean;
       final_gate: string;
       reason_code: string;
-      disposition: "rejected" | "admitted" | "duplicate";
+      disposition: "rejected" | "pending" | "admitted" | "duplicate";
+      tradeability?: "actionable" | "pending_next_open" | "not_actionable";
+      execution_status?: "pending" | "filled" | "rejected" | "cancelled" | null;
       expected_r_multiple?: number | null;
     }>;
   } | null;

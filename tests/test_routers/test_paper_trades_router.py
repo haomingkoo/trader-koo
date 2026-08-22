@@ -12,6 +12,11 @@ from fastapi.testclient import TestClient
 from trader_koo.backend.routers.admin import paper_campaigns
 from trader_koo.paper_trades import create_paper_trades_from_report
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
+from trader_koo.paper_trade.campaign import (
+    canonical_hash, record_experiment_preregistration, record_promotion_experiment,
+)
+from trader_koo.paper_trade.config import config_snapshot
+from trader_koo.paper_trades import _build_config
 
 
 class TestPaperTradesListEndpoint:
@@ -211,6 +216,54 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
         json={
             "action": "activate", "reason": "paper validation approved",
             "idempotency_key": "admin-activation-001",
+        },
+    )
+    assert response.status_code == 409
+    approval_conn = sqlite3.connect(db_path)
+    config = _build_config()
+    record_experiment_preregistration(
+        approval_conn, preregistration_id="admin-prereg", campaign_id="paper-v2",
+        policy_version=config.decision_version,
+        policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
+        gates={
+            "risk_gates": {"max_drawdown_pct": 10.0},
+            "active_return_gate": {"minimum_pct": 0.0},
+        },
+    )
+    record_promotion_experiment(
+        approval_conn, experiment_id="admin-exp", preregistration_id="admin-prereg",
+        campaign_id="paper-v2",
+        policy_version=config.decision_version,
+        policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
+        metrics={
+            "engine_version": "paper-replay-v2.0", "closed_trades": 2,
+            "conversion_rate_pct": 50.0, "average_exposure_pct": 10.0,
+            "turnover_pct": 20.0, "portfolio_return_pct": 2.0,
+            "matched_spy_return_pct": 1.0,
+            "matched_spy_active_return_pct": 1.0,
+            "max_drawdown_pct": 1.0, "profit_factor": 1.5,
+            "mean_trade_return_pct_ci95": [-1.0, 2.0],
+            "walk_forward": {"folds": [{"metrics": {"closed_trades": 1}}]},
+            "held_out": {"metrics": {"closed_trades": 1}, "trades": []},
+        },
+        parity_status="matched",
+    )
+    approval_conn.commit()
+    approval_conn.close()
+    approval_response = TestClient(authenticated_app).post(
+        "/api/admin/paper-campaigns/paper-v2/approvals",
+        json={
+            "approval_id": "admin-approval", "experiment_id": "admin-exp",
+            "reason": "approved evidence",
+            "artifact": {"approved": True, "signed": True},
+        },
+    )
+    assert approval_response.status_code == 200
+    response = TestClient(authenticated_app).post(
+        "/api/admin/paper-campaigns/paper-v2/transition",
+        json={
+            "action": "activate", "reason": "paper validation approved",
+            "idempotency_key": "admin-activation-002",
         },
     )
     assert response.status_code == 200

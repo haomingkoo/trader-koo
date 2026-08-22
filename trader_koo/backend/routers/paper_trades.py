@@ -11,6 +11,7 @@ from trader_koo.backend.services.database import get_conn
 from trader_koo.paper_trades import ensure_paper_trade_schema, list_paper_trades, paper_trade_summary
 from trader_koo.research.strategy_evidence import evidence_snapshot_by_hash
 from trader_koo.research.next_open_baseline import artifact_state
+from trader_koo.paper_trade.campaign import EvidenceIntegrityError, verify_decision_set
 
 
 class NotesUpdate(BaseModel):
@@ -97,10 +98,17 @@ def api_paper_candidate_decisions(
         rows = conn.execute(
             f"""SELECT d.report_run_id,d.report_date,d.generated_ts,d.candidate_rank,
                        d.ticker,d.eligibility_passed,d.final_gate,d.reason_code,
-                       d.disposition,d.expected_r_multiple,d.inputs_hash,
+                       d.disposition,
+                       CASE WHEN po.status='filled' THEN 'actionable'
+                            WHEN po.status='pending' THEN 'pending_next_open'
+                            ELSE d.tradeability END,
+                       po.status,d.expected_r_multiple,d.inputs_hash,
                        s.candidates_hash,s.report_complete,s.is_canonical
                 FROM paper_candidate_decisions d JOIN paper_decision_sets s
                   ON s.report_run_id=d.report_run_id AND s.campaign_id=d.campaign_id
+                LEFT JOIN paper_pending_orders po
+                  ON po.report_run_id=d.report_run_id AND po.campaign_id=d.campaign_id
+                 AND po.candidate_rank=d.candidate_rank
                 WHERE {' AND '.join(clauses)}
                 ORDER BY d.report_date DESC,d.generated_ts DESC,d.candidate_rank
                 LIMIT ?""",
@@ -109,14 +117,21 @@ def api_paper_candidate_decisions(
         keys = [
             "report_run_id", "report_date", "generated_ts", "candidate_rank", "ticker",
             "eligibility_passed", "final_gate", "reason_code", "disposition",
-            "expected_r_multiple", "inputs_hash", "candidates_hash", "report_complete", "is_canonical",
+            "tradeability", "execution_status", "expected_r_multiple", "inputs_hash",
+            "candidates_hash", "report_complete", "is_canonical",
         ]
+        try:
+            for sealed_run_id in {str(row[0]) for row in rows}:
+                verify_decision_set(
+                    conn, report_run_id=sealed_run_id, campaign_id=campaign_id
+                )
+        except EvidenceIntegrityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         decisions = [dict(zip(keys, row)) for row in rows]
         for item in decisions:
             item["eligibility_passed"] = bool(item["eligibility_passed"])
             item["report_complete"] = bool(item["report_complete"])
             item["is_canonical"] = bool(item["is_canonical"])
-            item["tradeability"] = "actionable" if item["disposition"] == "admitted" else "not_actionable"
         return {"ok": True, "campaign_id": campaign_id, "count": len(decisions), "decisions": decisions}
     finally:
         conn.close()
