@@ -60,10 +60,6 @@ from trader_koo.backend.services.report_loader import latest_report_setup_for_ti
 LOG = logging.getLogger("trader_koo.services.chart_builder")
 
 
-def _chart_price_contract(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
-    return get_data_sources(conn, ticker)
-
-
 def _excluded_chart_payload(
     conn: sqlite3.Connection,
     ticker: str,
@@ -1120,7 +1116,7 @@ def build_dashboard_quick_payload(
     frontend can render the chart immediately.
     """
     ticker = ticker.upper().strip()
-    price_contract = _chart_price_contract(conn, ticker)
+    price_contract = get_data_sources(conn, ticker)
     if not price_contract["research_eligible"]:
         return _excluded_chart_payload(conn, ticker, price_contract)
     (
@@ -1208,7 +1204,7 @@ def build_commentary_payload(
     expensive feature engineering entirely (~200ms saved per call).
     """
     ticker = ticker.upper().strip()
-    price_contract = _chart_price_contract(conn, ticker)
+    price_contract = get_data_sources(conn, ticker)
     if not price_contract["research_eligible"]:
         return {
             "ticker": ticker,
@@ -1324,7 +1320,7 @@ def build_dashboard_payload(
         Optional pinned report timestamp for snapshot override.
     """
     ticker = ticker.upper().strip()
-    price_contract = _chart_price_contract(conn, ticker)
+    price_contract = get_data_sources(conn, ticker)
     if not price_contract["research_eligible"]:
         payload = _excluded_chart_payload(conn, ticker, price_contract)
         payload.update(

@@ -30,6 +30,7 @@ def _raw_frame(
     for column in ("Open", "High", "Low", "Close"):
         raw.loc[before, column] *= factor
     raw.loc[before, "Volume"] /= factor
+    raw["Adj Close"] = continuous["Close"]
     raw["Stock Splits"] = 0.0
     raw.loc[pd.Timestamp(action_date), "Stock Splits"] = factor
     raw["Dividends"] = 0.0
@@ -156,6 +157,85 @@ def test_actionless_three_for_two_sized_move_is_preserved_but_unresolved(
     assert normalized.attrs["corporate_actions"] == []
     assert normalized.attrs["basis_status"] == "unresolved"
     assert normalized.attrs["unresolved_discontinuities"][0]["ratio"] == 1.5
+
+
+@pytest.mark.parametrize(
+    ("ticker", "factor", "closes", "action_type"),
+    [
+        ("COINCIDENT_SPLIT", 2.0, [100.0, 75.0], "split"),
+        ("COINCIDENT_REVERSE", 0.5, [100.0, 125.0], "reverse_split"),
+    ],
+)
+def test_declared_action_without_provider_basis_evidence_is_persisted_ineligible(
+    ticker: str,
+    factor: float,
+    closes: list[float],
+    action_type: str,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2026-08-20", "2026-08-21"]),
+            "Open": closes,
+            "High": closes,
+            "Low": closes,
+            "Close": closes,
+            "Volume": [1000.0, 2000.0],
+            "Stock Splits": [0.0, factor],
+        }
+    ).set_index("Date")
+
+    normalized = DataSourceManager._normalize_ohlcv(frame)
+    assert normalized["close"].tolist() == closes
+    assert normalized.attrs["basis_status"] == "unresolved"
+    assert normalized.attrs["corporate_actions"] == [
+        {
+            "action_date": "2026-08-21",
+            "action_type": action_type,
+            "value": factor,
+            "applied_to_prices": False,
+            "basis_evidence": "unresolved",
+        }
+    ]
+
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    write_price_daily(conn, ticker, normalized)
+    assert research_price_contract(conn, [ticker])["eligible"] is False
+    assert get_data_sources(conn, ticker)["research_eligible"] is False
+
+
+@pytest.mark.parametrize(
+    ("factor", "raw_closes", "adjusted_closes"),
+    [
+        (2.0, [100.0, 75.0], [50.0, 75.0]),
+        (0.5, [100.0, 125.0], [200.0, 125.0]),
+    ],
+)
+def test_provider_adjusted_close_resolves_coincident_action_basis(
+    factor: float,
+    raw_closes: list[float],
+    adjusted_closes: list[float],
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2026-08-20", "2026-08-21"]),
+            "Open": raw_closes,
+            "High": raw_closes,
+            "Low": raw_closes,
+            "Close": raw_closes,
+            "Adj Close": adjusted_closes,
+            "Volume": [1000.0, 2000.0],
+            "Stock Splits": [0.0, factor],
+        }
+    ).set_index("Date")
+
+    normalized = DataSourceManager._normalize_ohlcv(frame)
+
+    assert normalized["close"].tolist() == adjusted_closes
+    assert normalized.attrs["corporate_actions"][0]["applied_to_prices"] is True
+    assert normalized.attrs["corporate_actions"][0]["basis_evidence"] == (
+        "provider_adjusted_close"
+    )
 
 
 def test_action_persistence_is_idempotent_and_visible_in_chart_contract() -> None:

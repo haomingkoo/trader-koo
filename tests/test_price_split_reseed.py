@@ -134,6 +134,7 @@ def test_retroactive_action_requires_one_idempotent_full_history_reconciliation(
     raw = continuous.copy()
     raw.loc[raw.index < pd.Timestamp(DATES[1]), ["Open", "High", "Low", "Close"]] *= 1.5
     raw.loc[raw.index < pd.Timestamp(DATES[1]), "Volume"] /= 1.5
+    raw["Adj Close"] = continuous["Close"]
     raw["Stock Splits"] = [0.0, 1.5, 0.0]
     normalized = DataSourceManager._normalize_ohlcv(raw)
     vendor_action = [
@@ -243,6 +244,7 @@ def _already_adjusted_action_frame(*, action_date: str, factor: float) -> pd.Dat
             "High": [101.0, 102.0, 103.0],
             "Low": [98.0, 99.0, 100.0],
             "Close": [100.0, 101.0, 102.0],
+            "Adj Close": [100.0, 101.0, 102.0],
             "Volume": [1000.0, 1000.0, 1000.0],
             "Stock Splits": [0.0, 0.0, 0.0],
         },

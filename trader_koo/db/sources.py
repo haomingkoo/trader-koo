@@ -332,10 +332,15 @@ class DataSourceManager:
                     }
                 )
 
+        unresolved: list[dict] = []
+
         # Yahoo is inconsistent about split adjustment: some downloads contain
-        # raw pre-split prices while others are already rebased. Apply a declared
-        # split only when it makes the closes immediately around the event more
-        # continuous. This avoids both missed splits and double-adjustment.
+        # raw pre-split prices while others are already rebased. ``Adj Close``
+        # provides an independent provider basis signal: its ratio to ``Close``
+        # changes by the declared factor only when the raw OHLC needs rebasing.
+        # Price continuity is not evidence because a split can coincide with a
+        # genuine large move. If Yahoo omits or contradicts that basis signal,
+        # preserve the observations and fail research closed.
         if "stock splits" in df_copy.columns:
             split_factors = pd.to_numeric(df_copy["stock splits"], errors="coerce").fillna(0)
             for index in split_factors[split_factors > 0].index:
@@ -371,9 +376,47 @@ class DataSourceManager:
                 if before_close <= 0 or after_close <= 0:
                     continue
 
-                raw_gap = abs(math.log(before_close / after_close))
-                adjusted_gap = abs(math.log((before_close / factor) / after_close))
-                if adjusted_gap >= raw_gap:
+                needs_rebase = False
+                already_rebased = bool(auto_adjust)
+                if not auto_adjust and "adj close" in df_copy.columns:
+                    before_adjusted = pd.to_numeric(
+                        df_copy.loc[comparison_before, "adj close"], errors="coerce"
+                    ).dropna()
+                    after_adjusted = pd.to_numeric(
+                        df_copy.loc[on_or_after_split, "adj close"], errors="coerce"
+                    ).dropna()
+                    if not before_adjusted.empty and not after_adjusted.empty:
+                        before_adj_close = float(before_adjusted.iloc[-1])
+                        after_adj_close = float(after_adjusted.iloc[0])
+                        if before_adj_close > 0 and after_adj_close > 0:
+                            ratio_change = (
+                                (after_adj_close / after_close)
+                                / (before_adj_close / before_close)
+                            )
+                            matches_factor = math.isclose(
+                                ratio_change, factor, rel_tol=0.01, abs_tol=1e-6
+                            )
+                            matches_one = math.isclose(
+                                ratio_change, 1.0, rel_tol=0.01, abs_tol=1e-6
+                            )
+                            needs_rebase = matches_factor and not matches_one
+                            already_rebased = matches_one and not matches_factor
+
+                if not needs_rebase and not already_rebased:
+                    action["basis_evidence"] = "unresolved"
+                    unresolved.append(
+                        {
+                            "action_date": action["action_date"],
+                            "action_type": action["action_type"],
+                            "value": factor,
+                            "reason": "declared_action_basis_unresolved",
+                        }
+                    )
+                    continue
+                action["basis_evidence"] = (
+                    "provider_adjusted_close" if needs_rebase else "provider_already_adjusted"
+                )
+                if already_rebased:
                     continue
 
                 for column in ("open", "high", "low", "close"):
@@ -414,7 +457,6 @@ class DataSourceManager:
 
         # A large remaining scale break is not evidence of a split. Preserve the
         # observations, but fail the series closed until declared evidence exists.
-        unresolved: list[dict] = []
         ordered = df_copy.sort_values("date")
         closes = pd.to_numeric(ordered["close"], errors="coerce")
         dates = ordered["date"].tolist()

@@ -14,6 +14,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from trader_koo.backend.services.database import DB_PATH, table_exists
+from trader_koo.db.price_contract import research_price_contract
 
 LOG = logging.getLogger("trader_koo.services.market_data")
 
@@ -218,15 +219,7 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
             (ticker,),
         ).fetchone()
 
-        bases = conn.execute(
-            """
-            SELECT DISTINCT adjustment_basis, adjustment_version, basis_status
-            FROM price_daily WHERE ticker = ?
-            """,
-            (ticker,),
-        ).fetchall()
-        incompatible = len({(item[0], item[1]) for item in bases}) > 1
-        has_unresolved = any((item[2] or "unverified") != "verified" for item in bases)
+        contract = research_price_contract(conn, [ticker])
         actions: list[dict[str, Any]] = []
         if table_exists(conn, "price_corporate_actions"):
             actions = [
@@ -250,20 +243,18 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
                 ).fetchall()
             ]
         if row:
-            status = "unresolved" if incompatible or has_unresolved else (row[4] or "unverified")
+            basis = str(contract["basis"])
             return {
                 "price": row[0] or "unknown",
                 "price_timestamp": row[1] or None,
-                "adjustment_basis": row[2] or "unknown",
-                "return_basis": "total_return" if row[2] == "total_return" else "price_only",
-                "adjustment_version": row[3] or "unknown",
-                "basis_status": status,
-                "research_eligible": status == "verified",
-                "unresolved_reason": row[5]
-                or ("mixed_price_basis" if incompatible else None)
-                or ("series_contains_unresolved_observations" if has_unresolved else None),
+                "adjustment_basis": basis,
+                "return_basis": "total_return" if basis == "total_return" else "price_only",
+                "adjustment_version": contract["version"],
+                "basis_status": contract["status"],
+                "research_eligible": contract["eligible"],
+                "unresolved_reason": row[5] or contract["reason"],
                 "corporate_actions": actions,
-                "distributions_included": row[2] == "total_return",
+                "distributions_included": contract["distributions_included"],
             }
     except Exception as exc:
         LOG.warning("Failed to get data sources for %s: %s", ticker, exc)
