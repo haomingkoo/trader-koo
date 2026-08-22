@@ -14,6 +14,7 @@ from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.benchmark import run_benchmark
 from trader_koo.ml.trainer import build_dataset
 from trader_koo.report import generator as report_generator
+from trader_koo.scripts.run_yolo_patterns import save_detections
 
 
 def _raw_frame(
@@ -253,3 +254,21 @@ def test_report_and_ml_consumers_fail_closed_for_unresolved_basis() -> None:
     benchmark = run_benchmark(conn, start_date="2024-01-01")
     assert benchmark["ok"] is False
     assert benchmark["price_contract"]["eligible"] is False
+
+
+def test_yolo_persistence_fails_closed_for_unresolved_basis() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    conn.execute(
+        """CREATE TABLE yolo_patterns (
+        ticker TEXT, timeframe TEXT, pattern TEXT, confidence REAL,
+        x0_date TEXT, x1_date TEXT, y0 REAL, y1 REAL,
+        lookback_days INTEGER, as_of_date TEXT)"""
+    )
+    prices = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
+    prices.attrs["basis_status"] = "unresolved"
+    write_price_daily(conn, "BAD", prices)
+
+    with pytest.raises(ValueError, match="not research eligible"):
+        save_detections(conn, "BAD", "daily", [], 180, "2026-08-20")
+    assert conn.execute("SELECT COUNT(*) FROM yolo_patterns").fetchone()[0] == 0

@@ -47,6 +47,10 @@ def _create_test_db() -> sqlite3.Connection:
             volume INTEGER,
             data_source TEXT,
             fetch_timestamp TEXT,
+            adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+            adjustment_version TEXT DEFAULT 'test-v1',
+            basis_status TEXT DEFAULT 'verified',
+            unresolved_reason TEXT,
             UNIQUE(ticker, date)
         );
 

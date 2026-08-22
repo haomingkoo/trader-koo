@@ -238,6 +238,7 @@ def ml_shap_analysis(request: Request) -> dict[str, Any]:
             extract_features_for_universe,
         )
         from trader_koo.ml.shap_analysis import compute_shap_summary
+        from trader_koo.db.price_contract import research_price_contract
 
         model, meta = load_model()
         if model is None:
@@ -250,6 +251,13 @@ def ml_shap_analysis(request: Request) -> dict[str, Any]:
         )
         conn = get_conn()
         try:
+            price_contract = research_price_contract(conn)
+            if not price_contract["eligible"]:
+                return {
+                    "ok": False,
+                    "error": f"Price basis is not research eligible: {price_contract['reason']}",
+                    "price_contract": price_contract,
+                }
             today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
             features = extract_features_for_universe(conn, as_of_date=today)
             if features.empty:

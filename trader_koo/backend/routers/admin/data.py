@@ -9,7 +9,7 @@ import sys
 import threading
 from typing import Any
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from trader_koo.audit import apply_retention_policy, get_audit_stats
 from trader_koo.audit.api import (
@@ -29,6 +29,48 @@ from trader_koo.backend.routers.admin._shared import (
 from trader_koo.scripts.cleanup_storage import run_cleanup
 
 router = APIRouter(tags=["admin", "admin-data"])
+
+_seed_history_lock = threading.Lock()
+_seed_history_thread: threading.Thread | None = None
+_seed_history_state: dict[str, Any] = {"status": "idle"}
+
+
+def _seed_history_command(tickers: list[str], start_date: str) -> list[str]:
+    return [
+        sys.executable,
+        str(PROJECT_DIR / "scripts" / "update_market_db.py"),
+        "--tickers",
+        ",".join(tickers),
+        "--price-start",
+        start_date,
+        "--price-lookback-days",
+        "0",
+        "--full-price-refresh",
+        "--db-path",
+        str(DB_PATH),
+        "--log-file",
+        str(LOG_DIR / "seed_history.log"),
+    ]
+
+
+def _run_seed_history(command: list[str]) -> None:
+    global _seed_history_state
+    try:
+        completed = subprocess.run(command, capture_output=False, check=False)
+        status = "succeeded" if completed.returncode == 0 else "failed"
+        error = None if completed.returncode == 0 else f"process_exit_{completed.returncode}"
+    except Exception as exc:
+        status = "failed"
+        error = str(exc)
+        completed = None
+    with _seed_history_lock:
+        _seed_history_state = {
+            **_seed_history_state,
+            "status": status,
+            "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "returncode": completed.returncode if completed is not None else None,
+            "error": error,
+        }
 
 
 @router.post("/api/admin/cleanup-storage")
@@ -64,37 +106,42 @@ def seed_ticker_history(
     if not ticker_list:
         return {"ok": False, "error": "No tickers specified"}
 
-    def _run_seed() -> None:
-        script = str(PROJECT_DIR / "scripts" / "update_market_db.py")
-        cmd = [
-            sys.executable,
-            script,
-            "--tickers",
-            ",".join(ticker_list),
-            "--price-start",
-            start_date,
-            "--price-lookback-days",
-            "0",
-            "--full-price-refresh",
-            "--skip-price",
-            "false",
-            "--db-path",
-            str(DB_PATH),
-            "--log-file",
-            str(LOG_DIR / "seed_history.log"),
-        ]
-        subprocess.run(cmd, capture_output=False)
-
-    thread = threading.Thread(target=_run_seed, daemon=True)
-    thread.start()
+    global _seed_history_state, _seed_history_thread
+    with _seed_history_lock:
+        if _seed_history_thread is not None and _seed_history_thread.is_alive():
+            raise HTTPException(status_code=409, detail="Price-history backfill already running")
+        command = _seed_history_command(ticker_list, start_date)
+        _seed_history_state = {
+            "status": "running",
+            "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "finished_at": None,
+            "returncode": None,
+            "error": None,
+            "tickers": ticker_list,
+            "start_date": start_date,
+        }
+        _seed_history_thread = threading.Thread(
+            target=_run_seed_history,
+            args=(command,),
+            daemon=True,
+            name="admin-price-history-backfill",
+        )
+        _seed_history_thread.start()
     return {
         "ok": True,
-        "message": (
-            f"Seeding history for {len(ticker_list)} tickers "
-            f"from {start_date}"
-        ),
+        "status": "running",
+        "message": f"Price-history backfill accepted for {len(ticker_list)} tickers",
         "tickers": ticker_list,
+        "start_date": start_date,
     }
+
+
+@router.get("/api/admin/seed-ticker-history/status")
+@require_admin_auth
+def seed_ticker_history_status(request: Request) -> dict[str, Any]:
+    with _seed_history_lock:
+        state = dict(_seed_history_state)
+    return {"ok": state.get("status") != "failed", **state}
 
 
 @router.get("/api/admin/database-stats")

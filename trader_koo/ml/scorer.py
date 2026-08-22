@@ -15,6 +15,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
+from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.features import (
     FEATURE_COLUMNS,
     extract_features_for_universe,
@@ -131,6 +132,14 @@ def score_universe(
     ``predicted_win_prob`` is kept as the storage/API field for compatibility.
     Use ``prediction_label`` to interpret what the probability means.
     """
+    price_contract = research_price_contract(
+        conn,
+        [*(tickers or []), "SPY"] if tickers else None,
+    )
+    if not price_contract["eligible"]:
+        raise ValueError(
+            f"Price basis is not research eligible: {price_contract['reason']}"
+        )
     model, meta = load_model()
     if model is None:
         return []
@@ -178,6 +187,11 @@ def score_single_ticker(
     as_of_date: str,
 ) -> dict[str, Any]:
     """Score a single ticker.  Returns prediction + confidence."""
+    price_contract = research_price_contract(conn, [ticker, "SPY"])
+    if not price_contract["eligible"]:
+        raise ValueError(
+            f"Price basis is not research eligible: {price_contract['reason']}"
+        )
     model, meta = load_model()
     if model is None:
         return {

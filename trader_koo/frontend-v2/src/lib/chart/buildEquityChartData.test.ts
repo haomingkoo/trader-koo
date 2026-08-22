@@ -29,6 +29,19 @@ test("completed weekly bars exclude the current partial week", () => {
   assert.deepEqual(bars.map((bar) => bar.date), ["2026-08-14"]);
 });
 
+test("weekly grouping starts a new week when Monday is a market holiday", () => {
+  const rows = [
+    row("2026-09-04", 100),
+    row("2026-09-08", 101),
+    row("2026-09-09", 102),
+    row("2026-09-11", 103),
+  ];
+
+  const bars = resampleToWeekly(rows);
+
+  assert.deepEqual(bars.map((bar) => bar.date), ["2026-09-04", "2026-09-11"]);
+});
+
 test("completed monthly bars exclude the current partial month", () => {
   const rows = [
     row("2026-07-31", 100),

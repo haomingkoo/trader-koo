@@ -271,6 +271,9 @@ def run_benchmark(
     with open(output_path, "w") as f:
         json.dump({
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "return_basis": price_contract["basis"],
+            "adjustment_version": price_contract["version"],
+            "distributions_included": price_contract["distributions_included"],
             "config": {
                 "start_date": start_date,
                 "train_days": train_days,
@@ -283,7 +286,13 @@ def run_benchmark(
         }, f, indent=2)
     print(f"\nResults saved to {output_path}")
 
-    return {"results": all_results}
+    return {
+        "results": all_results,
+        "return_basis": price_contract["basis"],
+        "adjustment_version": price_contract["version"],
+        "distributions_included": price_contract["distributions_included"],
+        "price_contract": price_contract,
+    }
 
 
 if __name__ == "__main__":

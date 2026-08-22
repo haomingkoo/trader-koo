@@ -14,6 +14,7 @@ from trader_koo.analysis.green_barrier import (
     scan_green_barrier_snapshot,
     scan_green_barriers,
 )
+from trader_koo.backend.services import chart_builder
 from trader_koo.notifications.morning_summary import (
     _select_green_barrier_attachments,
     send_morning_summary,
@@ -32,9 +33,12 @@ def _make_price_db(path: Path) -> sqlite3.Connection:
             low REAL,
             close REAL,
             volume REAL,
+            data_source TEXT DEFAULT 'yfinance',
+            fetch_timestamp TEXT DEFAULT '2026-08-22T00:00:00Z',
             adjustment_basis TEXT NOT NULL DEFAULT 'split_adjusted_price_only',
             adjustment_version TEXT NOT NULL DEFAULT 'test-v1',
-            basis_status TEXT NOT NULL DEFAULT 'verified'
+            basis_status TEXT NOT NULL DEFAULT 'verified',
+            unresolved_reason TEXT
         )
         """
     )
@@ -253,6 +257,38 @@ def test_chart_renderer_fails_closed_for_unresolved_price_basis(tmp_path: Path) 
             build_green_barrier_chart_png(conn, ticker="HIT", timeframe="monthly")
     finally:
         conn.close()
+
+
+def test_dashboard_and_commentary_do_not_compute_unresolved_series(
+    tmp_path: Path,
+) -> None:
+    conn = _make_price_db(tmp_path / "unresolved-dashboard.db")
+    conn.execute("UPDATE price_daily SET basis_status = 'unresolved' WHERE ticker = 'HIT'")
+    conn.commit()
+    with patch.object(
+        chart_builder,
+        "_prepare_model_and_features",
+        side_effect=AssertionError("indicator computation must not run"),
+    ):
+        quick = chart_builder.build_dashboard_quick_payload(conn, "HIT", 12)
+        full = chart_builder.build_dashboard_payload(
+            conn,
+            "HIT",
+            12,
+            report_dir=tmp_path,
+        )
+        commentary = chart_builder.build_commentary_payload(
+            conn,
+            "HIT",
+            12,
+            report_dir=tmp_path,
+        )
+    conn.close()
+
+    assert quick["chart"] == []
+    assert full["chart_commentary"] is None
+    assert commentary["hmm_regime"] is None
+    assert quick["data_sources"]["research_eligible"] is False
 
 
 def test_chart_is_bound_to_report_asof_and_value(tmp_path: Path) -> None:

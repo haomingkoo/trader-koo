@@ -59,6 +59,40 @@ from trader_koo.backend.services.report_loader import latest_report_setup_for_ti
 
 LOG = logging.getLogger("trader_koo.services.chart_builder")
 
+
+def _chart_price_contract(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
+    return get_data_sources(conn, ticker)
+
+
+def _excluded_chart_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Return provenance without computing indicators on an ineligible series."""
+    return {
+        "ticker": ticker,
+        "asof": None,
+        "fundamentals": {},
+        "options_summary": {},
+        "chart": [],
+        "levels": [],
+        "gaps": [],
+        "trendlines": [],
+        "patterns": [],
+        "candlestick_patterns": [],
+        "hybrid_patterns": [],
+        "cv_proxy_patterns": [],
+        "hybrid_cv_compare": [],
+        "pattern_overlays": [],
+        "yolo_patterns": [],
+        "yolo_audit": [],
+        "earnings_markers": [],
+        "data_sources": contract,
+        "data_freshness": _compute_data_freshness(conn, ticker),
+        "meta": {"excluded_reason": "price_basis_not_research_eligible"},
+    }
+
 # Feature/pattern configuration singletons
 FEATURE_CFG = FeatureConfig()
 LEVEL_CFG = LevelConfig()
@@ -1086,6 +1120,9 @@ def build_dashboard_quick_payload(
     frontend can render the chart immediately.
     """
     ticker = ticker.upper().strip()
+    price_contract = _chart_price_contract(conn, ticker)
+    if not price_contract["research_eligible"]:
+        return _excluded_chart_payload(conn, ticker, price_contract)
     (
         _prices,
         _model,
@@ -1171,6 +1208,16 @@ def build_commentary_payload(
     expensive feature engineering entirely (~200ms saved per call).
     """
     ticker = ticker.upper().strip()
+    price_contract = _chart_price_contract(conn, ticker)
+    if not price_contract["research_eligible"]:
+        return {
+            "ticker": ticker,
+            "chart_commentary": None,
+            "hmm_regime": None,
+            "report_generated_ts": report_generated_ts,
+            "price_contract": price_contract,
+            "excluded_reason": "price_basis_not_research_eligible",
+        }
 
     # Try the fast path first: report snapshot + cached HMM
     setup_override = latest_report_setup_for_ticker(
@@ -1277,6 +1324,17 @@ def build_dashboard_payload(
         Optional pinned report timestamp for snapshot override.
     """
     ticker = ticker.upper().strip()
+    price_contract = _chart_price_contract(conn, ticker)
+    if not price_contract["research_eligible"]:
+        payload = _excluded_chart_payload(conn, ticker, price_contract)
+        payload.update(
+            {
+                "chart_commentary": None,
+                "hmm_regime": None,
+                "report_generated_ts": report_generated_ts,
+            }
+        )
+        return payload
     (
         prices,
         model,

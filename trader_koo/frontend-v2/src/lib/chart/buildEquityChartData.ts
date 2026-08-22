@@ -82,6 +82,13 @@ function isCompletedPeriod(
   return periodEnd.getTime() <= cutoff.getTime();
 }
 
+function weekStartKey(value: string): string {
+  const date = utcDate(value);
+  const daysSinceMonday = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - daysSinceMonday);
+  return date.toISOString().slice(0, 10);
+}
+
 export function resampleToWeekly(
   rows: OhlcvRow[],
   completedOnly = false,
@@ -90,13 +97,14 @@ export function resampleToWeekly(
   if (rows.length === 0) return [];
   const weeks: OhlcvRow[] = [];
   let current: OhlcvRow | null = null;
+  let currentWeek = "";
 
   for (const row of rows) {
-    const d = new Date(row.date);
-    const dayOfWeek = d.getDay();
-    if (!current || dayOfWeek === 1) {
+    const week = weekStartKey(row.date);
+    if (!current || week !== currentWeek) {
       if (current) weeks.push(current);
       current = { ...row };
+      currentWeek = week;
     } else {
       current.high = Math.max(current.high, row.high);
       current.low = Math.min(current.low, row.low);

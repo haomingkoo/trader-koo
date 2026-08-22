@@ -130,10 +130,20 @@ def build_dataset(
         raise ValueError(
             f"Price basis is not research eligible: {price_contract['reason']}"
         )
+
+    def with_price_contract(frame: pd.DataFrame) -> pd.DataFrame:
+        frame.attrs.update(
+            price_contract=dict(price_contract),
+            return_basis=price_contract["basis"],
+            adjustment_version=price_contract["version"],
+            distributions_included=price_contract["distributions_included"],
+        )
+        return frame
+
     trading_dates = _get_trading_dates(conn, start_date, end_date)
     if not trading_dates:
         LOG.warning("No trading dates found between %s and %s", start_date, end_date)
-        return pd.DataFrame()
+        return with_price_contract(pd.DataFrame())
 
     # Sample dates
     sampled_dates = trading_dates[::sample_frequency]
@@ -158,7 +168,7 @@ def build_dataset(
         all_features.append(features)
 
     if not all_features:
-        return pd.DataFrame()
+        return with_price_contract(pd.DataFrame())
 
     feat_df = pd.concat(all_features, ignore_index=True)
 
@@ -178,7 +188,7 @@ def build_dataset(
 
     if labels_df.empty:
         LOG.warning("No labels generated")
-        return pd.DataFrame()
+        return with_price_contract(pd.DataFrame())
 
     # Merge features + labels
     dataset = feat_df.merge(
@@ -199,7 +209,7 @@ def build_dataset(
 
         if dataset.empty:
             LOG.warning("All samples were time-expiry; no clean labels remain")
-            return pd.DataFrame()
+            return with_price_contract(pd.DataFrame())
 
     # 3c. Feature correlation audit — log highly correlated pairs
     feat_cols = [c for c in (feature_columns or FEATURE_COLUMNS) if c in dataset.columns]
@@ -233,7 +243,7 @@ def build_dataset(
         dataset["target"].mean() * 100,
     )
 
-    return dataset
+    return with_price_contract(dataset)
 
 
 def _apply_target_mode(dataset: pd.DataFrame, mode: str) -> pd.DataFrame:
@@ -381,6 +391,7 @@ def train_walk_forward(
         feature_columns=use_features,
         drop_time_expired=False,
     )
+    price_contract = dict(dataset.attrs.get("price_contract") or {})
     if dataset.empty or len(dataset) < 100:
         return {
             "ok": False,
@@ -523,6 +534,7 @@ def train_walk_forward(
         folds,
         train_medians=medians_to_save,
         target_mode=target_mode,
+        price_contract=price_contract,
     )
 
     # Feature importance from the best model
@@ -559,6 +571,9 @@ def train_walk_forward(
         "ok": True,
         "model_path": str(model_path),
         "target_mode": target_mode,
+        "return_basis": price_contract.get("basis", "unknown"),
+        "adjustment_version": price_contract.get("version", "unknown"),
+        "distributions_included": bool(price_contract.get("distributions_included")),
         "folds": folds,
         "fold_count": len(folds),
         "total_samples": len(dataset),
@@ -582,6 +597,7 @@ def _save_model(
     *,
     train_medians: pd.Series | None = None,
     target_mode: str = "barrier",
+    price_contract: dict[str, Any] | None = None,
 ) -> Path:
     """Save model + metadata to disk."""
     model_dir = _model_dir()
@@ -603,6 +619,7 @@ def _save_model(
             if pd.notna(v)
         }
 
+    contract = price_contract or {}
     meta = {
         "model_type": "lightgbm",
         "task": "binary_classification",
@@ -613,6 +630,9 @@ def _save_model(
         "folds": folds,
         "trained_at": ts,
         "train_medians": medians_dict,
+        "return_basis": contract.get("basis", "unknown"),
+        "adjustment_version": contract.get("version", "unknown"),
+        "distributions_included": bool(contract.get("distributions_included")),
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 

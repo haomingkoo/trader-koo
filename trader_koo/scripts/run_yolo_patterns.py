@@ -33,6 +33,8 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 import pandas as pd
 
+from trader_koo.db.price_contract import research_price_contract
+
 LOG = logging.getLogger("yolo_patterns")
 if not LOG.handlers:
     logging.basicConfig(
@@ -166,6 +168,10 @@ def get_tickers_to_process(
     rows = conn.execute(
         "SELECT ticker, MAX(date) as latest FROM price_daily GROUP BY ticker ORDER BY ticker"
     ).fetchall()
+    rows = [
+        row for row in rows
+        if research_price_contract(conn, [str(row[0])])["eligible"]
+    ]
     if not only_new:
         return [(r[0], r[1]) for r in rows]
 
@@ -229,6 +235,11 @@ def save_detections(
     lookback_days: int,
     as_of_date: str,
 ) -> None:
+    contract = research_price_contract(conn, [ticker])
+    if not contract["eligible"]:
+        raise ValueError(
+            f"Price basis is not research eligible for {ticker}: {contract['reason']}"
+        )
     # Preserve historical snapshots. Only replace rows for the same ticker/timeframe/as_of_date.
     conn.execute(
         "DELETE FROM yolo_patterns WHERE ticker = ? AND timeframe = ? AND as_of_date = ?",
