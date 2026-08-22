@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trader_koo.analysis.green_barrier import compute_williams_percent_r, resample_ohlcv
+from trader_koo.analysis.green_barrier import (
+    compute_williams_percent_r,
+    resample_ohlcv,
+    scan_green_barriers,
+)
 from trader_koo.backend.services.market_data import get_data_sources
 from trader_koo.db import sources as price_sources
 from trader_koo.db.sources import DataSourceManager
@@ -204,6 +208,29 @@ def test_declared_action_without_provider_basis_evidence_is_persisted_ineligible
     assert get_data_sources(conn, ticker)["research_eligible"] is False
 
 
+@pytest.mark.parametrize("bad_close", [np.nan, 0.0, -1.0])
+def test_declared_action_with_invalid_bracketing_close_is_ineligible(
+    bad_close: float,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2026-08-20", "2026-08-21"]),
+            "Open": [bad_close, 50.0],
+            "High": [bad_close, 50.0],
+            "Low": [bad_close, 50.0],
+            "Close": [bad_close, 50.0],
+            "Adj Close": [bad_close, 50.0],
+            "Volume": [1000.0, 2000.0],
+            "Stock Splits": [0.0, 2.0],
+        }
+    ).set_index("Date")
+
+    normalized = DataSourceManager._normalize_ohlcv(frame)
+
+    assert normalized.attrs["basis_status"] == "unresolved"
+    assert normalized.attrs["corporate_actions"][0]["basis_evidence"] == "unresolved"
+
+
 @pytest.mark.parametrize(
     ("factor", "raw_closes", "adjusted_closes"),
     [
@@ -258,6 +285,56 @@ def test_action_persistence_is_idempotent_and_visible_in_chart_contract() -> Non
     assert contract["basis_status"] == "verified"
     assert contract["research_eligible"] is True
     assert contract["corporate_actions"][0]["action_type"] == "split"
+    assert contract["corporate_actions"][0]["basis_evidence"] == (
+        "provider_adjusted_close"
+    )
+    assert contract["corporate_actions"][0]["evidence_json"]["applied_to_prices"] is True
+    assert contract["corporate_actions"][0]["full_history_verified"] is False
+
+
+@pytest.mark.parametrize(
+    ("basis", "version"),
+    [("unknown", "unknown"), ("split_adjusted_price_only", "test-v1")],
+)
+def test_writer_downgrades_unproven_verified_attrs_for_every_reader(
+    basis: str,
+    version: str,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    frame = pd.DataFrame(
+        [{
+            "date": "2026-08-21",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1000.0,
+        }]
+    )
+    frame.attrs.update(
+        adjustment_basis=basis,
+        adjustment_version=version,
+        basis_status="verified",
+    )
+
+    write_price_daily(conn, "UNPROVEN", frame)
+
+    assert conn.execute(
+        "SELECT basis_status FROM price_daily WHERE ticker='UNPROVEN'"
+    ).fetchone()[0] == "unresolved"
+    assert research_price_contract(conn, ["UNPROVEN"])["eligible"] is False
+    assert get_data_sources(conn, "UNPROVEN")["research_eligible"] is False
+    assert scan_green_barriers(conn) == []
+
+    conn.execute(
+        """UPDATE price_daily SET adjustment_basis='unknown',
+        adjustment_version='unknown', basis_status='verified'
+        WHERE ticker='UNPROVEN'"""
+    )
+    assert research_price_contract(conn, ["UNPROVEN"])["eligible"] is False
+    assert get_data_sources(conn, "UNPROVEN")["research_eligible"] is False
+    assert scan_green_barriers(conn) == []
 
 
 def test_vendor_action_history_includes_fractional_reverse_split(monkeypatch) -> None:

@@ -25,6 +25,7 @@ from trader_koo.backend.services.report_loader import (
     is_report_fresh,
     latest_daily_report_json,
 )
+from trader_koo.db.price_contract import research_eligible_tickers
 from trader_koo.llm_narrative import llm_status
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
@@ -407,18 +408,7 @@ def status() -> dict[str, Any]:
                 """
             ).fetchall()
             price_basis["bases"] = [dict(row) for row in basis_rows]
-            verified = conn.execute(
-                """
-                SELECT COUNT(*) AS c FROM (
-                    SELECT ticker FROM price_daily GROUP BY ticker
-                    HAVING COUNT(DISTINCT COALESCE(adjustment_basis, 'unknown') || '|' ||
-                           COALESCE(adjustment_version, 'unknown')) = 1
-                       AND MIN(COALESCE(basis_status, 'unverified')) = 'verified'
-                       AND MAX(COALESCE(basis_status, 'unverified')) = 'verified'
-                )
-                """
-            ).fetchone()
-            price_basis["verified_tickers"] = int(verified["c"] or 0) if verified else 0
+            price_basis["verified_tickers"] = len(research_eligible_tickers(conn))
             price_basis["unresolved_tickers"] = max(
                 0,
                 int(counts["tracked_tickers"] if counts else 0)

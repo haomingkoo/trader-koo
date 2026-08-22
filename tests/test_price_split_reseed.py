@@ -12,6 +12,7 @@ from trader_koo.scripts.update_market_db import (
     corporate_actions_require_full_history,
     ensure_schema,
     mark_full_history_actions_verified,
+    reconcile_vendor_action_ledger,
     stored_closes_disagree,
     stored_prices_have_scale_break,
     write_price_daily,
@@ -171,6 +172,46 @@ def test_retroactive_action_requires_one_idempotent_full_history_reconciliation(
     ).fetchone()
     assert action[0] == 1
     assert '"full_history_verified": true' in action[1]
+
+
+@pytest.mark.parametrize("download_factor", [None, 3.0])
+def test_vendor_ledger_download_contradiction_is_persisted_once(
+    download_factor: float | None,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    continuous = _already_adjusted_action_frame(action_date=DATES[1], factor=1.0)
+    if download_factor is not None:
+        continuous.loc[pd.Timestamp(DATES[1]), "Stock Splits"] = download_factor
+    normalized = DataSourceManager._normalize_ohlcv(continuous)
+    ledger = [{"action_date": DATES[1], "action_type": "split", "value": 2.0}]
+
+    reconcile_vendor_action_ledger(
+        normalized,
+        ledger,
+        managed_start=DATES[0],
+        managed_end="2026-03-19",
+    )
+    write_price_daily(conn, "CONTRADICTION", normalized)
+    write_price_daily(conn, "CONTRADICTION", normalized)
+    conn.commit()
+
+    row = conn.execute(
+        """SELECT value, evidence_json FROM price_corporate_actions
+        WHERE ticker='CONTRADICTION' AND action_type='split'"""
+    ).fetchone()
+    assert row[0] == 2.0
+    evidence = json.loads(row[1])
+    assert evidence["basis_evidence"] == "vendor_ledger_download_contradiction"
+    assert evidence["download_value"] == download_factor
+    assert evidence["full_history_verified"] is True
+    assert corporate_actions_require_full_history(
+        conn,
+        "CONTRADICTION",
+        ledger,
+        managed_start=DATES[0],
+        managed_end="2026-03-19",
+    ) is False
 
 
 def test_pre_start_vendor_action_does_not_repeat_bounded_history_reseed() -> None:

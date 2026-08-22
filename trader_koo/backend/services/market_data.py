@@ -6,6 +6,7 @@ ingest-run metadata, and data-source information from the database.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 import sqlite3
@@ -222,8 +223,21 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
         contract = research_price_contract(conn, [ticker])
         actions: list[dict[str, Any]] = []
         if table_exists(conn, "price_corporate_actions"):
-            actions = [
-                {
+            for item in conn.execute(
+                """
+                SELECT action_date, action_type, provider, value,
+                       applied_to_prices, adjustment_version, fetch_timestamp,
+                       evidence_json
+                FROM price_corporate_actions WHERE ticker = ?
+                ORDER BY action_date DESC
+                """,
+                (ticker,),
+            ).fetchall():
+                try:
+                    evidence = json.loads(str(item[7] or "{}"))
+                except (TypeError, ValueError):
+                    evidence = {}
+                actions.append({
                     "action_date": item[0],
                     "action_type": item[1],
                     "provider": item[2],
@@ -231,17 +245,10 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
                     "applied_to_prices": bool(item[4]),
                     "adjustment_version": item[5],
                     "fetch_timestamp": item[6],
-                }
-                for item in conn.execute(
-                    """
-                    SELECT action_date, action_type, provider, value,
-                           applied_to_prices, adjustment_version, fetch_timestamp
-                    FROM price_corporate_actions WHERE ticker = ?
-                    ORDER BY action_date DESC
-                    """,
-                    (ticker,),
-                ).fetchall()
-            ]
+                    "evidence_json": evidence,
+                    "basis_evidence": evidence.get("basis_evidence"),
+                    "full_history_verified": bool(evidence.get("full_history_verified")),
+                })
         if row:
             basis = str(contract["basis"])
             return {

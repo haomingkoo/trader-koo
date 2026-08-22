@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
+from trader_koo.db.price_contract import research_eligible_tickers
 
 GREEN_BARRIER_PERIOD = 14
 LOG = logging.getLogger(__name__)
@@ -94,23 +95,6 @@ def resample_ohlcv(
     return aggregated
 
 
-def _research_eligible_tickers(conn: sqlite3.Connection) -> set[str]:
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(price_daily)").fetchall()}
-    required = {"adjustment_basis", "adjustment_version", "basis_status"}
-    if not required.issubset(columns):
-        return set()
-    rows = conn.execute(
-        """
-        SELECT ticker FROM price_daily GROUP BY ticker
-        HAVING COUNT(DISTINCT COALESCE(adjustment_basis, 'unknown') || '|' ||
-               COALESCE(adjustment_version, 'unknown')) = 1
-           AND MIN(COALESCE(basis_status, 'unverified')) = 'verified'
-           AND MAX(COALESCE(basis_status, 'unverified')) = 'verified'
-        """
-    ).fetchall()
-    return {str(row[0]) for row in rows}
-
-
 def scan_green_barriers(
     conn: sqlite3.Connection,
     *,
@@ -168,7 +152,7 @@ def scan_green_barrier_snapshot(
 
     hits: list[dict[str, Any]] = []
     stale_tickers: list[str] = []
-    eligible_tickers = _research_eligible_tickers(conn)
+    eligible_tickers = research_eligible_tickers(conn)
     basis_skipped: list[str] = []
     for ticker, ticker_daily in daily.groupby("ticker", sort=True):
         if str(ticker) not in eligible_tickers:
@@ -239,7 +223,7 @@ def build_green_barrier_chart_png(
 ) -> bytes:
     """Render a Telegram-sized price + Williams %R chart as PNG bytes."""
     symbol = str(ticker or "").strip().upper()
-    if symbol not in _research_eligible_tickers(conn):
+    if symbol not in research_eligible_tickers(conn):
         raise ValueError(f"Price basis is not research eligible for {symbol}")
     query = """
         SELECT date, open, high, low, close, COALESCE(volume, 0) AS volume

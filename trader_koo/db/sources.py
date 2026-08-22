@@ -369,11 +369,29 @@ class DataSourceManager:
                     df_copy.loc[on_or_after_split, "close"], errors="coerce"
                 ).dropna()
                 if before_closes.empty or after_closes.empty:
+                    action["basis_evidence"] = "unresolved"
+                    unresolved.append(
+                        {
+                            "action_date": action["action_date"],
+                            "action_type": action["action_type"],
+                            "value": factor,
+                            "reason": "declared_action_missing_bracketing_closes",
+                        }
+                    )
                     continue
 
                 before_close = float(before_closes.iloc[-1])
                 after_close = float(after_closes.iloc[0])
                 if before_close <= 0 or after_close <= 0:
+                    action["basis_evidence"] = "unresolved"
+                    unresolved.append(
+                        {
+                            "action_date": action["action_date"],
+                            "action_type": action["action_type"],
+                            "value": factor,
+                            "reason": "declared_action_invalid_bracketing_closes",
+                        }
+                    )
                     continue
 
                 needs_rebase = False

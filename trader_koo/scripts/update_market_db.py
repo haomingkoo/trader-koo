@@ -37,6 +37,7 @@ from trader_koo.config import (
     get_options_config,
 )
 from trader_koo.db.schema import ensure_ohlcv_schema
+from trader_koo.db.price_contract import valid_price_provenance
 from trader_koo.options_research import (
     fetch_yfinance_options_rows,
     write_options_rows as write_options_snapshot_rows,
@@ -560,6 +561,81 @@ def corporate_actions_require_full_history(
     return False
 
 
+def reconcile_vendor_action_ledger(
+    df: pd.DataFrame,
+    vendor_actions: list[dict[str, object]],
+    *,
+    managed_start: str | None = None,
+    managed_end: str | None = None,
+) -> None:
+    """Fail closed when Yahoo's ledger contradicts its downloaded split column."""
+    if df.empty:
+        return
+    dates = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if dates.empty:
+        return
+    first_date, last_date = dates.min().date(), dates.max().date()
+    configured_start = pd.Timestamp(managed_start).date() if managed_start else first_date
+    configured_end = pd.Timestamp(managed_end).date() if managed_end else None
+    actions = [dict(action) for action in (df.attrs.get("corporate_actions") or [])]
+    unresolved = list(df.attrs.get("unresolved_discontinuities") or [])
+    downloaded = {
+        str(action.get("action_date")): action
+        for action in actions
+        if action.get("action_type") in {"split", "reverse_split"}
+    }
+    for ledger in vendor_actions:
+        action_date = str(ledger.get("action_date") or "")
+        action_type = str(ledger.get("action_type") or "")
+        value = float(ledger.get("value") or 0.0)
+        if not action_date or action_type not in {"split", "reverse_split"} or value <= 0:
+            continue
+        action_day = pd.Timestamp(action_date).date()
+        if (
+            action_day < configured_start
+            or action_day < first_date
+            or action_day > last_date
+            or (configured_end is not None and action_day >= configured_end)
+        ):
+            continue
+        observed = downloaded.get(action_date)
+        observed_value = float(observed.get("value") or 0.0) if observed else None
+        if observed is not None and math.isclose(
+            observed_value or 0.0, value, rel_tol=1e-9, abs_tol=1e-12
+        ):
+            continue
+        contradiction = {
+            "action_date": action_date,
+            "action_type": action_type,
+            "value": value,
+            "applied_to_prices": False,
+            "basis_evidence": "vendor_ledger_download_contradiction",
+            "full_history_verified": True,
+            "download_value": observed_value,
+        }
+        actions = [
+            action for action in actions
+            if not (
+                str(action.get("action_date")) == action_date
+                and action.get("action_type") in {"split", "reverse_split"}
+            )
+        ]
+        actions.append(contradiction)
+        unresolved.append(
+            {
+                "action_date": action_date,
+                "action_type": action_type,
+                "ledger_value": value,
+                "download_value": observed_value,
+                "reason": "vendor_ledger_download_contradiction",
+            }
+        )
+    if any(item.get("reason") == "vendor_ledger_download_contradiction" for item in unresolved):
+        df.attrs["basis_status"] = "unresolved"
+    df.attrs["corporate_actions"] = actions
+    df.attrs["unresolved_discontinuities"] = unresolved
+
+
 def mark_full_history_actions_verified(df: pd.DataFrame) -> None:
     """Record that action evidence was evaluated against the complete price series."""
     actions = [dict(action) for action in (df.attrs.get("corporate_actions") or [])]
@@ -829,11 +905,34 @@ def write_price_daily(
     if fetch_timestamp is None:
         fetch_timestamp = utc_now_iso()
 
-    basis = str(df.attrs.get("adjustment_basis") or "unknown")
-    version = str(df.attrs.get("adjustment_version") or "unknown")
+    basis = str(df.attrs.get("adjustment_basis") or "unknown").strip()
+    version = str(df.attrs.get("adjustment_version") or "unknown").strip()
     status = str(df.attrs.get("basis_status") or "unverified")
     unresolved = list(df.attrs.get("unresolved_discontinuities") or [])
     unresolved_reason = json.dumps(unresolved, sort_keys=True) if unresolved else None
+    actions = list(df.attrs.get("corporate_actions") or [])
+    evidence_present = {
+        "corporate_actions", "unresolved_discontinuities"
+    }.issubset(df.attrs)
+    split_evidence_present = all(
+        action.get("action_type") not in {"split", "reverse_split"}
+        or action.get("basis_evidence") in {
+            "provider_adjusted_close",
+            "provider_already_adjusted",
+            "vendor_ledger_download_contradiction",
+        }
+        for action in actions
+    )
+    if status == "verified" and (
+        not valid_price_provenance(basis, version)
+        or not evidence_present
+        or not split_evidence_present
+        or unresolved
+    ):
+        status = "unresolved"
+        unresolved_reason = json.dumps(
+            [{"reason": "price_basis_provenance_incomplete"}], sort_keys=True
+        )
 
     existing = conn.execute(
         """
@@ -903,7 +1002,7 @@ def write_price_daily(
             """,
             (unresolved_reason, ticker),
         )
-    for action in df.attrs.get("corporate_actions") or []:
+    for action in actions:
         evidence = {
             **action,
             "provider": data_source,
@@ -1264,6 +1363,13 @@ def run(args: argparse.Namespace) -> None:
                                 timeout_sec=args.price_timeout_sec,
                                 retry_attempts=args.price_retry_attempts,
                             )
+                            from trader_koo.db.sources import get_data_source_manager
+
+                            vendor_actions = (
+                                []
+                                if is_index
+                                else get_data_source_manager().fetch_ticker_actions(tkr)
+                            )
                             # A full refresh also audits the old scale before writing so
                             # changed tickers are replaced atomically and reported.
                             reseed_required = bool(
@@ -1275,9 +1381,6 @@ def run(args: argparse.Namespace) -> None:
                                 not args.full_price_refresh
                                 and price_fetch_start != args.price_start
                             ):
-                                from trader_koo.db.sources import get_data_source_manager
-
-                                vendor_actions = get_data_source_manager().fetch_ticker_actions(tkr)
                                 late_action_reconciliation = corporate_actions_require_full_history(
                                     conn,
                                     tkr,
@@ -1349,6 +1452,12 @@ def run(args: argparse.Namespace) -> None:
                                 )
                                 reseeded_tickers.append(tkr)
                                 message_parts.append("price:reseed")
+                            reconcile_vendor_action_ledger(
+                                price_df,
+                                vendor_actions,
+                                managed_start=args.price_start,
+                                managed_end=args.price_end,
+                            )
                             if price_fetch_start == args.price_start:
                                 mark_full_history_actions_verified(price_df)
                             write_price_daily(conn, tkr, price_df, data_source=data_source)
