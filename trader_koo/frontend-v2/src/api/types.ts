@@ -1191,7 +1191,7 @@ export interface NextOpenBaselineState {
     null_mark_count?: number;
     net_return_pct: number | null;
     full_investment_spy_net_return_pct?: number | null;
-    full_investment_spy_price_return_pct?: number | null;
+    opportunity_cost_vs_full_spy_pct?: number | null;
     active_net_pnl: number | null;
     active_metrics_available: boolean;
     max_name_weight_pct: number;

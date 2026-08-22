@@ -202,8 +202,7 @@ export function NextOpenBaselinePanel({
 }) {
   const summary = baseline?.summary;
   const available = baseline?.available === true;
-  const spyReturn = summary?.full_investment_spy_net_return_pct
-    ?? summary?.full_investment_spy_price_return_pct;
+  const spyReturn = summary?.full_investment_spy_net_return_pct;
   const exclusionReasons = Object.entries(
     (baseline?.exclusions ?? []).reduce<Record<string, number>>((counts, row) => {
       counts[row.reason] = (counts[row.reason] ?? 0) + 1;
@@ -273,6 +272,7 @@ export function NextOpenBaselinePanel({
         <div><span className="font-semibold text-[var(--text)]">Benchmark basis:</span> {readableEvidenceText(baseline?.benchmark_basis ?? "unavailable")}</div>
         <div><span className="font-semibold text-[var(--text)]">Max gross:</span> {fmtPct(summary?.max_gross_exposure_pct)}</div>
         <div><span className="font-semibold text-[var(--text)]">Invalid marks:</span> {summary?.null_mark_count ?? 0}</div>
+        <div><span className="font-semibold text-[var(--text)]">Opportunity cost vs SPY:</span> {fmtPct(summary?.opportunity_cost_vs_full_spy_pct, "%", true)}</div>
       </div>
       <div className="mt-3 text-xs text-[var(--muted)]">
         <div className="font-semibold text-[var(--text)]">Why this cannot authorize a campaign</div>

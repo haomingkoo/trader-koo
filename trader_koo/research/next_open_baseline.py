@@ -150,6 +150,8 @@ def execute_portfolio(
     ordered = sorted(decisions, key=lambda row: (row.entry_date, -row.score, row.ticker, row.decision_id))
     if len({row.decision_id for row in ordered}) != len(ordered):
         raise ValueError("decision_id must be unique")
+    if any(not (row.signal_date < row.entry_date <= row.exit_date) for row in ordered):
+        raise ValueError("decisions must satisfy signal_date < entry_date <= exit_date")
     by_entry: dict[str, list[ExecutionDecision]] = defaultdict(list)
     exclusions: list[dict[str, Any]] = []
     for decision in ordered:
@@ -197,7 +199,13 @@ def execute_portfolio(
                 if config.short_borrow_bps_annual is None:
                     financing_priced = False
                     continue
-                charge = position["reserve"] * config.short_borrow_bps_annual / 10_000 / 252
+                prior_row = price_map.get((position["ticker"], previous))
+                prior_close = _finite(prior_row.close if prior_row else None)
+                if prior_close is None or prior_close <= 0:
+                    financing_priced = False
+                    continue
+                marked_short_value = position["shares"] * prior_close
+                charge = marked_short_value * config.short_borrow_bps_annual / 10_000 / 252
                 cash -= charge
                 position["borrow"] += charge
 
@@ -229,13 +237,20 @@ def execute_portfolio(
                 name_room,
                 adv_room,
             )
-            shares = int(target / entry_price)
+            # The name cap is measured on marked gross exposure. For a short,
+            # adverse entry slippage lowers proceeds, so sizing only from the
+            # fill price can exceed the cap at the contemporaneous open mark.
+            shares = int(target / max(raw_open, entry_price))
             if shares < 1:
                 exclusions.append({"decision_id": decision.decision_id, "reason": "capacity_below_one_share"})
                 continue
             reserve = shares * entry_price
             commission = _commission(reserve, config)
-            if reserve + commission > cash:
+            while shares > 0 and reserve + commission > cash:
+                shares -= 1
+                reserve = shares * entry_price
+                commission = _commission(reserve, config) if shares else 0.0
+            if shares < 1:
                 exclusions.append({"decision_id": decision.decision_id, "reason": "insufficient_cash"})
                 continue
             cash -= reserve + commission
@@ -341,14 +356,20 @@ def _verified_calls(
         return [], ["report_publication_contract_unavailable"], {}
     if report_dir is None:
         return [], ["report_artifact_directory_unconfigured"], {}
+    columns = _columns(conn, "setup_call_evaluations")
+    optional = [f"e.{name}" if name in columns else f"NULL AS {name}" for name in ("setup_family", "setup_tier")]
+    rows = conn.execute(f"""
+        SELECT e.id,e.asof_date,e.ticker,e.call_direction,e.score,{','.join(optional)},e.report_run_id
+        FROM setup_call_evaluations e
+        ORDER BY e.asof_date,e.score DESC,e.ticker,e.id
+    """).fetchall()
+    if any(row[7] is None or not str(row[7]).strip() for row in rows):
+        return [], ["setup_call_report_run_id_missing"], {}
     try:
         from trader_koo.report.runs import resolve_published_report
     except ImportError:
         return [], ["report_publication_contract_unavailable"], {}
-    run_ids = [str(row[0]) for row in conn.execute(
-        "SELECT DISTINCT report_run_id FROM setup_call_evaluations "
-        "WHERE report_run_id IS NOT NULL AND TRIM(report_run_id)!='' ORDER BY report_run_id"
-    )]
+    run_ids = sorted({str(row[7]).strip() for row in rows})
     lineage: dict[str, Any] = {}
     for run_id in run_ids:
         resolved = resolve_published_report(
@@ -363,19 +384,11 @@ def _verified_calls(
                 "code_version", "generated_ts", "generation_key",
             )
         }
-    columns = _columns(conn, "setup_call_evaluations")
-    optional = [f"e.{name}" if name in columns else f"NULL AS {name}" for name in ("setup_family", "setup_tier")]
-    rows = conn.execute(f"""
-        SELECT e.id,e.asof_date,e.ticker,e.call_direction,e.score,{','.join(optional)},e.report_run_id
-        FROM setup_call_evaluations e
-        WHERE e.report_run_id IS NOT NULL AND TRIM(e.report_run_id)!=''
-        ORDER BY e.asof_date,e.score DESC,e.ticker,e.id
-    """).fetchall()
     return [{
         "call_id": int(row[0]), "signal_date": str(row[1]), "ticker": str(row[2]).upper(),
         "direction": str(row[3]).lower(), "score": _finite(row[4]), "setup_family": row[5],
         "setup_tier": row[6], "report_run_id": row[7],
-    } for row in rows if str(row[7]) in lineage], [], lineage
+    } for row in rows], [], lineage
 
 
 def _price_contract(conn: sqlite3.Connection, tickers: list[str]) -> tuple[dict[str, Any] | None, list[str]]:
@@ -410,23 +423,40 @@ def _split_dates(dates: list[str], sessions: list[str], holding: int) -> dict[st
 
 
 def _ensure_consumption_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS research_holdout_consumptions (
+    statements = (
+        """CREATE TABLE IF NOT EXISTS research_holdout_consumptions (
             consumption_id TEXT PRIMARY KEY, method TEXT NOT NULL, window_start TEXT NOT NULL,
             window_end TEXT NOT NULL, config_hash TEXT NOT NULL, input_hash TEXT NOT NULL,
-            reusable_for_policy_selection INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS research_holdout_dates (
+            reusable_for_policy_selection INTEGER NOT NULL DEFAULT 0)""",
+        """CREATE TABLE IF NOT EXISTS research_holdout_dates (
             signal_date TEXT PRIMARY KEY,
-            consumption_id TEXT NOT NULL REFERENCES research_holdout_consumptions(consumption_id));
-        CREATE TRIGGER IF NOT EXISTS research_holdout_consumptions_no_update BEFORE UPDATE
-        ON research_holdout_consumptions BEGIN SELECT RAISE(ABORT,'holdout consumption is immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS research_holdout_consumptions_no_delete BEFORE DELETE
-        ON research_holdout_consumptions BEGIN SELECT RAISE(ABORT,'holdout consumption is immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS research_holdout_dates_no_update BEFORE UPDATE
-        ON research_holdout_dates BEGIN SELECT RAISE(ABORT,'holdout dates are immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS research_holdout_dates_no_delete BEFORE DELETE
-        ON research_holdout_dates BEGIN SELECT RAISE(ABORT,'holdout dates are immutable'); END;
-    """)
+            consumption_id TEXT NOT NULL REFERENCES research_holdout_consumptions(consumption_id))""",
+        """CREATE TRIGGER IF NOT EXISTS research_holdout_consumptions_no_update BEFORE UPDATE
+        ON research_holdout_consumptions BEGIN SELECT RAISE(ABORT,'holdout consumption is immutable'); END""",
+        """CREATE TRIGGER IF NOT EXISTS research_holdout_consumptions_no_delete BEFORE DELETE
+        ON research_holdout_consumptions BEGIN SELECT RAISE(ABORT,'holdout consumption is immutable'); END""",
+        """CREATE TRIGGER IF NOT EXISTS research_holdout_dates_no_update BEFORE UPDATE
+        ON research_holdout_dates BEGIN SELECT RAISE(ABORT,'holdout dates are immutable'); END""",
+        """CREATE TRIGGER IF NOT EXISTS research_holdout_dates_no_delete BEFORE DELETE
+        ON research_holdout_dates BEGIN SELECT RAISE(ABORT,'holdout dates are immutable'); END""",
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+
+def _seal_holdout_inserts(conn: sqlite3.Connection) -> None:
+    """Make the first complete heldout seal append-immutable."""
+    statements = (
+        """CREATE TRIGGER IF NOT EXISTS research_holdout_consumptions_no_insert BEFORE INSERT
+        ON research_holdout_consumptions
+        WHEN EXISTS (SELECT 1 FROM research_holdout_consumptions)
+        BEGIN SELECT RAISE(ABORT,'holdout consumption is sealed'); END""",
+        """CREATE TRIGGER IF NOT EXISTS research_holdout_dates_no_insert BEFORE INSERT
+        ON research_holdout_dates
+        BEGIN SELECT RAISE(ABORT,'holdout dates are sealed'); END""",
+    )
+    for statement in statements:
+        conn.execute(statement)
 
 
 def _record_holdout(conn: sqlite3.Connection, dates: list[str], config_hash: str, input_hash: str) -> dict[str, Any]:
@@ -447,7 +477,7 @@ def _record_holdout(conn: sqlite3.Connection, dates: list[str], config_hash: str
         conn.execute("INSERT INTO research_holdout_consumptions VALUES (?,?,?,?,?,?,0)",
                      (identity, METHOD, dates[0], dates[-1], config_hash, input_hash))
         conn.executemany("INSERT INTO research_holdout_dates VALUES (?,?)", ((date, identity) for date in dates))
-        conn.commit()
+    _seal_holdout_inserts(conn)
     return {"consumed": True, "reusable_for_policy_selection": False,
             "status": "sealed_once_not_reusable_for_policy_selection", "consumption_id": identity,
             "window_start": dates[0], "window_end": dates[-1]}
@@ -493,7 +523,7 @@ def _matched_control(trade: dict[str, Any], prices: list[SessionPrice], sessions
     )
 
 
-def run_next_open_baseline(
+def _run_next_open_baseline(
     conn: sqlite3.Connection,
     *,
     config: BaselineConfig | None = None,
@@ -506,23 +536,11 @@ def run_next_open_baseline(
     diagnostic = cfg.holding_sessions != 10
     if diagnostic and consume_heldout:
         raise ValueError("diagnostic horizons cannot consume the sealed heldout window")
-    opened_snapshot = not conn.in_transaction
-    if opened_snapshot:
-        conn.execute("BEGIN")
-    try:
-        calls, reasons, report_lineage = _verified_calls(conn, report_dir)
-        lineage_contract_ready = not reasons
-        selected_tickers = sorted({call["ticker"] for call in calls} | {"SPY"})
-        price_contract, price_reasons = _price_contract(
-            conn, selected_tickers
-        )
-        prices, volumes = _price_rows(conn, selected_tickers)
-        if opened_snapshot:
-            conn.commit()
-    except Exception:
-        if opened_snapshot:
-            conn.rollback()
-        raise
+    calls, reasons, report_lineage = _verified_calls(conn, report_dir)
+    lineage_contract_ready = not reasons
+    selected_tickers = sorted({call["ticker"] for call in calls} | {"SPY"})
+    price_contract, price_reasons = _price_contract(conn, selected_tickers)
+    prices, volumes = _price_rows(conn, selected_tickers)
     reasons.extend(price_reasons)
     price_map = {(row.ticker, row.date): row for row in prices}
     sessions = sorted(row.date for row in prices if row.ticker == "SPY" and row.close is not None and row.close > 0)
@@ -565,16 +583,27 @@ def run_next_open_baseline(
             metadata = tuple(sorted({"call_id": call_id, "report_run_id": call["report_run_id"], "setup_family": call["setup_family"], "setup_tier": call["setup_tier"]}.items()))
             decisions.append(ExecutionDecision(str(call_id), ticker, call["direction"], call["signal_date"], entry, exit_, float(call["score"]), capacity, part, metadata=metadata))
 
-    simulation_dates = sorted({date for decision in decisions for date in sessions if decision.signal_date <= date <= decision.exit_date})
+    simulation_dates = (
+        [date for date in sessions if min(row.signal_date for row in decisions) <= date <= max(row.exit_date for row in decisions)]
+        if decisions else []
+    )
     result = execute_portfolio(decisions, prices, simulation_dates, cfg)
     exclusions.extend({"call_id": int(row["decision_id"]), "reason": row["reason"]} for row in result.exclusions)
     enriched = []
     controls_priced = True
     for trade in result.trades:
         control = _matched_control(trade, prices, sessions, cfg)
-        controls_priced = controls_priced and control.financing_priced and bool(control.trades)
-        matched = float(control.trades[0]["net_pnl"]) if control.financing_priced and control.trades else None
-        enriched.append({**trade, "spy_matched_net_pnl": matched,
+        control_complete = (
+            control.financing_priced
+            and bool(control.trades)
+            and all(row.get("equity") is not None for row in control.equity_curve)
+        )
+        controls_priced = controls_priced and control_complete
+        matched = float(control.trades[0]["net_pnl"]) if control_complete else None
+        matched_fill = float(control.trades[0]["entry_notional"]) if control.trades else None
+        enriched.append({**trade, "spy_matched_target_notional": float(trade["entry_notional"]),
+                         "spy_matched_filled_notional": matched_fill,
+                         "spy_matched_net_pnl": matched,
                          "active_net_pnl": float(trade["net_pnl"]) - matched if matched is not None else None})
 
     config_payload = dataclasses.asdict(cfg)
@@ -614,7 +643,12 @@ def run_next_open_baseline(
     if enriched:
         start, end = min(str(t["entry_date"]) for t in enriched), max(str(t["exit_date"]) for t in enriched)
         full_cfg = dataclasses.replace(cfg, max_positions=1, position_pct=100, max_name_pct=100, max_adv_pct=100)
-        full = execute_portfolio([ExecutionDecision("full_spy", "SPY", "long", start, start, end, 0, cfg.initial_capital, locked_notional=cfg.initial_capital * .99)], prices, [date for date in sessions if start <= date <= end], full_cfg)
+        prior_sessions = [date for date in sessions if date < start]
+        full_signal = prior_sessions[-1] if prior_sessions else start
+        if full_signal < start:
+            full = execute_portfolio([ExecutionDecision("full_spy", "SPY", "long", full_signal, start, end, 0, cfg.initial_capital, locked_notional=cfg.initial_capital)], prices, [date for date in sessions if full_signal <= date <= end], full_cfg)
+        else:
+            full = ExecutionResult((), (), (), False, cfg.initial_capital, None, 0.0, 0.0)
         if full.final_equity is not None and full.financing_priced:
             full_spy = (full.final_equity / full.initial_equity - 1) * 100
 
@@ -625,7 +659,7 @@ def run_next_open_baseline(
         "readiness_status": "insufficient_or_noncausal_evidence", "readiness_reasons": reasons,
         "causal_valid": False, "decision_eligible": False, "causal_limitations": reasons,
         "return_basis": str((price_contract or {}).get("basis") or "unavailable"),
-        "benchmark_basis": "same_direction_same_notional_spy_via_canonical_execution_ledger",
+        "benchmark_basis": "same_direction_target_notional_spy_whole_shares_via_canonical_execution_ledger",
         "data_window": {"price_start": sessions[0] if sessions else None, "price_end": sessions[-1] if sessions else None,
                         "signal_start": signal_dates[0] if signal_dates else None, "signal_end": signal_dates[-1] if signal_dates else None},
         "execution_contract": {"signal": "report close", "entry": "immediate next SPY session open before same-day close exits",
@@ -635,11 +669,14 @@ def run_next_open_baseline(
                     "daily_observation_count": len(valid_curve), "null_mark_count": null_marks,
                     "signal_date_count": len(signal_dates), "traded_signal_date_count": len(traded_dates),
                     "effective_non_overlapping_block_count": effective_blocks, "initial_capital": cfg.initial_capital,
-                    "final_equity": final_equity,
-                    "net_return_pct": (final_equity / cfg.initial_capital - 1) * 100 if final_equity is not None and result.financing_priced else None,
-                    "realized_net_pnl": realized if result.financing_priced else None, "matched_spy_net_pnl": matched_net,
-                    "active_net_pnl": realized - matched_net if matched_net is not None and result.financing_priced else None,
-                    "full_investment_spy_net_return_pct": full_spy,
+                    "final_equity": final_equity if result.financing_priced and not null_marks else None,
+                    "net_return_pct": (final_equity / cfg.initial_capital - 1) * 100 if final_equity is not None and result.financing_priced and not null_marks else None,
+                    "realized_net_pnl": realized if result.financing_priced and not null_marks else None,
+                    "matched_spy_net_pnl": matched_net if not null_marks else None,
+                    "active_net_pnl": realized - matched_net if matched_net is not None and result.financing_priced and not null_marks else None,
+                    "full_investment_spy_net_return_pct": full_spy if not null_marks else None,
+                    "opportunity_cost_vs_full_spy_pct": ((final_equity / cfg.initial_capital - 1) * 100 - full_spy)
+                    if final_equity is not None and full_spy is not None and result.financing_priced and not null_marks else None,
                     "active_metrics_available": matched_net is not None and result.financing_priced and controls_priced and not null_marks,
                     "max_name_weight_pct": result.max_name_weight_pct, "max_gross_exposure_pct": result.max_gross_exposure_pct},
         "exclusions": sorted(exclusions, key=lambda row: (int(row.get("call_id", 0)), str(row.get("reason", "")))),
@@ -655,6 +692,30 @@ def run_next_open_baseline(
     return artifact
 
 
+def run_next_open_baseline(
+    conn: sqlite3.Connection,
+    *,
+    config: BaselineConfig | None = None,
+    consume_heldout: bool = True,
+    report_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Run one caller-owned snapshot; commit only transactions opened here."""
+    opened_snapshot = not conn.in_transaction
+    if opened_snapshot:
+        conn.execute("BEGIN")
+    try:
+        artifact = _run_next_open_baseline(
+            conn, config=config, consume_heldout=consume_heldout, report_dir=report_dir
+        )
+        if opened_snapshot:
+            conn.commit()
+        return artifact
+    except Exception:
+        if opened_snapshot:
+            conn.rollback()
+        raise
+
+
 def write_artifact(path: Path, artifact: dict[str, Any]) -> str:
     payload = canonical_json_bytes(artifact) + b"\n"
     if path.exists() and path.read_bytes() != payload:
@@ -662,6 +723,38 @@ def write_artifact(path: Path, artifact: dict[str, Any]) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     return hashlib.sha256(payload).hexdigest()
+
+
+def _valid_artifact_shape(payload: dict[str, Any]) -> bool:
+    """Validate the small, current evidence contract without a schema library."""
+    if payload.get("schema_version") != SCHEMA_VERSION or payload.get("method") != METHOD:
+        return False
+    if payload.get("causal_valid") is not False or payload.get("decision_eligible") is not False:
+        return False
+    scalar_strings = ("artifact_scope", "evidence_state", "readiness_status", "return_basis", "benchmark_basis")
+    if any(not isinstance(payload.get(key), str) or not payload[key] for key in scalar_strings):
+        return False
+    dict_fields = ("data_window", "execution_contract", "config", "splits", "consumed_window", "summary", "provenance")
+    list_fields = ("readiness_reasons", "causal_limitations", "exclusions", "trades", "equity_curve")
+    if any(not isinstance(payload.get(key), dict) for key in dict_fields):
+        return False
+    if any(not isinstance(payload.get(key), list) for key in list_fields):
+        return False
+    required_summary = {
+        "selected_calls", "closed_trades", "excluded_calls", "daily_observation_count",
+        "null_mark_count", "initial_capital", "net_return_pct", "active_metrics_available",
+    }
+    if not required_summary.issubset(payload["summary"]):
+        return False
+    provenance = payload["provenance"]
+    hashes = ("config_sha256", "input_sha256", "implementation_sha256", "artifact_sha256")
+    if any(not isinstance(provenance.get(key), str) or len(provenance[key]) != 64 for key in hashes):
+        return False
+    if not isinstance(provenance.get("canonical_report_lineage_enforced"), bool):
+        return False
+    if not isinstance(provenance.get("research_price_basis_enforced"), bool):
+        return False
+    return isinstance(payload["summary"].get("active_metrics_available"), bool)
 
 
 def artifact_state(path: Path | None = None) -> dict[str, Any]:
@@ -673,8 +766,8 @@ def artifact_state(path: Path | None = None) -> dict[str, Any]:
         payload = json.loads(selected.read_text())
     except (OSError, UnicodeError, json.JSONDecodeError):
         return unavailable
-    if not isinstance(payload, dict) or not isinstance(payload.get("provenance"), dict):
-        return unavailable
+    if not isinstance(payload, dict) or not _valid_artifact_shape(payload):
+        return {**unavailable, "error": "artifact_schema_invalid"}
     check = dict(payload)
     check["provenance"] = dict(payload["provenance"])
     expected = check["provenance"].pop("artifact_sha256", None)
