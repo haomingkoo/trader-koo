@@ -17,6 +17,7 @@ import sqlite3
 import subprocess
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -147,12 +148,6 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
         "ON report_runs(generation_key) WHERE is_generation_canonical=1 AND generation_key IS NOT NULL"
     )
     conn.execute("DROP VIEW IF EXISTS report_publication_ownership")
-    conn.execute(
-        """CREATE VIEW report_publication_ownership AS
-           SELECT run_id,is_generation_canonical AS admits_new
-           FROM report_runs
-           WHERE status='published' AND publication_verified=1"""
-    )
 
     triggers = {
         "report_runs_started_insert_only": """
@@ -175,6 +170,7 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                 OR julianday(NEW.completed_ts)<julianday(NEW.started_ts)
                 OR NEW.generated_ts NOT GLOB '????-??-??T??:??:??Z'
                 OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.generated_ts)!=NEW.generated_ts
+                OR julianday(NEW.generated_ts)<julianday(NEW.started_ts)
                 OR julianday(NEW.generated_ts)>julianday(NEW.completed_ts)
                 OR NEW.generation_key!=(NEW.report_kind||':'||NEW.generated_ts)
                 OR json_type(NEW.scanned_universe_json)!='array'
@@ -210,6 +206,16 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
         "report_runs_failed_immutable": """
             BEFORE UPDATE ON report_runs WHEN OLD.status='failed'
             BEGIN SELECT RAISE(ABORT,'failed report run is immutable'); END
+        """,
+        "report_runs_started_identity_immutable": """
+            BEFORE UPDATE ON report_runs
+            WHEN OLD.status='started' AND (
+              NEW.run_id IS NOT OLD.run_id OR NEW.report_kind IS NOT OLD.report_kind
+              OR NEW.started_ts IS NOT OLD.started_ts
+              OR NEW.config_json IS NOT OLD.config_json
+              OR NEW.config_hash IS NOT OLD.config_hash
+              OR NEW.code_version IS NOT OLD.code_version
+            ) BEGIN SELECT RAISE(ABORT,'started report identity is immutable'); END
         """,
         "report_runs_snapshot_immutable": """
             BEFORE UPDATE ON report_runs
@@ -271,7 +277,7 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
         "report_run_decisions_parent_started", "report_runs_immutable_delete",
         "report_runs_started_insert_only", "report_runs_terminal_evidence",
         "report_runs_failed_immutable", "report_runs_snapshot_immutable",
-        "report_runs_pointer_transition",
+        "report_runs_pointer_transition", "report_runs_started_identity_immutable",
     ):
         conn.execute(f"DROP TRIGGER IF EXISTS {name}")
     for name, body in triggers.items():
@@ -346,6 +352,16 @@ def _load_artifact(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _load_artifact_bytes(data: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("report JSON artifact is unreadable") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("report JSON artifact must be an object")
+    return payload
+
+
 def _assert_publishable_report(report: dict[str, Any]) -> None:
     if report.get("ok") is not True:
         raise ValueError("degraded report cannot be completed or published (ok must be true)")
@@ -383,9 +399,14 @@ def complete_report_run(
     run_meta = meta.get("report_run") if isinstance(meta.get("report_run"), dict) else {}
     if str(run_meta.get("run_id") or "") != run_id:
         raise ValueError("report artifact has the wrong run identity")
-    row = conn.execute("SELECT status,report_kind FROM report_runs WHERE run_id=?", (run_id,)).fetchone()
+    row = conn.execute(
+        "SELECT status,report_kind,started_ts FROM report_runs WHERE run_id=?",
+        (run_id,),
+    ).fetchone()
     if row is None or row[0] != "started" or str(row[1]) != report_kind:
         raise ValueError(f"report run {run_id} is not the matching started run")
+    if generated < _utc(row[2], field="started_ts"):
+        raise ValueError("generated_ts cannot be before started_ts")
     ranked = [{"ticker": item["ticker"], "selected_rank": item["selected_rank"]} for item in decisions]
     latest_data = artifact_report.get("latest_data") if isinstance(artifact_report.get("latest_data"), dict) else {}
     inputs = {
@@ -437,18 +458,28 @@ def _row_dict(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
     return dict(zip(columns, row, strict=True)) if row is not None else None
 
 
+@dataclass(frozen=True)
+class _VerifiedPublication:
+    artifact: Path
+    markdown: Path
+    payload: dict[str, Any]
+    json_bytes: bytes
+    markdown_bytes: bytes
+    row: dict[str, Any]
+
+
 def _verify_artifacts(
     conn: sqlite3.Connection,
     row: dict[str, Any],
     report_dir: Path,
-) -> tuple[Path, Path, dict[str, Any]]:
+) -> _VerifiedPublication:
     """Verify identity, chronology, both files, and the exact DB snapshot."""
     if row.get("status") not in {"completed", "published"}:
         raise ValueError("report run does not own completed evidence")
     started = _utc(row.get("started_ts"), field="started_ts")
     completed = _utc(row.get("completed_ts"), field="completed_ts")
     generated = _utc(row.get("generated_ts"), field="generated_ts")
-    if completed < started or generated > completed:
+    if generated < started or generated > completed:
         raise ValueError("report run timestamps are reversed")
     if row.get("status") == "published":
         published = _utc(row.get("published_ts"), field="published_ts")
@@ -499,18 +530,24 @@ def _verify_artifacts(
     markdown = Path(str(row.get("markdown_path") or ""))
     stamp = generated.strftime("%Y%m%dT%H%M%SZ")
     expected_stem = f"daily_report_{stamp}_{row.get('run_id')}"
-    if artifact.parent.resolve() != report_dir or artifact.name != f"{expected_stem}.json":
+    if artifact.is_symlink() or artifact.resolve().parent != report_dir or artifact.name != f"{expected_stem}.json":
         raise ValueError("report artifact path does not match its run identity")
-    if markdown.parent.resolve() != report_dir or markdown.name != f"{expected_stem}.md":
+    if markdown.is_symlink() or markdown.resolve().parent != report_dir or markdown.name != f"{expected_stem}.md":
         raise ValueError("report markdown path does not match its run identity")
-    for path, expected, label in (
-        (artifact, row.get("content_hash"), "JSON"),
-        (markdown, row.get("markdown_hash"), "Markdown"),
+    try:
+        json_bytes = artifact.read_bytes()
+        markdown_bytes = markdown.read_bytes()
+    except OSError as exc:
+        raise ValueError("report artifact is unreadable") from exc
+    for data, expected, label in (
+        (json_bytes, row.get("content_hash"), "JSON"),
+        (markdown_bytes, row.get("markdown_hash"), "Markdown"),
     ):
-        if not _HASH_RE.fullmatch(str(expected or "")) or not path.is_file() or sha256_file(path) != expected:
+        actual = hashlib.sha256(data).hexdigest()
+        if not _HASH_RE.fullmatch(str(expected or "")) or actual != expected:
             raise ValueError(f"report {label} artifact hash mismatch")
 
-    payload = _load_artifact(artifact)
+    payload = _load_artifact_bytes(json_bytes)
     _assert_publishable_report(payload)
     meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
     run_meta = meta.get("report_run") if isinstance(meta.get("report_run"), dict) else {}
@@ -552,7 +589,14 @@ def _verify_artifacts(
     ]
     if stored_decisions != decisions:
         raise ValueError("report artifact and stored decision rows differ")
-    return artifact, markdown, payload
+    return _VerifiedPublication(
+        artifact=artifact,
+        markdown=markdown,
+        payload=payload,
+        json_bytes=json_bytes,
+        markdown_bytes=markdown_bytes,
+        row=row,
+    )
 
 
 def _publication_meta(row: dict[str, Any]) -> dict[str, Any]:
@@ -601,6 +645,14 @@ def resolve_published_report(
         params.append(exact)
     if require_current:
         clauses.append("is_generation_canonical=1")
+        clauses.append(
+            """NOT EXISTS (
+                SELECT 1 FROM report_runs newer
+                WHERE newer.status='published' AND newer.publication_verified=1
+                  AND (newer.published_ts>report_runs.published_ts OR
+                       (newer.published_ts=report_runs.published_ts AND newer.run_id>report_runs.run_id))
+            )"""
+        )
     row = conn.execute(
         f"SELECT * FROM report_runs WHERE {' AND '.join(clauses)} "
         "ORDER BY published_ts DESC,run_id DESC LIMIT 1",
@@ -609,10 +661,58 @@ def resolve_published_report(
     if row is None:
         return None
     record = dict(zip(columns, row, strict=True))
-    artifact, _, payload = _verify_artifacts(conn, record, report_dir)
-    linked = dict(payload)
+    verified = _verify_artifacts(conn, record, report_dir)
+    linked = dict(verified.payload)
     linked["report_run"] = _publication_meta(record)
-    return artifact, linked
+    return verified.artifact, linked
+
+
+def verified_report_run_ids(
+    conn: sqlite3.Connection,
+    run_ids: list[str] | set[str] | tuple[str, ...],
+) -> set[str]:
+    """Return only run IDs whose exact historical artifacts still verify."""
+    verified: set[str] = set()
+    for run_id in sorted({str(value) for value in run_ids if str(value).strip()}):
+        row = conn.execute(
+            "SELECT artifact_path FROM report_runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        if row is None or not str(row[0] or "").strip():
+            continue
+        try:
+            resolved = resolve_published_report(
+                conn,
+                report_dir=Path(str(row[0])).parent,
+                run_id=run_id,
+            )
+        except ValueError:
+            continue
+        if resolved is not None:
+            verified.add(run_id)
+    return verified
+
+
+def _resolve_current_publication(
+    conn: sqlite3.Connection,
+    *,
+    report_dir: Path,
+) -> _VerifiedPublication | None:
+    columns = [str(item[1]) for item in conn.execute("PRAGMA table_info(report_runs)")]
+    if "publication_verified" not in columns:
+        return None
+    row = conn.execute(
+        """SELECT * FROM report_runs
+           WHERE status='published' AND publication_verified=1
+           ORDER BY published_ts DESC,run_id DESC LIMIT 1"""
+    ).fetchone()
+    if row is None:
+        return None
+    return _verify_artifacts(
+        conn,
+        dict(zip(columns, row, strict=True)),
+        report_dir,
+    )
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -641,22 +741,32 @@ def _publication_lock(report_dir: Path):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def reconcile_report_publication(conn: sqlite3.Connection, *, report_dir: Path) -> dict[str, Any] | None:
-    """Rebuild compatibility files from the DB-authoritative latest publication."""
+def _reconcile_report_publication_locked(
+    conn: sqlite3.Connection,
+    *,
+    report_dir: Path,
+) -> dict[str, Any] | None:
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_runs'").fetchone() is None:
         return None
-    resolved = resolve_published_report(conn, report_dir=report_dir, require_current=True)
-    if resolved is None:
+    verified = _resolve_current_publication(conn, report_dir=report_dir)
+    if verified is None:
         return None
-    artifact, payload = resolved
-    markdown = Path(str(conn.execute(
-        "SELECT markdown_path FROM report_runs WHERE run_id=?", (payload["report_run"]["run_id"],)
-    ).fetchone()[0]))
-    manifest = {**payload["report_run"], "artifact_file": artifact.name, "markdown_file": markdown.name}
+    meta = _publication_meta(verified.row)
+    manifest = {
+        **meta,
+        "artifact_file": verified.artifact.name,
+        "markdown_file": verified.markdown.name,
+    }
     _atomic_write_if_changed(report_dir / LATEST_MANIFEST, (_canonical_json(manifest) + "\n").encode())
-    _atomic_write_if_changed(report_dir / "daily_report_latest.json", artifact.read_bytes())
-    _atomic_write_if_changed(report_dir / "daily_report_latest.md", markdown.read_bytes())
+    _atomic_write_if_changed(report_dir / "daily_report_latest.json", verified.json_bytes)
+    _atomic_write_if_changed(report_dir / "daily_report_latest.md", verified.markdown_bytes)
     return manifest
+
+
+def reconcile_report_publication(conn: sqlite3.Connection, *, report_dir: Path) -> dict[str, Any] | None:
+    """Serialize recovery writes with publication and copy only verified bytes."""
+    with _publication_lock(report_dir):
+        return _reconcile_report_publication_locked(conn, report_dir=report_dir)
 
 
 def publish_report_run(conn: sqlite3.Connection, *, run_id: str, report_dir: Path) -> dict[str, Any]:
@@ -697,7 +807,7 @@ def publish_report_run(conn: sqlite3.Connection, *, run_id: str, report_dir: Pat
             except Exception:
                 conn.rollback()
                 raise
-        manifest = reconcile_report_publication(conn, report_dir=report_dir)
+        manifest = _reconcile_report_publication_locked(conn, report_dir=report_dir)
         if manifest is None:
             raise RuntimeError("published report could not be resolved")
         return manifest if manifest.get("run_id") == run_id else _publication_meta(_row_dict(conn, run_id) or {})

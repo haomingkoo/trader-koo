@@ -163,11 +163,15 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         CREATE TRIGGER paper_trades_require_canonical_run
         BEFORE INSERT ON paper_trades
         WHEN NOT EXISTS (
-            SELECT 1 FROM report_publication_ownership
-            WHERE run_id = NEW.report_run_id AND admits_new = 1
+            SELECT 1 FROM report_runs r
+            JOIN report_run_decisions d ON d.run_id=r.run_id
+            WHERE r.run_id=NEW.report_run_id
+              AND r.status='published' AND r.publication_verified=1
+              AND r.is_generation_canonical=1
+              AND d.ticker=NEW.ticker AND d.decision='accepted'
         )
         BEGIN
-            SELECT RAISE(ABORT, 'paper trades require a canonical published report run');
+            SELECT RAISE(ABORT, 'paper trades require a canonical published report run with an accepted decision');
         END
         """
     )

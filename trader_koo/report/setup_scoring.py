@@ -1567,11 +1567,15 @@ def ensure_setup_call_eval_schema(conn: sqlite3.Connection) -> None:
         CREATE TRIGGER setup_call_evaluations_require_canonical_run
         BEFORE INSERT ON setup_call_evaluations
         WHEN NOT EXISTS (
-            SELECT 1 FROM report_publication_ownership
-            WHERE run_id = NEW.report_run_id AND admits_new = 1
+            SELECT 1 FROM report_runs r
+            JOIN report_run_decisions d ON d.run_id=r.run_id
+            WHERE r.run_id=NEW.report_run_id
+              AND r.status='published' AND r.publication_verified=1
+              AND r.is_generation_canonical=1
+              AND d.ticker=NEW.ticker AND d.decision='accepted'
         )
         BEGIN
-            SELECT RAISE(ABORT, 'setup calls require a canonical published report run');
+            SELECT RAISE(ABORT, 'setup calls require a canonical published report run with an accepted decision');
         END
         """
     )
@@ -1636,7 +1640,9 @@ def _persist_setup_call_candidates(
     if not str(report_run_id or "").strip():
         raise ValueError("setup-call creation requires canonical report-run lineage")
     run = conn.execute(
-        "SELECT admits_new FROM report_publication_ownership WHERE run_id = ?",
+        """SELECT 1 FROM report_runs
+           WHERE run_id=? AND status='published' AND publication_verified=1
+             AND is_generation_canonical=1""",
         (report_run_id,),
     ).fetchone()
     if (
@@ -1653,6 +1659,13 @@ def _persist_setup_call_candidates(
         ticker = str(row.get("ticker") or "").upper().strip()
         if not ticker:
             continue
+        member = conn.execute(
+            """SELECT 1 FROM report_run_decisions
+               WHERE run_id=? AND ticker=? AND decision='accepted'""",
+            (report_run_id, ticker),
+        ).fetchone()
+        if member is None:
+            raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
         direction = _setup_call_direction(row)
         if direction not in {"long", "short"}:
             continue
@@ -1713,18 +1726,27 @@ def _persist_setup_call_candidates(
 
 
 def _score_open_setup_call_outcomes(conn: sqlite3.Connection) -> int:
+    from trader_koo.report.runs import verified_report_run_ids
+
+    linked_ids = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT report_run_id FROM setup_call_evaluations WHERE report_run_id IS NOT NULL"
+        )
+    }
+    verified_ids = verified_report_run_ids(conn, linked_ids)
+    if not verified_ids:
+        return 0
+    placeholders = ",".join("?" for _ in verified_ids)
     open_rows = conn.execute(
-        """
+        f"""
         SELECT id, ticker, asof_date, call_direction, validity_days, close_asof
         FROM setup_call_evaluations
         WHERE status = 'open'
-          AND report_run_id IS NOT NULL
-          AND EXISTS (
-                  SELECT 1 FROM report_publication_ownership
-                  WHERE report_publication_ownership.run_id = setup_call_evaluations.report_run_id
-          )
+          AND report_run_id IN ({placeholders})
         ORDER BY asof_date ASC, id ASC
-        """
+        """,
+        tuple(sorted(verified_ids)),
     ).fetchall()
     scored = 0
     for row in open_rows:
@@ -1995,16 +2017,26 @@ def _summarize_setup_call_evaluations(
     if not table_exists(conn, "setup_call_evaluations"):
         return {}, {}
     cutoff_date = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=max(30, int(window_days)))).isoformat()
+    from trader_koo.report.runs import verified_report_run_ids
+
+    linked_ids = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT report_run_id FROM setup_call_evaluations WHERE report_run_id IS NOT NULL"
+        )
+    }
+    verified_ids = verified_report_run_ids(conn, linked_ids)
+    if not verified_ids:
+        return {}, {}
+    placeholders = ",".join("?" for _ in verified_ids)
+    lineage_params = tuple(sorted(verified_ids))
     open_calls = int(
         (
             conn.execute(
-                """SELECT COUNT(*) FROM setup_call_evaluations
+                f"""SELECT COUNT(*) FROM setup_call_evaluations
                    WHERE status = 'open'
-                     AND report_run_id IS NOT NULL
-                     AND EXISTS (
-                         SELECT 1 FROM report_publication_ownership
-                         WHERE report_publication_ownership.run_id = setup_call_evaluations.report_run_id
-                     )"""
+                     AND report_run_id IN ({placeholders})""",
+                lineage_params,
             ).fetchone() or [0]
         )[0]
         or 0
@@ -2012,7 +2044,7 @@ def _summarize_setup_call_evaluations(
     scored_rows = [
         dict(r)
         for r in conn.execute(
-            """
+            f"""
             SELECT
                 ticker,
                 asof_date,
@@ -2025,14 +2057,10 @@ def _summarize_setup_call_evaluations(
             FROM setup_call_evaluations
             WHERE status = 'scored'
               AND asof_date >= ?
-              AND report_run_id IS NOT NULL
-              AND EXISTS (
-                      SELECT 1 FROM report_publication_ownership
-                      WHERE report_publication_ownership.run_id = setup_call_evaluations.report_run_id
-              )
+              AND report_run_id IN ({placeholders})
             ORDER BY asof_date DESC, id DESC
             """,
-            (cutoff_date,),
+            (cutoff_date, *lineage_params),
         ).fetchall()
     ]
 

@@ -370,16 +370,19 @@ def daily_report_history(
     files: list[Path] = []
     try:
         if registry_conn is not None:
-            run_ids = [
+            candidates = [
                 str(row[0])
                 for row in registry_conn.execute(
-                    """SELECT ownership.run_id
-                       FROM report_publication_ownership AS ownership
-                       JOIN report_runs USING (run_id)
-                       WHERE ownership.admits_new=1
-                       ORDER BY published_ts DESC,run_id DESC LIMIT ?""",
-                    (max(1, int(limit)),),
+                    """SELECT run_id FROM report_runs
+                       WHERE status='published' AND publication_verified=1
+                       ORDER BY published_ts DESC,run_id DESC"""
                 )
+            ]
+            from trader_koo.report.runs import verified_report_run_ids
+
+            verified = verified_report_run_ids(registry_conn, candidates)
+            run_ids = [run_id for run_id in candidates if run_id in verified][
+                : max(1, int(limit))
             ]
             for run_id in run_ids:
                 resolved = resolve_published_report(

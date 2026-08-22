@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
@@ -50,9 +51,38 @@ def conn(tmp_path: Path):
     db = sqlite3.connect(":memory:")
     ensure_paper_trade_schema(db)
     config_hash = hashlib.sha256(b"{}").hexdigest()
-    artifact = tmp_path / "paper-fixture.json"
-    markdown = tmp_path / "paper-fixture.md"
-    artifact.write_text("{}\n", encoding="utf-8")
+    artifact = tmp_path / f"daily_report_20260314T211500Z_{TEST_REPORT_RUN_ID}.json"
+    markdown = tmp_path / f"daily_report_20260314T211500Z_{TEST_REPORT_RUN_ID}.md"
+    decisions = [
+        {
+            "ticker": ticker,
+            "selected_rank": rank,
+            "decision": "accepted",
+            "reason_codes": ["selected_report_cohort"],
+            "inputs": {},
+        }
+        for rank, ticker in enumerate(
+            ("AAPL", "MSFT", "GOOG", "PIPE", "AAA", "BBB", "T0", "T1", "T2", "T3", "T4", "T5"),
+            start=1,
+        )
+    ]
+    payload = {
+        "generated_ts": "2026-03-14T21:15:00Z",
+        "meta": {
+            "report_kind": "daily",
+            "report_run": {"run_id": TEST_REPORT_RUN_ID},
+        },
+        "latest_data": {},
+        "signals": {
+            "report_decisions": decisions,
+            "scanned_universe": [item["ticker"] for item in decisions],
+        },
+        "counts": {},
+        "risk_filters": {},
+        "warnings": [],
+        "ok": True,
+    }
+    artifact.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
     markdown.write_text("fixture\n", encoding="utf-8")
     content_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
     markdown_hash = hashlib.sha256(markdown.read_bytes()).hexdigest()
@@ -65,16 +95,37 @@ def conn(tmp_path: Path):
         """,
         (TEST_REPORT_RUN_ID, config_hash, "a" * 40),
     )
+    db.executemany(
+        """INSERT INTO report_run_decisions
+           (run_id,ticker,selected_rank,decision,reason_codes_json,inputs_json)
+           VALUES (?,?,?,?,?,?)""",
+        [
+            (TEST_REPORT_RUN_ID, item["ticker"], item["selected_rank"], "accepted",
+             '["selected_report_cohort"]', '{}')
+            for item in decisions
+        ],
+    )
     db.execute(
         """UPDATE report_runs
            SET status='completed', completed_ts='2026-03-14T21:30:00Z',
                generated_ts='2026-03-14T21:15:00Z',
                generation_key='daily:2026-03-14T21:15:00Z',
-               scanned_universe_json='[]', ranked_candidates_json='[]',
-               decisions_json='[]', inputs_json='{}', source_timestamps_json='{}',
+               scanned_universe_json=?, ranked_candidates_json=?,
+               decisions_json=?,
+               inputs_json='{"report_kind":"daily","market_session":{},"counts":{},"risk_filters":{},"price_basis":null}',
+               source_timestamps_json='{}',
                content_hash=?, markdown_hash=?, artifact_path=?, markdown_path=?
            WHERE run_id=?""",
-        (content_hash, markdown_hash, str(artifact), str(markdown), TEST_REPORT_RUN_ID),
+        (
+            json.dumps([item["ticker"] for item in decisions], separators=(",", ":")),
+            json.dumps(
+                [{"ticker": item["ticker"], "selected_rank": item["selected_rank"]} for item in decisions],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            json.dumps(decisions, sort_keys=True, separators=(",", ":")),
+            content_hash, markdown_hash, str(artifact), str(markdown), TEST_REPORT_RUN_ID,
+        ),
     )
     db.execute(
         """UPDATE report_runs
@@ -666,6 +717,22 @@ class TestMarkToMarket:
             "SELECT current_price, unrealized_pnl_pct, last_mtm_date "
             "FROM paper_trades WHERE ticker='LEGACY'"
         ).fetchone() == (100.0, 0.0, None)
+
+    def test_ignores_open_trade_when_its_sealed_artifact_is_missing(self, conn):
+        self._insert_open_trade(conn, "AAPL", 100.0)
+        _seed_price(conn, "AAPL", 105.0)
+        artifact = Path(conn.execute(
+            "SELECT artifact_path FROM report_runs WHERE run_id=?",
+            (TEST_REPORT_RUN_ID,),
+        ).fetchone()[0])
+        artifact.unlink()
+
+        result = mark_to_market(conn)
+
+        assert result == {"open_trades": 0, "updated": 0, "closed": 0}
+        assert conn.execute(
+            "SELECT current_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone() == (100.0,)
 
     def test_triggers_stop_loss(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0)

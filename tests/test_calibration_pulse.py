@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
@@ -37,9 +38,25 @@ def _make_conn(tmp_path: Path) -> sqlite3.Connection:
     ensure_calibration_schema(conn)
     ensure_report_run_schema(conn)
     config_hash = hashlib.sha256(b"{}").hexdigest()
-    artifact = tmp_path / "calibration-fixture.json"
-    markdown = tmp_path / "calibration-fixture.md"
-    artifact.write_text("{}\n", encoding="utf-8")
+    artifact = tmp_path / "daily_report_20260401T000000Z_canonical-test-run.json"
+    markdown = tmp_path / "daily_report_20260401T000000Z_canonical-test-run.md"
+    payload = {
+        "generated_ts": "2026-04-01T00:00:00Z",
+        "meta": {
+            "report_kind": "daily",
+            "report_run": {"run_id": "canonical-test-run"},
+        },
+        "latest_data": {},
+        "signals": {
+            "report_decisions": [],
+            "scanned_universe": [],
+        },
+        "counts": {},
+        "risk_filters": {},
+        "warnings": [],
+        "ok": True,
+    }
+    artifact.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
     markdown.write_text("fixture\n", encoding="utf-8")
     content_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
     markdown_hash = hashlib.sha256(markdown.read_bytes()).hexdigest()
@@ -59,7 +76,9 @@ def _make_conn(tmp_path: Path) -> sqlite3.Connection:
                generated_ts='2026-04-01T00:00:00Z',
                generation_key='daily:2026-04-01T00:00:00Z',
                scanned_universe_json='[]', ranked_candidates_json='[]',
-               decisions_json='[]', inputs_json='{}', source_timestamps_json='{}',
+               decisions_json='[]',
+               inputs_json='{"report_kind":"daily","market_session":{},"counts":{},"risk_filters":{},"price_basis":null}',
+               source_timestamps_json='{}',
                content_hash=?, markdown_hash=?, artifact_path=?, markdown_path=?
            WHERE run_id='canonical-test-run'""",
         (content_hash, markdown_hash, str(artifact), str(markdown)),

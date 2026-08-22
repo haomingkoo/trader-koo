@@ -105,15 +105,19 @@ def _published_lineage_clause(conn: sqlite3.Connection, table_name: str) -> str:
     columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})")}
     if "report_run_id" not in columns or not table_exists(conn, "report_runs"):
         return " AND 0"
-    if conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='view' AND name='report_publication_ownership'"
-    ).fetchone() is None:
+    from trader_koo.report.runs import verified_report_run_ids
+
+    run_ids = {
+        str(row[0])
+        for row in conn.execute(
+            f"SELECT DISTINCT report_run_id FROM {table_name} WHERE report_run_id IS NOT NULL"
+        )
+    }
+    verified = verified_report_run_ids(conn, run_ids)
+    if not verified:
         return " AND 0"
-    return (
-        " AND report_run_id IS NOT NULL AND EXISTS ("
-        "SELECT 1 FROM report_publication_ownership "
-        f"WHERE report_publication_ownership.run_id = {table_name}.report_run_id)"
-    )
+    quoted = ",".join(str(conn.execute("SELECT quote(?)", (run_id,)).fetchone()[0]) for run_id in sorted(verified))
+    return f" AND report_run_id IN ({quoted})"
 
 def _eval_stats(
     conn: sqlite3.Connection,

@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from trader_koo.report.runs import (
     ensure_report_run_schema,
     fail_report_run,
     publish_report_run,
+    reconcile_report_publication,
     resolve_published_report,
     sha256_file,
     start_report_run,
@@ -95,6 +97,7 @@ def _complete_and_publish(
         report_kind="daily",
         configuration={"selection_limit": 40},
         code_version=TEST_SHA,
+        started_ts="2026-08-22T11:59:00Z",
     )
     paths = write_reports(report, report_dir, run_id=run_id, publish_latest=False)
     artifact = Path(paths["json_path"])
@@ -120,6 +123,7 @@ def _complete_only(
         report_kind="daily",
         configuration={"selection_limit": 40},
         code_version=TEST_SHA,
+        started_ts="2026-08-22T11:59:00Z",
     )
     paths = write_reports(report, report_dir, run_id=run_id, publish_latest=False)
     artifact = Path(paths["json_path"])
@@ -205,6 +209,24 @@ def test_sql_lifecycle_requires_terminal_evidence_and_freezes_failures(tmp_path:
         conn, report_kind="daily", configuration={}, code_version=TEST_SHA,
         started_ts="2026-08-22T00:00:00Z",
     )
+    with pytest.raises(sqlite3.IntegrityError, match="started report identity is immutable"):
+        conn.execute(
+            "UPDATE report_runs SET started_ts='2026-08-21T23:59:59Z' WHERE run_id=?",
+            (run_id,),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="complete evidence"):
+        conn.execute(
+            """UPDATE report_runs
+               SET status='completed', completed_ts='2026-08-22T01:00:00Z',
+                   generated_ts='2026-08-21T23:59:59Z',
+                   generation_key='daily:2026-08-21T23:59:59Z',
+                   scanned_universe_json='[]', ranked_candidates_json='[]',
+                   decisions_json='[]', inputs_json='{}', source_timestamps_json='{}',
+                   content_hash=?, markdown_hash=?, artifact_path='/tmp/report.json',
+                   markdown_path='/tmp/report.md'
+               WHERE run_id=?""",
+            ("c" * 64, "d" * 64, run_id),
+        )
     with pytest.raises(sqlite3.IntegrityError, match="complete evidence"):
         conn.execute(
             "UPDATE report_runs SET status='completed' WHERE run_id=?",
@@ -502,6 +524,7 @@ def test_hash_mismatch_refuses_publication_and_keeps_previous_canonical(tmp_path
         report_kind="daily",
         configuration={},
         code_version=TEST_SHA,
+        started_ts="2026-08-22T11:59:00Z",
     )
     retry = _report("BBB")
     paths = write_reports(retry, report_dir, run_id=retry_id, publish_latest=False)
@@ -564,6 +587,71 @@ def test_exact_generated_timestamp_miss_never_returns_latest(tmp_path: Path):
         "2026-08-22T12:00:01Z",
         registry_conn=conn,
     ) == (None, None)
+
+
+def test_require_current_rejects_an_older_daily_generation(tmp_path: Path):
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report_dir = tmp_path / "reports"
+    older = _complete_and_publish(conn, report_dir, _report("OLDER"))
+    newer_report = _report("NEWER")
+    newer_report["generated_ts"] = "2026-08-22T13:00:00Z"
+    newer = _complete_and_publish(conn, report_dir, newer_report)
+
+    assert resolve_published_report(
+        conn, report_dir=report_dir, run_id=older, require_current=True
+    ) is None
+    assert resolve_published_report(conn, report_dir=report_dir, run_id=older) is not None
+    current = resolve_published_report(
+        conn, report_dir=report_dir, run_id=newer, require_current=True
+    )
+    assert current is not None
+    assert current[1]["report_run"]["run_id"] == newer
+
+
+def test_resolver_rejects_symlinked_run_artifact(tmp_path: Path):
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report_dir = tmp_path / "reports"
+    run_id = _complete_and_publish(conn, report_dir, _report("SYMLINK"))
+    artifact = Path(conn.execute(
+        "SELECT artifact_path FROM report_runs WHERE run_id=?", (run_id,)
+    ).fetchone()[0])
+    target = tmp_path / "saved-report.json"
+    target.write_bytes(artifact.read_bytes())
+    artifact.unlink()
+    artifact.symlink_to(target)
+
+    with pytest.raises(ValueError, match="path does not match"):
+        resolve_published_report(conn, report_dir=report_dir, run_id=run_id)
+
+
+def test_reconciliation_copies_the_bytes_that_were_verified(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from trader_koo.report import runs
+
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report_dir = tmp_path / "reports"
+    run_id = _complete_and_publish(conn, report_dir, _report("SEALED-BYTES"))
+    artifact = Path(conn.execute(
+        "SELECT artifact_path FROM report_runs WHERE run_id=?", (run_id,)
+    ).fetchone()[0])
+    expected = artifact.read_bytes()
+    real_write = runs._atomic_write_if_changed
+    mutated = False
+
+    def mutate_after_verification(path: Path, data: bytes) -> None:
+        nonlocal mutated
+        if path.name == runs.LATEST_MANIFEST and not mutated:
+            mutated = True
+            artifact.write_text("{}\n", encoding="utf-8")
+        real_write(path, data)
+
+    monkeypatch.setattr(runs, "_atomic_write_if_changed", mutate_after_verification)
+    reconcile_report_publication(conn, report_dir=report_dir)
+
+    assert mutated
+    assert (report_dir / "daily_report_latest.json").read_bytes() == expected
 
 
 def test_schema_ensure_does_not_commit_caller_transaction(tmp_path: Path):
@@ -676,6 +764,11 @@ def test_null_legacy_lineage_is_excluded_from_calibration(tmp_path: Path):
         "hit_rate_pct": 0.0,
         "expectancy_pct": -3.0,
     }
+    artifact = Path(conn.execute(
+        "SELECT artifact_path FROM report_runs WHERE run_id=?", (run_id,)
+    ).fetchone()[0])
+    artifact.unlink()
+    assert _eval_stats(conn, window_days=365) == {}
 
 
 def test_publication_crash_keeps_previous_manifest_and_is_recoverable(
@@ -689,7 +782,8 @@ def test_publication_crash_keeps_previous_manifest_and_is_recoverable(
     first = _complete_and_publish(conn, report_dir, _report("FIRST"))
     retry = _report("SECOND")
     retry_id = start_report_run(
-        conn, report_kind="daily", configuration={}, code_version=TEST_SHA
+        conn, report_kind="daily", configuration={}, code_version=TEST_SHA,
+        started_ts="2026-08-22T11:59:00Z",
     )
     paths = write_reports(retry, report_dir, run_id=retry_id, publish_latest=False)
     artifact = Path(paths["json_path"])
@@ -802,6 +896,73 @@ def test_concurrent_publications_leave_registry_and_manifest_on_same_run(tmp_pat
     verify.close()
 
 
+def test_reader_reconciliation_cannot_overwrite_a_newer_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from trader_koo.report import runs
+
+    db_path = tmp_path / "report.db"
+    report_dir = tmp_path / "reports"
+    conn = sqlite3.connect(db_path, timeout=10)
+    _complete_and_publish(conn, report_dir, _report("FIRST"))
+    second_report = _report("SECOND")
+    second_report["generated_ts"] = "2026-08-22T13:00:00Z"
+    second = _complete_only(conn, report_dir, second_report)
+    conn.close()
+
+    reader_resolved = threading.Event()
+    let_reader_finish = threading.Event()
+    errors: list[BaseException] = []
+    real_resolve = runs._resolve_current_publication
+
+    def pause_reader(*args, **kwargs):
+        result = real_resolve(*args, **kwargs)
+        if threading.current_thread().name == "reader":
+            reader_resolved.set()
+            assert let_reader_finish.wait(timeout=10)
+        return result
+
+    monkeypatch.setattr(runs, "_resolve_current_publication", pause_reader)
+
+    def reconcile() -> None:
+        worker = sqlite3.connect(db_path, timeout=10)
+        try:
+            reconcile_report_publication(worker, report_dir=report_dir)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            worker.close()
+
+    def publish() -> None:
+        worker = sqlite3.connect(db_path, timeout=10)
+        try:
+            publish_report_run(worker, run_id=second, report_dir=report_dir)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            worker.close()
+
+    reader = threading.Thread(target=reconcile, name="reader")
+    publisher = threading.Thread(target=publish, name="publisher")
+    reader.start()
+    assert reader_resolved.wait(timeout=10)
+    publisher.start()
+    let_reader_finish.set()
+    reader.join(timeout=10)
+    publisher.join(timeout=10)
+
+    assert not errors
+    assert not reader.is_alive() and not publisher.is_alive()
+    verify = sqlite3.connect(db_path)
+    assert resolve_published_report(
+        verify, report_dir=report_dir, run_id=second, require_current=True
+    ) is not None
+    manifest = json.loads((report_dir / "daily_report_latest.manifest.json").read_text())
+    assert manifest["run_id"] == second
+    verify.close()
+
+
 @pytest.mark.parametrize(
     ("ok", "warnings", "generation_warnings"),
     [
@@ -891,6 +1052,14 @@ def test_email_dispatch_happens_only_after_publication_and_admission(
         return {"sent_count": 1, "failed_count": 0, "skipped_duplicate_count": 0}
 
     monkeypatch.setattr(command, "fetch_report_payload", lambda **kwargs: _report("AAA"))
+    real_start_report_run = start_report_run
+    monkeypatch.setattr(
+        command,
+        "start_report_run",
+        lambda conn, **kwargs: real_start_report_run(
+            conn, **kwargs, started_ts="2026-08-22T11:59:00Z"
+        ),
+    )
     monkeypatch.setattr(command, "publish_report_run", publish_then_record)
     monkeypatch.setattr(command, "admit_published_report", admit_then_record)
     monkeypatch.setattr(command, "send_report_email", send_after_publish)
@@ -1073,12 +1242,19 @@ def test_new_setup_calls_and_paper_trades_require_report_lineage(tmp_path: Path)
             insert()
 
     canonical_id = _complete_and_publish(conn, tmp_path / "reports", _report("CANONICAL"))
-    insert_setup(canonical_id, "CANONICALCALL")
-    insert_trade(canonical_id, "CANONICALTRADE", "2026-08-23")
+    insert_setup(canonical_id, "CANONICAL")
+    insert_trade(canonical_id, "CANONICAL", "2026-08-23")
+
+    for insert in (
+        lambda: insert_setup(canonical_id, "UNRELATEDCALL"),
+        lambda: insert_trade(canonical_id, "UNRELATEDTRADE", "2026-08-23"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError, match="accepted decision"):
+            insert()
 
     for table, ticker in (
-        ("setup_call_evaluations", "CANONICALCALL"),
-        ("paper_trades", "CANONICALTRADE"),
+        ("setup_call_evaluations", "CANONICAL"),
+        ("paper_trades", "CANONICAL"),
     ):
         for replacement in (None, started_id, "does-not-exist"):
             with pytest.raises(sqlite3.IntegrityError, match="lineage is immutable"):

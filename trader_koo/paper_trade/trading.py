@@ -543,7 +543,9 @@ def create_paper_trades_from_report(
     if not str(report_run_id or "").strip():
         raise ValueError("paper-trade creation requires canonical report-run lineage")
     run = conn.execute(
-        "SELECT admits_new FROM report_publication_ownership WHERE run_id = ?",
+        """SELECT 1 FROM report_runs
+           WHERE run_id=? AND status='published' AND publication_verified=1
+             AND is_generation_canonical=1""",
         (report_run_id,),
     ).fetchone()
     if (
@@ -648,6 +650,13 @@ def create_paper_trades_from_report(
         ticker = str(row.get("ticker") or "").upper().strip()
         if not ticker:
             continue
+        member = conn.execute(
+            """SELECT 1 FROM report_run_decisions
+               WHERE run_id=? AND ticker=? AND decision='accepted'""",
+            (report_run_id, ticker),
+        ).fetchone()
+        if member is None:
+            raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
 
         direction = str(evaluation["direction"])
 
@@ -931,20 +940,30 @@ def mark_to_market(
     """Update all open paper trades with latest prices."""
     ensure_paper_trade_schema(conn)
 
-    open_rows = conn.execute(
-        """
+    from trader_koo.report.runs import verified_report_run_ids
+
+    linked_ids = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT report_run_id FROM paper_trades WHERE report_run_id IS NOT NULL"
+        )
+    }
+    verified_ids = verified_report_run_ids(conn, linked_ids)
+    if verified_ids:
+        placeholders = ",".join("?" for _ in verified_ids)
+        open_rows = conn.execute(
+            f"""
         SELECT id, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, high_water_mark, low_water_mark,
                stop_distance_pct, atr_at_entry
         FROM paper_trades
         WHERE status = 'open'
-          AND report_run_id IS NOT NULL
-          AND EXISTS (
-              SELECT 1 FROM report_publication_ownership
-              WHERE report_publication_ownership.run_id = paper_trades.report_run_id
-          )
-        """
-    ).fetchall()
+          AND report_run_id IN ({placeholders})
+        """,
+            tuple(sorted(verified_ids)),
+        ).fetchall()
+    else:
+        open_rows = []
 
     if not open_rows:
         update_portfolio_snapshot(conn)
