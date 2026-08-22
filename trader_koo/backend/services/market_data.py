@@ -16,6 +16,10 @@ from zoneinfo import ZoneInfo
 
 from trader_koo.backend.services.database import DB_PATH, table_exists
 from trader_koo.db.price_contract import research_price_contract
+from trader_koo.report.utils import (
+    completed_nyse_period_through,
+    last_completed_nyse_session,
+)
 
 LOG = logging.getLogger("trader_koo.services.market_data")
 
@@ -26,6 +30,15 @@ except Exception:
     MARKET_TZ = dt.timezone.utc
 
 MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
+
+
+def market_session_completion(now: dt.datetime | None = None) -> dict[str, str]:
+    instant = now or dt.datetime.now(dt.timezone.utc)
+    return {
+        "last_completed_session": last_completed_nyse_session(instant).isoformat(),
+        "completed_week_through": completed_nyse_period_through("weekly", instant).isoformat(),
+        "completed_month_through": completed_nyse_period_through("monthly", instant).isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -261,9 +274,10 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
                 "research_eligible": contract["eligible"],
                 "unresolved_reason": row[5] or contract["reason"],
                 "corporate_actions": actions,
-                "distributions_included": contract["distributions_included"],
+                "distributions_included": bool(contract.get("distributions_included")),
                 "price_revision": contract.get("revision"),
                 "managed_window": contract.get("managed_window"),
+                "session_completion": market_session_completion(),
             }
     except Exception as exc:
         LOG.warning("Failed to get data sources for %s: %s", ticker, exc)

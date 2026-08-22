@@ -103,6 +103,18 @@ def record_price_series_revision(
         "action_sha256": material["action_sha256"],
         "evidence_sha256": evidence_sha,
     })
+    previous = conn.execute(
+        "SELECT managed_start,managed_end,action_sha256,revision_sha256 "
+        "FROM price_series_revisions WHERE ticker=?",
+        (ticker,),
+    ).fetchone()
+    materially_reseeded = previous is not None and previous[3] != revision and (
+        previous[0] != material["managed_start"]
+        or previous[1] == material["managed_end"]
+        or previous[2] != material["action_sha256"]
+    )
+    if materially_reseeded and _table_exists(conn, "yolo_patterns"):
+        conn.execute("DELETE FROM yolo_patterns WHERE ticker=?", (ticker,))
     conn.execute(
         """INSERT INTO price_series_revisions (
                ticker,managed_start,managed_end,row_count,adjustment_basis,

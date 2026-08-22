@@ -1111,7 +1111,19 @@ def _prepare_model_and_features(
 # Quick dashboard builder (fast path — no LLM / HMM)
 # ---------------------------------------------------------------------------
 
-def build_dashboard_quick_payload(
+def _run_read_snapshot(conn: sqlite3.Connection, build: Any) -> dict[str, Any]:
+    """Materialize one payload from one SQLite snapshot without owning caller state."""
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        return build()
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
+
+
+def _build_dashboard_quick_payload(
     conn: sqlite3.Connection,
     ticker: str,
     months: int,
@@ -1171,7 +1183,7 @@ def build_dashboard_quick_payload(
         "yolo_patterns": yolo_pats,
         "yolo_audit": yolo_aud,
         "earnings_markers": earnings_markers,
-        "data_sources": get_data_sources(conn, ticker),
+        "data_sources": price_contract,
         "data_freshness": data_freshness,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
@@ -1193,7 +1205,7 @@ def build_dashboard_quick_payload(
 # Commentary-only builder (slow path — LLM + debate + HMM)
 # ---------------------------------------------------------------------------
 
-def build_commentary_payload(
+def _build_commentary_payload(
     conn: sqlite3.Connection,
     ticker: str,
     months: int,
@@ -1302,7 +1314,7 @@ def build_commentary_payload(
 # Main dashboard builder (backward-compatible full payload)
 # ---------------------------------------------------------------------------
 
-def build_dashboard_payload(
+def _build_dashboard_payload(
     conn: sqlite3.Connection,
     ticker: str,
     months: int,
@@ -1411,7 +1423,7 @@ def build_dashboard_payload(
         "hmm_regime": hmm_regime,
         "earnings_markers": earnings_markers,
         "report_generated_ts": report_generated_ts,
-        "data_sources": get_data_sources(conn, ticker),
+        "data_sources": price_contract,
         "data_freshness": data_freshness,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
@@ -1427,3 +1439,53 @@ def build_dashboard_payload(
             },
         },
     }
+
+
+def build_dashboard_quick_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+) -> dict[str, Any]:
+    return _run_read_snapshot(
+        conn, lambda: _build_dashboard_quick_payload(conn, ticker, months)
+    )
+
+
+def build_commentary_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+    *,
+    report_dir: Path,
+    report_generated_ts: str | None = None,
+) -> dict[str, Any]:
+    return _run_read_snapshot(
+        conn,
+        lambda: _build_commentary_payload(
+            conn,
+            ticker,
+            months,
+            report_dir=report_dir,
+            report_generated_ts=report_generated_ts,
+        ),
+    )
+
+
+def build_dashboard_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+    *,
+    report_dir: Path,
+    report_generated_ts: str | None = None,
+) -> dict[str, Any]:
+    return _run_read_snapshot(
+        conn,
+        lambda: _build_dashboard_payload(
+            conn,
+            ticker,
+            months,
+            report_dir=report_dir,
+            report_generated_ts=report_generated_ts,
+        ),
+    )

@@ -1634,6 +1634,7 @@ def _persist_setup_call_candidates(
     asof_date: str | None,
     setup_rows: list[dict[str, Any]],
     report_run_id: str | None = None,
+    expected_price_revision: str | None = None,
 ) -> int:
     if not asof_date:
         return 0
@@ -1652,6 +1653,14 @@ def _persist_setup_call_candidates(
         raise ValueError(
             f"setup-call creation requires canonical published report run {report_run_id}"
         )
+    from trader_koo.db.price_contract import research_price_contract
+
+    current = research_price_contract(conn)
+    if not current["eligible"] or (
+        expected_price_revision is not None
+        and current.get("revision") != expected_price_revision
+    ):
+        return 0
     inserted = 0
     for row in (setup_rows or [])[:SETUP_EVAL_TRACK_LIMIT]:
         if not isinstance(row, dict):
@@ -1666,6 +1675,8 @@ def _persist_setup_call_candidates(
         ).fetchone()
         if member is None:
             raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
+        if not research_price_contract(conn, [ticker])["eligible"]:
+            continue
         direction = _setup_call_direction(row)
         if direction not in {"long", "short"}:
             continue
@@ -1725,8 +1736,9 @@ def _persist_setup_call_candidates(
     return inserted
 
 
-def _score_open_setup_call_outcomes(conn: sqlite3.Connection) -> int:
+def _score_open_setup_call_outcomes_in_transaction(conn: sqlite3.Connection) -> int:
     from trader_koo.report.runs import verified_report_run_ids
+    from trader_koo.db.price_contract import research_price_contract
 
     linked_ids = {
         str(row[0])
@@ -1756,6 +1768,8 @@ def _score_open_setup_call_outcomes(conn: sqlite3.Connection) -> int:
         call_direction = str(row[3] or "").strip().lower()
         validity_days = int(row[4] or 0)
         close_asof = float(row[5] or 0.0)
+        if not research_price_contract(conn, [ticker])["eligible"]:
+            continue
         if call_direction not in {"long", "short"} or validity_days <= 0 or close_asof <= 0.0:
             conn.execute(
                 """
@@ -1812,6 +1826,21 @@ def _score_open_setup_call_outcomes(conn: sqlite3.Connection) -> int:
         )
         scored += 1
     return scored
+
+
+def _score_open_setup_call_outcomes(conn: sqlite3.Connection) -> int:
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        scored = _score_open_setup_call_outcomes_in_transaction(conn)
+        if owns_transaction:
+            conn.commit()
+        return scored
+    except Exception:
+        if owns_transaction and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _setup_eval_bucket(

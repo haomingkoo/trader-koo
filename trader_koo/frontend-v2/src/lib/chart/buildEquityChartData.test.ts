@@ -54,6 +54,29 @@ test("completed monthly bars exclude the current partial month", () => {
   assert.deepEqual(bars.map((bar) => bar.date), ["2026-07-31"]);
 });
 
+test("Friday weekly bar stays partial before the New York close", () => {
+  const rows = [row("2026-08-14", 100), row("2026-08-21", 101)];
+  const bars = resampleToWeekly(rows, true, new Date("2026-08-21T12:00:00Z"));
+  assert.deepEqual(bars.map((bar) => bar.date), ["2026-08-14"]);
+});
+
+test("month-end bar stays partial before the New York close", () => {
+  const rows = [row("2026-07-31", 100), row("2026-08-31", 101)];
+  const bars = resampleToMonthly(rows, true, new Date("2026-08-31T12:00:00Z"));
+  assert.deepEqual(bars.map((bar) => bar.date), ["2026-07-31"]);
+});
+
+test("server session watermark completes a month ending on a weekend", () => {
+  const rows = [row("2026-01-30", 100), row("2026-02-02", 101)];
+  const bars = resampleToMonthly(
+    rows,
+    true,
+    new Date("2026-01-30T21:30:00Z"),
+    "2026-01-30",
+  );
+  assert.deepEqual(bars.map((bar) => bar.date), ["2026-01-30"]);
+});
+
 test("research chart fails closed without a verified eligible contract", () => {
   assert.equal(isResearchChartEligible(undefined), false);
   assert.equal(isResearchChartEligible({ research_eligible: false }), false);

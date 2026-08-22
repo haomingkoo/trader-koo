@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 import pandas as pd
 import pytest
@@ -304,6 +304,47 @@ def test_dashboard_and_commentary_do_not_compute_unresolved_series(
     assert full["chart_commentary"] is None
     assert commentary["hmm_regime"] is None
     assert quick["data_sources"]["research_eligible"] is False
+
+
+def test_quick_dashboard_uses_one_sqlite_snapshot(tmp_path: Path) -> None:
+    db_path = tmp_path / "snapshot.db"
+    conn = _make_price_db(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    writer = sqlite3.connect(db_path)
+    original_prepare = chart_builder._prepare_model_and_features
+
+    def repair_after_admission(*args, **kwargs):
+        writer.execute(
+            "UPDATE price_daily SET close=999, basis_status='unresolved' WHERE ticker='HIT'"
+        )
+        writer.commit()
+        return original_prepare(*args, **kwargs)
+
+    try:
+        with patch.multiple(
+            chart_builder,
+            _prepare_model_and_features=DEFAULT,
+            get_latest_fundamentals=DEFAULT,
+            get_ticker_earnings_markers=DEFAULT,
+            get_yolo_patterns=DEFAULT,
+            get_yolo_audit=DEFAULT,
+            get_latest_options_summary=DEFAULT,
+        ) as mocked:
+            mocked["_prepare_model_and_features"].side_effect = repair_after_admission
+            mocked["get_latest_fundamentals"].return_value = None
+            mocked["get_ticker_earnings_markers"].return_value = []
+            mocked["get_yolo_patterns"].return_value = []
+            mocked["get_yolo_audit"].return_value = []
+            mocked["get_latest_options_summary"].return_value = {}
+            payload = chart_builder.build_dashboard_quick_payload(conn, "HIT", 24)
+        assert payload["chart"][-1]["close"] == 80
+        assert payload["data_sources"]["research_eligible"] is True
+        assert writer.execute(
+            "SELECT close FROM price_daily WHERE ticker='HIT' ORDER BY date DESC LIMIT 1"
+        ).fetchone()[0] == 999
+    finally:
+        writer.close()
+        conn.close()
 
 
 def test_chart_is_bound_to_report_asof_and_value(tmp_path: Path) -> None:

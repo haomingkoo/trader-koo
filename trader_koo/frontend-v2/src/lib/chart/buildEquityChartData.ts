@@ -71,7 +71,6 @@ function isCompletedPeriod(
   asOf: Date,
 ): boolean {
   const date = utcDate(sourceDate);
-  const cutoff = utcDate(asOf);
   const periodEnd = timeframe === "weekly"
     ? new Date(Date.UTC(
         date.getUTCFullYear(),
@@ -79,7 +78,28 @@ function isCompletedPeriod(
         date.getUTCDate() + ((5 - date.getUTCDay() + 7) % 7),
       ))
     : new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
-  return periodEnd.getTime() <= cutoff.getTime();
+  while (periodEnd.getUTCDay() === 0 || periodEnd.getUTCDay() === 6) {
+    periodEnd.setUTCDate(periodEnd.getUTCDate() - 1);
+  }
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(asOf);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "0";
+  const marketDate = `${part("year")}-${part("month")}-${part("day")}`;
+  const endDate = periodEnd.toISOString().slice(0, 10);
+  if (endDate !== marketDate) return endDate < marketDate;
+  return Number(part("hour")) * 60 + Number(part("minute")) >= 16 * 60;
+}
+
+function periodKey(value: string, timeframe: "weekly" | "monthly"): string {
+  return timeframe === "weekly" ? weekStartKey(value) : value.slice(0, 7);
 }
 
 function weekStartKey(value: string): string {
@@ -93,6 +113,7 @@ export function resampleToWeekly(
   rows: OhlcvRow[],
   completedOnly = false,
   asOf = new Date(),
+  completedThrough?: string,
 ): OhlcvRow[] {
   if (rows.length === 0) return [];
   const weeks: OhlcvRow[] = [];
@@ -115,7 +136,9 @@ export function resampleToWeekly(
   }
   if (current) weeks.push(current);
   if (completedOnly) {
-    return weeks.filter((row) => isCompletedPeriod(row.date, "weekly", asOf));
+    return weeks.filter((row) => completedThrough
+      ? periodKey(row.date, "weekly") <= periodKey(completedThrough, "weekly")
+      : isCompletedPeriod(row.date, "weekly", asOf));
   }
   return weeks;
 }
@@ -124,6 +147,7 @@ export function resampleToMonthly(
   rows: OhlcvRow[],
   completedOnly = false,
   asOf = new Date(),
+  completedThrough?: string,
 ): OhlcvRow[] {
   if (rows.length === 0) return [];
   const months: OhlcvRow[] = [];
@@ -146,7 +170,9 @@ export function resampleToMonthly(
   }
   if (current) months.push(current);
   if (completedOnly) {
-    return months.filter((row) => isCompletedPeriod(row.date, "monthly", asOf));
+    return months.filter((row) => completedThrough
+      ? periodKey(row.date, "monthly") <= periodKey(completedThrough, "monthly")
+      : isCompletedPeriod(row.date, "monthly", asOf));
   }
   return months;
 }
@@ -442,10 +468,11 @@ export function buildChartData(
   const rawChart = payload.chart ?? [];
   const isWeekly = timeframe === "weekly";
   const isMonthly = timeframe === "monthly";
+  const completion = payload.data_sources?.session_completion;
   const baseChart = isMonthly
-    ? resampleToMonthly(rawChart, true)
+    ? resampleToMonthly(rawChart, true, new Date(), completion?.completed_month_through)
     : isWeekly
-      ? resampleToWeekly(rawChart, true)
+      ? resampleToWeekly(rawChart, true, new Date(), completion?.completed_week_through)
       : rawChart;
   const levels = payload.levels ?? [];
   const gaps = payload.gaps ?? [];

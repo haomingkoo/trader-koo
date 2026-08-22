@@ -19,11 +19,11 @@ from trader_koo.scripts.update_market_db import (
     reconcile_vendor_action_ledger,
     write_price_daily,
 )
-from trader_koo.db.price_contract import research_price_contract
+from trader_koo.db.price_contract import record_price_series_revision, research_price_contract
 from trader_koo.ml.benchmark import run_benchmark
 from trader_koo.ml.trainer import build_dataset
 from trader_koo.report import generator as report_generator
-from trader_koo.scripts.run_yolo_patterns import save_detections
+from trader_koo.scripts.run_yolo_patterns import ensure_yolo_table, save_detections
 
 
 def _raw_frame(
@@ -520,3 +520,39 @@ def test_yolo_persistence_fails_closed_for_unresolved_basis() -> None:
     with pytest.raises(ValueError, match="not research eligible"):
         save_detections(conn, "BAD", "daily", [], 180, "2026-08-20")
     assert conn.execute("SELECT COUNT(*) FROM yolo_patterns").fetchone()[0] == 0
+
+
+def test_same_date_reseed_invalidates_yolo_and_rejects_stale_detection() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_yolo_table(conn)
+    prices = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
+    reconcile_vendor_action_ledger(prices, [])
+    write_price_daily(conn, "AAA", prices)
+    revision = research_price_contract(conn, ["AAA"])["revision"]
+    detection = {
+        "pattern": "Triangle", "confidence": 0.8,
+        "x0_date": "2024-01-02", "x1_date": "2024-01-10",
+        "y0": 90.0, "y1": 110.0,
+    }
+    save_detections(
+        conn, "AAA", "daily", [detection], 180, "2024-02-12",
+        expected_revision=revision,
+    )
+    assert conn.execute("SELECT COUNT(*) FROM yolo_patterns").fetchone()[0] == 1
+
+    conn.execute(
+        "UPDATE price_daily SET close=close+1 WHERE ticker='AAA' AND date='2024-01-03'"
+    )
+    record_price_series_revision(
+        conn,
+        "AAA",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+        fetch_timestamp="2026-08-23T00:00:00Z",
+    )
+    assert conn.execute("SELECT COUNT(*) FROM yolo_patterns").fetchone()[0] == 0
+    with pytest.raises(ValueError, match="revision changed"):
+        save_detections(
+            conn, "AAA", "daily", [detection], 180, "2024-02-12",
+            expected_revision=revision,
+        )

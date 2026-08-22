@@ -258,9 +258,19 @@ export default function ChartPage() {
 
   const chartBarCount = (
     timeframe === "monthly"
-      ? resampleToMonthly(livePayload?.chart ?? [], true)
+      ? resampleToMonthly(
+          livePayload?.chart ?? [],
+          true,
+          new Date(),
+          livePayload?.data_sources?.session_completion?.completed_month_through,
+        )
       : timeframe === "weekly"
-        ? resampleToWeekly(livePayload?.chart ?? [], true)
+        ? resampleToWeekly(
+            livePayload?.chart ?? [],
+            true,
+            new Date(),
+            livePayload?.data_sources?.session_completion?.completed_week_through,
+          )
         : livePayload?.chart ?? []
   ).length;
   const reportSnapshotMatches = reportGreenBarrierSnapshot && chartResult

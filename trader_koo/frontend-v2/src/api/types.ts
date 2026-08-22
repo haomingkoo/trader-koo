@@ -714,6 +714,11 @@ export interface PriceDataSource {
   unresolved_reason: string | null;
   corporate_actions: Array<Record<string, unknown>>;
   distributions_included: boolean;
+  session_completion?: {
+    last_completed_session: string;
+    completed_week_through: string;
+    completed_month_through: string;
+  };
 }
 
 /** Slow-path payload from /api/dashboard/{ticker}/commentary (LLM + HMM). */

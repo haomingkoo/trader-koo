@@ -13,6 +13,7 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
 from trader_koo.db.price_contract import research_eligible_tickers
+from trader_koo.report.utils import completed_nyse_period_through
 
 GREEN_BARRIER_PERIOD = 14
 LOG = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def resample_ohlcv(
     timeframe: str,
     *,
     completed_only: bool = False,
-    as_of: dt.date | None = None,
+    as_of: dt.date | dt.datetime | None = None,
 ) -> pd.DataFrame:
     """Aggregate daily OHLCV rows to weekly or monthly bars."""
     if frame.empty:
@@ -85,13 +86,15 @@ def resample_ohlcv(
         .reset_index(drop=True)
     )
     if completed_only and not aggregated.empty:
-        cutoff = pd.Timestamp(as_of or dt.date.today())
+        completed_through = completed_nyse_period_through(tf, as_of)
         source_dates = pd.to_datetime(aggregated["date"], errors="coerce")
         if tf == "weekly":
-            period_end = source_dates.dt.to_period("W-FRI").dt.end_time.dt.normalize()
+            completed_period = pd.Timestamp(completed_through).to_period("W-FRI")
+            row_period = source_dates.dt.to_period("W-FRI")
         else:
-            period_end = source_dates.dt.to_period("M").dt.end_time.dt.normalize()
-        aggregated = aggregated.loc[period_end <= cutoff.normalize()].reset_index(drop=True)
+            completed_period = pd.Timestamp(completed_through).to_period("M")
+            row_period = source_dates.dt.to_period("M")
+        aggregated = aggregated.loc[row_period <= completed_period].reset_index(drop=True)
     return aggregated
 
 

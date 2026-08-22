@@ -207,7 +207,7 @@ def _apply_ensemble_adjustment(row: dict[str, Any]) -> None:
     row["setup_tier"] = tier
 
 
-def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
+def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
     """Market signals for the daily report: 52W extremes, top YOLO patterns, candle signals."""
     signals: dict[str, Any] = {
         "near_52w_high": [],
@@ -1294,6 +1294,18 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
     return signals
 
 
+def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Build analytical signals from one caller-preserving SQLite snapshot."""
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        return _fetch_signals_snapshot(conn)
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
+
+
 def fetch_report_payload(
     db_path: Path,
     run_log: Path,
@@ -1514,7 +1526,6 @@ def fetch_report_payload(
                     if report_run_id
                     else "requires_report_run_publication"
                 )
-
                 mtm_result = mark_to_market(conn)
                 conn.commit()
                 paper_trade_result["mtm"] = mtm_result

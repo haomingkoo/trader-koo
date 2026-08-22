@@ -130,6 +130,13 @@ def _get_prev_close(db_path: Path, ticker: str) -> float | None:
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
+        from trader_koo.db.price_contract import research_price_contract
+
+        conn.execute("BEGIN")
+        if not research_price_contract(conn, [ticker])["eligible"]:
+            conn.rollback()
+            conn.close()
+            return None
         row = conn.execute(
             """
             SELECT close FROM price_daily
@@ -139,6 +146,7 @@ def _get_prev_close(db_path: Path, ticker: str) -> float | None:
             """,
             (ticker,),
         ).fetchone()
+        conn.rollback()
         conn.close()
         if row is None:
             return None
