@@ -31,7 +31,10 @@ def _make_price_db(path: Path) -> sqlite3.Connection:
             high REAL,
             low REAL,
             close REAL,
-            volume REAL
+            volume REAL,
+            adjustment_basis TEXT NOT NULL DEFAULT 'split_adjusted_price_only',
+            adjustment_version TEXT NOT NULL DEFAULT 'test-v1',
+            basis_status TEXT NOT NULL DEFAULT 'verified'
         )
         """
     )
@@ -40,7 +43,11 @@ def _make_price_db(path: Path) -> sqlite3.Connection:
     for idx, date in enumerate(dates):
         rows.append(("HIT", date.date().isoformat(), 110, 120, 80, 80 if idx == 17 else 110, 1000))
         rows.append(("CLEAR", date.date().isoformat(), 110, 120, 80, 120, 1000))
-    conn.executemany("INSERT INTO price_daily VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany(
+        """INSERT INTO price_daily
+        (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
     conn.commit()
     return conn
 
@@ -184,19 +191,28 @@ def test_scan_snapshot_reports_incomplete_coverage(tmp_path: Path) -> None:
         "stale_skipped_tickers": ["CLEAR", "HIT"],
         "invalid_date_skipped_count": 0,
         "insufficient_history_skipped_count": 0,
+        "basis_unresolved_skipped_count": 0,
+        "basis_unresolved_skipped_tickers": [],
     }
 
 
 def test_scan_snapshot_counts_insufficient_timeframe_history(tmp_path: Path) -> None:
     conn = sqlite3.connect(tmp_path / "short.db")
     conn.execute(
-        "CREATE TABLE price_daily (ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)"
+        """CREATE TABLE price_daily (
+        ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
+        adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+        adjustment_version TEXT DEFAULT 'test-v1', basis_status TEXT DEFAULT 'verified')"""
     )
     rows = [
         ("SHORT", date.date().isoformat(), 10, 11, 9, 10, 100)
         for date in pd.date_range("2026-08-01", periods=10, freq="D")
     ]
-    conn.executemany("INSERT INTO price_daily VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany(
+        """INSERT INTO price_daily
+        (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
     conn.commit()
     try:
         snapshot = scan_green_barrier_snapshot(
@@ -211,11 +227,29 @@ def test_scan_snapshot_counts_insufficient_timeframe_history(tmp_path: Path) -> 
     assert snapshot["coverage"]["insufficient_history_skipped_count"] == 2
 
 
+def test_scan_fails_closed_for_unresolved_price_basis(tmp_path: Path) -> None:
+    conn = _make_price_db(tmp_path / "unresolved.db")
+    conn.execute("UPDATE price_daily SET basis_status = 'unresolved' WHERE ticker = 'HIT'")
+    conn.commit()
+    try:
+        snapshot = scan_green_barrier_snapshot(
+            conn,
+            timeframes=("monthly",),
+            as_of=pd.Timestamp("2025-06-30").date(),
+        )
+    finally:
+        conn.close()
+
+    assert snapshot["hits"] == []
+    assert snapshot["coverage"]["basis_unresolved_skipped_tickers"] == ["HIT"]
+
+
 def test_chart_is_bound_to_report_asof_and_value(tmp_path: Path) -> None:
     conn = _make_price_db(tmp_path / "prices.db")
     try:
         conn.execute(
-            "INSERT INTO price_daily VALUES (?, ?, ?, ?, ?, ?, ?)",
+            """INSERT INTO price_daily
+            (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
             ("HIT", "2025-07-31", 110, 120, 80, 120, 1000),
         )
         conn.commit()

@@ -25,7 +25,10 @@ def _conn() -> sqlite3.Connection:
             high REAL,
             low REAL,
             close REAL,
-            volume REAL
+            volume REAL,
+            adjustment_basis TEXT NOT NULL DEFAULT 'split_adjusted_price_only',
+            adjustment_version TEXT NOT NULL DEFAULT 'test-v1',
+            basis_status TEXT NOT NULL DEFAULT 'verified'
         )
         """
     )
@@ -131,3 +134,6 @@ def test_run_rule_baseline_produces_registry_ready_summary(monkeypatch):
     assert result["summary"]["method"] == "current_rule_technical_proxy"
     assert result["summary"]["total_trades"] > 0
     assert "spy_return_pct" in result["summary"]
+    assert result["summary"]["return_basis"] == "split_adjusted_price_only"
+    assert result["summary"]["benchmark_return_basis"] == "split_adjusted_price_only"
+    assert result["summary"]["distributions_included"] is False

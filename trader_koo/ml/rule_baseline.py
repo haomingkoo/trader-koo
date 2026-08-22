@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.features import ML_CONTEXT_TICKERS, extract_features_for_universe
 
 LOG = logging.getLogger(__name__)
@@ -435,6 +436,17 @@ def run_rule_baseline(
     tickers: list[str] | None = None,
 ) -> dict[str, Any]:
     """Backtest the current technical-rule proxy over a validation window."""
+    price_contract = research_price_contract(
+        conn,
+        [*(tickers or []), "SPY"] if tickers else None,
+    )
+    if not price_contract["eligible"]:
+        return {
+            "ok": False,
+            "error": f"Price basis is not research eligible: {price_contract['reason']}",
+            "method": RULE_BASELINE_METHOD,
+            "price_contract": price_contract,
+        }
     end_date = end_date or _latest_spy_date(conn)
     all_dates = _trading_dates(conn, start_date, end_date)
     if len(all_dates) < 20:
@@ -602,6 +614,10 @@ def run_rule_baseline(
 
     summary = {
         "method": RULE_BASELINE_METHOD,
+        "return_basis": price_contract["basis"],
+        "benchmark_return_basis": price_contract["basis"],
+        "adjustment_version": price_contract["version"],
+        "distributions_included": price_contract["distributions_included"],
         "return_pct": round(total_return, 2),
         "total_return_pct": round(total_return, 2),
         "spy_return_pct": round(spy_return, 2),

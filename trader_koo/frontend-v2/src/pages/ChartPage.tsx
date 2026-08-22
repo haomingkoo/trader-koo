@@ -188,6 +188,7 @@ export default function ChartPage() {
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
   const commentary = commentaryData?.chart_commentary ?? null;
   const freshness = quickData?.data_freshness ?? undefined;
+  const priceContract = quickData?.data_sources;
   // Throttled copy for the chart rebuild only; toolbar/fundamentals stay instant.
   const chartLivePrice = useThrottledValue(livePrice, CHART_LIVE_PRICE_THROTTLE_MS);
   const livePayload = useMemo(
@@ -283,6 +284,21 @@ export default function ChartPage() {
           Price data as of <strong>{freshness.latest_price_date}</strong>
           {freshness.age_hours != null && ` (${freshness.age_hours < 24 ? `${freshness.age_hours.toFixed(0)}h ago` : `${(freshness.age_hours / 24).toFixed(1)}d ago`})`}
           {freshness.is_stale && " — STALE"}
+        </div>
+      )}
+
+      {priceContract && (
+        <div
+          role="status"
+          className={`rounded-lg border px-3 py-2 text-xs ${
+            priceContract.research_eligible
+              ? "border-[var(--green)]/30 bg-[var(--green)]/5 text-[var(--muted)]"
+              : "border-[var(--red)]/40 bg-[var(--red)]/5 text-[var(--red)]"
+          }`}
+        >
+          Price basis: <strong>{priceContract.adjustment_basis}</strong> · {priceContract.price} ·{" "}
+          {priceContract.adjustment_version} · {priceContract.basis_status}
+          {!priceContract.research_eligible && " — excluded from research until resolved"}
         </div>
       )}
 

@@ -15,7 +15,7 @@ import concurrent.futures
 import logging
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
@@ -26,6 +26,8 @@ LOG = logging.getLogger(__name__)
 
 # yfinance is the only price source by design (see module docstring).
 SOURCE_NAME = "yfinance"
+PRICE_ADJUSTMENT_VERSION = "yfinance-actions-v1"
+SCALE_BREAK_RATIO = 1.8
 
 # Hard timeout for any single yf.download call.  If the call does not
 # return within this many seconds, the thread is abandoned and the
@@ -41,6 +43,11 @@ class FetchResult:
     timestamp: datetime
     success: bool
     error: Optional[str] = None
+    adjustment_basis: str = "unknown"
+    adjustment_version: str = "unknown"
+    basis_status: str = "unverified"
+    corporate_actions: list[dict] = field(default_factory=list)
+    unresolved_discontinuities: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -149,7 +156,7 @@ class DataSourceManager:
                     error=f"Empty response from yfinance for {ticker}",
                 )
 
-            df = self._normalize_ohlcv(raw)
+            df = self._normalize_ohlcv(raw, auto_adjust=auto_adjust)
 
             metrics.successful_fetches += 1
             LOG.info(f"Successfully fetched {ticker} from yfinance ({len(df)} rows)")
@@ -159,6 +166,11 @@ class DataSourceManager:
                 source=SOURCE_NAME,
                 timestamp=datetime.now(),
                 success=True,
+                adjustment_basis=str(df.attrs["adjustment_basis"]),
+                adjustment_version=str(df.attrs["adjustment_version"]),
+                basis_status=str(df.attrs["basis_status"]),
+                corporate_actions=list(df.attrs["corporate_actions"]),
+                unresolved_discontinuities=list(df.attrs["unresolved_discontinuities"]),
             )
 
         except Exception as e:
@@ -227,7 +239,7 @@ class DataSourceManager:
                 )
 
     @staticmethod
-    def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_ohlcv(df: pd.DataFrame, *, auto_adjust: bool = False) -> pd.DataFrame:
         """Normalize OHLCV DataFrame schema.
 
         Handles both old-style flat columns (yfinance <1.0) and
@@ -262,6 +274,19 @@ class DataSourceManager:
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
 
+        actions: list[dict] = []
+        if "dividends" in df_copy.columns:
+            dividends = pd.to_numeric(df_copy["dividends"], errors="coerce").fillna(0)
+            for index in dividends[dividends != 0].index:
+                actions.append(
+                    {
+                        "action_date": df_copy.loc[index, "date"].date().isoformat(),
+                        "action_type": "dividend",
+                        "value": float(dividends.loc[index]),
+                        "applied_to_prices": bool(auto_adjust),
+                    }
+                )
+
         # Yahoo is inconsistent about split adjustment: some downloads contain
         # raw pre-split prices while others are already rebased. Apply a declared
         # split only when it makes the closes immediately around the event more
@@ -274,6 +299,13 @@ class DataSourceManager:
                     continue
 
                 split_date = df_copy.loc[index, "date"]
+                action = {
+                    "action_date": split_date.date().isoformat(),
+                    "action_type": "split" if factor > 1 else "reverse_split",
+                    "value": factor,
+                    "applied_to_prices": False,
+                }
+                actions.append(action)
                 before_split = df_copy["date"] < split_date
                 on_or_after_split = df_copy["date"] >= split_date
                 comparison_before = before_split
@@ -310,6 +342,7 @@ class DataSourceManager:
                 df_copy.loc[before_split, "volume"] = (
                     df_copy.loc[before_split, "volume"] * factor
                 )
+                action["applied_to_prices"] = True
 
         # A repaired row is yfinance's inferred value, not an exchange print.
         # Drop it when it remains an isolated >35% outlier after split
@@ -334,9 +367,39 @@ class DataSourceManager:
                 )
                 df_copy = df_copy.drop(index=drop_indexes)
 
-        df_copy["date"] = df_copy["date"].dt.strftime("%Y-%m-%d")
+        # A large remaining scale break is not evidence of a split. Preserve the
+        # observations, but fail the series closed until declared evidence exists.
+        unresolved: list[dict] = []
+        ordered = df_copy.sort_values("date")
+        closes = pd.to_numeric(ordered["close"], errors="coerce")
+        dates = ordered["date"].tolist()
+        for position in range(1, len(ordered)):
+            previous, current = closes.iloc[position - 1], closes.iloc[position]
+            if pd.isna(previous) or pd.isna(current) or previous <= 0 or current <= 0:
+                continue
+            ratio = max(float(previous / current), float(current / previous))
+            if ratio >= SCALE_BREAK_RATIO:
+                unresolved.append(
+                    {
+                        "previous_date": dates[position - 1].date().isoformat(),
+                        "date": dates[position].date().isoformat(),
+                        "ratio": round(ratio, 6),
+                        "reason": "unexplained_adjacent_price_discontinuity",
+                    }
+                )
 
-        return df_copy[required]
+        df_copy["date"] = df_copy["date"].dt.strftime("%Y-%m-%d")
+        normalized = df_copy[required]
+        normalized.attrs.update(
+            {
+                "adjustment_basis": "total_return" if auto_adjust else "split_adjusted_price_only",
+                "adjustment_version": PRICE_ADJUSTMENT_VERSION,
+                "basis_status": "unresolved" if unresolved else "verified",
+                "corporate_actions": actions,
+                "unresolved_discontinuities": unresolved,
+            }
+        )
+        return normalized
 
     def _check_and_alert(self) -> None:
         """Log a CRITICAL alert when the failure rate exceeds threshold."""

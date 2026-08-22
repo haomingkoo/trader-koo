@@ -331,7 +331,24 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             volume REAL,
             data_source TEXT DEFAULT 'yfinance',
             fetch_timestamp TEXT,
+            adjustment_basis TEXT,
+            adjustment_version TEXT,
+            basis_status TEXT DEFAULT 'unverified',
+            unresolved_reason TEXT,
             PRIMARY KEY (ticker, date)
+        );
+
+        CREATE TABLE IF NOT EXISTS price_corporate_actions (
+            ticker TEXT NOT NULL,
+            action_date TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            value REAL NOT NULL,
+            applied_to_prices INTEGER NOT NULL DEFAULT 0,
+            adjustment_version TEXT NOT NULL,
+            fetch_timestamp TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            PRIMARY KEY (ticker, action_date, action_type, provider)
         );
 
         CREATE TABLE IF NOT EXISTS options_iv (
@@ -382,6 +399,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_fund_ticker_snap ON finviz_fundamentals(ticker, snapshot_ts);
         CREATE INDEX IF NOT EXISTS idx_price_ticker_date ON price_daily(ticker, date);
         CREATE INDEX IF NOT EXISTS idx_price_daily_ticker ON price_daily(ticker);
+        CREATE INDEX IF NOT EXISTS idx_price_actions_ticker_date ON price_corporate_actions(ticker, action_date);
         CREATE INDEX IF NOT EXISTS idx_options_ticker_snap ON options_iv(ticker, snapshot_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_runs_started ON ingest_runs(started_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_ticker_status_run ON ingest_ticker_status(run_id, status);
@@ -395,6 +413,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     for col_ddl in (
         "ALTER TABLE price_daily ADD COLUMN data_source TEXT DEFAULT 'yfinance'",
         "ALTER TABLE price_daily ADD COLUMN fetch_timestamp TEXT",
+        "ALTER TABLE price_daily ADD COLUMN adjustment_basis TEXT",
+        "ALTER TABLE price_daily ADD COLUMN adjustment_version TEXT",
+        "ALTER TABLE price_daily ADD COLUMN basis_status TEXT DEFAULT 'unverified'",
+        "ALTER TABLE price_daily ADD COLUMN unresolved_reason TEXT",
     ):
         try:
             conn.execute(col_ddl)
@@ -746,6 +768,36 @@ def write_price_daily(
     if fetch_timestamp is None:
         fetch_timestamp = utc_now_iso()
 
+    basis = str(df.attrs.get("adjustment_basis") or "unknown")
+    version = str(df.attrs.get("adjustment_version") or "unknown")
+    status = str(df.attrs.get("basis_status") or "unverified")
+    unresolved = list(df.attrs.get("unresolved_discontinuities") or [])
+    unresolved_reason = json.dumps(unresolved, sort_keys=True) if unresolved else None
+
+    existing = conn.execute(
+        """
+        SELECT DISTINCT adjustment_basis, adjustment_version, basis_status
+        FROM price_daily WHERE ticker = ?
+        """,
+        (ticker,),
+    ).fetchall()
+    known_existing = {(row[0], row[1]) for row in existing if row[0] and row[1]}
+    has_legacy = any(not row[0] or not row[1] for row in existing)
+    has_unresolved = any((row[2] or "unverified") != "verified" for row in existing)
+    if has_legacy or has_unresolved or (known_existing and known_existing != {(basis, version)}):
+        status = "unresolved"
+        unresolved_reason = json.dumps(
+            [{"reason": "legacy_or_mixed_price_basis"}], sort_keys=True
+        )
+        conn.execute(
+            """
+            UPDATE price_daily
+            SET basis_status = 'unresolved', unresolved_reason = ?
+            WHERE ticker = ?
+            """,
+            (unresolved_reason, ticker),
+        )
+
     rows = [
         (
             ticker,
@@ -757,17 +809,53 @@ def write_price_daily(
             float(r.volume) if pd.notna(r.volume) else None,
             data_source,
             fetch_timestamp,
+            basis,
+            version,
+            status,
+            unresolved_reason,
         )
         for r in df.itertuples(index=False)
     ]
     conn.executemany(
         """
         INSERT OR REPLACE INTO price_daily (
-            ticker, date, open, high, low, close, volume, data_source, fetch_timestamp
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ticker, date, open, high, low, close, volume, data_source, fetch_timestamp,
+            adjustment_basis, adjustment_version, basis_status, unresolved_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
+    for action in df.attrs.get("corporate_actions") or []:
+        evidence = {
+            **action,
+            "provider": data_source,
+            "adjustment_version": version,
+        }
+        conn.execute(
+            """
+            INSERT INTO price_corporate_actions (
+                ticker, action_date, action_type, provider, value,
+                applied_to_prices, adjustment_version, fetch_timestamp, evidence_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticker, action_date, action_type, provider) DO UPDATE SET
+                value = excluded.value,
+                applied_to_prices = excluded.applied_to_prices,
+                adjustment_version = excluded.adjustment_version,
+                fetch_timestamp = excluded.fetch_timestamp,
+                evidence_json = excluded.evidence_json
+            """,
+            (
+                ticker,
+                action["action_date"],
+                action["action_type"],
+                data_source,
+                float(action["value"]),
+                int(bool(action.get("applied_to_prices"))),
+                version,
+                fetch_timestamp,
+                json.dumps(evidence, sort_keys=True),
+            ),
+        )
 
 
 def fetch_options_rows(
@@ -1032,7 +1120,10 @@ def run(args: argparse.Namespace) -> None:
                             )
                             # A full refresh also audits the old scale before writing so
                             # changed tickers are replaced atomically and reported.
-                            reseed_required = stored_closes_disagree(conn, tkr, price_df)
+                            reseed_required = bool(
+                                args.full_price_refresh
+                                or stored_closes_disagree(conn, tkr, price_df)
+                            )
                             if (
                                 not args.full_price_refresh
                                 and not reseed_required
@@ -1054,9 +1145,13 @@ def run(args: argparse.Namespace) -> None:
 
                             if reseed_required:
                                 LOG.warning(
-                                    "%s: fetched closes contradict stored history "
-                                    "(split or restatement); reseeding from %s",
+                                    "%s: %s; reseeding from %s",
                                     tkr,
+                                    (
+                                        "full price refresh requested"
+                                        if args.full_price_refresh
+                                        else "fetched closes contradict stored history (split or restatement)"
+                                    ),
                                     args.price_start,
                                 )
                                 if price_fetch_start != args.price_start:
@@ -1072,6 +1167,10 @@ def run(args: argparse.Namespace) -> None:
                                 # The full fetch succeeded before deletion. Both operations
                                 # remain in this ticker's transaction and roll back together.
                                 conn.execute("DELETE FROM price_daily WHERE ticker = ?", (tkr,))
+                                conn.execute(
+                                    "DELETE FROM price_corporate_actions WHERE ticker = ?",
+                                    (tkr,),
+                                )
                                 reseeded_tickers.append(tkr)
                                 message_parts.append("price:reseed")
                             write_price_daily(conn, tkr, price_df, data_source=data_source)

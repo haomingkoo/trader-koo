@@ -51,7 +51,13 @@ def compute_williams_percent_r(
     return -100.0 * (highest - closes) / span
 
 
-def resample_ohlcv(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+def resample_ohlcv(
+    frame: pd.DataFrame,
+    timeframe: str,
+    *,
+    completed_only: bool = False,
+    as_of: dt.date | None = None,
+) -> pd.DataFrame:
     """Aggregate daily OHLCV rows to weekly or monthly bars."""
     if frame.empty:
         return frame.copy()
@@ -77,7 +83,32 @@ def resample_ohlcv(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
         .dropna(subset=["open", "high", "low", "close"])
         .reset_index(drop=True)
     )
+    if completed_only and not aggregated.empty:
+        cutoff = pd.Timestamp(as_of or dt.date.today())
+        source_dates = pd.to_datetime(aggregated["date"], errors="coerce")
+        if tf == "weekly":
+            period_end = source_dates.dt.to_period("W-FRI").dt.end_time.dt.normalize()
+        else:
+            period_end = source_dates.dt.to_period("M").dt.end_time.dt.normalize()
+        aggregated = aggregated.loc[period_end <= cutoff.normalize()].reset_index(drop=True)
     return aggregated
+
+
+def _research_eligible_tickers(conn: sqlite3.Connection) -> set[str]:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(price_daily)").fetchall()}
+    required = {"adjustment_basis", "adjustment_version", "basis_status"}
+    if not required.issubset(columns):
+        return set()
+    rows = conn.execute(
+        """
+        SELECT ticker FROM price_daily GROUP BY ticker
+        HAVING COUNT(DISTINCT COALESCE(adjustment_basis, 'unknown') || '|' ||
+               COALESCE(adjustment_version, 'unknown')) = 1
+           AND MIN(COALESCE(basis_status, 'unverified')) = 'verified'
+           AND MAX(COALESCE(basis_status, 'unverified')) = 'verified'
+        """
+    ).fetchall()
+    return {str(row[0]) for row in rows}
 
 
 def scan_green_barriers(
@@ -129,13 +160,20 @@ def scan_green_barrier_snapshot(
         "stale_skipped_tickers": [],
         "invalid_date_skipped_count": 0,
         "insufficient_history_skipped_count": 0,
+        "basis_unresolved_skipped_count": 0,
+        "basis_unresolved_skipped_tickers": [],
     }
     if daily.empty:
         return {"hits": [], "coverage": coverage}
 
     hits: list[dict[str, Any]] = []
     stale_tickers: list[str] = []
+    eligible_tickers = _research_eligible_tickers(conn)
+    basis_skipped: list[str] = []
     for ticker, ticker_daily in daily.groupby("ticker", sort=True):
+        if str(ticker) not in eligible_tickers:
+            basis_skipped.append(str(ticker))
+            continue
         latest_source_date = pd.to_datetime(ticker_daily["date"], errors="coerce").max()
         if pd.isna(latest_source_date):
             coverage["invalid_date_skipped_count"] += 1
@@ -146,7 +184,12 @@ def scan_green_barrier_snapshot(
             continue
         coverage["scanned_ticker_count"] += 1
         for timeframe in timeframes:
-            bars = resample_ohlcv(ticker_daily, timeframe)
+            bars = resample_ohlcv(
+                ticker_daily,
+                timeframe,
+                completed_only=True,
+                as_of=reference_date,
+            )
             if len(bars) < GREEN_BARRIER_PERIOD:
                 coverage["insufficient_history_skipped_count"] += 1
                 continue
@@ -174,6 +217,8 @@ def scan_green_barrier_snapshot(
         )
     coverage["stale_skipped_count"] = len(stale_tickers)
     coverage["stale_skipped_tickers"] = stale_tickers
+    coverage["basis_unresolved_skipped_count"] = len(basis_skipped)
+    coverage["basis_unresolved_skipped_tickers"] = basis_skipped
     return {
         "hits": sorted(
             hits,

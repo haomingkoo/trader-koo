@@ -389,6 +389,42 @@ def status() -> dict[str, Any]:
         fund_age_hours = hours_since(latest_fund_snapshot, now)
         opt_age_hours = hours_since(latest_opt_snapshot, now)
 
+        price_basis = {
+            "verified_tickers": 0,
+            "unresolved_tickers": int(counts["tracked_tickers"] if counts else 0),
+            "bases": [],
+        }
+        price_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(price_daily)").fetchall()
+        }
+        if {"adjustment_basis", "adjustment_version", "basis_status"}.issubset(price_columns):
+            basis_rows = conn.execute(
+                """
+                SELECT adjustment_basis, adjustment_version, basis_status,
+                       COUNT(DISTINCT ticker) AS ticker_count
+                FROM price_daily
+                GROUP BY adjustment_basis, adjustment_version, basis_status
+                """
+            ).fetchall()
+            price_basis["bases"] = [dict(row) for row in basis_rows]
+            verified = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM (
+                    SELECT ticker FROM price_daily GROUP BY ticker
+                    HAVING COUNT(DISTINCT COALESCE(adjustment_basis, 'unknown') || '|' ||
+                           COALESCE(adjustment_version, 'unknown')) = 1
+                       AND MIN(COALESCE(basis_status, 'unverified')) = 'verified'
+                       AND MAX(COALESCE(basis_status, 'unverified')) = 'verified'
+                )
+                """
+            ).fetchone()
+            price_basis["verified_tickers"] = int(verified["c"] or 0) if verified else 0
+            price_basis["unresolved_tickers"] = max(
+                0,
+                int(counts["tracked_tickers"] if counts else 0)
+                - int(price_basis["verified_tickers"]),
+            )
+
         # Report freshness
         _, report_payload = latest_daily_report_json(REPORT_DIR)
         report_generated_ts_str = (report_payload or {}).get("generated_ts")
@@ -407,6 +443,8 @@ def status() -> dict[str, Any]:
             warnings.append("finviz_fundamentals stale")
         if not report_fresh:
             warnings.append("daily_report stale")
+        if price_basis["unresolved_tickers"]:
+            warnings.append("price basis unresolved")
 
         latest_run = dict(run_row) if run_row is not None else None
         if latest_run and latest_run.get("status") in {"failed"}:
@@ -536,6 +574,7 @@ def status() -> dict[str, Any]:
                 "fundamentals_rows": counts["fundamentals_rows"] if counts else 0,
                 "options_rows": counts["options_rows"] if counts else 0,
             },
+            "price_basis": price_basis,
             "activity": activity,
             "llm": llm_meta,
             "latest_data": {

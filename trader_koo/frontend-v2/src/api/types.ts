@@ -660,7 +660,7 @@ export interface DashboardPayload {
   hmm_regime: HmmRegime | null;
   cv_proxy_patterns?: PatternOverlayRow[];
   hybrid_cv_compare?: Record<string, unknown>[];
-  data_sources?: Record<string, unknown>;
+  data_sources?: PriceDataSource;
   live_candle?: LiveCandle;
 }
 
@@ -683,7 +683,7 @@ export interface DashboardQuickPayload {
   earnings_markers: EarningsMarker[];
   cv_proxy_patterns?: PatternOverlayRow[];
   hybrid_cv_compare?: Record<string, unknown>[];
-  data_sources?: Record<string, unknown>;
+  data_sources?: PriceDataSource;
   data_freshness?: {
     latest_price_date: string | null;
     age_hours: number | null;
@@ -691,6 +691,19 @@ export interface DashboardQuickPayload {
   };
   live_candle?: LiveCandle;
   meta?: Record<string, unknown>;
+}
+
+export interface PriceDataSource {
+  price: string;
+  price_timestamp: string | null;
+  adjustment_basis: string;
+  return_basis: string;
+  adjustment_version: string;
+  basis_status: string;
+  research_eligible: boolean;
+  unresolved_reason: string | null;
+  corporate_actions: Array<Record<string, unknown>>;
+  distributions_included: boolean;
 }
 
 /** Slow-path payload from /api/dashboard/{ticker}/commentary (LLM + HMM). */
