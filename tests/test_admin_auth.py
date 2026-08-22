@@ -13,6 +13,7 @@ from trader_koo.middleware.auth import (
     require_admin,
     route_uses_admin_dependency,
 )
+from trader_koo.ratelimit.integration import initialize_rate_limiting
 
 
 def _app(
@@ -154,6 +155,7 @@ def test_every_production_admin_route_has_the_native_dependency():
         AdminAuthConfig(api_key="x" * 32)
     )
     app.include_router(production_admin_router)
+    initialize_rate_limiting(app)
     admin_routes = [
         route
         for route in app.routes
@@ -175,9 +177,35 @@ def test_every_production_admin_route_has_the_native_dependency():
 
     with TestClient(app) as client:
         assert client.get("/api/admin/routes").status_code == 401
+        assert client.get("/api/admin/ratelimit/status").status_code == 401
+        assert client.post(
+            "/api/admin/ratelimit/override",
+            json={
+                "key": "ip:victim",
+                "limit": 999999,
+                "window_seconds": 60,
+                "duration_seconds": 3600,
+            },
+        ).status_code == 401
         assert client.get(
             "/api/admin/routes", headers={"X-API-Key": "x" * 32}
         ).status_code == 200
+        assert client.get(
+            "/api/admin/ratelimit/status",
+            headers={"X-API-Key": "x" * 32},
+        ).status_code == 200
+        override = client.post(
+            "/api/admin/ratelimit/override",
+            headers={"X-API-Key": "x" * 32},
+            json={
+                "key": "ip:victim",
+                "limit": 999999,
+                "window_seconds": 60,
+                "duration_seconds": 3600,
+            },
+        )
+        assert override.status_code == 200
+        assert override.json()["success"] is True
 
 
 def test_openapi_marks_the_admin_surface_with_the_api_key_scheme():

@@ -34,6 +34,7 @@ from trader_koo.backend.routers.admin.telegram import (
 )
 from trader_koo.backend.routers.data_sync import router as data_sync_router
 from trader_koo.middleware.auth import require_admin
+from trader_koo.ratelimit.api import router as rate_limit_router
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -48,5 +49,6 @@ router.include_router(backups_router)
 router.include_router(market_monitor_router)
 router.include_router(crypto_router)
 router.include_router(data_sync_router)
+router.include_router(rate_limit_router)
 
 __all__ = ["router"]

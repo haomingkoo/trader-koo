@@ -234,7 +234,9 @@ def admin_route_inventory(app: Any) -> list[dict[str, Any]]:
     """Describe the runtime admin surface from FastAPI's resolved routes."""
     rows: list[dict[str, Any]] = []
     for route in app.routes:
-        if not isinstance(route, APIRoute) or not route.path.startswith("/api/admin/"):
+        if not isinstance(route, APIRoute) or not (
+            route.path == "/api/admin" or route.path.startswith("/api/admin/")
+        ):
             continue
         protected = route_uses_admin_dependency(route)
         for method in sorted(route.methods or set()):

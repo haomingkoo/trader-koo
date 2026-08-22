@@ -5,7 +5,7 @@ import os
 from fastapi import FastAPI
 
 from trader_koo.ratelimit.service import RateLimiter, RateLimitConfig
-from trader_koo.ratelimit.api import router as ratelimit_router, set_rate_limiter
+from trader_koo.ratelimit.api import set_rate_limiter
 
 LOG = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ def initialize_rate_limiting(app: FastAPI) -> RateLimiter:
 
     This function:
     1. Creates rate limiter with configuration from environment
-    2. Registers rate limiting API endpoints
+    2. Binds the limiter used by the already-mounted admin endpoints
     3. Stores rate limiter in app state
 
     Note: Middleware should be added separately before lifespan.
@@ -45,10 +45,10 @@ def initialize_rate_limiting(app: FastAPI) -> RateLimiter:
     # Initialize rate limiter
     rate_limiter = RateLimiter(config)
 
-    # Register API endpoints
+    # The API router is mounted through backend.routers.admin so it inherits
+    # the same native authentication dependency as every other admin route.
     set_rate_limiter(rate_limiter)
-    app.include_router(ratelimit_router)
-    LOG.info("Rate limiting API endpoints registered")
+    LOG.info("Rate limiting service bound to protected admin endpoints")
 
     # Store rate limiter in app state for access
     app.state.rate_limiter = rate_limiter
