@@ -23,6 +23,7 @@ import {
   formatChartNumber,
   resampleToMonthly,
   resampleToWeekly,
+  isResearchChartEligible,
   type ChartOverlayKey,
   type ChartOverlayState,
 } from "../lib/chart/buildEquityChartData";
@@ -189,6 +190,7 @@ export default function ChartPage() {
   const commentary = commentaryData?.chart_commentary ?? null;
   const freshness = quickData?.data_freshness ?? undefined;
   const priceContract = quickData?.data_sources;
+  const researchChartEligible = isResearchChartEligible(priceContract);
   // Throttled copy for the chart rebuild only; toolbar/fundamentals stay instant.
   const chartLivePrice = useThrottledValue(livePrice, CHART_LIVE_PRICE_THROTTLE_MS);
   const livePayload = useMemo(
@@ -228,7 +230,12 @@ export default function ChartPage() {
   }, [data, chartLivePrice]);
 
   const chartResult = useMemo(() => {
-    if (!livePayload || !livePayload.chart || livePayload.chart.length === 0) {
+    if (
+      !researchChartEligible ||
+      !livePayload ||
+      !livePayload.chart ||
+      livePayload.chart.length === 0
+    ) {
       return null;
     }
     return buildChartData(
@@ -246,13 +253,14 @@ export default function ChartPage() {
     effectiveLiveCandle,
     compactChart,
     greenBarrierThreshold,
+    researchChartEligible,
   ]);
 
   const chartBarCount = (
     timeframe === "monthly"
-      ? resampleToMonthly(livePayload?.chart ?? [])
+      ? resampleToMonthly(livePayload?.chart ?? [], true)
       : timeframe === "weekly"
-        ? resampleToWeekly(livePayload?.chart ?? [])
+        ? resampleToWeekly(livePayload?.chart ?? [], true)
         : livePayload?.chart ?? []
   ).length;
   const reportSnapshotMatches = reportGreenBarrierSnapshot && chartResult
@@ -345,7 +353,16 @@ export default function ChartPage() {
         </div>
       )}
 
-      {data && !isLoading && (
+      {data && !isLoading && !researchChartEligible && (
+        <div
+          role="alert"
+          className="rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/5 px-4 py-6 text-sm text-[var(--red)]"
+        >
+          Research chart and indicators are unavailable until this ticker's price basis is resolved.
+        </div>
+      )}
+
+      {data && !isLoading && researchChartEligible && (
         <>
           {/* Fundamental cards */}
           <ChartFundamentals

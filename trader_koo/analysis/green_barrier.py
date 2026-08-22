@@ -239,6 +239,8 @@ def build_green_barrier_chart_png(
 ) -> bytes:
     """Render a Telegram-sized price + Williams %R chart as PNG bytes."""
     symbol = str(ticker or "").strip().upper()
+    if symbol not in _research_eligible_tickers(conn):
+        raise ValueError(f"Price basis is not research eligible for {symbol}")
     query = """
         SELECT date, open, high, low, close, COALESCE(volume, 0) AS volume
         FROM price_daily WHERE ticker = ?
@@ -250,7 +252,13 @@ def build_green_barrier_chart_png(
         params = (symbol, cutoff)
     query += " ORDER BY date"
     daily = pd.read_sql_query(query, conn, params=params)
-    bars = resample_ohlcv(daily, timeframe)
+    reference_date = pd.Timestamp(as_of).date() if as_of is not None else dt.date.today()
+    bars = resample_ohlcv(
+        daily,
+        timeframe,
+        completed_only=True,
+        as_of=reference_date,
+    )
     if len(bars) < GREEN_BARRIER_PERIOD:
         raise ValueError(f"Not enough {timeframe} bars for {symbol}")
     bars["williams_r"] = compute_williams_percent_r(bars)

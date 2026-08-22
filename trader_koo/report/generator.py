@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 
 from trader_koo.catalyst_data import build_earnings_calendar_payload
+from trader_koo.db.price_contract import research_price_contract
 from trader_koo.llm_narrative import llm_enabled, llm_status
 from trader_koo.paper_trades import (
     PAPER_TRADE_ENABLED,
@@ -232,6 +233,15 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
         "green_barrier_hits": [],
         "green_barrier_coverage": {},
     }
+    price_contract = research_price_contract(conn)
+    signals["price_contract"] = price_contract
+    if not price_contract["eligible"]:
+        _report_warnings.append("price_basis_unresolved")
+        LOG.error(
+            "Report signals excluded: price basis is not research eligible (%s)",
+            price_contract["reason"],
+        )
+        return signals
     movers_all: list[dict[str, Any]] = []
     fundamentals_map: dict[str, dict[str, Any]] = {}
     yolo_by_ticker: dict[str, dict[str, Any]] = {}
@@ -1429,7 +1439,11 @@ def fetch_report_payload(
 
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
         payload["signals"] = fetch_signals(conn)
-        for warning in ("green_barrier_incomplete_coverage", "green_barrier_scan_failed"):
+        for warning in (
+            "price_basis_unresolved",
+            "green_barrier_incomplete_coverage",
+            "green_barrier_scan_failed",
+        ):
             if warning in _report_warnings:
                 payload["warnings"].append(warning)
         if SETUP_EVAL_ENABLED:

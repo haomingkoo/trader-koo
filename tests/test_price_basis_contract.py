@@ -10,6 +10,10 @@ from trader_koo.analysis.green_barrier import compute_williams_percent_r, resamp
 from trader_koo.backend.services.market_data import get_data_sources
 from trader_koo.db.sources import DataSourceManager
 from trader_koo.scripts.update_market_db import ensure_schema, write_price_daily
+from trader_koo.db.price_contract import research_price_contract
+from trader_koo.ml.benchmark import run_benchmark
+from trader_koo.ml.trainer import build_dataset
+from trader_koo.report import generator as report_generator
 
 
 def _raw_frame(
@@ -158,3 +162,94 @@ def test_mixing_price_bases_marks_whole_ticker_unresolved() -> None:
     ).fetchall()
     assert statuses == [("unresolved",)]
     assert get_data_sources(conn, "SNDK")["research_eligible"] is False
+
+
+def test_incremental_batch_boundary_discontinuity_fails_closed() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+
+    for date, close in (("2026-08-20", 100.0), ("2026-08-21", 40.0)):
+        frame = pd.DataFrame(
+            [{"date": date, "open": close, "high": close, "low": close, "close": close, "volume": 1000.0}]
+        )
+        frame.attrs.update(
+            adjustment_basis="split_adjusted_price_only",
+            adjustment_version="yfinance-actions-v1",
+            basis_status="verified",
+            unresolved_discontinuities=[],
+            corporate_actions=[],
+        )
+        write_price_daily(conn, "CRASH", frame)
+
+    rows = conn.execute(
+        "SELECT close, basis_status, unresolved_reason FROM price_daily WHERE ticker='CRASH' ORDER BY date"
+    ).fetchall()
+    assert [row[0] for row in rows] == [100.0, 40.0]
+    assert {row[1] for row in rows} == {"unresolved"}
+    assert "unexplained_adjacent_price_discontinuity" in rows[0][2]
+    assert research_price_contract(conn, ["CRASH"])["eligible"] is False
+
+
+def test_narrow_refetch_does_not_erase_applied_split_provenance() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    full = DataSourceManager._normalize_ohlcv(
+        _raw_frame(_continuous_prices(), action_date="2025-07-01", factor=20.0)
+    )
+    write_price_daily(conn, "BKNG", full, fetch_timestamp="2026-08-20T00:00:00Z")
+
+    raw_post_only = _raw_frame(
+        _continuous_prices(), action_date="2025-07-01", factor=20.0
+    ).loc["2025-07-01":]
+    narrow = DataSourceManager._normalize_ohlcv(raw_post_only)
+    assert narrow.attrs["corporate_actions"][0]["applied_to_prices"] is False
+    write_price_daily(conn, "BKNG", narrow, fetch_timestamp="2026-08-21T00:00:00Z")
+
+    action = conn.execute(
+        """SELECT applied_to_prices, fetch_timestamp, evidence_json
+        FROM price_corporate_actions WHERE ticker='BKNG' AND action_type='split'"""
+    ).fetchone()
+    assert action[0] == 1
+    assert action[1] == "2026-08-20T00:00:00Z"
+    assert '"applied_to_prices": true' in action[2]
+
+
+def test_requested_missing_ticker_fails_contract_closed() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    prices = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:5])
+    write_price_daily(conn, "SPY", prices)
+
+    contract = research_price_contract(conn, ["SPY", "MISSING"])
+
+    assert contract["eligible"] is False
+    assert contract["reason"] == "missing_requested_tickers"
+    assert contract["missing_tickers"] == ["MISSING"]
+
+
+def test_report_and_ml_consumers_fail_closed_for_unresolved_basis() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    prices = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
+    prices.attrs["basis_status"] = "unresolved"
+    prices.attrs["unresolved_discontinuities"] = [
+        {"reason": "unexplained_adjacent_price_discontinuity"}
+    ]
+    write_price_daily(conn, "SPY", prices)
+
+    report_generator._report_warnings = []
+    signals = report_generator.fetch_signals(conn)
+    assert signals["setup_quality_top"] == []
+    assert "hmm_regime_by_ticker" not in signals
+    assert signals["price_contract"]["eligible"] is False
+    assert "price_basis_unresolved" in report_generator._report_warnings
+
+    with pytest.raises(ValueError, match="not research eligible"):
+        build_dataset(
+            conn,
+            start_date="2024-01-01",
+            end_date="2026-01-01",
+        )
+    benchmark = run_benchmark(conn, start_date="2024-01-01")
+    assert benchmark["ok"] is False
+    assert benchmark["price_contract"]["eligible"] is False

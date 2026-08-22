@@ -825,6 +825,23 @@ def write_price_daily(
         """,
         rows,
     )
+    # Normalization can only inspect rows returned by one provider request.
+    # Re-check the persisted series so a genuine scale break that lands exactly
+    # between two incremental batches cannot enter research as verified data.
+    if stored_prices_have_scale_break(conn, ticker):
+        status = "unresolved"
+        unresolved_reason = json.dumps(
+            [{"reason": "unexplained_adjacent_price_discontinuity"}],
+            sort_keys=True,
+        )
+        conn.execute(
+            """
+            UPDATE price_daily
+            SET basis_status = 'unresolved', unresolved_reason = ?
+            WHERE ticker = ?
+            """,
+            (unresolved_reason, ticker),
+        )
     for action in df.attrs.get("corporate_actions") or []:
         evidence = {
             **action,
@@ -838,11 +855,34 @@ def write_price_daily(
                 applied_to_prices, adjustment_version, fetch_timestamp, evidence_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker, action_date, action_type, provider) DO UPDATE SET
-                value = excluded.value,
-                applied_to_prices = excluded.applied_to_prices,
-                adjustment_version = excluded.adjustment_version,
-                fetch_timestamp = excluded.fetch_timestamp,
-                evidence_json = excluded.evidence_json
+                value = CASE
+                    WHEN price_corporate_actions.applied_to_prices = 1
+                         AND excluded.applied_to_prices = 0
+                    THEN price_corporate_actions.value
+                    ELSE excluded.value
+                END,
+                applied_to_prices = MAX(
+                    price_corporate_actions.applied_to_prices,
+                    excluded.applied_to_prices
+                ),
+                adjustment_version = CASE
+                    WHEN price_corporate_actions.applied_to_prices = 1
+                         AND excluded.applied_to_prices = 0
+                    THEN price_corporate_actions.adjustment_version
+                    ELSE excluded.adjustment_version
+                END,
+                fetch_timestamp = CASE
+                    WHEN price_corporate_actions.applied_to_prices = 1
+                         AND excluded.applied_to_prices = 0
+                    THEN price_corporate_actions.fetch_timestamp
+                    ELSE excluded.fetch_timestamp
+                END,
+                evidence_json = CASE
+                    WHEN price_corporate_actions.applied_to_prices = 1
+                         AND excluded.applied_to_prices = 0
+                    THEN price_corporate_actions.evidence_json
+                    ELSE excluded.evidence_json
+                END
             """,
             (
                 ticker,

@@ -32,14 +32,36 @@ def research_price_contract(
         """,
         params,
     ).fetchall()
+    missing_tickers: list[str] = []
+    if params:
+        present = {
+            str(row[0])
+            for row in conn.execute(
+                f"SELECT DISTINCT ticker FROM price_daily WHERE ticker IN ({','.join('?' for _ in params)})",
+                params,
+            ).fetchall()
+        }
+        missing_tickers = sorted(set(params) - present)
     bases = {(row[0], row[1]) for row in rows if row[0] and row[1]}
-    verified = bool(rows) and len(bases) == 1 and all(row[2] == "verified" for row in rows)
+    verified = (
+        bool(rows)
+        and not missing_tickers
+        and len(bases) == 1
+        and all(row[2] == "verified" for row in rows)
+    )
     basis, version = next(iter(bases)) if len(bases) == 1 else ("unknown", "unknown")
     return {
         "eligible": verified,
         "basis": basis,
         "version": version,
         "status": "verified" if verified else "unresolved",
-        "reason": None if verified else "mixed_or_unresolved_price_basis",
+        "reason": (
+            None
+            if verified
+            else "missing_requested_tickers"
+            if missing_tickers
+            else "mixed_or_unresolved_price_basis"
+        ),
+        "missing_tickers": missing_tickers,
         "distributions_included": basis == "total_return",
     }

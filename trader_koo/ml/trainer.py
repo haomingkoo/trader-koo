@@ -36,6 +36,7 @@ from trader_koo.ml.features import (
     extract_features_for_universe,
 )
 from trader_koo.ml.labels import generate_triple_barrier_labels
+from trader_koo.db.price_contract import research_price_contract
 
 LOG = logging.getLogger(__name__)
 
@@ -121,6 +122,14 @@ def build_dataset(
         False for ``return_sign`` and ``rank`` targets so they learn from the
         full realized outcome distribution, including time-expired trades.
     """
+    price_contract = research_price_contract(
+        conn,
+        [*(tickers or []), "SPY"] if tickers else None,
+    )
+    if not price_contract["eligible"]:
+        raise ValueError(
+            f"Price basis is not research eligible: {price_contract['reason']}"
+        )
     trading_dates = _get_trading_dates(conn, start_date, end_date)
     if not trading_dates:
         LOG.warning("No trading dates found between %s and %s", start_date, end_date)

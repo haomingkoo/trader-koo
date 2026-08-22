@@ -244,6 +244,17 @@ def test_scan_fails_closed_for_unresolved_price_basis(tmp_path: Path) -> None:
     assert snapshot["coverage"]["basis_unresolved_skipped_tickers"] == ["HIT"]
 
 
+def test_chart_renderer_fails_closed_for_unresolved_price_basis(tmp_path: Path) -> None:
+    conn = _make_price_db(tmp_path / "unresolved-chart.db")
+    conn.execute("UPDATE price_daily SET basis_status = 'unresolved' WHERE ticker = 'HIT'")
+    conn.commit()
+    try:
+        with pytest.raises(ValueError, match="not research eligible"):
+            build_green_barrier_chart_png(conn, ticker="HIT", timeframe="monthly")
+    finally:
+        conn.close()
+
+
 def test_chart_is_bound_to_report_asof_and_value(tmp_path: Path) -> None:
     conn = _make_price_db(tmp_path / "prices.db")
     try:

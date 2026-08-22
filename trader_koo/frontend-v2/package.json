@@ -11,6 +11,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test:e2e": "playwright test",
+    "test": "node --experimental-strip-types --test src/lib/chart/buildEquityChartData.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

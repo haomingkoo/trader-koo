@@ -36,6 +36,7 @@ LOG = logging.getLogger("trader_koo.ml.benchmark")
 from trader_koo.ml.features import FEATURE_COLUMNS_SLIM, FEATURE_COLUMNS_RANKED
 
 from trader_koo.ml.trainer import _apply_target_mode, build_dataset
+from trader_koo.db.price_contract import research_price_contract
 
 FEATURE_SETS = {
     "ranked_7": FEATURE_COLUMNS_RANKED,
@@ -109,6 +110,13 @@ def run_benchmark(
 
     Returns a dict with results for every combination.
     """
+    price_contract = research_price_contract(conn)
+    if not price_contract["eligible"]:
+        return {
+            "ok": False,
+            "error": f"Price basis is not research eligible: {price_contract['reason']}",
+            "price_contract": price_contract,
+        }
     print("=" * 70)
     print("MULTI-MODEL BENCHMARK")
     print(f"Start: {start_date}, Train: {train_days}d, Test: {test_days}d")

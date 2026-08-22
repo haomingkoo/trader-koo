@@ -48,6 +48,16 @@ export interface PipelineStatus {
     fund_age_hours: number | null;
     opt_age_hours: number | null;
   };
+  price_basis: {
+    verified_tickers: number;
+    unresolved_tickers: number;
+    bases: Array<{
+      adjustment_basis: string | null;
+      adjustment_version: string | null;
+      basis_status: string | null;
+      ticker_count: number;
+    }>;
+  };
   errors: {
     failed_runs_7d: number;
     latest_error_message: string | null;

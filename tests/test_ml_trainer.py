@@ -35,9 +35,14 @@ def test_apply_target_mode_barrier_treats_time_expiry_as_no_target_hit():
 
 def test_build_dataset_keeps_time_expired_labels_by_default(monkeypatch):
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, close REAL)")
+    conn.execute("""CREATE TABLE price_daily (
+        ticker TEXT, date TEXT, close REAL,
+        adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+        adjustment_version TEXT DEFAULT 'test-v1',
+        basis_status TEXT DEFAULT 'verified'
+    )""")
     conn.executemany(
-        "INSERT INTO price_daily VALUES (?, ?, ?)",
+        "INSERT INTO price_daily (ticker, date, close) VALUES (?, ?, ?)",
         [("SPY", f"2025-01-{day:02d}", 100.0 + day) for day in range(1, 6)],
     )
 
@@ -72,9 +77,14 @@ def test_build_dataset_keeps_time_expired_labels_by_default(monkeypatch):
 
 def test_build_dataset_can_drop_time_expired_labels(monkeypatch):
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, close REAL)")
+    conn.execute("""CREATE TABLE price_daily (
+        ticker TEXT, date TEXT, close REAL,
+        adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+        adjustment_version TEXT DEFAULT 'test-v1',
+        basis_status TEXT DEFAULT 'verified'
+    )""")
     conn.executemany(
-        "INSERT INTO price_daily VALUES (?, ?, ?)",
+        "INSERT INTO price_daily (ticker, date, close) VALUES (?, ?, ?)",
         [("SPY", f"2025-01-{day:02d}", 100.0 + day) for day in range(1, 6)],
     )
 

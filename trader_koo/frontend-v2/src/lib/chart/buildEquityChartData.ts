@@ -14,6 +14,12 @@ export function formatChartNumber(
   return n.toFixed(decimals);
 }
 
+export function isResearchChartEligible(
+  contract: { research_eligible?: boolean } | null | undefined,
+): boolean {
+  return contract?.research_eligible === true;
+}
+
 function ma(arr: number[], n: number): (number | null)[] {
   const result: (number | null)[] = new Array(arr.length).fill(null);
   let sum = 0;
@@ -54,7 +60,33 @@ function lastFinite(values: Array<number | null | undefined>): number | null {
   return null;
 }
 
-export function resampleToWeekly(rows: OhlcvRow[]): OhlcvRow[] {
+function utcDate(value: string | Date): Date {
+  const parsed = value instanceof Date ? value : new Date(`${value.slice(0, 10)}T00:00:00Z`);
+  return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()));
+}
+
+function isCompletedPeriod(
+  sourceDate: string,
+  timeframe: "weekly" | "monthly",
+  asOf: Date,
+): boolean {
+  const date = utcDate(sourceDate);
+  const cutoff = utcDate(asOf);
+  const periodEnd = timeframe === "weekly"
+    ? new Date(Date.UTC(
+        date.getUTCFullYear(),
+        date.getUTCMonth(),
+        date.getUTCDate() + ((5 - date.getUTCDay() + 7) % 7),
+      ))
+    : new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
+  return periodEnd.getTime() <= cutoff.getTime();
+}
+
+export function resampleToWeekly(
+  rows: OhlcvRow[],
+  completedOnly = false,
+  asOf = new Date(),
+): OhlcvRow[] {
   if (rows.length === 0) return [];
   const weeks: OhlcvRow[] = [];
   let current: OhlcvRow | null = null;
@@ -74,10 +106,17 @@ export function resampleToWeekly(rows: OhlcvRow[]): OhlcvRow[] {
     }
   }
   if (current) weeks.push(current);
+  if (completedOnly) {
+    return weeks.filter((row) => isCompletedPeriod(row.date, "weekly", asOf));
+  }
   return weeks;
 }
 
-export function resampleToMonthly(rows: OhlcvRow[]): OhlcvRow[] {
+export function resampleToMonthly(
+  rows: OhlcvRow[],
+  completedOnly = false,
+  asOf = new Date(),
+): OhlcvRow[] {
   if (rows.length === 0) return [];
   const months: OhlcvRow[] = [];
   let current: OhlcvRow | null = null;
@@ -98,6 +137,9 @@ export function resampleToMonthly(rows: OhlcvRow[]): OhlcvRow[] {
     }
   }
   if (current) months.push(current);
+  if (completedOnly) {
+    return months.filter((row) => isCompletedPeriod(row.date, "monthly", asOf));
+  }
   return months;
 }
 
@@ -393,9 +435,9 @@ export function buildChartData(
   const isWeekly = timeframe === "weekly";
   const isMonthly = timeframe === "monthly";
   const baseChart = isMonthly
-    ? resampleToMonthly(rawChart)
+    ? resampleToMonthly(rawChart, true)
     : isWeekly
-      ? resampleToWeekly(rawChart)
+      ? resampleToWeekly(rawChart, true)
       : rawChart;
   const levels = payload.levels ?? [];
   const gaps = payload.gaps ?? [];
