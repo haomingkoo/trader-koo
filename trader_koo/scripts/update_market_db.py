@@ -513,8 +513,18 @@ def corporate_actions_require_full_history(
     conn: sqlite3.Connection,
     ticker: str,
     vendor_actions: list[dict[str, Any]],
+    *,
+    managed_start: str | None = None,
+    managed_end: str | None = None,
 ) -> bool:
-    """Return whether vendor split evidence lacks a completed full-history audit."""
+    """Return whether an in-window vendor action lacks a full-history audit.
+
+    Price downloads use a half-open ``[start, end)`` interval. Actions outside
+    that configured interval cannot affect any managed observation and must not
+    cause an endless bounded-history reseed.
+    """
+    start_date = pd.Timestamp(managed_start).date() if managed_start else None
+    end_date = pd.Timestamp(managed_end).date() if managed_end else None
     persisted = {
         (str(row[0]), str(row[1])): (float(row[2]), int(row[3] or 0), str(row[4] or ""))
         for row in conn.execute(
@@ -530,6 +540,11 @@ def corporate_actions_require_full_history(
         action_type = str(action.get("action_type") or "")
         value = float(action.get("value") or 0.0)
         if not action_date or action_type not in {"split", "reverse_split"} or value <= 0:
+            continue
+        action_day = pd.Timestamp(action_date).date()
+        if start_date is not None and action_day < start_date:
+            continue
+        if end_date is not None and action_day >= end_date:
             continue
         prior = persisted.get((action_date, action_type))
         if prior is None or not math.isclose(prior[0], value, rel_tol=1e-9, abs_tol=1e-12):
@@ -1264,7 +1279,11 @@ def run(args: argparse.Namespace) -> None:
 
                                 vendor_actions = get_data_source_manager().fetch_ticker_actions(tkr)
                                 late_action_reconciliation = corporate_actions_require_full_history(
-                                    conn, tkr, vendor_actions
+                                    conn,
+                                    tkr,
+                                    vendor_actions,
+                                    managed_start=args.price_start,
+                                    managed_end=args.price_end,
                                 )
                                 if late_action_reconciliation:
                                     full_price_df, full_data_source = fetch_price_daily(

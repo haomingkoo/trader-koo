@@ -144,20 +144,96 @@ def test_retroactive_action_requires_one_idempotent_full_history_reconciliation(
         }
     ]
 
-    assert corporate_actions_require_full_history(conn, "LATE", vendor_action) is True
+    assert corporate_actions_require_full_history(
+        conn,
+        "LATE",
+        vendor_action,
+        managed_start=DATES[0],
+        managed_end="2026-03-19",
+    ) is True
 
     mark_full_history_actions_verified(normalized)
     write_price_daily(conn, "LATE", normalized, fetch_timestamp="2026-08-22T00:00:00Z")
     write_price_daily(conn, "LATE", normalized, fetch_timestamp="2026-08-22T00:00:00Z")
     conn.commit()
 
-    assert corporate_actions_require_full_history(conn, "LATE", vendor_action) is False
+    assert corporate_actions_require_full_history(
+        conn,
+        "LATE",
+        vendor_action,
+        managed_start=DATES[0],
+        managed_end="2026-03-19",
+    ) is False
     action = conn.execute(
         """SELECT COUNT(*), evidence_json FROM price_corporate_actions
         WHERE ticker='LATE' AND action_type='split'"""
     ).fetchone()
     assert action[0] == 1
     assert '"full_history_verified": true' in action[1]
+
+
+def test_pre_start_vendor_action_does_not_repeat_bounded_history_reseed() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    vendor_action = [
+        {"action_date": "2017-12-31", "action_type": "split", "value": 2.0}
+    ]
+
+    # First run sees Yahoo's lifetime ledger but manages only 2018 onward.
+    assert corporate_actions_require_full_history(
+        conn,
+        "OLD",
+        vendor_action,
+        managed_start="2018-01-01",
+    ) is False
+    bounded = DataSourceManager._normalize_ohlcv(
+        _already_adjusted_action_frame(action_date=DATES[1], factor=1.0)
+    )
+    mark_full_history_actions_verified(bounded)
+    write_price_daily(conn, "OLD", bounded)
+    conn.commit()
+
+    # The next incremental run must make the same decision without reseeding.
+    assert corporate_actions_require_full_history(
+        conn,
+        "OLD",
+        vendor_action,
+        managed_start="2018-01-01",
+    ) is False
+
+
+def test_managed_action_window_uses_exact_half_open_boundaries() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+
+    def requires(action_date: str) -> bool:
+        return corporate_actions_require_full_history(
+            conn,
+            "BOUNDARY",
+            [{"action_date": action_date, "action_type": "split", "value": 1.5}],
+            managed_start="2018-01-01",
+            managed_end="2020-01-01",
+        )
+
+    assert requires("2017-12-31") is False
+    assert requires("2018-01-01") is True
+    assert requires("2019-12-31") is True
+    assert requires("2020-01-01") is False
+
+
+def test_earlier_managed_start_makes_previously_irrelevant_action_relevant() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    vendor_action = [
+        {"action_date": "2017-06-01", "action_type": "split", "value": 1.5}
+    ]
+
+    assert corporate_actions_require_full_history(
+        conn, "CONFIG", vendor_action, managed_start="2018-01-01"
+    ) is False
+    assert corporate_actions_require_full_history(
+        conn, "CONFIG", vendor_action, managed_start="2017-01-01"
+    ) is True
 
 
 def _already_adjusted_action_frame(*, action_date: str, factor: float) -> pd.DataFrame:
