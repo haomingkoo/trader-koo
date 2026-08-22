@@ -112,6 +112,7 @@ export default function PaperTradePage() {
       <PaperTradeBenchmarkComparison
         overall={overall}
         benchmarks={summary?.benchmarks}
+        evidence={summary?.strategy_evidence}
       />
 
       <PaperTradeFeedbackPanel

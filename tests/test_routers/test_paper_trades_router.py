@@ -71,6 +71,28 @@ class TestPaperTradeSummaryEndpoint:
         state = response.json()["strategy_evidence"]
         assert state["provenance"]["artifact_sha256"] == provenance["artifact_sha256"]
         assert state["provenance"]["input_hash_sha256"] == provenance["input_hash_sha256"]
+        assert state["provenance"]["verified"] is True
+
+    def test_missing_packaged_evidence_fails_closed_through_real_api(
+        self, test_app, monkeypatch, tmp_path
+    ):
+        manifest = tmp_path / "strategy_evidence_20260822.json"
+        manifest.write_text(
+            '{"artifact_file":"missing.json","input_manifest_file":"inputs.json"}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "trader_koo.research.strategy_evidence._SNAPSHOT_PATH", manifest
+        )
+
+        response = test_app.get("/api/paper-trades/summary")
+
+        assert response.status_code == 200
+        evidence = response.json()["strategy_evidence"]
+        assert evidence["readiness_status"] == "evidence_unavailable"
+        assert evidence["decision_eligible"] is False
+        assert evidence["provenance"]["verified"] is False
+        assert evidence["provenance"]["href"] is None
 
     def test_wrong_evidence_hash_fails_closed(self, test_app):
         response = test_app.get(

@@ -1,11 +1,27 @@
 import { expect, test, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const snapshotPath = fileURLToPath(
-  new URL("../../research/strategy_evidence_20260822.json", import.meta.url),
+const artifactPath = fileURLToPath(
+  new URL("../../research/strategy_evidence_artifact_20260822.json", import.meta.url),
 );
-const productionEvidence = JSON.parse(readFileSync(snapshotPath, "utf8"));
+const inputsPath = fileURLToPath(
+  new URL("../../research/strategy_evidence_inputs_20260822.json", import.meta.url),
+);
+const artifactBytes = readFileSync(artifactPath);
+const inputBytes = readFileSync(inputsPath);
+const productionEvidence = {
+  ...JSON.parse(artifactBytes.toString("utf8")),
+  provenance: {
+    artifact_name: "strategy_evidence_artifact_20260822.json",
+    artifact_sha256: createHash("sha256").update(artifactBytes).digest("hex"),
+    input_hash_sha256: createHash("sha256").update(inputBytes).digest("hex"),
+    artifact_spec_hash_sha256: null,
+    verified: true,
+    href: "",
+  },
+};
 productionEvidence.provenance.href =
   `/api/research/strategy-evidence/${productionEvidence.provenance.artifact_sha256}` +
   `/inputs/${productionEvidence.provenance.input_hash_sha256}`;
@@ -20,7 +36,19 @@ const maliciousFeedback = [
   },
 ];
 
-const summaryPayload = {
+const outperformingBenchmarks = {
+  spy_buy_hold: { return_pct: -1, period_days: 20, start_price: 100, end_price: 99 },
+  unfiltered_setups: {
+    trades: 100,
+    win_rate: 45,
+    return_pct: -1,
+    total_return_pct: -10,
+    sharpe: null,
+    hold_days: 10,
+  },
+};
+
+const summaryPayload = (evidence: Record<string, unknown>) => ({
   ok: true,
   overall: {
     total_trades: 5,
@@ -38,11 +66,11 @@ const summaryPayload = {
   equity_curve: [],
   recent_trades: [],
   feedback: maliciousFeedback,
-  benchmarks: {},
-  strategy_evidence: productionEvidence,
-};
+  benchmarks: outperformingBenchmarks,
+  strategy_evidence: evidence,
+});
 
-async function mockApi(page: Page) {
+async function mockApi(page: Page, evidence: Record<string, unknown> = productionEvidence) {
   await page.routeWebSocket(/\/ws\//, (socket) => socket.close());
   await page.route((url) => url.pathname.startsWith("/api/"), async (route) => {
     await route.fulfill({ json: { ok: false } });
@@ -51,7 +79,7 @@ async function mockApi(page: Page) {
     await route.fulfill({ json: { ok: true, count: 0, trades: [] } });
   });
   await page.route("**/api/paper-trades/summary", async (route) => {
-    await route.fulfill({ json: summaryPayload });
+    await route.fulfill({ json: summaryPayload(evidence) });
   });
   await page.route("**/api/daily-report?*", async (route) => {
     await route.fulfill({
@@ -104,7 +132,47 @@ test("portfolio cannot render an actionable recommendation from inadequate evide
   await expect(page.getByText(/size up/i)).toHaveCount(0);
   await expect(page.getByText(/priority allocation/i)).toHaveCount(0);
   await expect(page.getByText(/shows edge/i)).toHaveCount(0);
+  await expect(page.getByText(/portfolio outperforms/i)).toHaveCount(0);
+  await expect(page.getByText(/taken trades beat/i)).toHaveCount(0);
+  await expect(page.getByText(/observed portfolio return is above/i)).toBeVisible();
+  await expect(page.getByText(/observed taken-trade average is above/i)).toBeVisible();
   await expect(page.getByText(/do not change allocation or admission/i)).toBeVisible();
+});
+
+test("forged eligibility assertions cannot bypass missing evidence gates", async ({ page }) => {
+  const forged = structuredClone(productionEvidence);
+  Object.assign(forged, {
+    lifecycle_stage: "promotion_review",
+    readiness_status: "eligible_for_human_promotion_review",
+    readiness_reasons: [],
+    observation_count: 0,
+    traded_signal_date_count: 0,
+    effective_non_overlapping_block_count: 0,
+    decision_eligible: true,
+    causal_validity: { valid: true, reasons: [] },
+    consumed_window: { consumed: true, reusable_for_policy_selection: true, status: "fresh" },
+    return_basis: "split_adjusted_total_return_net_of_costs",
+  });
+  await mockApi(page, forged);
+  await page.goto("/paper-trades");
+
+  await expect(page.getByText("Promotion Review")).toHaveCount(0);
+  await expect(page.getByText(/size up/i)).toHaveCount(0);
+  await expect(page.getByText(/portfolio outperforms/i)).toHaveCount(0);
+});
+
+test("partial evidence package fails closed instead of crashing", async ({ page }) => {
+  await mockApi(page, {
+    readiness_status: "eligible_for_human_promotion_review",
+    decision_eligible: true,
+  });
+  await page.goto("/paper-trades");
+
+  await expect(page.getByTestId("strategy-evidence-state")).toBeVisible();
+  await expect(page.getByTestId("strategy-evidence-status")).toHaveText(
+    "Research only / evidence unavailable",
+  );
+  await expect(page.getByText("Promotion Review")).toHaveCount(0);
 });
 
 test("research journey shows the same fail-closed production snapshot", async ({ page }) => {

@@ -45,11 +45,33 @@ const fmtDollars = (value: number | null | undefined, compact = false): string =
   return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
-const evidenceAllowsAction = (evidence?: StrategyEvidenceState): boolean =>
-  evidence?.readiness_status === "eligible_for_human_promotion_review" &&
-  evidence.lifecycle_stage === "promotion_review" &&
-  evidence.decision_eligible === true &&
-  evidence.causal_validity.valid === true;
+const evidenceAllowsAction = (evidence?: StrategyEvidenceState): boolean => {
+  if (!evidence) return false;
+  const causalReasons = evidence.causal_validity?.reasons;
+  return (
+    evidence.schema_version === "1.0" &&
+    evidence.readiness_status === "eligible_for_human_promotion_review" &&
+    evidence.lifecycle_stage === "promotion_review" &&
+    evidence.decision_eligible === true &&
+    Number.isFinite(evidence.observation_count) &&
+    evidence.observation_count >= 120 &&
+    Number.isFinite(evidence.traded_signal_date_count) &&
+    evidence.traded_signal_date_count >= 20 &&
+    Number.isFinite(evidence.effective_non_overlapping_block_count) &&
+    evidence.effective_non_overlapping_block_count >= 12 &&
+    Array.isArray(evidence.readiness_reasons) &&
+    evidence.readiness_reasons.length === 0 &&
+    evidence.causal_validity?.valid === true &&
+    Array.isArray(causalReasons) &&
+    causalReasons.length === 0 &&
+    evidence.consumed_window?.consumed === true &&
+    evidence.consumed_window?.reusable_for_policy_selection === true &&
+    evidence.return_basis === "split_adjusted_total_return_net_of_costs" &&
+    evidence.provenance?.verified === true &&
+    /^[0-9a-f]{64}$/.test(evidence.provenance.artifact_sha256 ?? "") &&
+    /^[0-9a-f]{64}$/.test(evidence.provenance.input_hash_sha256 ?? "")
+  );
+};
 
 const readableEvidenceText = (value: string): string =>
   value.replace(/_/g, " ").replace(/\bspy\b/gi, "SPY");
@@ -117,8 +139,8 @@ export function StrategyEvidenceStatePanel({
         </div>
         <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Causal validity</div>
-          <div className={`mt-1 text-sm font-semibold ${evidence?.causal_validity.valid ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
-            {evidence?.causal_validity.valid ? "Valid" : "Invalid / unresolved"}
+          <div className={`mt-1 text-sm font-semibold ${evidence?.causal_validity?.valid ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+            {evidence?.causal_validity?.valid ? "Valid" : "Invalid / unresolved"}
           </div>
         </div>
       </div>
@@ -144,7 +166,7 @@ export function StrategyEvidenceStatePanel({
           </div>
           <div>
             <dt className="font-semibold text-[var(--text)]">Selection window</dt>
-            <dd>{readableEvidenceText(evidence?.consumed_window.status ?? "unknown fail closed")}</dd>
+            <dd>{readableEvidenceText(evidence?.consumed_window?.status ?? "unknown fail closed")}</dd>
           </div>
         </dl>
       </div>
@@ -644,13 +666,16 @@ function BenchmarkColumn({
 export function PaperTradeBenchmarkComparison({
   overall,
   benchmarks,
+  evidence,
 }: {
   overall: PaperTradeSummaryOverall;
   benchmarks?: PaperTradeBenchmarks;
+  evidence?: StrategyEvidenceState;
 }) {
   const spy = benchmarks?.spy_buy_hold;
   const unfiltered = benchmarks?.unfiltered_setups;
   const coreSatellite = benchmarks?.core_satellite;
+  const actionable = evidenceAllowsAction(evidence);
 
   if (!spy && !unfiltered && !coreSatellite) {
     return null;
@@ -675,10 +700,10 @@ export function PaperTradeBenchmarkComparison({
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-[var(--text)]">
-          Benchmark Comparison
+          {actionable ? "Benchmark Comparison" : "Observed Benchmark Comparison"}
         </div>
         <span className="text-[10px] text-[var(--muted)]">
-          Does the pipeline add value?
+          {actionable ? "Does the pipeline add value?" : "Descriptive comparison only"}
         </span>
       </div>
       <p className="mt-1 text-[10px] text-[var(--muted)]">
@@ -746,8 +771,8 @@ export function PaperTradeBenchmarkComparison({
       {spy && typeof pipelinePortfolioReturn === "number" && (
         <div className="mt-3 text-xs">
           {pipelinePortfolioReturn > spy.return_pct ? (
-            <span className="text-[var(--green)]">
-              Portfolio outperforms SPY by{" "}
+            <span className={actionable ? "text-[var(--green)]" : "text-[var(--muted)]"}>
+              {actionable ? "Portfolio outperforms SPY by " : "Observed portfolio return is above SPY by "}
               {(pipelinePortfolioReturn - spy.return_pct).toFixed(2)}pp over the same window
             </span>
           ) : pipelinePortfolioReturn < spy.return_pct ? (
@@ -763,8 +788,8 @@ export function PaperTradeBenchmarkComparison({
       {unfiltered && typeof pipelineAvgReturn === "number" && typeof unfiltered.return_pct === "number" && (
         <div className="mt-1 text-xs">
           {pipelineAvgReturn > unfiltered.return_pct ? (
-            <span className="text-[var(--green)]">
-              Taken trades beat the setup baseline by{" "}
+            <span className={actionable ? "text-[var(--green)]" : "text-[var(--muted)]"}>
+              {actionable ? "Taken trades beat the setup baseline by " : "Observed taken-trade average is above the setup baseline by "}
               {(pipelineAvgReturn - unfiltered.return_pct).toFixed(2)}pp per trade on average
             </span>
           ) : pipelineAvgReturn < unfiltered.return_pct ? (

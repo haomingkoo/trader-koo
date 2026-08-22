@@ -1119,7 +1119,11 @@ export interface StrategyEvidenceState {
     artifact_sha256: string | null;
     input_hash_sha256: string | null;
     artifact_spec_hash_sha256: string | null;
+    verified: boolean;
     href: string | null;
+    upstream_artifact_name?: string | null;
+    upstream_artifact_sha256?: string | null;
+    upstream_input_hash_sha256?: string | null;
   };
 }
 
