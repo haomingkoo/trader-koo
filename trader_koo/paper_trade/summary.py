@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import math
 import sqlite3
@@ -11,6 +12,7 @@ from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.schema import decode_json_list, ensure_paper_trade_schema
+from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
 from trader_koo.research.strategy_evidence import evidence_allows_action, strategy_evidence_state
 
 LOG = logging.getLogger(__name__)
@@ -25,105 +27,67 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
 
 
 def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> None:
-    """Compute and persist daily portfolio metrics."""
-    today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-
-    open_count = conn.execute(
-        "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
+    """Persist the one cash + positions = equity account projection."""
+    campaign = conn.execute(
+        "SELECT starting_capital FROM paper_campaigns WHERE campaign_id=?",
         (campaign_id,),
-    ).fetchone()[0]
-
+    ).fetchone()
+    starting_capital = float(campaign[0]) if campaign else 1_000_000.0
+    account = reconcile_portfolio(
+        conn,
+        campaign_id=campaign_id,
+        starting_capital=starting_capital,
+    )
+    snapshot_date = account["as_of_date"] or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    previous = conn.execute(
+        """SELECT equity,high_water_equity FROM paper_portfolio_snapshots
+           WHERE campaign_id=? AND snapshot_date<? ORDER BY snapshot_date DESC LIMIT 1""",
+        (campaign_id, snapshot_date),
+    ).fetchone()
+    previous_equity = float(previous[0]) if previous and previous[0] is not None else starting_capital
+    previous_high = float(previous[1]) if previous and previous[1] is not None else starting_capital
+    equity = float(account["equity"])
+    high_water = max(previous_high, equity, starting_capital)
+    drawdown = (high_water - equity) / high_water * 100 if high_water else 0.0
     closed_rows = conn.execute(
-        "SELECT pnl_pct, r_multiple FROM paper_trades "
-        "WHERE campaign_id=? AND status!='open' AND pnl_pct IS NOT NULL "
-        "ORDER BY exit_date, id"
-        , (campaign_id,)
+        """SELECT pnl_pct,r_multiple FROM paper_trades
+           WHERE campaign_id=? AND accounting_status='reconciled'
+             AND status!='open' AND pnl_pct IS NOT NULL
+           ORDER BY exit_date,id""",
+        (campaign_id,),
     ).fetchall()
-
-    total_closed = len(closed_rows)
-    if total_closed == 0:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO paper_portfolio_snapshots
-                (snapshot_date, campaign_id, open_trades, closed_trades_total, wins, losses,
-                 equity_index)
-            VALUES (?, ?, ?, 0, 0, 0, 100.0)
-            """,
-            (today, campaign_id, open_count),
-        )
-        return
-
-    pnls = [float(r[0]) for r in closed_rows]
-    r_mults = [float(r[1]) for r in closed_rows if r[1] is not None]
-
-    wins = sum(1 for p in pnls if p > 0)
-    losses = total_closed - wins
-    win_rate = round((wins / total_closed) * 100.0, 1) if total_closed > 0 else 0.0
-    avg_pnl = round(sum(pnls) / len(pnls), 2)
-    avg_r = round(sum(r_mults) / len(r_mults), 2) if r_mults else None
-    total_pnl = round(sum(pnls), 2)
-
-    cumulative = 0.0
-    peak = 0.0
-    max_dd = 0.0
-    for pnl in pnls:
-        cumulative += pnl
-        peak = max(peak, cumulative)
-        dd = peak - cumulative
-        max_dd = max(max_dd, dd)
-    max_dd = round(max_dd, 2)
-
-    if len(pnls) > 1:
-        mean_p = sum(pnls) / len(pnls)
-        std_p = statistics.stdev(pnls)
-        sharpe = round(mean_p / std_p, 2) if std_p > 0 else None
-
-        # Sortino: uses downside deviation (only negative returns)
-        neg_pnls = [p for p in pnls if p < 0]
-        if neg_pnls:
-            downside_var = sum((p - mean_p) ** 2 for p in neg_pnls) / len(neg_pnls)
-            downside_std = math.sqrt(downside_var) if downside_var > 0 else 0
-            sortino = round(mean_p / downside_std, 2) if downside_std > 0 else None
-        else:
-            sortino = None  # no losses = infinite sortino
-
-        # Calmar: annualized return / max drawdown
-        if max_dd > 0 and total_closed >= 5:
-            annualized_return = mean_p * min(total_closed, 252)
-            calmar = round(annualized_return / max_dd, 2)
-        else:
-            calmar = None
-    else:
-        sharpe = None
-        sortino = None
-        calmar = None
-
-    gross_win = sum(pnl for pnl in pnls if pnl > 0)
-    gross_loss = abs(sum(pnl for pnl in pnls if pnl < 0))
-    profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else None
-
-    best_trade = round(max(pnls), 2)
-    worst_trade = round(min(pnls), 2)
-
-    equity = 100.0
-    for pnl in pnls:
-        equity *= (1.0 + pnl / 100.0)
-    equity = round(equity, 2)
-
+    pnls = [float(row[0]) for row in closed_rows]
+    r_values = [float(row[1]) for row in closed_rows if row[1] is not None]
+    wins = sum(value > 0 for value in pnls)
+    losses = len(pnls) - wins
+    gross_win = sum(value for value in pnls if value > 0)
+    gross_loss = abs(sum(value for value in pnls if value < 0))
     conn.execute(
-        """
-        INSERT OR REPLACE INTO paper_portfolio_snapshots
-            (snapshot_date, campaign_id, open_trades, closed_trades_total, wins, losses,
-             win_rate_pct, avg_pnl_pct, avg_r_multiple, total_pnl_pct,
-             max_drawdown_pct, sharpe_ratio, sortino_ratio, calmar_ratio,
-             profit_factor, equity_index,
-             best_trade_pct, worst_trade_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (today, campaign_id, open_count, total_closed, wins, losses,
-         win_rate, avg_pnl, avg_r, total_pnl,
-         max_dd, sharpe, sortino, calmar, profit_factor, equity,
-         best_trade, worst_trade),
+        """INSERT OR REPLACE INTO paper_portfolio_snapshots
+               (snapshot_date,campaign_id,open_trades,closed_trades_total,wins,losses,
+                win_rate_pct,avg_pnl_pct,avg_r_multiple,total_pnl_pct,max_drawdown_pct,
+                profit_factor,equity_index,best_trade_pct,worst_trade_pct,
+                starting_capital,cash,equity,realized_pnl_usd,unrealized_pnl_usd,
+                gross_exposure_usd,gross_exposure_pct,high_water_equity,drawdown_pct,
+                session_pnl_usd,legacy_unreconciled_count,accounting_breaks_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            snapshot_date, campaign_id, account["open_positions"], len(pnls), wins, losses,
+            wins / len(pnls) * 100 if pnls else 0.0,
+            statistics.fmean(pnls) if pnls else None,
+            statistics.fmean(r_values) if r_values else None,
+            (equity / starting_capital - 1) * 100,
+            drawdown,
+            gross_win / gross_loss if gross_loss else None,
+            equity / starting_capital * 100,
+            max(pnls) if pnls else None,
+            min(pnls) if pnls else None,
+            starting_capital, account["cash"], equity,
+            account["realized_pnl_usd"], account["unrealized_pnl_usd"],
+            account["gross_exposure_usd"], account["gross_exposure_pct"], high_water,
+            drawdown, equity - previous_equity, account["legacy_unreconciled_count"],
+            json.dumps(account["accounting_breaks"], sort_keys=True, separators=(",", ":")),
+        ),
     )
 
 
@@ -689,6 +653,17 @@ def paper_trade_summary(
 
     total = len(all_closed)
     if total == 0:
+        starting_capital = config.starting_capital if config else 1_000_000.0
+        account = reconcile_portfolio(
+            conn, campaign_id=campaign_id, starting_capital=starting_capital,
+        )
+        eq_rows = conn.execute(
+            """SELECT snapshot_date,equity_index,open_trades,closed_trades_total,
+                      cash,equity,drawdown_pct,gross_exposure_pct
+               FROM paper_portfolio_snapshots
+               WHERE campaign_id=? AND snapshot_date>=? ORDER BY snapshot_date""",
+            (campaign_id, cutoff),
+        ).fetchall()
         campaign["benchmark_evidence"] = {
             "role": "campaign_health_and_promotion_evidence_only",
             "spy_buy_hold": None,
@@ -696,15 +671,25 @@ def paper_trade_summary(
         return {
             "overall": {
                 "total_trades": 0, "open_count": open_trades,
-                "starting_capital": config.starting_capital if config else 1_000_000.0,
-                "portfolio_value": config.starting_capital if config else 1_000_000.0,
-                "realized_pnl": 0, "unrealized_pnl": 0, "total_return_pct": 0,
+                "starting_capital": starting_capital,
+                "portfolio_value": account["equity"], "cash": account["cash"],
+                "realized_pnl": account["realized_pnl_usd"],
+                "unrealized_pnl": account["unrealized_pnl_usd"],
+                "total_return_pct": (account["equity"] / starting_capital - 1) * 100,
+                "gross_exposure_pct": account["gross_exposure_pct"],
+                "legacy_unreconciled_count": account["legacy_unreconciled_count"],
+                "accounting_breaks": account["accounting_breaks"],
             },
             "by_direction": {},
             "by_family": {},
             "by_tier": {},
             "by_exit_reason": {},
-            "equity_curve": [],
+            "equity_curve": [
+                {"date": row[0], "equity_index": row[1], "open_trades": row[2],
+                 "closed_total": row[3], "cash": row[4], "equity": row[5],
+                 "drawdown_pct": row[6], "gross_exposure_pct": row[7]}
+                for row in eq_rows
+            ],
             "recent_trades": recent_trades(conn, campaign_id=campaign_id, limit=20),
             "recent_reflections": recent_reflections(conn, campaign_id=campaign_id, limit=10),
             "policy": _policy_snapshot(config),
@@ -732,30 +717,13 @@ def paper_trade_summary(
     hit_target_count = sum(1 for row in all_closed if row[5] == "target_hit")
     stopped_out_count = sum(1 for row in all_closed if row[5] == "stopped_out")
 
-    # Portfolio value tracking
     STARTING_CAPITAL = config.starting_capital if config else 1_000_000.0
-    # Each closed trade's P&L contribution = position_size_pct × pnl_pct / 100
-    # position_size_pct is read from the actual trade record (index 6 in the query).
-    realized_pnl_dollars = 0.0
-    for row in all_closed:
-        trade_pnl_pct = float(row[0])
-        pos_pct = float(row[6]) if row[6] is not None else 8.0
-        position_dollars = STARTING_CAPITAL * (pos_pct / 100.0)
-        realized_pnl_dollars += position_dollars * (trade_pnl_pct / 100)
-
-    # Unrealized P&L from open trades
-    open_rows = conn.execute(
-        "SELECT unrealized_pnl_pct,position_size_pct FROM paper_trades WHERE campaign_id=? AND status='open'",
-        (campaign_id,),
-    ).fetchall()
-    unrealized_pnl_dollars = 0.0
-    for orow in open_rows:
-        u_pnl = float(orow[0] or 0)
-        pos_pct = float(orow[1] or 8.0)
-        position_dollars = STARTING_CAPITAL * (pos_pct / 100)
-        unrealized_pnl_dollars += position_dollars * (u_pnl / 100)
-
-    portfolio_value = STARTING_CAPITAL + realized_pnl_dollars + unrealized_pnl_dollars
+    account = reconcile_portfolio(
+        conn,
+        campaign_id=campaign_id,
+        starting_capital=STARTING_CAPITAL,
+    )
+    portfolio_value = float(account["equity"])
 
     overall = {
         "total_trades": total,
@@ -778,9 +746,13 @@ def paper_trade_summary(
         # Portfolio tracking
         "starting_capital": STARTING_CAPITAL,
         "portfolio_value": round(portfolio_value, 2),
-        "realized_pnl": round(realized_pnl_dollars, 2),
-        "unrealized_pnl": round(unrealized_pnl_dollars, 2),
+        "cash": round(float(account["cash"]), 2),
+        "realized_pnl": round(float(account["realized_pnl_usd"]), 2),
+        "unrealized_pnl": round(float(account["unrealized_pnl_usd"]), 2),
         "total_return_pct": round((portfolio_value - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 2),
+        "gross_exposure_pct": account["gross_exposure_pct"],
+        "legacy_unreconciled_count": account["legacy_unreconciled_count"],
+        "accounting_breaks": account["accounting_breaks"],
     }
 
     by_direction: dict[str, dict[str, Any]] = {}
@@ -829,7 +801,8 @@ def paper_trade_summary(
 
     eq_rows = conn.execute(
         """
-        SELECT snapshot_date, equity_index, open_trades, closed_trades_total
+        SELECT snapshot_date,equity_index,open_trades,closed_trades_total,
+               cash,equity,drawdown_pct,gross_exposure_pct
         FROM paper_portfolio_snapshots
         WHERE campaign_id=? AND snapshot_date >= ?
         ORDER BY snapshot_date
@@ -842,6 +815,10 @@ def paper_trade_summary(
             "equity_index": row[1],
             "open_trades": row[2],
             "closed_total": row[3],
+            "cash": row[4],
+            "equity": row[5],
+            "drawdown_pct": row[6],
+            "gross_exposure_pct": row[7],
         }
         for row in eq_rows
     ]

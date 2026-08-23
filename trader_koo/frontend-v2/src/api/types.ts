@@ -967,6 +967,22 @@ export interface PaperTrade {
   ml_confidence?: number | null;
   ml_signal?: string | null;
   notes?: string | null;
+  quantity?: number | null;
+  entry_notional?: number | null;
+  entry_commission?: number | null;
+  exit_commission?: number | null;
+  borrow_cost?: number | null;
+  realized_pnl_usd?: number | null;
+  accounting_status?: string | null;
+  event_trace_status?: "unreconciled_legacy" | "active" | "complete";
+  timeline?: Array<{
+    source: "order" | "trade";
+    event_type: string;
+    event_date: string;
+    payload: Record<string, unknown>;
+    payload_hash: string;
+    created_ts: string;
+  }>;
 }
 
 export interface PaperTradeList {
@@ -995,9 +1011,13 @@ export interface PaperTradeSummaryOverall {
   stopped_out_rate_pct?: number | null;
   starting_capital?: number;
   portfolio_value?: number;
+  cash?: number;
   realized_pnl?: number;
   unrealized_pnl?: number;
   total_return_pct?: number;
+  gross_exposure_pct?: number | null;
+  legacy_unreconciled_count?: number;
+  accounting_breaks?: Array<Record<string, unknown>>;
 }
 
 export interface PaperTradeDirectionStats {
@@ -1125,6 +1145,12 @@ export interface PaperTradeVixBucketEdgeRow extends PaperTradeEdgeRow {
 export interface EquityCurvePoint {
   date: string;
   equity_index: number;
+  open_trades?: number;
+  closed_total?: number;
+  cash?: number | null;
+  equity?: number | null;
+  drawdown_pct?: number | null;
+  gross_exposure_pct?: number | null;
 }
 
 export interface PaperTradeReflection {

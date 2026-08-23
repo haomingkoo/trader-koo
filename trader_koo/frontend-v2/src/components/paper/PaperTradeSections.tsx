@@ -528,6 +528,8 @@ export function PaperTradePortfolioHero({
   const totalReturn = overall.total_return_pct ?? 0;
   const realizedPnl = overall.realized_pnl ?? 0;
   const unrealizedPnl = overall.unrealized_pnl ?? 0;
+  const accountingBreaks = overall.accounting_breaks ?? [];
+  const legacyCount = overall.legacy_unreconciled_count ?? 0;
 
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-5">
@@ -544,9 +546,11 @@ export function PaperTradePortfolioHero({
             {totalReturn.toFixed(2)}% total return
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
+          <Stat label="Cash" value={fmtDollars(overall.cash ?? 0)} />
           <Stat label="Realized P&L" value={fmtDollars(realizedPnl, true)} tone={pnlColor(realizedPnl)} />
           <Stat label="Unrealized P&L" value={fmtDollars(unrealizedPnl, true)} tone={pnlColor(unrealizedPnl)} />
+          <Stat label="Gross exposure" value={fmtPct(overall.gross_exposure_pct)} />
           <Stat label="Open" value={String(overall.open_count ?? 0)} />
           <Stat label="Win Rate" value={fmtPct(overall.win_rate_pct)} />
           <Stat
@@ -555,6 +559,13 @@ export function PaperTradePortfolioHero({
           />
         </div>
       </div>
+      {(accountingBreaks.length > 0 || legacyCount > 0) && (
+        <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+          {accountingBreaks.length > 0
+            ? `Account reconciliation has ${accountingBreaks.length} unresolved break(s); new admissions fail closed.`
+            : `${legacyCount} legacy trade(s) are excluded from cash and equity because quantity or fill history is unavailable.`}
+        </div>
+      )}
     </div>
   );
 }

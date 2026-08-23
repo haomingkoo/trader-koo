@@ -451,3 +451,37 @@ class TestPaperTradeDetailEndpoint:
         assert data["ok"] is True
         assert data["trade"]["ticker"] == "SPY"
         assert "decision_state" in data["trade"]
+        assert data["trade"]["event_trace_status"] == "unreconciled_legacy"
+        assert data["trade"]["timeline"] == []
+
+    def test_trade_detail_returns_hashed_event_timeline(self, test_app, seeded_conn, tmp_path):
+        ensure_paper_trade_schema(seeded_conn)
+        _publish_report_fixture(
+            seeded_conn, tmp_path, run_id="trace-run",
+            generated_ts="2026-08-21T11:00:00Z",
+        )
+        seeded_conn.execute(
+            """INSERT INTO paper_trades
+               (report_date,ticker,direction,entry_price,entry_date,status,
+                current_price,generated_ts,report_run_id)
+               VALUES ('2026-08-21','REJECT','long',100,'2026-08-21','open',
+                       101,'2026-08-21T12:00:00Z','trace-run')"""
+        )
+        trade_id = int(seeded_conn.execute(
+            "SELECT id FROM paper_trades WHERE ticker='REJECT'"
+        ).fetchone()[0])
+        payload = {"fill_price": 100, "fill_source": "fixture"}
+        seeded_conn.execute(
+            """INSERT INTO paper_trade_events
+               (trade_id,event_type,event_date,payload_json,payload_hash)
+               VALUES (?,'fill','2026-08-21',?,?)""",
+            (trade_id, json.dumps(payload), canonical_hash(payload)),
+        )
+        seeded_conn.commit()
+
+        trade = test_app.get(f"/api/paper-trades/{trade_id}").json()["trade"]
+
+        assert trade["event_trace_status"] == "active"
+        assert trade["timeline"][0]["event_type"] == "fill"
+        assert trade["timeline"][0]["payload"] == payload
+        assert len(trade["timeline"][0]["payload_hash"]) == 64

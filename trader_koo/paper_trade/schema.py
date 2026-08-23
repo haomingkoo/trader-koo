@@ -12,6 +12,7 @@ from typing import Any
 # In-memory databases are never cached (each connection is a distinct DB).
 _ensured_db_paths: set[str] = set()
 _ensured_db_paths_lock = threading.Lock()
+PAPER_TRADE_SCHEMA_VERSION = 2
 
 
 def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
@@ -20,6 +21,22 @@ def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
         if str(row[1]) == "main":
             return str(row[2] or "")
     return ""
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone() is not None
+
+
+def _schema_is_current(conn: sqlite3.Connection) -> bool:
+    if not _table_exists(conn, "paper_trade_schema_meta"):
+        return False
+    row = conn.execute(
+        "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
+    ).fetchone()
+    return bool(row and int(row[0]) == PAPER_TRADE_SCHEMA_VERSION)
 
 
 def _ensure_column(
@@ -103,8 +120,9 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     is_memory = db_path in ("", ":memory:")
     if not is_memory:
         with _ensured_db_paths_lock:
-            if db_path in _ensured_db_paths:
+            if db_path in _ensured_db_paths and _schema_is_current(conn):
                 return
+            _ensured_db_paths.discard(db_path)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_trades (
@@ -160,6 +178,18 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "ON paper_trades(setup_family, direction, status)"
     )
     _ensure_column(conn, "paper_trades", "decision_version", "decision_version TEXT")
+    _ensure_column(conn, "paper_trades", "quantity", "quantity REAL")
+    _ensure_column(conn, "paper_trades", "entry_notional", "entry_notional REAL")
+    _ensure_column(conn, "paper_trades", "entry_commission", "entry_commission REAL")
+    _ensure_column(conn, "paper_trades", "exit_commission", "exit_commission REAL")
+    _ensure_column(conn, "paper_trades", "borrow_cost", "borrow_cost REAL")
+    _ensure_column(conn, "paper_trades", "realized_pnl_usd", "realized_pnl_usd REAL")
+    _ensure_column(
+        conn,
+        "paper_trades",
+        "accounting_status",
+        "accounting_status TEXT NOT NULL DEFAULT 'legacy_unreconciled'",
+    )
     _ensure_column(conn, "paper_trades", "decision_state", "decision_state TEXT")
     _ensure_column(conn, "paper_trades", "analyst_stage", "analyst_stage TEXT")
     _ensure_column(conn, "paper_trades", "debate_stage", "debate_stage TEXT")
@@ -528,6 +558,34 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         BEFORE DELETE ON paper_order_events
         BEGIN SELECT RAISE(ABORT, 'paper order events are immutable'); END
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trade_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER NOT NULL REFERENCES paper_trades(id),
+            event_type TEXT NOT NULL CHECK (
+                event_type IN ('fill','mark','management','close','corporate_action')
+            ),
+            event_date TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(trade_id,event_type,event_date,payload_hash)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_trade_events_timeline "
+        "ON paper_trade_events(trade_id,event_date,id)"
+    )
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_trade_events_no_update
+        BEFORE UPDATE ON paper_trade_events
+        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_trade_events_no_delete
+        BEFORE DELETE ON paper_trade_events
+        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END
+    """)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_campaign_preregistrations (
@@ -688,8 +746,37 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_portfolio_campaign_date "
         "ON paper_portfolio_snapshots(campaign_id, snapshot_date)"
     )
-    _ensure_column(conn, "paper_portfolio_snapshots", "sortino_ratio", "sortino_ratio REAL")
-    _ensure_column(conn, "paper_portfolio_snapshots", "calmar_ratio", "calmar_ratio REAL")
+    for column, ddl in (
+        ("open_trades", "open_trades INTEGER NOT NULL DEFAULT 0"),
+        ("closed_trades_total", "closed_trades_total INTEGER NOT NULL DEFAULT 0"),
+        ("wins", "wins INTEGER NOT NULL DEFAULT 0"),
+        ("losses", "losses INTEGER NOT NULL DEFAULT 0"),
+        ("win_rate_pct", "win_rate_pct REAL"),
+        ("avg_pnl_pct", "avg_pnl_pct REAL"),
+        ("avg_r_multiple", "avg_r_multiple REAL"),
+        ("total_pnl_pct", "total_pnl_pct REAL"),
+        ("max_drawdown_pct", "max_drawdown_pct REAL"),
+        ("sharpe_ratio", "sharpe_ratio REAL"),
+        ("sortino_ratio", "sortino_ratio REAL"),
+        ("calmar_ratio", "calmar_ratio REAL"),
+        ("profit_factor", "profit_factor REAL"),
+        ("equity_index", "equity_index REAL NOT NULL DEFAULT 100.0"),
+        ("best_trade_pct", "best_trade_pct REAL"),
+        ("worst_trade_pct", "worst_trade_pct REAL"),
+        ("starting_capital", "starting_capital REAL"),
+        ("cash", "cash REAL"),
+        ("equity", "equity REAL"),
+        ("realized_pnl_usd", "realized_pnl_usd REAL"),
+        ("unrealized_pnl_usd", "unrealized_pnl_usd REAL"),
+        ("gross_exposure_usd", "gross_exposure_usd REAL"),
+        ("gross_exposure_pct", "gross_exposure_pct REAL"),
+        ("high_water_equity", "high_water_equity REAL"),
+        ("drawdown_pct", "drawdown_pct REAL"),
+        ("session_pnl_usd", "session_pnl_usd REAL"),
+        ("legacy_unreconciled_count", "legacy_unreconciled_count INTEGER NOT NULL DEFAULT 0"),
+        ("accounting_breaks_json", "accounting_breaks_json TEXT NOT NULL DEFAULT '[]'"),
+    ):
+        _ensure_column(conn, "paper_portfolio_snapshots", column, ddl)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_portfolio_date "
         "ON paper_portfolio_snapshots(snapshot_date)"
@@ -720,6 +807,18 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_reflections_ticker "
         "ON paper_trade_reflections(ticker, exit_date)"
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS paper_trade_schema_meta (
+               id INTEGER PRIMARY KEY CHECK (id=1),
+               schema_version INTEGER NOT NULL
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO paper_trade_schema_meta (id,schema_version)
+           VALUES (1,?)
+           ON CONFLICT(id) DO UPDATE SET schema_version=excluded.schema_version""",
+        (PAPER_TRADE_SCHEMA_VERSION,),
     )
     conn.commit()
 

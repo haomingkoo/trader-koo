@@ -24,6 +24,7 @@ from trader_koo.paper_trade.decision import (
 )
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema, register_bot_version
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
+from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
 from trader_koo.db.price_contract import research_price_contract
 from trader_koo.research.next_open_baseline import (
     adverse_fill_price,
@@ -48,6 +49,52 @@ def _pending_order_hash(
         "critic_json": critic_json, "market_context_json": market_context_json,
         "avg_daily_volume": avg_daily_volume,
     })
+
+
+def _record_trade_event(
+    conn: sqlite3.Connection,
+    *,
+    trade_id: int,
+    event_type: str,
+    event_date: str,
+    payload: dict[str, Any],
+) -> None:
+    payload_json = canonical_json(payload)
+    conn.execute(
+        """INSERT OR IGNORE INTO paper_trade_events
+               (trade_id,event_type,event_date,payload_json,payload_hash)
+           VALUES (?,?,?,?,?)""",
+        (trade_id, event_type, event_date, payload_json, canonical_hash(payload)),
+    )
+
+
+def _entry_accounting(
+    conn: sqlite3.Connection,
+    *,
+    campaign_id: str,
+    entry_price: float,
+    position_size_pct: float,
+    config: PaperTradeConfig,
+) -> dict[str, float] | None:
+    account = reconcile_portfolio(
+        conn,
+        campaign_id=campaign_id,
+        starting_capital=config.starting_capital,
+    )
+    target_notional = float(account["equity"]) * position_size_pct / 100
+    quantity = int(target_notional / entry_price) if entry_price > 0 else 0
+    commission = float(config.commission_per_trade)
+    while quantity > 0 and quantity * entry_price + commission > float(account["cash"]):
+        quantity -= 1
+    if quantity < 1:
+        return None
+    return {
+        "quantity": float(quantity),
+        "entry_notional": quantity * entry_price,
+        "entry_commission": commission,
+        "equity_before": float(account["equity"]),
+        "cash_before": float(account["cash"]),
+    }
 
 
 def _run_owned_transaction(conn: sqlite3.Connection, operation: Any) -> Any:
@@ -507,11 +554,25 @@ def _close_trade(
     # Deduct trading costs from P&L
     # 1. Commission: entry + exit as % of entry price
     position_row = conn.execute(
-        "SELECT position_size_pct FROM paper_trades WHERE id = ?", (trade_id,),
+        """SELECT position_size_pct,quantity,entry_notional,entry_commission,
+                  accounting_status
+           FROM paper_trades WHERE id=?""",
+        (trade_id,),
     ).fetchone()
     pos_pct = float(position_row[0] or 8.0) if position_row and position_row[0] is not None else 8.0
-    notional = config.starting_capital * (pos_pct / 100)
-    commission_cost_pct = (config.commission_per_trade * 2 / notional) * 100 if notional > 0 else 0
+    reconciled = bool(position_row and str(position_row[4]) == "reconciled")
+    notional = (
+        float(position_row[2]) if reconciled and position_row[2] is not None
+        else config.starting_capital * (pos_pct / 100)
+    )
+    entry_commission = (
+        float(position_row[3]) if reconciled and position_row[3] is not None
+        else float(config.commission_per_trade)
+    )
+    exit_commission = float(config.commission_per_trade)
+    commission_cost_pct = (
+        (entry_commission + exit_commission) / notional * 100 if notional > 0 else 0
+    )
 
     # 2. Short borrow cost (annualized, pro-rated to TRADING days held)
     borrow_cost_pct = 0.0
@@ -540,6 +601,18 @@ def _close_trade(
 
     total_cost_pct = commission_cost_pct + borrow_cost_pct
     pnl = round(raw_pnl - total_cost_pct, 2)
+    quantity = float(position_row[1]) if reconciled and position_row[1] is not None else None
+    borrow_cost = notional * borrow_cost_pct / 100 if reconciled else None
+    realized_pnl_usd = (
+        (
+            (exit_price - entry_price) * quantity
+            if direction == "long"
+            else (entry_price - exit_price) * quantity
+        ) - entry_commission - exit_commission - float(borrow_cost or 0.0)
+        if quantity is not None else None
+    )
+    if realized_pnl_usd is not None and notional > 0:
+        pnl = round(realized_pnl_usd / notional * 100, 2)
     # R-multiple net of costs: adjust exit price by total cost drag
     if direction == "long":
         cost_adjusted_exit = exit_price * (1 - total_cost_pct / 100)
@@ -576,8 +649,12 @@ def _close_trade(
             r_multiple = ?,
             current_price = ?,
             unrealized_pnl_pct = NULL,
+            last_mtm_date = ?,
             review_status = ?,
             review_summary = ?,
+            exit_commission = ?,
+            borrow_cost = ?,
+            realized_pnl_usd = ?,
             updated_ts = ?
         WHERE id = ?
         """,
@@ -589,8 +666,12 @@ def _close_trade(
             pnl,
             r_mult,
             exit_price,
+            exit_date,
             review_status,
             review_summary,
+            exit_commission if reconciled else None,
+            borrow_cost,
+            realized_pnl_usd,
             now,
             trade_id,
         ),
@@ -602,6 +683,21 @@ def _close_trade(
         exit_reason=exit_reason,
         pnl_pct=pnl,
         r_multiple=r_mult,
+    )
+    _record_trade_event(
+        conn,
+        trade_id=trade_id,
+        event_type="close",
+        event_date=exit_date,
+        payload={
+            "exit_price": exit_price,
+            "exit_reason": exit_reason,
+            "status": status,
+            "pnl_pct": pnl,
+            "r_multiple": r_mult,
+            "commission_cost_pct": commission_cost_pct,
+            "borrow_cost_pct": borrow_cost_pct,
+        },
     )
 
 
@@ -632,6 +728,7 @@ def _create_paper_trades_from_report(
             or current_price_contract.get("revision") != expected_price_revision
         ):
             return 0
+    _mark_to_market(conn, config=config, through_date=report_date)
     fill_pending_paper_orders(conn, config=config, through_date=report_date)
     register_bot_version(
         conn,
@@ -745,15 +842,23 @@ def _create_paper_trades_from_report_in_transaction(
             f"Open positions {open_count} reached policy maximum {config.max_open}.",
         )
 
-    # Portfolio drawdown circuit breaker — halt new entries if drawdown exceeds limit
+    # All admission risk gates consume the one reconciled account snapshot.
     try:
         snapshot_row = conn.execute(
-            "SELECT equity_index FROM paper_portfolio_snapshots WHERE campaign_id=? ORDER BY snapshot_date DESC LIMIT 1",
+            """SELECT drawdown_pct,equity,session_pnl_usd,accounting_breaks_json
+               FROM paper_portfolio_snapshots WHERE campaign_id=?
+               ORDER BY snapshot_date DESC LIMIT 1""",
             (config.campaign_id,),
         ).fetchone()
-        if snapshot_row and snapshot_row[0] is not None:
-            equity_index = float(snapshot_row[0])
-            drawdown_pct = (100.0 - equity_index)  # equity starts at 100
+        if snapshot_row:
+            accounting_breaks = json.loads(str(snapshot_row[3] or "[]"))
+            if global_block is None and accounting_breaks:
+                global_block = (
+                    "portfolio_accounting",
+                    "portfolio_reconciliation_failed",
+                    "New entries are blocked until account reconciliation succeeds.",
+                )
+            drawdown_pct = float(snapshot_row[0] or 0.0)
             if global_block is None and drawdown_pct >= config.max_drawdown_pct:
                 LOG.warning(
                     "CIRCUIT BREAKER: portfolio drawdown %.1f%% exceeds %.1f%% limit, blocking new entries",
@@ -764,29 +869,33 @@ def _create_paper_trades_from_report_in_transaction(
                     "max_drawdown_circuit_breaker",
                     f"Portfolio drawdown {drawdown_pct:.1f}% reached {config.max_drawdown_pct:.1f}% limit.",
                 )
-    except Exception as exc:
-        LOG.debug("Drawdown check skipped: %s", exc)
-
-    # Daily loss circuit breaker — halt if today's realized losses exceed limit
-    try:
-        daily_loss_row = conn.execute(
-            "SELECT SUM(pnl_pct) FROM paper_trades "
-            "WHERE campaign_id=? AND exit_date=? AND status!='open' AND pnl_pct IS NOT NULL",
-            (config.campaign_id, report_date),
-        ).fetchone()
-        daily_loss = float(daily_loss_row[0]) if daily_loss_row and daily_loss_row[0] else 0.0
-        if global_block is None and daily_loss < 0 and abs(daily_loss) >= config.max_daily_loss_pct:
+            equity = float(snapshot_row[1] or config.starting_capital)
+            session_pnl = float(snapshot_row[2] or 0.0)
+            session_start = equity - session_pnl
+            daily_loss_pct = (
+                -session_pnl / session_start * 100
+                if session_pnl < 0 and session_start > 0 else 0.0
+            )
+        else:
+            daily_loss_pct = 0.0
+        if global_block is None and daily_loss_pct >= config.max_daily_loss_pct:
             LOG.warning(
                 "CIRCUIT BREAKER: daily loss %.1f%% exceeds %.1f%% limit, blocking new entries",
-                abs(daily_loss), config.max_daily_loss_pct,
+                daily_loss_pct, config.max_daily_loss_pct,
             )
             global_block = (
                 "portfolio_risk",
                 "max_daily_loss_circuit_breaker",
-                f"Daily loss {abs(daily_loss):.1f}% reached {config.max_daily_loss_pct:.1f}% limit.",
+                f"Session account loss {daily_loss_pct:.1f}% reached {config.max_daily_loss_pct:.1f}% limit.",
             )
     except Exception as exc:
-        LOG.debug("Daily loss check skipped: %s", exc)
+        LOG.warning("Reconciled portfolio risk check failed: %s", exc)
+        if global_block is None:
+            global_block = (
+                "portfolio_accounting",
+                "portfolio_snapshot_unavailable",
+                "New entries are blocked because the account snapshot is unavailable.",
+            )
 
     remaining_slots = max(0, config.max_open - open_count)
     inserted = 0
@@ -1215,6 +1324,27 @@ def _create_paper_trades_from_report_in_transaction(
             )
             continue
 
+        accounting = _entry_accounting(
+            conn,
+            campaign_id=config.campaign_id,
+            entry_price=entry_price,
+            position_size_pct=float(plan["position_size_pct"]),
+            config=config,
+        )
+        if accounting is None:
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                critic=critic,
+                final_gate="portfolio.cash",
+                reason_code="insufficient_reconciled_cash",
+                reasons=["Reconciled cash cannot fund one share plus commission."],
+            )
+            continue
+
         rationale = _build_entry_rationale(
             ticker=ticker,
             direction=direction,
@@ -1227,7 +1357,7 @@ def _create_paper_trades_from_report_in_transaction(
         )
 
         before_changes = conn.total_changes
-        conn.execute(
+        insert_cursor = conn.execute(
             """
             INSERT INTO paper_trades (
                 report_date, generated_ts, report_run_id, ticker, direction,
@@ -1249,7 +1379,7 @@ def _create_paper_trades_from_report_in_transaction(
                 regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry,
                 directional_regime_at_entry, directional_regime_confidence,
                 ml_predicted_win_prob, ml_confidence, ml_signal,
-                campaign_id, report_run_id, policy_version
+                campaign_id, policy_version
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -1270,7 +1400,7 @@ def _create_paper_trades_from_report_in_transaction(
                 ?, ?, ?,
                 ?, ?,
                 ?, ?, ?,
-                ?, ?, ?
+                ?, ?
             )
             ON CONFLICT(campaign_id, report_date, ticker, direction) DO NOTHING
             """,
@@ -1333,12 +1463,39 @@ def _create_paper_trades_from_report_in_transaction(
                 ml_prediction.get("confidence"),
                 ml_prediction.get("signal"),
                 config.campaign_id,
-                report_run_id,
                 config.decision_version,
             ),
         )
         if conn.total_changes > before_changes:
             inserted += 1
+            trade_id = int(insert_cursor.lastrowid)
+            conn.execute(
+                """UPDATE paper_trades SET
+                       quantity=?,entry_notional=?,entry_commission=?,accounting_status='reconciled'
+                   WHERE id=?""",
+                (
+                    accounting["quantity"],
+                    accounting["entry_notional"],
+                    accounting["entry_commission"],
+                    trade_id,
+                ),
+            )
+            _record_trade_event(
+                conn,
+                trade_id=trade_id,
+                event_type="fill",
+                event_date=entry_date_actual,
+                payload={
+                    "report_run_id": report_run_id,
+                    "ticker": ticker,
+                    "direction": direction,
+                    "raw_open": raw_entry,
+                    "fill_price": entry_price,
+                    "fill_source": "immediate_next_session_open",
+                    "policy_version": config.decision_version,
+                    **accounting,
+                },
+            )
             LOG.info(
                 "Paper trade created: %s %s @ %.2f (stop=%.2f target=%.2f) — %s",
                 direction.upper(), ticker, entry_price,
@@ -1390,6 +1547,7 @@ def _create_paper_trades_from_report_in_transaction(
         report_complete=report_complete,
         is_canonical=is_canonical,
     )
+    update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
     return inserted
 
 
@@ -1508,6 +1666,24 @@ def fill_pending_paper_orders(
                                "price_date": open_row[1]},
         }
         decision = decide_candidate(row=row, rank=int(rank), config=config, context=context)
+        accounting = None
+        if decision["disposition"] == "admitted":
+            accounting = _entry_accounting(
+                conn,
+                campaign_id=str(campaign_id),
+                entry_price=entry_price,
+                position_size_pct=float(decision["plan"]["position_size_pct"]),
+                config=config,
+            )
+            if accounting is None:
+                context["portfolio_block"] = {
+                    "gate": "portfolio.cash",
+                    "reason_code": "insufficient_reconciled_cash",
+                    "detail": "Reconciled cash cannot fund one share plus commission.",
+                }
+                decision = decide_candidate(
+                    row=row, rank=int(rank), config=config, context=context,
+                )
         event_payload = {
             "decision": decision, "raw_open": raw_open,
             "entry_price": entry_price, "entry_date": open_row[1],
@@ -1515,7 +1691,7 @@ def fill_pending_paper_orders(
         if decision["disposition"] == "admitted":
             levels = decision["levels"]
             plan = decision["plan"]
-            conn.execute(
+            insert_cursor = conn.execute(
                 """INSERT INTO paper_trades
                    (report_date,generated_ts,ticker,direction,entry_price,entry_date,
                     target_price,stop_loss,atr_at_entry,status,current_price,
@@ -1536,6 +1712,34 @@ def fill_pending_paper_orders(
                  plan.get("sizing_summary"),campaign_id,report_run_id,policy_version,
                  policy_version,"admitted"),
             )
+            if insert_cursor.rowcount == 1:
+                trade_id = int(insert_cursor.lastrowid)
+                conn.execute(
+                    """UPDATE paper_trades SET
+                           quantity=?,entry_notional=?,entry_commission=?,accounting_status='reconciled'
+                       WHERE id=?""",
+                    (
+                        accounting["quantity"], accounting["entry_notional"],
+                        accounting["entry_commission"], trade_id,
+                    ),
+                )
+                _record_trade_event(
+                    conn,
+                    trade_id=trade_id,
+                    event_type="fill",
+                    event_date=str(open_row[1]),
+                    payload={
+                        "order_id": order_id,
+                        "report_run_id": report_run_id,
+                        "ticker": ticker,
+                        "direction": direction,
+                        "raw_open": raw_open,
+                        "fill_price": entry_price,
+                        "fill_source": "pending_immediate_next_session_open",
+                        "policy_version": policy_version,
+                        **accounting,
+                    },
+                )
             status = "filled"
             resolved["filled"] += 1
         else:
@@ -1593,6 +1797,21 @@ def _apply_trade_bar(
     day_open = float(price_row[4]) if price_row[4] is not None else current_price
     new_hwm = max(trade["high_water_mark"] or day_high, day_high)
     new_lwm = min(trade["low_water_mark"] or day_low, day_low)
+    _record_trade_event(
+        conn,
+        trade_id=trade["trade_id"],
+        event_type="mark",
+        event_date=price_date,
+        payload={
+            "ticker": trade["ticker"],
+            "open": day_open,
+            "high": day_high,
+            "low": day_low,
+            "close": current_price,
+            "stop_before": trade["stop_loss"],
+            "target": trade["target_price"],
+        },
+    )
     barrier = resolve_barrier_exit(
         direction=trade["direction"],
         open_price=day_open,
@@ -1651,6 +1870,20 @@ def _apply_trade_bar(
         current_stop=trade["stop_loss"],
         config=config,
     )
+    if new_stop != trade["stop_loss"]:
+        _record_trade_event(
+            conn,
+            trade_id=trade["trade_id"],
+            event_type="management",
+            event_date=price_date,
+            payload={
+                "action": "tighten_stop",
+                "stop_before": trade["stop_loss"],
+                "stop_after": new_stop,
+                "high_water_mark": new_hwm,
+                "low_water_mark": new_lwm,
+            },
+        )
     conn.execute(
         """UPDATE paper_trades SET
                current_price=?, unrealized_pnl_pct=?, last_mtm_date=?,
@@ -1680,6 +1913,7 @@ def _mark_to_market(
     conn: sqlite3.Connection,
     *,
     config: PaperTradeConfig,
+    through_date: str | None = None,
 ) -> dict[str, Any]:
     """Update all open paper trades with latest prices."""
     ensure_paper_trade_schema(conn)
@@ -1742,14 +1976,19 @@ def _mark_to_market(
             })
             continue
 
-        price_rows = conn.execute(
-            "SELECT CAST(close AS REAL), date, "
-            "CAST(high AS REAL), CAST(low AS REAL), CAST(open AS REAL) "
-            "FROM price_daily "
-            "WHERE ticker=? AND date>? AND close IS NOT NULL "
-            "ORDER BY date ASC",
-            (trade["ticker"], trade["last_mtm_date"] or trade["entry_date"]),
-        ).fetchall()
+        query = (
+            "SELECT CAST(close AS REAL),date,CAST(high AS REAL),CAST(low AS REAL),"
+            "CAST(open AS REAL) FROM price_daily "
+            "WHERE ticker=? AND date>? AND close IS NOT NULL"
+        )
+        params: list[Any] = [
+            trade["ticker"], trade["last_mtm_date"] or trade["entry_date"],
+        ]
+        if through_date is not None:
+            query += " AND date<=?"
+            params.append(through_date)
+        query += " ORDER BY date ASC"
+        price_rows = conn.execute(query, params).fetchall()
         if not price_rows:
             continue
         updated += 1

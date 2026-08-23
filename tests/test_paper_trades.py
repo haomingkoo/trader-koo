@@ -510,6 +510,26 @@ class TestCreatePaperTrades:
             "SELECT ticker, direction, status, decision_state, portfolio_decision FROM paper_trades",
         ).fetchone()
         assert trade == ("AAPL", "long", "open", "approved", "approved")
+        event = conn.execute(
+            "SELECT event_type,event_date,payload_json,payload_hash FROM paper_trade_events"
+        ).fetchone()
+        assert event[0:2] == ("fill", "2026-03-15")
+        assert json.loads(event[2])["fill_source"] == "immediate_next_session_open"
+        assert len(event[3]) == 64
+        accounting = conn.execute(
+            """SELECT quantity,entry_notional,entry_commission,accounting_status
+               FROM paper_trades WHERE ticker='AAPL'"""
+        ).fetchone()
+        assert accounting[0] > 0
+        assert accounting[1] == pytest.approx(accounting[0] * 150.15)
+        assert accounting[2:] == (5.0, "reconciled")
+        snapshot = conn.execute(
+            """SELECT starting_capital,cash,equity,unrealized_pnl_usd,
+                      accounting_breaks_json
+               FROM paper_portfolio_snapshots WHERE campaign_id='paper-v2'"""
+        ).fetchone()
+        assert snapshot[2] == pytest.approx(snapshot[0] + snapshot[3])
+        assert json.loads(snapshot[4]) == []
 
     def test_unresolved_price_cannot_create_trade(self, conn):
         _seed_price(conn, "AAPL", 150.0, date="2026-03-15")
@@ -966,6 +986,11 @@ class TestMarkToMarket:
         assert trade[0] == "stopped_out"
         assert trade[1] == "2026-03-14"
         assert trade[2] < 95.0
+        assert conn.execute(
+            "SELECT event_type,event_date FROM paper_trade_events "
+            "WHERE trade_id=(SELECT id FROM paper_trades WHERE ticker='AAPL') "
+            "ORDER BY id"
+        ).fetchall() == [("mark", "2026-03-14"), ("close", "2026-03-14")]
 
     def test_triggers_target_hit(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, target_price=110.0)
@@ -1402,11 +1427,11 @@ class TestPaperTradeSummary:
         assert core_satellite["core_allocation_pct"] == pytest.approx(70.0)
         assert core_satellite["satellite_allocation_pct"] == pytest.approx(30.0)
         assert core_satellite["core_return_pct"] == pytest.approx(10.05)
-        # Trade contributes 10% PnL on a 10% position = 1% satellite book return.
-        # Blended: 70% * 10.05 + 30% * 1.0 = 7.335 -> 7.33 rounded.
-        assert core_satellite["satellite_return_pct"] == pytest.approx(1.0)
-        assert core_satellite["total_return_pct"] == pytest.approx(7.33)
-        assert core_satellite["alpha_vs_spy_pct"] == pytest.approx(-2.72)
+        # Quantity/cash history is absent, so the legacy row is excluded rather
+        # than converted into an invented 10%-of-starting-capital position.
+        assert core_satellite["satellite_return_pct"] == pytest.approx(0.0)
+        assert core_satellite["total_return_pct"] == pytest.approx(7.04)
+        assert core_satellite["alpha_vs_spy_pct"] == pytest.approx(-3.02)
 
     def test_summary_includes_recent_reflections(self, conn):
         base_date = dt.date.today() - dt.timedelta(days=30)

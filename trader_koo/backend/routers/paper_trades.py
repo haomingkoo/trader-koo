@@ -213,6 +213,58 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
             except Exception:
                 payload = []
             trade[key] = payload if isinstance(payload, list) else []
+        trade_events = []
+        for event in conn.execute(
+            """SELECT event_type,event_date,payload_json,payload_hash,created_ts
+               FROM paper_trade_events WHERE trade_id=? ORDER BY event_date,id""",
+            (trade_id,),
+        ).fetchall():
+            try:
+                payload = json.loads(str(event[2]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {"unavailable": True}
+            trade_events.append({
+                "source": "trade",
+                "event_type": event[0],
+                "event_date": event[1],
+                "payload": payload,
+                "payload_hash": event[3],
+                "created_ts": event[4],
+            })
+        order_events = []
+        if trade.get("report_run_id") and trade.get("ticker"):
+            rows = conn.execute(
+                """SELECT e.event_type,e.event_date,e.payload_json,e.payload_hash,e.created_ts
+                   FROM paper_pending_orders o
+                   JOIN paper_order_events e ON e.order_id=o.order_id
+                   WHERE o.report_run_id=? AND o.ticker=? AND o.direction=?
+                   ORDER BY e.event_date,e.id""",
+                (trade["report_run_id"], trade["ticker"], trade["direction"]),
+            ).fetchall()
+            for event in rows:
+                try:
+                    payload = json.loads(str(event[2]))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = {"unavailable": True}
+                order_events.append({
+                    "source": "order",
+                    "event_type": event[0],
+                    "event_date": event[1],
+                    "payload": payload,
+                    "payload_hash": event[3],
+                    "created_ts": event[4],
+                })
+        timeline = sorted(
+            [*order_events, *trade_events],
+            key=lambda item: (str(item["event_date"]), str(item["created_ts"]), item["source"]),
+        )
+        event_types = {item["event_type"] for item in trade_events}
+        trade["event_trace_status"] = (
+            "unreconciled_legacy" if "fill" not in event_types
+            else "complete" if trade.get("status") != "open" and "close" in event_types
+            else "active"
+        )
+        trade["timeline"] = timeline
         return {"ok": True, "trade": trade}
     finally:
         conn.close()
