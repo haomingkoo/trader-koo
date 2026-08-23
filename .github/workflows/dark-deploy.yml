@@ -57,13 +57,22 @@ jobs:
           npx --prefix trader_koo/frontend-v2 playwright install --with-deps chromium
           npm install --global @railway/cli@5.27.0
 
-      - name: Link the exact Railway target
-        run: >-
-          railway link
-          --project "$RAILWAY_PROJECT_ID"
-          --environment "$RAILWAY_ENVIRONMENT"
-          --service "$RAILWAY_SERVICE"
-          --json
+      - name: Verify exact Railway project-token scope
+        run: |
+          curl --fail --silent --show-error \
+            --request POST \
+            --url https://backboard.railway.com/graphql/v2 \
+            --header "Project-Access-Token: ${RAILWAY_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data '{"query":"query { projectToken { projectId environmentId } }"}' \
+            --output /tmp/railway-token-scope.json
+          jq -e \
+            --arg project "$RAILWAY_PROJECT_ID" \
+            --arg environment "$RAILWAY_ENVIRONMENT" \
+            '.data.projectToken.projectId == $project and
+             .data.projectToken.environmentId == $environment' \
+            /tmp/railway-token-scope.json \
+            > /dev/null
 
       - name: Refuse a Railway GitHub autodeploy bypass
         run: |
