@@ -330,6 +330,42 @@ def test_sql_lifecycle_requires_terminal_evidence_and_freezes_failures(tmp_path:
         )
 
 
+def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "legacy-admission.db")
+    ensure_report_run_schema(conn)
+    run_id = start_report_run(
+        conn, report_kind="daily", configuration={}, code_version=TEST_SHA
+    )
+    conn.execute("DROP TABLE report_admission_attempts")
+    conn.execute(
+        """CREATE TABLE report_admission_attempts (
+               attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               run_id TEXT NOT NULL,
+               status TEXT NOT NULL,
+               error_code TEXT,
+               error_message TEXT,
+               attempted_ts TEXT NOT NULL
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO report_admission_attempts
+           (run_id,status,error_code,error_message,attempted_ts)
+           VALUES (?,'succeeded',NULL,NULL,'2026-08-22T00:00:00Z')""",
+        (run_id,),
+    )
+    conn.commit()
+
+    ensure_report_run_schema(conn)
+
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'succeeded','forged','forged','2026-99-99T00:00:00Z')""",
+            (run_id,),
+        )
+
+
 def test_legacy_terminal_run_is_preserved_but_not_trusted_as_verified_lineage():
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -1083,7 +1119,9 @@ def test_admission_uses_immutable_inputs_and_rolls_back_as_one_transaction(
         "SELECT status,error_code,error_message FROM report_admission_attempts "
         "WHERE run_id=?",
         (run_id,),
-    ).fetchone() == ("failed", "RuntimeError", "RuntimeError")
+    ).fetchone() == (
+        "failed", "admission_paper_trade_persistence_failed", "RuntimeError"
+    )
 
 
 def test_email_dispatch_happens_only_after_publication_and_admission(

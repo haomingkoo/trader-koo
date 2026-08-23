@@ -937,6 +937,51 @@ def test_promotion_verifies_lineage_before_candidate_evidence(
     assert conn.execute("SELECT COUNT(*) FROM paper_campaign_experiments").fetchone()[0] == 0
 
 
+def test_promotion_rejects_corrupted_published_artifact_before_candidate_evidence() -> None:
+    conn = _db()
+    run_id = "corrupted-promotion-run"
+    _publish(conn, run_id, [_candidate("CORRUPT")])
+    artifact_path = Path(conn.execute(
+        "SELECT artifact_path FROM report_runs WHERE run_id=?", (run_id,)
+    ).fetchone()[0])
+    artifact_path.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ReportLineageError) as error:
+        replay_and_seal_promotion(
+            conn,
+            experiment_id="corrupted-exp",
+            preregistration_id="corrupted-prereg",
+            campaign_id="paper-v2",
+            candidate_runs=[{
+                "report_run_id": run_id,
+                "report_date": "2026-08-21",
+                "candidates": [_candidate("CORRUPT")],
+            }],
+            price_rows=[],
+            spy_rows=[],
+            config=_build_config(),
+        )
+
+    assert error.value.code == "report_publication_lineage_invalid"
+    assert conn.execute("SELECT COUNT(*) FROM paper_campaign_experiments").fetchone()[0] == 0
+
+
+def test_historical_promotion_accepts_superseded_verified_lineage() -> None:
+    conn = _db()
+    _publish(conn, "historical-run", [_candidate("HIST")])
+    _publish(conn, "replacement-run", [_candidate("NEXT")])
+
+    historical = _require_published_canonical_report(
+        conn, "historical-run", require_current=False
+    )
+    assert historical["is_canonical"] is False
+    with pytest.raises(ReportLineageError) as error:
+        _require_published_canonical_report(
+            conn, "historical-run", require_current=True
+        )
+    assert error.value.code == "report_not_current_publication"
+
+
 def test_chronological_replay_models_costs_overlap_exits_and_parity():
     config = replace(_build_config(), max_open=2, expiry_days=2)
     runs = [

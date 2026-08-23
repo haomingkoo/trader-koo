@@ -106,6 +106,11 @@ immutable published run. There is no paper-admission
 HTTP endpoint that maps it to a transport status in v4. The lower-level
 `replay_campaign()` simulation accepts caller-supplied research fixtures; only
 `replay_and_seal_promotion()` is the lineage-verified promotion boundary.
+Caller-owned transaction rejection and schema-initialization failures are
+precondition failures outside the admission-attempt ledger. Non-lineage failure
+codes are a closed phase set: `admission_setup_persistence_failed`,
+`admission_paper_trade_persistence_failed`, and `admission_finalize_failed`;
+the exception class is stored separately as diagnostic metadata.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,

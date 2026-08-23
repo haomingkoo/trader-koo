@@ -186,7 +186,12 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
             error_code TEXT,
             error_message TEXT,
             attempted_ts TEXT NOT NULL
-                CHECK (attempted_ts GLOB '????-??-??T??:??:??Z'),
+                CHECK (
+                    attempted_ts GLOB '????-??-??T??:??:??Z'
+                    AND attempted_ts NOT GLOB '*[^0-9TZ:-]*'
+                    AND strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts) IS NOT NULL
+                    AND strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts)=attempted_ts
+                ),
             CHECK (
                 (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                 OR
@@ -198,6 +203,37 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_report_admission_attempts_run "
         "ON report_admission_attempts(run_id,attempt_id)"
+    )
+    invalid_attempts = conn.execute(
+        """SELECT COUNT(*) FROM report_admission_attempts
+           WHERE attempted_ts NOT GLOB '????-??-??T??:??:??Z'
+              OR attempted_ts GLOB '*[^0-9TZ:-]*'
+              OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts) IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts)!=attempted_ts
+              OR NOT (
+                  (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
+                  OR
+                  (status='failed' AND TRIM(COALESCE(error_code,''))!=''
+                   AND TRIM(COALESCE(error_message,''))!='')
+              )"""
+    ).fetchone()[0]
+    if invalid_attempts:
+        raise RuntimeError("legacy report admission attempts violate the audit contract")
+    conn.execute(
+        """CREATE TRIGGER IF NOT EXISTS report_admission_attempts_valid_insert
+           BEFORE INSERT ON report_admission_attempts
+           WHEN NEW.attempted_ts NOT GLOB '????-??-??T??:??:??Z'
+             OR NEW.attempted_ts GLOB '*[^0-9TZ:-]*'
+             OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts) IS NULL
+             OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts)!=NEW.attempted_ts
+             OR NOT (
+                 (NEW.status='succeeded' AND NEW.error_code IS NULL
+                  AND NEW.error_message IS NULL)
+                 OR
+                 (NEW.status='failed' AND TRIM(COALESCE(NEW.error_code,''))!=''
+                  AND TRIM(COALESCE(NEW.error_message,''))!='')
+             )
+           BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END"""
     )
     conn.execute(
         """CREATE TRIGGER IF NOT EXISTS report_admission_attempts_no_update
@@ -887,6 +923,7 @@ def _record_admission_attempt(
     run_id: str,
     status: str,
     error: Exception | None = None,
+    error_code: str | None = None,
 ) -> None:
     conn.execute(
         """INSERT INTO report_admission_attempts
@@ -895,7 +932,8 @@ def _record_admission_attempt(
         (
             run_id,
             status,
-            getattr(error, "code", type(error).__name__) if error else None,
+            error_code or getattr(error, "code", type(error).__name__)
+            if error else None,
             type(error).__name__ if error else None,
             _utc_now(),
         ),
@@ -911,6 +949,7 @@ def admit_published_report(
     """Admit only the current verified artifact's immutable accepted decisions."""
     if conn.in_transaction:
         raise RuntimeError("report admission requires a clean transaction boundary")
+    del report_dir
     from trader_koo.paper_trades import PAPER_TRADE_ENABLED, create_paper_trades_from_report
     from trader_koo.paper_trade.schema import ensure_paper_trade_schema
     from trader_koo.paper_trade.trading import _require_published_canonical_report
@@ -922,17 +961,11 @@ def admit_published_report(
     ensure_setup_call_eval_schema(conn)
     ensure_paper_trade_schema(conn)
     calls = trades = 0
+    failure_phase = "lineage"
     try:
         conn.execute("BEGIN")
-        _require_published_canonical_report(conn, run_id)
-        resolved = resolve_published_report(
-            conn, report_dir=report_dir, run_id=run_id, require_current=True
-        )
-        if resolved is None:
-            raise ReportLineageError(
-                "report_not_current_publication",
-                f"report run {run_id} is not the current verified publication",
-            )
+        lineage = _require_published_canonical_report(conn, run_id)
+        resolved = lineage["resolved"]
         row = conn.execute(
             "SELECT generated_ts,report_kind,source_timestamps_json "
             "FROM report_runs WHERE run_id=?", (run_id,)
@@ -960,25 +993,35 @@ def admit_published_report(
             str(price_basis.get("revision") or "").strip()
             if price_basis is not None else None
         ) or None
+        failure_phase = "setup_persistence"
         if SETUP_EVAL_ENABLED and asof_date and setups:
             calls = _persist_setup_call_candidates(
                 conn, generated_ts=str(row[0]), report_kind=str(row[1]), asof_date=asof_date,
                 setup_rows=setups, report_run_id=run_id,
                 expected_price_revision=expected_price_revision,
             )
+        failure_phase = "paper_trade_persistence"
         if PAPER_TRADE_ENABLED and asof_date and setups:
             trades = create_paper_trades_from_report(
                 conn, setup_rows=setups, report_date=asof_date, generated_ts=str(row[0]),
                 report_run_id=run_id, schema_ready=True,
                 expected_price_revision=expected_price_revision,
             )
+        failure_phase = "finalize"
         _record_admission_attempt(conn, run_id=run_id, status="succeeded")
         conn.commit()
     except Exception as exc:
         conn.rollback()
         try:
             _record_admission_attempt(
-                conn, run_id=run_id, status="failed", error=exc
+                conn,
+                run_id=run_id,
+                status="failed",
+                error=exc,
+                error_code=(
+                    getattr(exc, "code", None)
+                    or f"admission_{failure_phase}_failed"
+                ),
             )
             conn.commit()
         except Exception:

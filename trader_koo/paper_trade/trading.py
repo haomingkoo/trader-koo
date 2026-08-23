@@ -165,7 +165,8 @@ def _require_published_canonical_report(
         )
     try:
         row = conn.execute(
-            "SELECT artifact_path,published_ts,status,publication_verified "
+            "SELECT artifact_path,published_ts,status,publication_verified,"
+            "is_generation_canonical "
             "FROM report_runs WHERE run_id=?",
             (report_run_id,),
         ).fetchone()
@@ -204,8 +205,9 @@ def _require_published_canonical_report(
         )
     return {
         "report_complete": True,
-        "is_canonical": True,
+        "is_canonical": bool(row[4]),
         "published_ts": str(row[1] or ""),
+        "resolved": resolved,
     }
 
 
