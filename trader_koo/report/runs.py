@@ -202,7 +202,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
             CHECK (
                 (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                 OR
-                (status='failed' AND error_code IN ({allowed_admission_codes})
+                (status='failed' AND COALESCE(error_code,'') IN ({allowed_admission_codes})
                  AND TRIM(COALESCE(error_message,''))!='')
             )
         )""".format(allowed_admission_codes=allowed_admission_codes)
@@ -238,7 +238,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
               OR NOT (
                   (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                   OR
-                  (status='failed' AND error_code IN ({allowed_admission_codes})
+                  (status='failed' AND COALESCE(error_code,'') IN ({allowed_admission_codes})
                    AND TRIM(COALESCE(error_message,''))!='')
               )""".format(allowed_admission_codes=allowed_admission_codes)
     ).fetchone()[0] if needs_admission_scan else 0
@@ -263,7 +263,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                  (NEW.status='succeeded' AND NEW.error_code IS NULL
                   AND NEW.error_message IS NULL)
                  OR
-                 (NEW.status='failed' AND NEW.error_code IN ({allowed_admission_codes})
+                 (NEW.status='failed' AND COALESCE(NEW.error_code,'') IN ({allowed_admission_codes})
                   AND TRIM(COALESCE(NEW.error_message,''))!='')
              )
            BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END""".format(
