@@ -660,8 +660,11 @@ def test_chronological_replay_models_costs_overlap_exits_and_parity():
         ]},
     ]
     prices = [
+        {"ticker": "AAA", "date": "2026-08-20", "open": 149, "high": 151, "low": 148, "close": 150, "volume": 900_000},
+        {"ticker": "BBB", "date": "2026-08-20", "open": 149, "high": 151, "low": 148, "close": 150, "volume": 900_000},
         {"ticker": "AAA", "date": "2026-08-21", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
         {"ticker": "BBB", "date": "2026-08-21", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
+        {"ticker": "CCC", "date": "2026-08-21", "open": 149, "high": 151, "low": 148, "close": 150, "volume": 900_000},
         {"ticker": "AAA", "date": "2026-08-24", "open": 150, "high": 166, "low": 149, "close": 165, "volume": 1_000_000},
         {"ticker": "BBB", "date": "2026-08-24", "open": 150, "high": 151, "low": 140, "close": 141, "volume": 1_000_000},
         {"ticker": "CCC", "date": "2026-08-24", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
@@ -698,6 +701,8 @@ def test_baseline_and_campaign_replay_seal_identical_complete_ledgers():
         "candidates": [{**_candidate("AAA"), "critic_outcome": {"approved": True}}],
     }]
     prices = [
+        {"ticker": "AAA", "date": "2026-08-20", "open": 149, "high": 151,
+         "low": 148, "close": 150, "volume": 900_000},
         {"ticker": "AAA", "date": "2026-08-21", "open": 150, "high": 151,
          "low": 149, "close": 150, "volume": 1_000_000},
         {"ticker": "AAA", "date": "2026-08-24", "open": 150, "high": 166,
@@ -727,6 +732,34 @@ def test_baseline_and_campaign_replay_seal_identical_complete_ledgers():
     assert baseline.ledger["provenance"]["ledger_sha256"] == campaign[
         "execution_ledger_hash"
     ]
+
+
+def test_replay_rejects_missing_immediate_open_and_uses_only_causal_volume():
+    config = replace(_build_config(), expiry_days=2)
+    runs = [{
+        "report_run_id": "causal-run", "report_date": "2026-08-20",
+        "candidates": [{**_candidate("LATE"), "critic_outcome": {"approved": True}}],
+    }]
+    prices = [
+        {"ticker": "LATE", "date": "2026-08-20", "open": 150, "high": 151,
+         "low": 149, "close": 150, "volume": 100},
+        {"ticker": "MARKET", "date": "2026-08-21", "open": 100, "high": 101,
+         "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "LATE", "date": "2026-08-24", "open": 150, "high": 151,
+         "low": 149, "close": 150, "volume": 100_000_000},
+    ]
+
+    replay = replay_campaign(
+        candidate_runs=runs, price_rows=prices, spy_rows=[], config=config,
+        _include_splits=False,
+    )
+
+    decision = replay["decisions"][0]
+    assert decision["disposition"] == "rejected"
+    assert decision["inputs"]["context"]["execution_ready"] is False
+    assert decision["inputs"]["context"]["source_context"]["intended_session"] == "2026-08-21"
+    assert decision["inputs"]["context"]["avg_daily_volume"] == 100
+    assert replay["trades"] == []
 
 
 def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():

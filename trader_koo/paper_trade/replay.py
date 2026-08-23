@@ -102,8 +102,9 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 else raw_candidate
             )
             ticker = str(candidate.get("ticker") or "").upper()
+            intended_session = next((date for date in sessions if date > report_date), None)
             next_bar = next((bar for bar in by_ticker.get(ticker, [])
-                             if bar["date"] > report_date and bar.get("open") is not None), None)
+                             if bar["date"] == intended_session and bar.get("open") is not None), None)
             execution_key = f"{run['report_run_id']}:{rank}"
             raw_entry = float(next_bar["open"]) if next_bar else None
             direction = direction_from_row(candidate) if isinstance(candidate, dict) else "long"
@@ -113,10 +114,11 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 if raw_entry is not None else None
             )
             volumes = [float(bar["volume"]) for bar in by_ticker.get(ticker, [])
-                       if next_bar and bar["date"] <= next_bar["date"] and bar.get("volume") not in (None, 0)][-20:]
+                       if bar["date"] <= report_date and bar.get("volume") not in (None, 0)][-20:]
+            causal_avg_volume = statistics.fmean(volumes) if volumes else None
             context = {
                 "entry_price": entry,
-                "avg_daily_volume": statistics.fmean(volumes) if volumes else None,
+                "avg_daily_volume": causal_avg_volume,
                 "portfolio_block": None,
                 "critic_outcome": candidate.get("critic_outcome") or {"approved": False, "error": "missing_replay_critic_evidence"},
                 "campaign_active": True, "duplicate": False,
@@ -124,13 +126,13 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 "market_context": candidate.get("market_context") or {},
                 "portfolio_context": {},
                 "source_context": {"report_run_id": run["report_run_id"],
+                                   "intended_session": intended_session,
                                    "price_date": next_bar["date"] if next_bar else None},
             }
             if isinstance(sealed, dict):
                 context.update(sealed)
                 context.update(
                     entry_price=entry,
-                    avg_daily_volume=statistics.fmean(volumes) if volumes else None,
                     execution_ready=next_bar is not None,
                 )
             decision = decide_candidate(row=candidate, rank=rank, config=config, context=context)
@@ -141,7 +143,8 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
             exit_index = min(len(sessions) - 1, entry_index + config.expiry_days)
             position_pct = float(decision["sizing"].get("position_size_pct") or 0)
             locked_notional = config.starting_capital * position_pct / 100
-            capacity = statistics.fmean(volumes) * raw_entry * config.max_adv_pct / 100 if volumes and raw_entry else 0.0
+            avg_volume = context.get("avg_daily_volume")
+            capacity = float(avg_volume) * raw_entry * config.max_adv_pct / 100 if avg_volume and raw_entry else 0.0
             executable.append(ExecutionDecision(
                 execution_key, ticker, direction, report_date,
                 next_bar["date"], sessions[exit_index], float(candidate.get("score") or 0),
