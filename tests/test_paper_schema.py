@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from trader_koo.paper_trade.schema import (
     PAPER_TRADE_SCHEMA_VERSION,
@@ -162,6 +164,9 @@ def test_release_copy_rescans_current_v4_admission_ledger(
     failure = json.loads(
         (output_dir / "database-migration-manifest.json").read_text()
     )
+    Draft202012Validator(
+        json.loads(Path("release-database-copy-v2.schema.json").read_text())
+    ).validate(failure)
     assert failure["schema"] == "release-database-copy-v2"
     assert failure["passed"] is False
     assert failure["report_admission_contract"] == {
@@ -194,6 +199,29 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     output_dir.mkdir()
 
     manifest = migrate_copy(source, output_dir)
+    validator = Draft202012Validator(
+        json.loads(Path("release-database-copy-v2.schema.json").read_text())
+    )
+    validator.validate(manifest)
+
+    integrity_failure = deepcopy(manifest)
+    integrity_failure.update(passed=False, integrity_check="page 4 malformed")
+    validator.validate(integrity_failure)
+    accounting_failure = deepcopy(manifest)
+    accounting_failure["passed"] = False
+    accounting_failure["accounting_invariants"]["breaks"] = [{
+        "reason": "equity_pnl_invariant", "delta_usd": 1.25,
+    }]
+    validator.validate(accounting_failure)
+    version_failure = deepcopy(manifest)
+    version_failure["passed"] = False
+    version_failure["paper_trade_schema_version"] -= 1
+    validator.validate(version_failure)
+    schema_failure = deepcopy(manifest)
+    schema_failure["passed"] = False
+    schema_failure["schema_contract"]["passed"] = False
+    schema_failure["schema_contract"]["malformed_indexes"] = ["broken_index"]
+    validator.validate(schema_failure)
 
     assert manifest["schema"] == "release-database-copy-v2"
     assert manifest["passed"] is True

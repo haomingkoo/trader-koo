@@ -18,7 +18,7 @@
     "source_artifact_sha256": {"$ref": "#/$defs/sha256"},
     "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
     "migrated_copy_sha256": {"$ref": "#/$defs/sha256"},
-    "integrity_check": {"const": "ok"},
+    "integrity_check": {"type": "string", "minLength": 1},
     "paper_trade_schema_version": {"type": "integer", "minimum": 1},
     "expected_paper_trade_schema_version": {"type": "integer", "minimum": 1},
     "accounting_invariants": {"$ref": "#/$defs/accounting"},
@@ -96,17 +96,35 @@
       }
     }
   ],
+  "allOf": [
+    {
+      "if": {"properties": {"passed": {"const": true}}},
+      "then": {"properties": {"integrity_check": {"const": "ok"}}}
+    }
+  ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "sqliteCounts": {
       "type": "object",
+      "propertyNames": {"enum": ["index", "table", "trigger", "view"]},
       "additionalProperties": {"type": "integer", "minimum": 0}
     },
     "accounting": {
       "type": "object",
       "required": ["breaks", "legacy_unreconciled_count", "equity", "cash"],
       "properties": {
-        "breaks": {"type": "array"},
+        "breaks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["reason", "delta_usd"],
+            "properties": {
+              "reason": {"const": "equity_pnl_invariant"},
+              "delta_usd": {"type": "number"}
+            },
+            "additionalProperties": false
+          }
+        },
         "legacy_unreconciled_count": {"type": "integer", "minimum": 0},
         "equity": {"type": "number"},
         "cash": {"type": "number"}
@@ -132,14 +150,73 @@
         "contract": {"const": "paper-schema-expand-v4"},
         "malformed_indexes": {"type": "array", "items": {"type": "string"}},
         "malformed_triggers": {"type": "array", "items": {"type": "string"}},
-        "missing_foreign_keys": {"type": "array", "items": {"type": "array"}},
-        "malformed_optional_foreign_keys": {"type": "array", "items": {"type": "object"}},
+        "missing_foreign_keys": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/stringTuple4"}
+        },
+        "malformed_optional_foreign_keys": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/malformedOptionalForeignKey"}
+        },
         "campaign_defaults": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
         "campaign_defaults_compatible": {"type": "boolean"},
-        "foreign_key_breaks": {"type": "array", "items": {"type": "array"}},
+        "foreign_key_breaks": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {"type": "string"},
+              {"type": ["integer", "null"]},
+              {"type": "string"},
+              {"type": "integer"}
+            ],
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
         "legacy_read_probe": {"type": "boolean"},
         "previous_image_paper_write_mode": {"const": "disabled_during_rollback_window"},
         "passed": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "stringTuple4": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "string"},
+        {"type": "string"},
+        {"type": "string"},
+        {"type": "string"}
+      ],
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "malformedOptionalForeignKey": {
+      "type": "object",
+      "required": ["table", "column", "constraints"],
+      "properties": {
+        "table": {"type": "string"},
+        "column": {"type": "string"},
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "mappings"],
+            "properties": {
+              "id": {"type": "integer", "minimum": 0},
+              "mappings": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "minItems": 6,
+                  "maxItems": 6
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     }
