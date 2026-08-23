@@ -204,6 +204,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                     AND strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts) IS NOT NULL
                     AND strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts)=attempted_ts
                     AND date(substr(attempted_ts,1,10),'+0 days')=substr(attempted_ts,1,10)
+                    AND substr(attempted_ts,1,4) BETWEEN '0001' AND '9999'
                     AND substr(attempted_ts,12,2) BETWEEN '00' AND '23'
                     AND substr(attempted_ts,15,2) BETWEEN '00' AND '59'
                     AND substr(attempted_ts,18,2) BETWEEN '00' AND '59'
@@ -242,6 +243,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
               OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts) IS NULL
               OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts)!=attempted_ts
               OR date(substr(attempted_ts,1,10),'+0 days')!=substr(attempted_ts,1,10)
+              OR substr(attempted_ts,1,4) NOT BETWEEN '0001' AND '9999'
               OR substr(attempted_ts,12,2) NOT BETWEEN '00' AND '23'
               OR substr(attempted_ts,15,2) NOT BETWEEN '00' AND '59'
               OR substr(attempted_ts,18,2) NOT BETWEEN '00' AND '59'
@@ -310,6 +312,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
              OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts) IS NULL
              OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts)!=NEW.attempted_ts
              OR date(substr(NEW.attempted_ts,1,10),'+0 days')!=substr(NEW.attempted_ts,1,10)
+             OR substr(NEW.attempted_ts,1,4) NOT BETWEEN '0001' AND '9999'
              OR substr(NEW.attempted_ts,12,2) NOT BETWEEN '00' AND '23'
              OR substr(NEW.attempted_ts,15,2) NOT BETWEEN '00' AND '59'
              OR substr(NEW.attempted_ts,18,2) NOT BETWEEN '00' AND '59'

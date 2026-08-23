@@ -447,6 +447,8 @@ def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> N
         ("error-message-whitespace", "failed", "admission_finalize_failed", "\t",
          "2026-08-22T00:00:00Z", False),
         ("timestamp", "succeeded", None, None, None, False),
+        ("timestamp-year-zero", "succeeded", None, None,
+         "0000-08-22T00:00:00Z", False),
         ("run-id", "succeeded", None, None, "2026-08-22T00:00:00Z", True),
     ],
 )

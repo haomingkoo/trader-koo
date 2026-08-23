@@ -124,11 +124,15 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
             (run_id,),
         )
         for second in range(1, 26):
+            attempted_ts = (
+                "0000-08-22T00:00:01Z"
+                if second == 1 else f"2026-08-22T00:00:{second:02d}Z"
+            )
             conn.execute(
                 """INSERT INTO report_admission_attempts
                    (run_id,status,error_code,error_message,attempted_ts)
                    VALUES (?,'failed',NULL,'ValueError',?)""",
-                (run_id, f"2026-08-22T00:00:{second:02d}Z"),
+                (run_id, attempted_ts),
             )
         conn.execute(
             "DELETE FROM report_schema_migrations "
@@ -158,7 +162,10 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
         "invalid_row_count": 25,
         "affected_attempt_sample": [{
             "attempt_id": attempt_id,
-            "violations": ["failure_error_metadata_invalid"],
+            "violations": (
+                ["attempted_ts_invalid", "failure_error_metadata_invalid"]
+                if attempt_id == 2 else ["failure_error_metadata_invalid"]
+            ),
         } for attempt_id in range(2, 22)],
         "reported_attempt_count": 20,
         "diagnostic_limit": 20,
