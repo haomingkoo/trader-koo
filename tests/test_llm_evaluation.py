@@ -216,6 +216,36 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
     }, no_breakdown)
     assert "action_type_changed" in added_breakdown_trade["errors"]
 
+    for action in (
+        "We don't intend to buy; wait for confirmation.",
+        "We do not plan to buy; wait for confirmation.",
+    ):
+        negated_declaration = evaluate_setup_rewrite({
+            **wait_context["baseline"], "action": action,
+        }, wait_context)
+        assert negated_declaration["passed"] is True
+
+    for action in (
+        "Breakout hasn't occurred; wait for confirmation.",
+        "Breakdown didn't happen; wait for confirmation.",
+        "Breakout has yet to occur; wait for confirmation.",
+        "Breakout has failed to occur; wait for confirmation.",
+    ):
+        absent_event = evaluate_setup_rewrite({
+            **wait_context["baseline"], "action": action,
+        }, wait_context)
+        assert absent_event["passed"] is True
+
+    negated_intent_context = _context(baseline={
+        **wait_context["baseline"],
+        "action": "We don't intend to buy; wait for confirmation.",
+    })
+    intent_reversal = evaluate_setup_rewrite({
+        **negated_intent_context["baseline"],
+        "action": "We intend to buy after confirmation.",
+    }, negated_intent_context)
+    assert "action_type_changed" in intent_reversal["errors"]
+
 
 def test_mixed_observation_and_protective_risk_do_not_change_action() -> None:
     context = _context(baseline={
@@ -341,6 +371,11 @@ def test_risk_controls_cannot_be_negated_or_weakened() -> None:
         **stop_loss_context["baseline"], "risk_note": "Risk remains.",
     }, stop_loss_context)
     assert "risk_posture_weakened" in removed_stop_loss["errors"]
+
+    risk_free = evaluate_setup_rewrite({
+        **_context()["baseline"], "risk_note": "Risk-free.",
+    }, _context())
+    assert "unsupported_causal_or_recommendation_claim" in risk_free["errors"]
 
 
 def test_grounding_rejects_prompt_injection_and_stale_evidence() -> None:

@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v9"
-CACHE_VERSION = "setup-rewrite-cache-v10"
+EVALUATOR_VERSION = "setup-grounding-v10"
+CACHE_VERSION = "setup-rewrite-cache-v11"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -60,11 +60,26 @@ def _affirmed(text: str, phrase: str) -> bool:
     return False
 
 
+def _pattern_affirmed(text: str, pattern: str) -> bool:
+    for match in re.finditer(pattern, text):
+        clause_prefix = re.split(r"[.;,]", text[:match.start()])[-1][-60:]
+        if not re.search(
+            r"\b(?:do\s+not|don't|never|avoid|not|no)\s+(?:\w+\s+){0,2}$",
+            clause_prefix,
+        ):
+            return True
+    return False
+
+
 def _event_affirmed(text: str, phrase: str) -> bool:
     if not _affirmed(text, phrase):
         return False
     return re.search(
-        rf"\b{re.escape(phrase)}\b.{{0,20}}\b(?:has|have|is|was|did)?\s*(?:not|never)\b",
+        rf"\b{re.escape(phrase)}\b.{{0,30}}(?:"
+        r"\b(?:has|have|is|was|did)\s+(?:not|never)\b|"
+        r"\b(?:hasn't|haven't|isn't|wasn't|didn't)\b|"
+        r"\b(?:has|have)\s+(?:yet\s+to|failed\s+to)\s+(?:occur|happen)\b"
+        r")",
         text,
     ) is None
 
@@ -187,25 +202,31 @@ def _action_side(text: str) -> str | None:
         if protective_exit:
             continue
         negated_start = re.match(r"^(?:do\s+not|don't|never|avoid)\b", clause) is not None
-        long_entry = not negated_start and bool(re.search(
+        long_pattern = (
             r"^(?:buy|go\s+long|long(?!-)|enter(?:\s+a)?\s+long|open(?:\s+a)?\s+long)\b|"
             r"\b(?:to|should|could|may|can|will|would|shall|must|consider|"
             r"intend\s+to|plan\s+to|going\s+to)\s+(?:buy|go\s+long|enter\s+long)\b|"
             r"\b(?:consider|before|after)\s+buying\b|"
-            r"\b(?:will|would|shall|must|going\s+to)\s+open(?:\s+a)?\s+long\b",
-            clause,
-        )) or _event_affirmed(clause, "breakout") or _event_affirmed(
-            clause, "above resistance"
+            r"\b(?:will|would|shall|must|going\s+to)\s+open(?:\s+a)?\s+long\b"
         )
-        short_entry = not negated_start and bool(re.search(
+        short_pattern = (
             r"^(?:sell|go\s+short|short(?!-)|enter(?:\s+a)?\s+short|open(?:\s+a)?\s+short)\b|"
             r"\b(?:to|should|could|may|can|will|would|shall|must|consider|"
             r"intend\s+to|plan\s+to|going\s+to)\s+(?:sell|go\s+short|enter\s+short)\b|"
             r"\b(?:consider|before|after)\s+selling\b|"
-            r"\b(?:will|would|shall|must|going\s+to)\s+open(?:\s+a)?\s+short\b",
-            clause,
-        )) or _event_affirmed(clause, "breakdown") or _event_affirmed(
-            clause, "below support"
+            r"\b(?:will|would|shall|must|going\s+to)\s+open(?:\s+a)?\s+short\b"
+        )
+        long_entry = (
+            not negated_start and _pattern_affirmed(clause, long_pattern)
+        ) or (
+            _event_affirmed(clause, "breakout")
+            or _event_affirmed(clause, "above resistance")
+        )
+        short_entry = (
+            not negated_start and _pattern_affirmed(clause, short_pattern)
+        ) or (
+            _event_affirmed(clause, "breakdown")
+            or _event_affirmed(clause, "below support")
         )
         long_side = long_side or long_entry
         short_side = short_side or short_entry
@@ -296,7 +317,8 @@ def evaluate_setup_rewrite(
 
     if any(marker in context_lower for marker in _INJECTION_MARKERS):
         errors.add("prompt_injection_in_evidence")
-    if any(claim in output_lower for claim in _PROHIBITED_CLAIMS):
+    normalized_claims = re.sub(r"[-‐‑‒–—]+", " ", output_lower)
+    if any(claim in normalized_claims for claim in _PROHIBITED_CLAIMS):
         errors.add("unsupported_causal_or_recommendation_claim")
 
     evidence_status = _normal(context.get("evidence_status"))
