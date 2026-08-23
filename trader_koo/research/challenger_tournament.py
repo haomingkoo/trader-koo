@@ -243,20 +243,26 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
     required = {"ticker", "date", "open", "close", "volume"}
     if not required.issubset(columns):
         return {"eligible": False, "reasons": ["required_price_columns_unavailable"]}
-    price_rows = list(conn.execute(
-        "SELECT ticker,date,open,close,volume FROM price_daily"
-    ))
-    tickers = sorted({str(row[0]) for row in price_rows if str(row[0]).strip()})
-    ticker_count = len(tickers)
-    row_count = len(price_rows)
+    tickers: set[str] = set()
+    row_count = 0
     reasons: list[str] = []
-    valid_dates: list[dt.date] = []
+    start_date: dt.date | None = None
+    end_date: dt.date | None = None
     spy_prices: list[tuple[dt.date, float]] = []
     invalid_spy_prices = 0
-    for ticker, date_value, open_value, close_value, volume_value in price_rows:
+    for ticker, date_value, open_value, close_value, volume_value in conn.execute(
+        "SELECT ticker,date,open,close,volume FROM price_daily"
+    ):
+        row_count += 1
+        ticker_name = str(ticker).strip() if ticker is not None else ""
+        if ticker_name:
+            tickers.add(ticker_name)
+        else:
+            reasons.append("invalid_ticker")
         try:
             parsed_date = dt.date.fromisoformat(str(date_value))
-            valid_dates.append(parsed_date)
+            start_date = parsed_date if start_date is None else min(start_date, parsed_date)
+            end_date = parsed_date if end_date is None else max(end_date, parsed_date)
         except (TypeError, ValueError):
             reasons.append("invalid_price_date")
             parsed_date = None
@@ -273,14 +279,16 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
             valid_values = False
         if not valid_values:
             reasons.append("invalid_price_value")
-            if str(ticker) == "SPY":
+            if ticker_name == "SPY":
                 invalid_spy_prices += 1
-        elif str(ticker) == "SPY" and parsed_date is not None:
+        elif ticker_name == "SPY" and parsed_date is not None:
             spy_prices.append((parsed_date, close_price))
-    start = min(valid_dates).isoformat() if valid_dates else None
-    end = max(valid_dates).isoformat() if valid_dates else None
+    start = start_date.isoformat() if start_date else None
+    end = end_date.isoformat() if end_date else None
+    ticker_names = sorted(tickers)
+    ticker_count = len(ticker_names)
     try:
-        contract = research_price_contract(conn, tickers)
+        contract = research_price_contract(conn, ticker_names)
     except Exception as exc:
         contract = {
             "eligible": False, "basis": "unknown", "status": "unresolved",

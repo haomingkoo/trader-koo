@@ -221,6 +221,26 @@ class TestPaperTradeSummaryEndpoint:
         assert tournament["heldout"]["accessed"] is False
         assert set(tournament["challengers"]) == {"C1", "C2", "C3"}
 
+    def test_experiment_catalogue_uses_configured_runtime_baseline(
+        self, test_app, monkeypatch
+    ):
+        fixture = (
+            Path(__file__).resolve().parents[1]
+            / "fixtures/next_open_baseline_schema_v2.json"
+        )
+        monkeypatch.setenv("TRADER_KOO_NEXT_OPEN_BASELINE_ARTIFACT", str(fixture))
+
+        direct = test_app.get("/api/research/next-open-baseline").json()["baseline"]
+        experiments = test_app.get("/api/research/experiments").json()["experiments"]
+        catalogue = next(
+            item for item in experiments
+            if item["experiment_id"] == "next-open-baseline"
+        )
+
+        assert direct["available"] is True
+        assert catalogue["available"] is True
+        assert catalogue["manifest"]["artifact_hash"] == direct["provenance"]["artifact_sha256"]
+
     def test_experiment_manifest_is_downloadable_but_missing_ledger_is_not(
         self, test_app
     ):

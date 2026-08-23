@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from trader_koo.research.next_open_baseline import (
-    PACKAGED_ARTIFACT_PATH as BASELINE_PATH,
     artifact_state as baseline_state,
     canonical_json_bytes,
 )
@@ -42,10 +41,8 @@ def _load_tournament(path: Path = TOURNAMENT_PATH) -> dict[str, Any]:
 
 
 def _baseline_result() -> dict[str, Any]:
-    state = baseline_state(BASELINE_PATH)
-    payload: dict[str, Any] = {}
-    if state.get("available"):
-        payload = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    state = baseline_state()
+    payload: dict[str, Any] = state if state.get("available") else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
     warnings = list(payload.get("readiness_reasons") or state.get("readiness_reasons") or [])

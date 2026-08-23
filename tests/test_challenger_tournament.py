@@ -142,6 +142,28 @@ def test_audit_checks_interior_dates_and_non_spy_values() -> None:
     assert artifact["sealed_heldout"]["accessed"] is False
 
 
+def test_audit_rejects_anonymous_market_rows() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE price_daily (ticker TEXT,date TEXT,open REAL,close REAL,volume REAL)"
+    )
+    conn.executemany(
+        "INSERT INTO price_daily VALUES (?,?,?,?,?)",
+        [
+            ("SPY", "2020-01-02", 100, 100, 1_000_000),
+            ("   ", "2023-01-02", 100, 100, 1_000_000),
+            (None, "2024-01-02", 100, 100, 1_000_000),
+            ("SPY", "2026-01-02", 101, 101, 1_000_000),
+        ],
+    )
+
+    artifact = run_challenger_tournament(conn)
+
+    assert artifact["status"] == "blocked_before_validation"
+    assert "invalid_ticker" in artifact["dataset_audit"]["reasons"]
+    assert artifact["sealed_heldout"]["accessed"] is False
+
+
 def test_eligible_data_still_fails_closed_until_executor_is_sealed(monkeypatch) -> None:
     monkeypatch.setattr(tournament, "dataset_audit", lambda _conn: {
         "eligible": True, "reasons": [], "dataset_sha256": "d" * 64,
