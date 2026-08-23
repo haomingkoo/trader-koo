@@ -15,6 +15,7 @@ from trader_koo.paper_trade.schema import (
     ensure_paper_trade_schema,
 )
 from trader_koo.scripts.release_evidence import _schema_contract, migrate_copy
+from trader_koo.scripts import release_evidence
 
 
 def test_parent_unique_key_rebuild_preserves_child_foreign_keys() -> None:
@@ -98,7 +99,7 @@ def test_v3_database_runs_v4_expand_contract_instead_of_short_circuiting() -> No
 
 @pytest.mark.parametrize("invalid_count", [1, 20, 21])
 def test_release_copy_rescans_current_v4_admission_ledger(
-    tmp_path: Path, invalid_count: int
+    tmp_path: Path, invalid_count: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "current-v4.db"
     with sqlite3.connect(source) as conn:
@@ -165,18 +166,45 @@ def test_release_copy_rescans_current_v4_admission_ledger(
         (output_dir / "database-migration-manifest.json").read_text()
     )
     Draft202012Validator(
-        json.loads(Path("release-database-copy-v3.schema.json").read_text())
+        json.loads(Path("release-database-copy-v4.schema.json").read_text())
     ).validate(failure)
-    contradictory_admission_failure = deepcopy(failure)
-    contradictory_admission_failure["accounting_invariants"] = None
-    contradictory_admission_failure["schema_contract"] = {
-        "passed": True
-    }
-    with pytest.raises(ValidationError):
-        Draft202012Validator(
-            json.loads(Path("release-database-copy-v3.schema.json").read_text())
-        ).validate(contradictory_admission_failure)
-    assert failure["schema"] == "release-database-copy-v3"
+    validator = Draft202012Validator(
+        json.loads(Path("release-database-copy-v4.schema.json").read_text())
+    )
+    if invalid_count == 1:
+        clean_source = tmp_path / "clean-for-admission-variant.db"
+        with sqlite3.connect(clean_source) as conn:
+            conn.execute("CREATE TABLE release_seed(id INTEGER PRIMARY KEY)")
+        clean_output = tmp_path / "clean-for-admission-variant"
+        clean_output.mkdir()
+        downstream = migrate_copy(clean_source, clean_output)
+        for field in (
+            "integrity_check", "paper_trade_schema_version",
+            "expected_paper_trade_schema_version", "accounting_invariants",
+            "schema_contract", "sqlite_objects_before", "sqlite_objects_after",
+        ):
+            contradictory = deepcopy(failure)
+            contradictory[field] = deepcopy(downstream[field])
+            with pytest.raises(ValidationError):
+                validator.validate(contradictory)
+
+        rejected_output = tmp_path / "rejected-manifest"
+        rejected_output.mkdir()
+        monkeypatch.setattr(
+            release_evidence, "_validate_database_manifest_schema",
+            lambda payload: (_ for _ in ()).throw(ValueError("schema drift")),
+        )
+        with pytest.raises(RuntimeError, match="primary manifest not published"):
+            release_evidence._publish_database_manifest(rejected_output, failure)
+        assert not (rejected_output / "database-migration-manifest.json").exists()
+        assert json.loads(
+            (rejected_output / "database-migration-generation-error.json").read_text()
+        ) == {
+            "schema": "release-database-generation-error-v1",
+            "error_code": "release_manifest_validation_failed",
+            "target_schema": "release-database-copy-v4",
+        }
+    assert failure["schema"] == "release-database-copy-v4"
     assert failure["passed"] is False
     assert failure["report_admission_contract"] == {
         "passed": False,
@@ -209,7 +237,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
 
     manifest = migrate_copy(source, output_dir)
     validator = Draft202012Validator(
-        json.loads(Path("release-database-copy-v3.schema.json").read_text())
+        json.loads(Path("release-database-copy-v4.schema.json").read_text())
     )
     validator.validate(manifest)
     unexplained_failure = deepcopy(manifest)
@@ -281,7 +309,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     with pytest.raises(ValidationError):
         validator.validate(contradictory_defaults)
 
-    assert manifest["schema"] == "release-database-copy-v3"
+    assert manifest["schema"] == "release-database-copy-v4"
     assert manifest["passed"] is True
     assert manifest["report_admission_contract"] == {
         "passed": True,
@@ -321,7 +349,7 @@ def test_release_copy_reports_real_schema_failure_before_accounting(
         (output_dir / "database-migration-manifest.json").read_text()
     )
     Draft202012Validator(
-        json.loads(Path("release-database-copy-v3.schema.json").read_text())
+        json.loads(Path("release-database-copy-v4.schema.json").read_text())
     ).validate(failure)
     assert failure["passed"] is False
     assert failure["schema_contract"]["passed"] is False

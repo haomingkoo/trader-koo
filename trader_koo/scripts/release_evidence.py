@@ -48,7 +48,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _validate_database_manifest(payload: dict[str, Any]) -> None:
-    """Enforce v2 relationships JSON Schema cannot express."""
+    """Enforce relationships JSON Schema cannot express."""
     contract = payload.get("report_admission_contract")
     if not isinstance(contract, dict) or not isinstance(contract.get("passed"), bool):
         raise RuntimeError("release database manifest lacks admission contract status")
@@ -69,9 +69,25 @@ def _validate_database_manifest(payload: dict[str, Any]) -> None:
 
 
 def _validate_database_manifest_schema(payload: dict[str, Any]) -> None:
-    schema_path = Path(__file__).resolve().parents[2] / "release-database-copy-v3.schema.json"
+    schema_path = Path(__file__).resolve().parents[2] / "release-database-copy-v4.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(payload)
+
+
+def _publish_database_manifest(output_dir: Path, payload: dict[str, Any]) -> None:
+    try:
+        _validate_database_manifest(payload)
+        _validate_database_manifest_schema(payload)
+    except Exception as exc:
+        _write_json(output_dir / "database-migration-generation-error.json", {
+            "schema": "release-database-generation-error-v1",
+            "error_code": "release_manifest_validation_failed",
+            "target_schema": "release-database-copy-v4",
+        })
+        raise RuntimeError(
+            "release database manifest validation failed; primary manifest not published"
+        ) from exc
+    _write_json(output_dir / "database-migration-manifest.json", payload)
 
 
 def _code_sha() -> str:
@@ -310,7 +326,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             conn.commit()
     if contract_failure is not None:
         failure_manifest = {
-            "schema": "release-database-copy-v3",
+            "schema": "release-database-copy-v4",
             "source_artifact": source.name,
             "source_artifact_sha256": source_artifact_hash,
             "source_snapshot_sha256": source_snapshot_hash,
@@ -328,12 +344,10 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             },
             "passed": False,
         }
-        _validate_database_manifest(failure_manifest)
-        _validate_database_manifest_schema(failure_manifest)
-        _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
+        _publish_database_manifest(output_dir, failure_manifest)
         raise RuntimeError("database copy report-admission contract failed") from contract_failure
     manifest = {
-        "schema": "release-database-copy-v3",
+        "schema": "release-database-copy-v4",
         "source_artifact": source.name,
         "source_artifact_sha256": source_artifact_hash,
         "source_snapshot_sha256": source_snapshot_hash,
@@ -365,9 +379,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         and not account["accounting_breaks"]
         and schema_contract["passed"]
     )
-    _validate_database_manifest(manifest)
-    _validate_database_manifest_schema(manifest)
-    _write_json(output_dir / "database-migration-manifest.json", manifest)
+    _publish_database_manifest(output_dir, manifest)
     if not manifest["passed"]:
         raise RuntimeError("database copy migration or accounting invariant failed")
     return manifest

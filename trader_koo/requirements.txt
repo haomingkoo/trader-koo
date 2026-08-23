@@ -22,4 +22,5 @@ shap>=0.51
 python-multipart>=0.0.24
 httpx>=0.28
 exchange-calendars==4.13.2
+jsonschema>=4.23.0,<5
 hyperliquid-python-sdk>=0.22.0

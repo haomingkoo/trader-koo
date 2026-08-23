@@ -7,5 +7,4 @@ pytest-cov>=4.1.0
 pytest-mock>=3.11.0
 pytest-asyncio>=0.23.0
 hypothesis>=6.92.0
-jsonschema>=4.23.0,<5
 pre-commit>=4.5.0
