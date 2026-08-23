@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v3"
-CACHE_VERSION = "setup-rewrite-cache-v4"
+EVALUATOR_VERSION = "setup-grounding-v4"
+CACHE_VERSION = "setup-rewrite-cache-v5"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -70,6 +70,13 @@ def _unit(path: str, currency: bool, percent: bool) -> str:
     return "plain"
 
 
+def _numeric_text(text: str) -> str:
+    normalized = text.translate(str.maketrans({
+        "−": "-", "﹣": "-", "－": "-", "＋": "+", "–": "-", "—": "-",
+    }))
+    return re.sub(r"(?<=\d)\s*-\s*(?=\$?\d)", " ", normalized)
+
+
 def _number_facts(value: Any, path: str = "") -> set[tuple[Decimal, str]]:
     if isinstance(value, dict):
         return {
@@ -86,7 +93,7 @@ def _number_facts(value: Any, path: str = "") -> set[tuple[Decimal, str]]:
         except InvalidOperation:
             return set()
     facts: set[tuple[Decimal, str]] = set()
-    text = _ISO_DATE.sub("", str(value))
+    text = _numeric_text(_ISO_DATE.sub("", str(value)))
     for match in _NUMBER.finditer(text):
         try:
             sign = -1 if "-" in match.group("prefix") else 1
@@ -99,7 +106,7 @@ def _number_facts(value: Any, path: str = "") -> set[tuple[Decimal, str]]:
 
 def _output_number_claims(text: str) -> set[tuple[Decimal, str]]:
     claims: set[tuple[Decimal, str]] = set()
-    without_dates = _MONTH_DATE.sub("", _ISO_DATE.sub("", text))
+    without_dates = _numeric_text(_MONTH_DATE.sub("", _ISO_DATE.sub("", text)))
     for match in _NUMBER.finditer(without_dates):
         try:
             sign = -1 if "-" in match.group("prefix") else 1
@@ -145,8 +152,11 @@ def _action_side(text: str) -> str | None:
         ))
         protective = any(_contains(clause, term) for term in (
             "stop", "exit", "invalidation", "protect", "cover",
-        )) and not immediate
-        if protective:
+        ))
+        entry_context = immediate or any(_contains(clause, term) for term in (
+            "confirmation", "entry", "setup", "open position",
+        ))
+        if protective and not entry_context:
             continue
         long_side = long_side or any(_affirmed(clause, term) for term in (
             "buy", "long", "breakout", "above resistance",
@@ -154,7 +164,9 @@ def _action_side(text: str) -> str | None:
         short_side = short_side or any(_affirmed(clause, term) for term in (
             "sell", "short", "breakdown", "below support",
         ))
-    if long_side == short_side:
+    if long_side and short_side:
+        return "mixed"
+    if not long_side and not short_side:
         return None
     return "long" if long_side else "short"
 
@@ -178,16 +190,20 @@ def _risk_posture(text: str) -> tuple[set[str], bool]:
     risk = _normal(text)
     categories: set[str] = set()
     if any(_affirmed(risk, marker) for marker in (
-        "stop", "invalidation", "protect", "protective",
+        "stop", "stops", "invalidation", "protect", "protective",
     )):
         categories.add("stop")
-    if any(_affirmed(risk, marker) for marker in ("size", "limit")):
+    if any(_affirmed(risk, marker) for marker in ("size", "sizing", "limit")):
         categories.add("size")
     if any(_affirmed(risk, marker) for marker in ("risk", "bounded", "caution")):
         categories.add("generic")
     weakened = bool(re.search(
         r"\b(?:do not|don't|never|no|remove|loosen|ignore)\b.{0,30}"
-        r"\b(?:stop|risk|size|limit|protect(?:ion|ive)?)\b",
+        r"\b(?:stops?|risk|siz(?:e|ing)|limit|bounded|protect(?:ion|ive)?)\b",
+        risk,
+    )) or bool(re.search(
+        r"\b(?:stops?|risk|siz(?:e|ing)|limit|bounded|protect(?:ion|ive)?)\b"
+        r".{0,30}\b(?:should\s+|must\s+)?(?:never|not)\b",
         risk,
     )) or any(phrase in risk for phrase in (
         "unbounded", "increase position size", "increase size", "unlimited risk",
@@ -263,6 +279,8 @@ def evaluate_setup_rewrite(
     output_side = _action_side(output_action)
     if baseline_side != output_side and (baseline_side is not None or output_side is not None):
         errors.add("action_type_changed")
+    if output_side == "mixed":
+        errors.add("ambiguous_directional_action")
     baseline_mode = _action_mode(baseline_action)
     output_mode = _action_mode(output_action)
     if baseline_mode in {"conditional", "immediate"} and output_mode != baseline_mode:

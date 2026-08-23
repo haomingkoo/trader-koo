@@ -71,6 +71,19 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
         wrong_side["errors"]
     )
 
+    conditional_with_stop = _context(baseline={
+        "observation": "AAA has a bullish setup.",
+        "action": "Buy only after confirmation with a stop.",
+        "risk_note": "Use a protective stop.",
+    })
+    reversed_with_stop = evaluate_setup_rewrite({
+        **conditional_with_stop["baseline"],
+        "action": "Sell only after confirmation with a stop.",
+    }, conditional_with_stop)
+    assert {"action_type_changed", "direction_action_contradiction"}.issubset(
+        reversed_with_stop["errors"]
+    )
+
     mixed_negation = evaluate_setup_rewrite({
         **wait_context["baseline"],
         "action": "Do not sell now; sell only after confirmation.",
@@ -78,6 +91,12 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
     assert {"action_type_changed", "direction_action_contradiction"}.issubset(
         mixed_negation["errors"]
     )
+
+    ambiguous = evaluate_setup_rewrite({
+        **wait_context["baseline"],
+        "action": "Buy or sell only after confirmation.",
+    }, wait_context)
+    assert "ambiguous_directional_action" in ambiguous["errors"]
 
     neutral = _context(signal_bias="neutral")
     direction_with_stop = evaluate_setup_rewrite({
@@ -144,12 +163,28 @@ def test_numeric_grounding_normalizes_units_dates_and_formatting() -> None:
     assert matching_negative["passed"] is True
     assert "unsupported_numeric_claim" in reversed_positive["errors"]
 
+    unicode_minus = evaluate_setup_rewrite({
+        **context["baseline"], "observation": "AAA moved −5%.",
+    }, context)
+    assert "unsupported_numeric_claim" in unicode_minus["errors"]
+
+    range_context = {
+        **context, "support_level": 90.0, "resistance_level": 110.0,
+    }
+    for range_text in ("90-110", "$90-$110", "90 - 110"):
+        grounded_range = evaluate_setup_rewrite({
+            **context["baseline"], "observation": f"AAA range is {range_text}.",
+        }, range_context)
+        assert grounded_range["passed"] is True
+
 
 def test_risk_controls_cannot_be_negated_or_weakened() -> None:
     cases = [
         ("Use a protective stop.", "Do not use a protective stop."),
+        ("Use a protective stop.", "Stops should never be used."),
         ("Limit position size.", "Increase position size."),
         ("Keep risk bounded.", "Accept unlimited risk."),
+        ("Keep risk bounded.", "Risk is not bounded."),
     ]
     for baseline_risk, output_risk in cases:
         context = _context(baseline={
