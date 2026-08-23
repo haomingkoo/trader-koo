@@ -113,6 +113,34 @@ def test_open_orders_cannot_spend_same_day_close_proceeds() -> None:
     assert {row["decision_id"]: row["reason"] for row in result.exclusions}["new"] == "insufficient_cash"
 
 
+def test_next_open_rebalance_reuses_proceeds_and_honors_locked_weight() -> None:
+    sessions = ["2026-01-01", "2026-01-02", "2026-01-03"]
+    prices = [
+        SessionPrice(ticker, date, 100, 100)
+        for ticker in ("AAA", "BBB") for date in sessions
+    ]
+    old = dataclasses.replace(
+        _decision("old", signal="2025-12-31", entry=sessions[0], exit_=sessions[1]),
+        locked_weight_pct=100, exit_at="open",
+    )
+    new = dataclasses.replace(
+        _decision("new", ticker="BBB", entry=sessions[1], exit_=sessions[2]),
+        locked_weight_pct=100,
+    )
+    result = simulate_portfolio(
+        [old, new], prices, sessions,
+        BaselineConfig(
+            initial_capital=10_000, max_positions=1, max_name_pct=100,
+            commission_bps_per_side=0, minimum_commission_per_side=0,
+            entry_slippage_bps=0, exit_slippage_bps=0,
+        ),
+    )
+
+    assert [trade["decision_id"] for trade in result.trades] == ["old", "new"]
+    assert result.trades[0]["exit_reason"] == "scheduled_open"
+    assert result.trades[1]["entry_notional"] == pytest.approx(10_000)
+
+
 def test_same_ticker_orders_share_name_and_adv_limits() -> None:
     config = BaselineConfig(
         initial_capital=100_000, position_pct=10, max_name_pct=15, max_adv_pct=100,

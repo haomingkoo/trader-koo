@@ -1271,6 +1271,63 @@ export interface NextOpenBaselinePayload {
   baseline: NextOpenBaselineState;
 }
 
+export type ExperimentEvidenceLabel =
+  | "descriptive"
+  | "validation"
+  | "sealed held-out"
+  | "prospective paper"
+  | "invalid"
+  | "promotion eligible";
+
+export interface ExperimentResult {
+  experiment_id: string;
+  title: string;
+  available: boolean;
+  evidence_label: ExperimentEvidenceLabel;
+  status: string;
+  selected: boolean;
+  automatic_promotion: false;
+  warnings: string[];
+  manifest: {
+    strategy_version: string | null;
+    code_sha: string | null;
+    data_snapshot_hash: string | null;
+    universe_basis: string | null;
+    return_basis: string | null;
+    config_hash: string | null;
+    seed: number | null;
+    evaluation_windows: unknown;
+    benchmark: string | null;
+    costs: Record<string, unknown>;
+    artifact_hash: string | null;
+    ledger_hash: string | null;
+  };
+  metrics: Record<string, number | null | unknown> | null;
+  curves: {
+    strategy: Array<{ date: string; equity: number | null }>;
+    spy_total_return: Array<{ date: string; equity: number | null }>;
+    cash: Array<{ date: string; equity: number | null }>;
+  };
+  folds: unknown;
+  regimes: { count?: number | null } | null;
+  attribution: unknown;
+  cost_stress: unknown;
+  challengers?: Record<string, {
+    status: string;
+    reasons: string[];
+    config_sha256: string;
+    metrics: Record<string, unknown> | null;
+  }>;
+  heldout?: { accessed: boolean; access_log: unknown[] };
+  downloads: { manifest: string; ledger: string | null };
+}
+
+export interface ExperimentResultsPayload {
+  ok: boolean;
+  count: number;
+  experiments: ExperimentResult[];
+}
+
 export interface PaperTradeSummary {
   ok: boolean;
   overall: PaperTradeSummaryOverall;

@@ -68,6 +68,8 @@ class ExecutionDecision:
     stop_loss: float | None = None
     target_price: float | None = None
     max_holding_sessions: int | None = None
+    locked_weight_pct: float | None = None
+    exit_at: str = "close"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -164,6 +166,16 @@ def simulate_portfolio(
         raise ValueError("decision_id must be unique")
     if any(not (row.signal_date < row.entry_date <= row.exit_date) for row in ordered):
         raise ValueError("decisions must satisfy signal_date < entry_date <= exit_date")
+    if any(row.exit_at not in {"open", "close"} for row in ordered):
+        raise ValueError("exit_at must be open or close")
+    if any(row.exit_at == "open" and row.entry_date == row.exit_date for row in ordered):
+        raise ValueError("next-open exits require entry_date < exit_date")
+    if any(
+        row.locked_weight_pct is not None
+        and not (0 < row.locked_weight_pct <= 100)
+        for row in ordered
+    ):
+        raise ValueError("locked_weight_pct must be in (0, 100]")
     by_entry: dict[str, list[ExecutionDecision]] = defaultdict(list)
     exclusions: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
@@ -305,10 +317,37 @@ def simulate_portfolio(
                     "decision_id": position["decision_id"], "amount": -charge,
                 })
 
-        # Barrier-managed campaign positions release capital before today's
-        # open-order admissions. Gap exits use the open; intraday collisions
-        # resolve stop-first, which is the conservative deterministic choice.
+        # Rebalances and barrier-managed campaign positions release capital
+        # before today's open-order admissions. Gap exits use the open;
+        # intraday collisions resolve stop-first, the conservative choice.
         survivors: list[dict[str, Any]] = []
+        for position in positions:
+            if position["exit_date"] != date or position["exit_at"] != "open":
+                survivors.append(position)
+                continue
+            row = price_map.get((position["ticker"], date))
+            raw_open = _finite(row.open if row else None)
+            if raw_open is None or raw_open <= 0:
+                exclusions.append({
+                    "decision_id": position["decision_id"],
+                    "reason": "exact_exit_open_missing",
+                })
+                orders.append({
+                    "order_id": f"{position['decision_id']}:exit",
+                    "decision_id": position["decision_id"],
+                    "date": date,
+                    "ticker": position["ticker"],
+                    "direction": position["direction"],
+                    "order_type": "exit",
+                    "status": "rejected",
+                    "reason": "exact_exit_open_missing",
+                })
+                survivors.append(position)
+                continue
+            close_position(position, raw_open, date, "scheduled_open")
+        positions = survivors
+
+        survivors = []
         for position in positions:
             if position.get("max_holding_sessions") is None:
                 survivors.append(position)
@@ -383,7 +422,11 @@ def simulate_portfolio(
             target = min(
                 decision.locked_notional
                 if decision.locked_notional is not None
-                else equity * config.position_pct / 100,
+                else equity * (
+                    decision.locked_weight_pct
+                    if decision.locked_weight_pct is not None
+                    else config.position_pct
+                ) / 100,
                 name_room,
                 adv_room,
             )
@@ -458,6 +501,8 @@ def simulate_portfolio(
                 "stop_loss": decision.stop_loss,
                 "target_price": decision.target_price,
                 "max_holding_sessions": decision.max_holding_sessions,
+                "locked_weight_pct": decision.locked_weight_pct,
+                "exit_at": decision.exit_at,
                 "bars_held": 0,
             })
             opening_equity, opening_exposure = mark(date, "open")
@@ -469,7 +514,7 @@ def simulate_portfolio(
 
         remaining: list[dict[str, Any]] = []
         for position in positions:
-            if position["exit_date"] != date:
+            if position["exit_date"] != date or position["exit_at"] != "close":
                 remaining.append(position)
                 continue
             row = price_map.get((position["ticker"], date))

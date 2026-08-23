@@ -204,6 +204,41 @@ class TestPaperTradeSummaryEndpoint:
         assert baseline["causal_valid"] is False
         assert baseline["decision_eligible"] is False
 
+    def test_experiment_results_keep_failed_tournament_visible(self, test_app):
+        response = test_app.get("/api/research/experiments")
+
+        assert response.status_code == 200
+        experiments = response.json()["experiments"]
+        assert {item["experiment_id"] for item in experiments} == {
+            "next-open-baseline", "challenger-tournament",
+        }
+        tournament = next(
+            item for item in experiments
+            if item["experiment_id"] == "challenger-tournament"
+        )
+        assert tournament["evidence_label"] == "invalid"
+        assert tournament["status"] == "blocked_before_validation"
+        assert tournament["heldout"]["accessed"] is False
+        assert set(tournament["challengers"]) == {"C1", "C2", "C3"}
+
+    def test_experiment_manifest_is_downloadable_but_missing_ledger_is_not(
+        self, test_app
+    ):
+        manifest = test_app.get(
+            "/api/research/experiments/challenger-tournament/download/manifest"
+        )
+        missing = test_app.get(
+            "/api/research/experiments/challenger-tournament/download/ledger"
+        )
+
+        assert manifest.status_code == 200
+        assert manifest.json()["artifact_sha256"]
+        assert missing.status_code == 404
+
+    def test_unknown_experiment_fails_closed(self, test_app):
+        response = test_app.get("/api/research/experiments/unknown")
+        assert response.status_code == 404
+
     def test_sealed_decisions_api_preserves_exact_rank_gate_and_hashes(
         self, test_app, seeded_conn, tmp_path
     ):

@@ -9,6 +9,7 @@ import type {
   PaperTradeSummary,
   PaperTradeList,
   NextOpenBaselinePayload,
+  ExperimentResultsPayload,
   OpportunitiesPayload,
   OptionsPremiumPayload,
   EarningsPayload,
@@ -75,6 +76,14 @@ export function useNextOpenBaseline() {
   return useQuery({
     queryKey: ["next-open-baseline"],
     queryFn: () => apiFetch<NextOpenBaselinePayload>("/api/research/next-open-baseline"),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useExperimentResults() {
+  return useQuery({
+    queryKey: ["experiment-results"],
+    queryFn: () => apiFetch<ExperimentResultsPayload>("/api/research/experiments"),
     staleTime: 5 * 60 * 1000,
   });
 }

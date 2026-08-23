@@ -11,6 +11,11 @@ from trader_koo.backend.services.database import get_conn
 from trader_koo.paper_trades import ensure_paper_trade_schema, list_paper_trades, paper_trade_summary
 from trader_koo.research.strategy_evidence import evidence_snapshot_by_hash
 from trader_koo.research.next_open_baseline import artifact_state
+from trader_koo.research.experiment_results import (
+    experiment_catalogue,
+    experiment_download,
+    experiment_result,
+)
 from trader_koo.paper_trade.campaign import EvidenceIntegrityError, verify_decision_set
 
 
@@ -77,6 +82,31 @@ def api_strategy_evidence_provenance(artifact_hash: str, input_hash: str) -> dic
 def api_next_open_baseline() -> dict[str, Any]:
     """Return the latest hash-verified baseline, or an ineligible unavailable state."""
     return {"ok": True, "baseline": artifact_state()}
+
+
+@router.get("/api/research/experiments")
+def api_experiment_results() -> dict[str, Any]:
+    """List hash-verified experiments, including failed and invalid runs."""
+    experiments = experiment_catalogue()
+    return {"ok": True, "count": len(experiments), "experiments": experiments}
+
+
+@router.get("/api/research/experiments/{experiment_id}")
+def api_experiment_result(experiment_id: str) -> dict[str, Any]:
+    result = experiment_result(experiment_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Experiment result not found")
+    return {"ok": True, "experiment": result}
+
+
+@router.get("/api/research/experiments/{experiment_id}/download/{component}")
+def api_experiment_download(experiment_id: str, component: str) -> dict[str, Any]:
+    if component not in {"manifest", "ledger"}:
+        raise HTTPException(status_code=404, detail="Experiment artifact not found")
+    artifact = experiment_download(experiment_id, component)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Experiment artifact not found")
+    return artifact
 
 
 @router.get("/api/paper-trades/decisions")
