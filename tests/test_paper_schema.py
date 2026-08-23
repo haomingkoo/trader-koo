@@ -238,6 +238,10 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     contradictory_version["passed"] = True
     with pytest.raises(ValidationError):
         validator.validate(contradictory_version)
+    invalid_expected_version = deepcopy(version_failure)
+    invalid_expected_version["expected_paper_trade_schema_version"] = 3
+    with pytest.raises(ValidationError):
+        validator.validate(invalid_expected_version)
     schema_failure = deepcopy(manifest)
     schema_failure["passed"] = False
     schema_failure["schema_contract"]["passed"] = False
@@ -247,6 +251,20 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     contradictory_schema["passed"] = True
     with pytest.raises(ValidationError):
         validator.validate(contradictory_schema)
+    defaults_failure = deepcopy(manifest)
+    defaults_failure["passed"] = False
+    defaults_failure["schema_contract"]["passed"] = False
+    defaults_failure["schema_contract"]["campaign_defaults_compatible"] = False
+    defaults_failure["schema_contract"]["campaign_defaults"][
+        "paper_trades.campaign_id"
+    ] = None
+    validator.validate(defaults_failure)
+    contradictory_defaults = deepcopy(defaults_failure)
+    contradictory_defaults["schema_contract"]["campaign_defaults"] = deepcopy(
+        manifest["schema_contract"]["campaign_defaults"]
+    )
+    with pytest.raises(ValidationError):
+        validator.validate(contradictory_defaults)
 
     assert manifest["schema"] == "release-database-copy-v2"
     assert manifest["passed"] is True

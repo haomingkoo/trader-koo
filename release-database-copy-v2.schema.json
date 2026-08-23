@@ -20,7 +20,7 @@
     "migrated_copy_sha256": {"$ref": "#/$defs/sha256"},
     "integrity_check": {"type": "string", "minLength": 1},
     "paper_trade_schema_version": {"type": "integer", "minimum": 1},
-    "expected_paper_trade_schema_version": {"type": "integer", "minimum": 1},
+    "expected_paper_trade_schema_version": {"const": 4},
     "accounting_invariants": {"$ref": "#/$defs/accounting"},
     "schema_contract": {"$ref": "#/$defs/schemaContract"},
     "sqlite_objects_before": {"$ref": "#/$defs/sqliteCounts"},
@@ -58,7 +58,6 @@
             "anyOf": [
               {"properties": {"integrity_check": {"not": {"const": "ok"}}}},
               {"properties": {"paper_trade_schema_version": {"not": {"const": 4}}}},
-              {"properties": {"expected_paper_trade_schema_version": {"not": {"const": 4}}}},
               {"properties": {"accounting_invariants": {"properties": {"breaks": {"minItems": 1}}}}},
               {"properties": {"schema_contract": {"properties": {"passed": {"const": false}}}}}
             ]
@@ -220,10 +219,10 @@
           ],
           "properties": {
             "paper_trades.campaign_id": {
-              "enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]
+              "type": ["string", "null"]
             },
             "paper_portfolio_snapshots.campaign_id": {
-              "enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]
+              "type": ["string", "null"]
             }
           },
           "additionalProperties": false
@@ -271,6 +270,45 @@
               {"properties": {"foreign_key_breaks": {"minItems": 1}}},
               {"properties": {"legacy_read_probe": {"const": false}}}
             ]
+          }
+        },
+        {
+          "if": {"properties": {"campaign_defaults_compatible": {"const": true}}},
+          "then": {
+            "properties": {
+              "campaign_defaults": {
+                "properties": {
+                  "paper_trades.campaign_id": {
+                    "enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]
+                  },
+                  "paper_portfolio_snapshots.campaign_id": {
+                    "enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "campaign_defaults": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "paper_trades.campaign_id": {
+                        "not": {"enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]}
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "paper_portfolio_snapshots.campaign_id": {
+                        "not": {"enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]}
+                      }
+                    }
+                  }
+                ]
+              }
+            }
           }
         }
       ],
