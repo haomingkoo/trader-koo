@@ -71,7 +71,7 @@ trace_start = dt.datetime(2026, 8, 21, 22, 5, tzinfo=dt.timezone.utc)
 record_llm_call(
     DB_PATH, source="chart_commentary", role="narrative_rewriter",
     stage="setup_copy_rewrite", provider="azure_openai", model="gpt-fixture",
-    deployment="fixture-deployment", prompt_template_version="setup-rewrite-v1",
+    deployment="fixture-deployment", prompt_template_version="setup-rewrite-v2",
     input_payload={"ticker": "REJECT"},
     proposed_output={"observation": "Candidate rejected by deterministic tier rule."},
     deterministic_pre={"observation": "Tier F candidate."},
@@ -80,6 +80,12 @@ record_llm_call(
     usage={"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
     validator_result="passed", fallback_reason=None, terminal_status="success",
     ticker="REJECT",
+    evaluation_result={
+        "version": "setup-grounding-v1", "passed": True, "errors": [],
+        "semantic_outcome": "rephrased", "prose_quality_scored": False,
+        "decision_scope": "narrative_only",
+    },
+    cache_identity_sha256="a" * 64,
 )
 
 app = FastAPI()

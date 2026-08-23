@@ -15,6 +15,14 @@ type Trace = {
   model: string | null;
   deployment: string | null;
   prompt_template_version: string;
+  evaluator_version: string | null;
+  evaluation_result: {
+    passed: boolean;
+    semantic_outcome: string;
+    errors: string[];
+    prose_quality_scored: false;
+  } | null;
+  cache_identity_sha256: string | null;
   ticker: string | null;
   terminal_status: string;
   validator_result: string;
@@ -37,6 +45,7 @@ type ObservabilityPayload = {
   aggregate: {
     traces: number;
     success_rate_pct: number | null;
+    cache_hit_rate_pct: number | null;
     fallback_rate_pct: number | null;
     error_rate_pct: number | null;
     unresolved_traces: number;
@@ -64,7 +73,7 @@ function format(value: number | null, suffix = "") {
 }
 
 function statusVariant(status: string) {
-  if (status === "success") return "green" as const;
+  if (status === "success" || status === "cache_hit") return "green" as const;
   if (status === "fallback") return "amber" as const;
   if (status === "error") return "red" as const;
   return "muted" as const;
@@ -197,7 +206,7 @@ export default function AgentObservabilityPage() {
                     <tr>
                       {[
                         "Time", "Role / stage", "Provider / model", "Context",
-                        "Validation", "Fallback", "Latency", "Tokens", "Contribution",
+                        "Validation", "Semantic check", "Fallback", "Latency", "Tokens", "Contribution",
                       ].map((heading) => <th key={heading} className="px-3 py-2 font-medium">{heading}</th>)}
                     </tr>
                   </thead>
@@ -209,6 +218,7 @@ export default function AgentObservabilityPage() {
                         <td className="px-3 py-3"><div className="text-[var(--text)]">{trace.provider}</div><div className="text-[var(--muted)]">{trace.model ?? trace.deployment ?? "N/A"}</div></td>
                         <td className="px-3 py-3 text-[var(--muted)]">{trace.ticker ?? trace.source}</td>
                         <td className="px-3 py-3"><Badge variant={statusVariant(trace.terminal_status)}>{trace.validator_result}</Badge></td>
+                        <td className="px-3 py-3"><div className="text-[var(--text)]">{trace.evaluation_result?.semantic_outcome ?? "N/A"}</div><div className="text-[var(--muted)]">{trace.evaluator_version ?? "not evaluated"}</div></td>
                         <td className="px-3 py-3 text-[var(--muted)]">{trace.fallback_reason?.replaceAll("_", " ") ?? "None"}</td>
                         <td className="px-3 py-3 text-[var(--muted)]">{format(trace.latency_ms, " ms")}</td>
                         <td className="px-3 py-3 text-[var(--muted)]">{trace.total_tokens}</td>

@@ -92,6 +92,9 @@ def ensure_observability_schema(conn: sqlite3.Connection) -> None:
             model TEXT,
             deployment TEXT,
             prompt_template_version TEXT NOT NULL,
+            evaluator_version TEXT,
+            evaluation_result_json TEXT,
+            cache_identity_sha256 TEXT,
             redacted_input_sha256 TEXT NOT NULL,
             redacted_output_sha256 TEXT NOT NULL,
             started_ts TEXT NOT NULL,
@@ -134,6 +137,10 @@ def ensure_observability_schema(conn: sqlite3.Connection) -> None:
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    trace_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(llm_call_traces)")}
+    for name in ("evaluator_version", "evaluation_result_json", "cache_identity_sha256"):
+        if name not in trace_columns:
+            conn.execute(f"ALTER TABLE llm_call_traces ADD COLUMN {name} TEXT")
     for table in (
         "llm_run_graphs", "llm_call_traces", "llm_contributions",
         "llm_outcome_links",
@@ -197,6 +204,8 @@ def record_llm_call(
     disagreement: bool = False,
     adjudicator_role: str | None = "deterministic_validator",
     decision_scope: str = "narrative_only",
+    evaluation_result: dict[str, Any] | None = None,
+    cache_identity_sha256: str | None = None,
 ) -> dict[str, str]:
     """Append one completed real-LLM span and its bounded contribution."""
     db_path = Path(db_path)
@@ -219,6 +228,7 @@ def record_llm_call(
     input_hash = redacted_hash(input_payload)
     output_hash = redacted_hash(final)
     proposed_hash = redacted_hash(proposed)
+    evaluation = _redact(evaluation_result or {})
     artifact_hash = redacted_hash({
         "input": input_hash, "output": output_hash,
         "prompt_template_version": prompt_template_version,
@@ -233,7 +243,9 @@ def record_llm_call(
                    started_ts,ended_ts,terminal_status,disagreement,adjudicator_role
                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                run_id, "llm-run-graph-v1", "single_llm_call", report_run_id,
+                run_id, "llm-run-graph-v1",
+                "cached_llm_result" if terminal_status == "cache_hit" else "single_llm_call",
+                report_run_id,
                 campaign_id, str(ticker or "").upper() or None, _iso(started_at),
                 _iso(ended), terminal_status, int(disagreement), adjudicator_role,
             ),
@@ -242,17 +254,20 @@ def record_llm_call(
             """INSERT INTO llm_call_traces (
                    trace_id,run_id,span_id,parent_span_id,report_run_id,campaign_id,
                    ticker,role,stage,source,provider,model,deployment,
-                   prompt_template_version,redacted_input_sha256,
+                   prompt_template_version,evaluator_version,evaluation_result_json,
+                   cache_identity_sha256,redacted_input_sha256,
                    redacted_output_sha256,started_ts,ended_ts,latency_ms,
                    prompt_tokens,completion_tokens,total_tokens,estimated_cost_usd,
                    retry_count,validator_result,fallback_reason,terminal_status,
                    message_artifact_sha256,retention_class
-               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trace_id, run_id, span_id, parent_span_id, report_run_id,
                 campaign_id, str(ticker or "").upper() or None, role, stage,
                 source, provider, model, deployment, prompt_template_version,
-                input_hash, output_hash, _iso(started_at), _iso(ended),
+                str(evaluation.get("version") or "") or None,
+                _canonical(evaluation) if evaluation else None,
+                cache_identity_sha256, input_hash, output_hash, _iso(started_at), _iso(ended),
                 max(0.0, (ended - started_at).total_seconds() * 1000),
                 prompt_tokens, completion_tokens, total_tokens,
                 _cost(prompt_tokens, completion_tokens), max(0, retry_count),
@@ -328,22 +343,30 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
         conn.close()
     total = len(rows)
     statuses = {name: sum(row["terminal_status"] == name for row in rows) for name in (
-        "success", "fallback", "error", "unresolved",
+        "success", "cache_hit", "fallback", "error", "unresolved",
     )}
     latencies = [float(row["latency_ms"]) for row in rows]
     traces = []
     for row in rows[:max(1, min(500, int(limit)))]:
-        traces.append({key: row[key] for key in (
+        trace = {key: row[key] for key in (
             "trace_id", "run_id", "span_id", "parent_span_id", "report_run_id",
             "campaign_id", "ticker", "role", "stage", "source", "provider",
             "model", "deployment", "prompt_template_version",
+            "evaluator_version", "evaluation_result_json", "cache_identity_sha256",
             "redacted_input_sha256", "redacted_output_sha256", "started_ts",
             "ended_ts", "latency_ms", "prompt_tokens", "completion_tokens",
             "total_tokens", "estimated_cost_usd", "retry_count",
             "validator_result", "fallback_reason", "terminal_status",
             "message_artifact_sha256", "retention_class", "decision_scope",
             "changed_fields_json", "decision_changed",
-        )})
+        )}
+        try:
+            trace["evaluation_result"] = json.loads(
+                str(trace.pop("evaluation_result_json") or "null")
+            )
+        except json.JSONDecodeError:
+            trace["evaluation_result"] = None
+        traces.append(trace)
     def rate(count: int) -> float | None:
         return round(count / total * 100, 4) if total else None
     legacy_raw = llm_health_summary(db_path, recent_limit=10)
@@ -363,6 +386,7 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
         "aggregate": {
             "traces": total,
             "success_rate_pct": rate(statuses["success"]),
+            "cache_hit_rate_pct": rate(statuses["cache_hit"]),
             "fallback_rate_pct": rate(statuses["fallback"]),
             "error_rate_pct": rate(statuses["error"]),
             "unresolved_traces": statuses["unresolved"],
@@ -415,7 +439,7 @@ def observability_trace(db_path: Path, trace_id: str) -> dict[str, Any] | None:
     finally:
         conn.close()
     trace = dict(row)
-    for key in ("changed_fields_json", "proposed_change_json"):
+    for key in ("changed_fields_json", "proposed_change_json", "evaluation_result_json"):
         try:
             trace[key.removesuffix("_json")] = json.loads(str(trace.pop(key) or "null"))
         except json.JSONDecodeError:
