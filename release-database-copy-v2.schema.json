@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "release-database-copy-v3.schema.json",
-  "title": "Trader Koo release database copy evidence v3",
+  "$id": "release-database-copy-v2.schema.json",
+  "title": "Trader Koo release database copy evidence v2",
   "type": "object",
   "required": [
     "schema",
@@ -13,7 +13,7 @@
     "passed"
   ],
   "properties": {
-    "schema": {"const": "release-database-copy-v3"},
+    "schema": {"const": "release-database-copy-v2"},
     "source_artifact": {"type": "string", "minLength": 1},
     "source_artifact_sha256": {"$ref": "#/$defs/sha256"},
     "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
@@ -21,9 +21,7 @@
     "integrity_check": {"type": "string", "minLength": 1},
     "paper_trade_schema_version": {"type": "integer", "minimum": 1},
     "expected_paper_trade_schema_version": {"const": 4},
-    "accounting_invariants": {
-      "oneOf": [{"$ref": "#/$defs/accounting"}, {"type": "null"}]
-    },
+    "accounting_invariants": {"$ref": "#/$defs/accounting"},
     "schema_contract": {"$ref": "#/$defs/schemaContract"},
     "sqlite_objects_before": {"$ref": "#/$defs/sqliteCounts"},
     "sqlite_objects_after": {"$ref": "#/$defs/sqliteCounts"},
@@ -60,31 +58,9 @@
             "anyOf": [
               {"properties": {"integrity_check": {"not": {"const": "ok"}}}},
               {"properties": {"paper_trade_schema_version": {"not": {"const": 4}}}},
-              {
-                "properties": {
-                  "accounting_invariants": {
-                    "type": "object",
-                    "properties": {"breaks": {"minItems": 1}}
-                  }
-                }
-              },
+              {"properties": {"accounting_invariants": {"properties": {"breaks": {"minItems": 1}}}}},
               {"properties": {"schema_contract": {"properties": {"passed": {"const": false}}}}}
             ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "schema_contract": {"properties": {"passed": {"const": true}}}
-            }
-          },
-          "then": {
-            "properties": {
-              "accounting_invariants": {"$ref": "#/$defs/accounting"}
-            }
-          },
-          "else": {
-            "properties": {"accounting_invariants": {"type": "null"}}
           }
         }
       ]
@@ -142,7 +118,6 @@
           "paper_trade_schema_version": {"const": 4},
           "expected_paper_trade_schema_version": {"const": 4},
           "accounting_invariants": {
-            "$ref": "#/$defs/accounting",
             "properties": {"breaks": {"maxItems": 0}}
           },
           "schema_contract": {

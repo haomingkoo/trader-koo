@@ -207,6 +207,10 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     unexplained_failure["passed"] = False
     with pytest.raises(ValidationError):
         validator.validate(unexplained_failure)
+    unexplained_null_accounting = deepcopy(unexplained_failure)
+    unexplained_null_accounting["accounting_invariants"] = None
+    with pytest.raises(ValidationError):
+        validator.validate(unexplained_null_accounting)
     invalid_defaults = deepcopy(manifest)
     invalid_defaults["schema_contract"]["campaign_defaults"] = {}
     with pytest.raises(ValidationError):
@@ -244,6 +248,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
         validator.validate(invalid_expected_version)
     schema_failure = deepcopy(manifest)
     schema_failure["passed"] = False
+    schema_failure["accounting_invariants"] = None
     schema_failure["schema_contract"]["passed"] = False
     schema_failure["schema_contract"]["malformed_indexes"] = ["broken_index"]
     validator.validate(schema_failure)
@@ -253,6 +258,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
         validator.validate(contradictory_schema)
     defaults_failure = deepcopy(manifest)
     defaults_failure["passed"] = False
+    defaults_failure["accounting_invariants"] = None
     defaults_failure["schema_contract"]["passed"] = False
     defaults_failure["schema_contract"]["campaign_defaults_compatible"] = False
     defaults_failure["schema_contract"]["campaign_defaults"][
