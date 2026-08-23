@@ -140,7 +140,14 @@ and `affected_attempt_sample`. Known invariant categories are `run_id_missing`,
 `success_error_metadata_present`, `failure_error_metadata_invalid`, and the
 forward-compatible fallback `row_contract_invalid`; consumers must tolerate
 unknown future categories but reject unknown root schema versions. Version 1 is
-not emitted by this release.
+not emitted by this release. `migration` is an extensible identifier and must
+match the marker stored in the verified copy; consumers must not treat its
+current value as a closed enum. Admission-ledger v5 changed diagnostic metadata
+to the exact ASCII identifier grammar `[A-Za-z_][A-Za-z0-9_]*`, matching the
+producer's unqualified Python exception class name. Qualified/dotted names that
+v4 accepted are invalid; operators preserve the source backup, use the failure
+sample to identify affected immutable rows, perform a separately reviewed repair
+or restore, and rerun copied-database verification before rollout.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,

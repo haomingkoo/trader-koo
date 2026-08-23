@@ -16,7 +16,10 @@ from typing import Any
 from trader_koo.db.price_contract import ensure_price_series_revision_schema
 from trader_koo.db.price_repairs import ensure_price_repair_schema
 from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
-from trader_koo.paper_trade.errors import AdmissionLedgerContractError
+from trader_koo.paper_trade.errors import (
+    ADMISSION_LEDGER_MIGRATION,
+    AdmissionLedgerContractError,
+)
 from trader_koo.paper_trade.replay import replay_campaign
 from trader_koo.paper_trade.schema import PAPER_TRADE_SCHEMA_VERSION, ensure_paper_trade_schema
 from trader_koo.paper_trades import _build_config
@@ -304,7 +307,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         "expected_paper_trade_schema_version": PAPER_TRADE_SCHEMA_VERSION,
         "report_admission_contract": {
             "passed": True,
-            "migration": "admission-ledger-contract-v5",
+            "migration": ADMISSION_LEDGER_MIGRATION,
         },
         "accounting_invariants": {
             "breaks": account["accounting_breaks"],

@@ -24,6 +24,7 @@ from typing import Any
 
 from trader_koo.paper_trade.errors import (
     ADMISSION_ERROR_CODES,
+    ADMISSION_LEDGER_MIGRATION,
     AdmissionLedgerContractError,
     LEGACY_ADMISSION_ERROR_CODES,
     ReportLineageError,
@@ -236,7 +237,7 @@ def _ensure_report_run_schema(
     )
     # v5 rescans v4 ledgers so exception-class metadata uses one exact contract
     # in SQLite validation and Python diagnostics, including whitespace.
-    admission_contract_migration = "admission-ledger-contract-v5"
+    admission_contract_migration = ADMISSION_LEDGER_MIGRATION
     needs_admission_scan = verify_admission_contract or conn.execute(
         "SELECT 1 FROM report_schema_migrations WHERE migration=?",
         (admission_contract_migration,),

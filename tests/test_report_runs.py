@@ -433,6 +433,14 @@ def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> N
                VALUES (?,'failed','admission_lineage_failed','ValueError','2026-08-22T00:00:02Z')""",
             (run_id,),
         )
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'failed','admission_finalize_failed','Value.Error',
+                       '2026-08-22T00:00:03Z')""",
+            (run_id,),
+        )
     conn.execute(
         """INSERT INTO report_admission_attempts
            (run_id,status,error_code,error_message,attempted_ts)

@@ -94,7 +94,10 @@ def test_v3_database_runs_v4_expand_contract_instead_of_short_circuiting() -> No
     assert contract["malformed_indexes"] == []
 
 
-def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> None:
+@pytest.mark.parametrize("invalid_count", [1, 20, 21])
+def test_release_copy_rescans_current_v4_admission_ledger(
+    tmp_path: Path, invalid_count: int
+) -> None:
     source = tmp_path / "current-v4.db"
     with sqlite3.connect(source) as conn:
         ensure_paper_trade_schema(conn)
@@ -123,7 +126,7 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
                        '2026-08-22T00:00:00Z')""",
             (run_id,),
         )
-        for second in range(1, 26):
+        for second in range(1, invalid_count + 1):
             attempted_ts = (
                 "0000-08-22T00:00:01Z"
                 if second == 1 else f"2026-08-22T00:00:{second:02d}Z"
@@ -164,17 +167,17 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
     assert failure["report_admission_contract"] == {
         "passed": False,
         "violation": "legacy_rows_invalid",
-        "invalid_row_count": 25,
+        "invalid_row_count": invalid_count,
         "affected_attempt_sample": [{
             "attempt_id": attempt_id,
             "violations": (
                 ["attempted_ts_invalid", "failure_error_metadata_invalid"]
                 if attempt_id == 2 else ["failure_error_metadata_invalid"]
             ),
-        } for attempt_id in range(2, 22)],
-        "reported_attempt_count": 20,
+        } for attempt_id in range(2, min(invalid_count, 20) + 2)],
+        "reported_attempt_count": min(invalid_count, 20),
         "diagnostic_limit": 20,
-        "truncated": True,
+        "truncated": invalid_count > 20,
         "ordering": "attempt_id_ascending",
     }
     assert failure["migrated_copy_sha256"] == hashlib.sha256(
@@ -197,6 +200,11 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
         "passed": True,
         "migration": "admission-ledger-contract-v5",
     }
+    with sqlite3.connect(output_dir / "database-copy.db") as verified:
+        assert verified.execute(
+            "SELECT 1 FROM report_schema_migrations WHERE migration=?",
+            (manifest["report_admission_contract"]["migration"],),
+        ).fetchone() == (1,)
 
 
 def test_v4_expand_contract_accepts_legacy_trade_table_without_lineage_fk() -> None:
