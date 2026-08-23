@@ -20,6 +20,18 @@ ADMISSION_ERROR_CODES = REPORT_LINEAGE_ERROR_CODES | ADMISSION_PHASE_ERROR_CODES
 LEGACY_ADMISSION_ERROR_CODES = frozenset({"admission_lineage_failed"})
 
 
+class AdmissionLedgerContractError(RuntimeError):
+    """Sanitized diagnostics for immutable legacy rows that block migration."""
+
+    def __init__(self, invalid_count: int, attempts: list[dict[str, object]]) -> None:
+        self.invalid_count = int(invalid_count)
+        self.attempts = attempts
+        super().__init__(
+            "legacy report admission attempts violate the audit contract: "
+            f"invalid_rows={self.invalid_count}"
+        )
+
+
 class ReportLineageError(ValueError):
     """Pre-admission failure for unverifiable report publication."""
 

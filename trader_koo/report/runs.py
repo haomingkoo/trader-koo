@@ -24,6 +24,7 @@ from typing import Any
 
 from trader_koo.paper_trade.errors import (
     ADMISSION_ERROR_CODES,
+    AdmissionLedgerContractError,
     LEGACY_ADMISSION_ERROR_CODES,
     ReportLineageError,
 )
@@ -258,10 +259,40 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
               )
     ).fetchone()[0] if needs_admission_scan else 0
     if invalid_attempts:
-        raise RuntimeError(
-            "legacy report admission attempts violate the audit contract: "
-            f"invalid_rows={invalid_attempts}"
-        )
+        invalid_rows = conn.execute(
+            """SELECT a.attempt_id,a.run_id,a.status,a.error_code,a.error_message,
+                      a.attempted_ts,
+                      EXISTS(SELECT 1 FROM report_runs r WHERE r.run_id=a.run_id)
+               FROM report_admission_attempts a ORDER BY a.attempt_id"""
+        ).fetchall()
+        diagnostics: list[dict[str, object]] = []
+        historical_codes = ADMISSION_ERROR_CODES | LEGACY_ADMISSION_ERROR_CODES
+        for attempt_id, run_id, status, code, message, attempted_ts, known_run in invalid_rows:
+            violations: list[str] = []
+            if run_id is None:
+                violations.append("run_id_missing")
+            elif not known_run:
+                violations.append("run_id_unknown")
+            try:
+                _utc(attempted_ts, field="attempted_ts")
+            except ValueError:
+                violations.append("attempted_ts_invalid")
+            if status not in {"succeeded", "failed"}:
+                violations.append("status_invalid")
+            elif status == "succeeded" and (code is not None or message is not None):
+                violations.append("success_error_metadata_present")
+            elif status == "failed" and (
+                code not in historical_codes or not str(message or "").strip()
+            ):
+                violations.append("failure_error_metadata_invalid")
+            if violations:
+                diagnostics.append({
+                    "attempt_id": int(attempt_id),
+                    "violations": violations,
+                })
+            if len(diagnostics) == 20:
+                break
+        raise AdmissionLedgerContractError(int(invalid_attempts), diagnostics)
     # Reinstall the versioned validator once per ensure so a legacy trigger
     # cannot retain weaker rules. The full ledger scan above runs only once.
     conn.execute("DROP TRIGGER IF EXISTS report_admission_attempts_valid_insert")

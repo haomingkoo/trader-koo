@@ -142,9 +142,11 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
     assert failure["report_admission_contract"] == {
         "passed": False,
         "violation": "legacy_rows_invalid",
-        "diagnostic": (
-            "legacy report admission attempts violate the audit contract: invalid_rows=1"
-        ),
+        "invalid_row_count": 1,
+        "affected_attempts": [{
+            "attempt_id": 1,
+            "violations": ["failure_error_metadata_invalid"],
+        }],
     }
 
 

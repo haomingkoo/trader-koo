@@ -15,6 +15,7 @@ from typing import Any
 from trader_koo.db.price_contract import ensure_price_series_revision_schema
 from trader_koo.db.price_repairs import ensure_price_repair_schema
 from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
+from trader_koo.paper_trade.errors import AdmissionLedgerContractError
 from trader_koo.paper_trade.replay import replay_campaign
 from trader_koo.paper_trade.schema import PAPER_TRADE_SCHEMA_VERSION, ensure_paper_trade_schema
 from trader_koo.paper_trades import _build_config
@@ -251,11 +252,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         # verified explicitly on the copied database.
         try:
             ensure_report_run_schema(conn)
-        except RuntimeError as exc:
-            if not str(exc).startswith(
-                "legacy report admission attempts violate the audit contract:"
-            ):
-                raise
+        except AdmissionLedgerContractError as exc:
             failure_manifest = {
                 "schema": "release-database-copy-v1",
                 "source_artifact": source.name,
@@ -265,7 +262,8 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
                 "report_admission_contract": {
                     "passed": False,
                     "violation": "legacy_rows_invalid",
-                    "diagnostic": str(exc),
+                    "invalid_row_count": exc.invalid_count,
+                    "affected_attempts": exc.attempts,
                 },
                 "passed": False,
             }
