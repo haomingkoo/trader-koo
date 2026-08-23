@@ -14,6 +14,14 @@ from trader_koo.paper_trade.chronology import (
     next_scheduled_session_after,
     publication_precedes_session_open,
 )
+
+
+class ReportLineageError(ValueError):
+    """Stable pre-admission failure for unverifiable report publication."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: {detail}")
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
     canonical_json,
@@ -132,28 +140,45 @@ def _require_published_canonical_report(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_runs'"
     ).fetchone()
     if not table:
-        raise ValueError("paper admission requires the authoritative report_runs registry")
+        raise ReportLineageError(
+            "report_publication_lineage_invalid",
+            "paper admission requires the authoritative report_runs registry",
+        )
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(report_runs)")}
     required = {"run_id", "artifact_path", "publication_verified"}
     if not required.issubset(columns):
-        raise ValueError("report_runs registry does not expose verified publication lineage")
+        raise ReportLineageError(
+            "report_publication_lineage_invalid",
+            "report_runs registry does not expose verified publication lineage",
+        )
     row = conn.execute(
         "SELECT artifact_path,published_ts FROM report_runs WHERE run_id=?",
         (report_run_id,),
     ).fetchone()
     if not row or not str(row[0] or "").strip():
-        raise ValueError("paper admission requires a verified report artifact")
+        raise ReportLineageError(
+            "report_not_verified_published",
+            "paper admission requires a verified report artifact",
+        )
     from pathlib import Path
     from trader_koo.report.runs import resolve_published_report
 
-    resolved = resolve_published_report(
-        conn,
-        report_dir=Path(str(row[0])).parent,
-        run_id=report_run_id,
-        require_current=require_current,
-    )
+    try:
+        resolved = resolve_published_report(
+            conn,
+            report_dir=Path(str(row[0])).parent,
+            run_id=report_run_id,
+            require_current=require_current,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise ReportLineageError(
+            "report_publication_lineage_invalid", str(exc)
+        ) from exc
     if resolved is None:
-        raise ValueError("paper admission requires the current verified publication")
+        raise ReportLineageError(
+            "report_not_verified_published",
+            "paper admission requires the current verified publication",
+        )
     return {
         "report_complete": True,
         "is_canonical": True,

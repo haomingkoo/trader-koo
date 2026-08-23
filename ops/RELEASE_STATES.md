@@ -91,26 +91,31 @@ destructive parent-table rebuild on the live volume.
    key, default, legacy read shape, collision rule, integrity check, and schema
    fingerprint. The current v4 image rejects Campaign v2 activation because
    this contract and verifier do not exist yet.
-9. Separately implement the migration, phase-aware initializer, exact verifier,
-   enforceable writer-quiescence mechanism, and failure recovery for each
-   boundary.
-10. Before rollback retirement or any production migration, pass the migration,
-    rollback-incompatibility checks, and named write smoke test against a copied
-    production database in non-production.
-11. Before enabling writes, change the deployment workflow to capture and audit
+9. Implement and review the migration against the frozen contract fixtures.
+10. Implement and review the exact verifier and schema fingerprint separately.
+11. Implement the phase-aware initializer as another change, proving it operates
+    safely on both v4 expand and v5 contract states.
+12. Implement the writer-quiescence control and recovery drills separately,
+    including active-transaction detection, timeouts, abort criteria, backup
+    retention, restore evidence, and the restore-versus-complete decision point.
+13. Before rollback retirement or any production migration, pass the migration,
+    rollback-incompatibility checks, and full v5 journey against a copied
+    production database in a named non-production environment: verifier,
+    audited activation idempotency, write-state restart, and first admission
+    write without test bypasses.
+14. Before enabling writes, change the deployment workflow to capture and audit
     the pre-deploy write state, preserve it through deploy and rollback, and
     verify both success and rollback paths. Include the absent/first-release rule
     and the required process restart for configuration changes.
-12. Only after those gates and explicit rollback-retirement approval, deploy the
-    phase-aware image while still on v4, quiesce every v4 writer, take a named
-    backup, migrate under a maintenance boundary, then restart and verify that
-    same contract-aware image.
-13. In another audited configuration transition, enable paper writes and verify
+15. Deploy the phase-aware image while production is still on v4 and verify its
+    API, background workers, schema no-op behavior, and rollback drill. Only
+    after that checkpoint and explicit rollback-retirement approval may the
+    operator quiesce every v4 writer, take a named backup, migrate under a
+    maintenance boundary, then restart and verify that same image on v5.
+16. In another audited configuration transition, enable paper writes and verify
     the API reports `write_state=enabled`.
-14. Finally, run a v5 integration test covering real migration, verification,
-    audited activation idempotency, and a first admission write without test
-    bypasses. Only then accept the separate human Campaign v2 activation request
-    and verify its first production admission write and audit event.
+17. Only then accept the separate human Campaign v2 activation request and
+    verify its first production admission write and audit event.
 
 The current dark-deploy workflow deliberately resets writes to paused on every
 release. Before the first activation, the contract-aware workflow must be changed

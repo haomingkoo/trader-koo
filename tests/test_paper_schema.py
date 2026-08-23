@@ -146,7 +146,10 @@ def test_v4_expand_contract_rejects_malformed_optional_lineage_fk() -> None:
         "column": "report_run_id",
         "constraints": [{
             "id": 0,
-            "mappings": [["report_run_id", "wrong_runs", "id"]],
+            "mappings": [[
+                "report_run_id", "wrong_runs", "id",
+                "NO ACTION", "NO ACTION", "NONE",
+            ]],
         }],
     }]
     assert contract["passed"] is False
@@ -176,9 +179,53 @@ def test_v4_expand_contract_rejects_composite_optional_lineage_fk() -> None:
     malformed = contract["malformed_optional_foreign_keys"]
     assert len(malformed) == 1
     assert malformed[0]["constraints"][0]["mappings"] == [
-        ["report_run_id", "report_runs", "run_id"],
-        ["report_kind", "report_runs", "report_kind"],
+        ["report_run_id", "report_runs", "run_id", "NO ACTION", "NO ACTION", "NONE"],
+        ["report_kind", "report_runs", "report_kind", "NO ACTION", "NO ACTION", "NONE"],
     ]
+    assert contract["passed"] is False
+
+
+def test_v4_expand_contract_rejects_cascading_optional_lineage_fk() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE report_runs(run_id TEXT PRIMARY KEY);
+        CREATE TABLE paper_trades(
+            id INTEGER PRIMARY KEY,
+            report_run_id TEXT REFERENCES report_runs(run_id) ON DELETE CASCADE
+        );
+        """
+    )
+
+    contract = _schema_contract(conn)
+
+    mappings = contract["malformed_optional_foreign_keys"][0]["constraints"][0]["mappings"]
+    assert mappings == [[
+        "report_run_id", "report_runs", "run_id",
+        "NO ACTION", "CASCADE", "NONE",
+    ]]
+    assert contract["passed"] is False
+
+
+def test_v4_expand_contract_rejects_duplicate_optional_lineage_fks() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE report_runs(run_id TEXT PRIMARY KEY);
+        CREATE TABLE paper_trades(
+            id INTEGER PRIMARY KEY,
+            report_run_id TEXT,
+            FOREIGN KEY(report_run_id) REFERENCES report_runs(run_id),
+            FOREIGN KEY(report_run_id) REFERENCES report_runs(run_id)
+        );
+        """
+    )
+
+    contract = _schema_contract(conn)
+
+    assert len(
+        contract["malformed_optional_foreign_keys"][0]["constraints"]
+    ) == 2
     assert contract["passed"] is False
 
 

@@ -33,6 +33,7 @@ from trader_koo.paper_trades import create_paper_trades_from_report as _create_p
 from trader_koo.paper_trades import fill_pending_paper_orders
 from trader_koo.paper_trades import paper_trade_summary
 from trader_koo.paper_trade.replay import replay_campaign
+from trader_koo.paper_trade.trading import ReportLineageError
 from trader_koo.research.next_open_baseline import (
     BaselineConfig,
     ExecutionDecision,
@@ -829,11 +830,13 @@ def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload(mo
         configuration={},
         code_version="a" * 40,
     )
-    with pytest.raises(ValueError, match="verified report artifact"):
+    with pytest.raises(ReportLineageError, match="verified report artifact") as lineage_error:
         _create_paper_trades_from_report(
             conn, setup_rows=[], report_date="2026-08-21", generated_ts="x",
             report_run_id=started_run,
         )
+    assert lineage_error.value.code == "report_not_verified_published"
+    assert conn.execute("SELECT COUNT(*) FROM paper_decision_sets").fetchone()[0] == 0
     conn.commit()
     with pytest.raises(ValueError, match="activation interlock"):
         transition_campaign(

@@ -54,8 +54,10 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
   cannot influence admission, sizing, or the entry fill. The NYSE calendar
   defines the intended date; an observed SPY open must exist on that exact date
   or execution fails closed without consulting a later row.
-- Live and replay execution produce the same canonical ledger for the same
-  campaign policy, report lineage, and market data.
+- For verified candidate runs, live and replay execution produce the same
+  canonical ledger for the same campaign policy, report lineage, and market
+  data. Report-level lineage refusal is a separate pre-admission contract and
+  produces no candidate ledger on either path.
 - The first Campaign v2 dark deployment verifies the exact commit and introduces
   `paper-v2` inactive. Later software releases must preserve the pre-deploy
   campaign status, including `active`; the sole bootstrap transition is
@@ -83,6 +85,15 @@ late publication has precedence over
 observation availability and is rejected before SPY or ticker gaps can create a
 pending order. SPY precedence applies next, then ticker availability. Verified
 candidate runs use the same late/SPY/ticker ordering as live admission.
+
+A lineage refusal aborts the admission transaction before decision sets, orders,
+or trades are written. Missing/unpublished lineage raises
+`ReportLineageError(code="report_not_verified_published")`; structurally invalid
+lineage raises `ReportLineageError(code="report_publication_lineage_invalid")`.
+Both are retryable only after the same run has valid verified-publication
+evidence. The nightly report run records the
+failure; there is no paper-admission HTTP endpoint that maps it to a transport
+status in v4.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
