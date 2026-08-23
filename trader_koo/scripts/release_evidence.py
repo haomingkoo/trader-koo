@@ -56,28 +56,106 @@ def _snapshot(source: Path, target: Path) -> None:
             source_conn.backup(target_conn)
 
 
+def _normalize_sql(value: str | None) -> str:
+    return " ".join(str(value or "").lower().split())
+
+
 def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
-    indexes = {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
-    }
-    triggers = {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
-    }
     required_indexes = {
-        "idx_paper_trades_campaign_unique",
-        "idx_paper_trades_legacy_compat",
-        "idx_paper_portfolio_campaign_date",
-        "idx_paper_portfolio_legacy_compat",
+        "idx_paper_trades_campaign_unique": (
+            "paper_trades", ("campaign_id", "report_date", "ticker", "direction")
+        ),
+        "idx_paper_trades_legacy_compat": (
+            "paper_trades", ("report_date", "ticker", "direction")
+        ),
+        "idx_paper_portfolio_campaign_date": (
+            "paper_portfolio_snapshots", ("campaign_id", "snapshot_date")
+        ),
+        "idx_paper_portfolio_legacy_compat": (
+            "paper_portfolio_snapshots", ("snapshot_date",)
+        ),
     }
+    malformed_indexes: list[str] = []
+    for name, (table, columns) in required_indexes.items():
+        index_rows = {
+            str(row[1]): row
+            for row in conn.execute(f"PRAGMA index_list({table})")
+        }
+        row = index_rows.get(name)
+        actual_columns = tuple(
+            str(item[2]) for item in conn.execute(f'PRAGMA index_info("{name}")')
+        )
+        if row is None or int(row[2]) != 1 or int(row[4]) != 0 or actual_columns != columns:
+            malformed_indexes.append(name)
     required_triggers = {
-        "paper_trades_require_canonical_run",
-        "paper_trades_immutable_lineage",
-        "paper_v1_trades_no_insert",
-        "paper_v1_trades_no_update",
-        "paper_v1_trades_no_delete",
+        "paper_trades_require_canonical_run": """
+            CREATE TRIGGER paper_trades_require_canonical_run
+            BEFORE INSERT ON paper_trades
+            WHEN NOT EXISTS (
+                SELECT 1 FROM report_runs r
+                JOIN report_run_decisions d ON d.run_id=r.run_id
+                WHERE r.run_id=NEW.report_run_id
+                  AND r.status='published' AND r.publication_verified=1
+                  AND r.is_generation_canonical=1
+                  AND d.ticker=NEW.ticker AND d.decision='accepted'
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'paper trades require a canonical published report run with an accepted decision');
+            END
+        """,
+        "paper_trades_immutable_lineage": """
+            CREATE TRIGGER paper_trades_immutable_lineage
+            BEFORE UPDATE OF report_run_id ON paper_trades
+            WHEN NEW.report_run_id IS NOT OLD.report_run_id
+            BEGIN
+                SELECT RAISE(ABORT, 'paper trade report lineage is immutable');
+            END
+        """,
+        "paper_v1_trades_no_insert": """
+            CREATE TRIGGER paper_v1_trades_no_insert
+            BEFORE INSERT ON paper_trades WHEN NEW.campaign_id = 'paper-v1'
+            BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END
+        """,
+        "paper_v1_trades_no_update": """
+            CREATE TRIGGER paper_v1_trades_no_update
+            BEFORE UPDATE ON paper_trades
+            WHEN OLD.campaign_id = 'paper-v1'
+              AND NEW.report_run_id IS OLD.report_run_id
+            BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END
+        """,
+        "paper_v1_trades_no_delete": """
+            CREATE TRIGGER paper_v1_trades_no_delete
+            BEFORE DELETE ON paper_trades WHEN OLD.campaign_id = 'paper-v1'
+            BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END
+        """,
     }
+    actual_triggers = {
+        str(row[0]): _normalize_sql(str(row[1] or ""))
+        for row in conn.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='trigger'"
+        )
+    }
+    malformed_triggers = sorted(
+        name for name, sql in required_triggers.items()
+        if actual_triggers.get(name) != _normalize_sql(sql)
+    )
+    required_foreign_keys = {
+        ("paper_trade_events", "trade_id", "paper_trades", "id"),
+        ("paper_trade_annotations", "trade_id", "paper_trades", "id"),
+        ("paper_pending_orders", "campaign_id", "paper_campaigns", "campaign_id"),
+        ("paper_order_events", "order_id", "paper_pending_orders", "order_id"),
+        ("paper_campaign_audit", "campaign_id", "paper_campaigns", "campaign_id"),
+        ("paper_campaign_preregistrations", "campaign_id", "paper_campaigns", "campaign_id"),
+        ("paper_campaign_experiments", "campaign_id", "paper_campaigns", "campaign_id"),
+        ("paper_campaign_approvals", "campaign_id", "paper_campaigns", "campaign_id"),
+    }
+    actual_foreign_keys: set[tuple[str, str, str, str]] = set()
+    for table in {item[0] for item in required_foreign_keys}:
+        actual_foreign_keys.update(
+            (table, str(row[3]), str(row[2]), str(row[4]))
+            for row in conn.execute(f"PRAGMA foreign_key_list({table})")
+        )
+    missing_foreign_keys = sorted(required_foreign_keys - actual_foreign_keys)
     trade_columns = {
         str(row[1]): str(row[4] or "")
         for row in conn.execute("PRAGMA table_info(paper_trades)")
@@ -98,8 +176,6 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
         ).fetchall()
     except sqlite3.DatabaseError:
         legacy_read_probe = False
-    missing_indexes = sorted(required_indexes - indexes)
-    missing_triggers = sorted(required_triggers - triggers)
     defaults = {
         "paper_trades.campaign_id": trade_columns.get("campaign_id"),
         "paper_portfolio_snapshots.campaign_id": portfolio_columns.get("campaign_id"),
@@ -108,16 +184,18 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
     defaults_compatible = all(value in allowed_defaults for value in defaults.values())
     return {
         "contract": "paper-schema-expand-v4",
-        "missing_indexes": missing_indexes,
-        "missing_triggers": missing_triggers,
+        "malformed_indexes": sorted(malformed_indexes),
+        "malformed_triggers": malformed_triggers,
+        "missing_foreign_keys": [list(item) for item in missing_foreign_keys],
         "campaign_defaults": defaults,
         "campaign_defaults_compatible": defaults_compatible,
         "foreign_key_breaks": foreign_key_breaks,
         "legacy_read_probe": legacy_read_probe,
         "previous_image_paper_write_mode": "disabled_during_rollback_window",
         "passed": (
-            not missing_indexes
-            and not missing_triggers
+            not malformed_indexes
+            and not malformed_triggers
+            and not missing_foreign_keys
             and defaults_compatible
             and not foreign_key_breaks
             and legacy_read_probe

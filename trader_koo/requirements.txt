@@ -21,4 +21,5 @@ lightgbm>=4.6
 shap>=0.51
 python-multipart>=0.0.24
 httpx>=0.28
+exchange-calendars==4.13.2
 hyperliquid-python-sdk>=0.22.0

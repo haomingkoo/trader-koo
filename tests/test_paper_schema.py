@@ -88,7 +88,27 @@ def test_v3_database_runs_v4_expand_contract_instead_of_short_circuiting() -> No
         "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
     ).fetchone() == (4,)
     assert contract["passed"] is True
-    assert contract["missing_indexes"] == []
+    assert contract["malformed_indexes"] == []
+
+
+def test_schema_contract_rejects_correctly_named_malformed_objects() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_paper_trade_schema(conn)
+    conn.execute("DROP INDEX idx_paper_trades_legacy_compat")
+    conn.execute(
+        "CREATE INDEX idx_paper_trades_legacy_compat ON paper_trades(ticker)"
+    )
+    conn.execute("DROP TRIGGER paper_v1_trades_no_delete")
+    conn.execute(
+        "CREATE TRIGGER paper_v1_trades_no_delete BEFORE DELETE ON paper_trades "
+        "BEGIN SELECT 1; END"
+    )
+
+    contract = _schema_contract(conn)
+
+    assert contract["passed"] is False
+    assert contract["malformed_indexes"] == ["idx_paper_trades_legacy_compat"]
+    assert contract["malformed_triggers"] == ["paper_v1_trades_no_delete"]
 
 
 def test_unique_key_rebuild_rolls_back_before_committing_fk_violations() -> None:

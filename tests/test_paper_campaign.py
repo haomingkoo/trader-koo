@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
-from trader_koo.paper_trade.chronology import publication_precedes_session_open
+from trader_koo.paper_trade.chronology import (
+    next_scheduled_session_after,
+    publication_precedes_session_open,
+)
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
     DivergentDecisionSetError,
@@ -87,6 +90,11 @@ def test_publication_cutoff_is_strict_and_dst_aware() -> None:
     assert publication_precedes_session_open(
         "2026-08-24T13:30:00Z", "2026-08-24"
     ) is False
+
+
+def test_scheduled_session_uses_versioned_historical_exchange_calendar() -> None:
+    assert next_scheduled_session_after("2021-06-17") == "2021-06-18"
+    assert next_scheduled_session_after("2018-12-04") == "2018-12-06"
     assert publication_precedes_session_open(
         "2026-01-05T14:29:59Z", "2026-01-05"
     ) is True

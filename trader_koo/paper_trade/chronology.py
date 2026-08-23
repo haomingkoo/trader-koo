@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import datetime as dt
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from trader_koo.report.utils import is_nyse_session
+import exchange_calendars as xcals
 
 _MARKET_TZ = ZoneInfo("America/New_York")
+
+
+@lru_cache(maxsize=1)
+def _nyse_calendar():
+    return xcals.get_calendar("XNYS")
 
 
 def next_scheduled_session_after(report_date: str) -> str | None:
     """Return the immediate scheduled NYSE session after the report date."""
     try:
         candidate = dt.date.fromisoformat(report_date) + dt.timedelta(days=1)
-    except (TypeError, ValueError, OverflowError):
+        session = _nyse_calendar().date_to_session(
+            candidate.isoformat(), direction="next"
+        )
+    except (TypeError, ValueError, OverflowError, RuntimeError):
         return None
-    while not is_nyse_session(candidate):
-        candidate += dt.timedelta(days=1)
-    return candidate.isoformat()
+    return session.date().isoformat()
 
 
 def publication_precedes_session_open(
