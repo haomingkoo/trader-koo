@@ -21,17 +21,17 @@
     "integrity_check": {"const": "ok"},
     "paper_trade_schema_version": {"type": "integer", "minimum": 1},
     "expected_paper_trade_schema_version": {"type": "integer", "minimum": 1},
-    "accounting_invariants": {"type": "object"},
-    "schema_contract": {"type": "object"},
-    "sqlite_objects_before": {"type": "object"},
-    "sqlite_objects_after": {"type": "object"},
+    "accounting_invariants": {"$ref": "#/$defs/accounting"},
+    "schema_contract": {"$ref": "#/$defs/schemaContract"},
+    "sqlite_objects_before": {"$ref": "#/$defs/sqliteCounts"},
+    "sqlite_objects_after": {"$ref": "#/$defs/sqliteCounts"},
     "report_admission_contract": {"type": "object"},
     "passed": {"type": "boolean"}
   },
   "oneOf": [
     {
       "properties": {
-        "passed": {"const": true},
+        "passed": {"type": "boolean"},
         "report_admission_contract": {
           "type": "object",
           "required": ["passed", "migration"],
@@ -97,7 +97,52 @@
     }
   ],
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sqliteCounts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "accounting": {
+      "type": "object",
+      "required": ["breaks", "legacy_unreconciled_count", "equity", "cash"],
+      "properties": {
+        "breaks": {"type": "array"},
+        "legacy_unreconciled_count": {"type": "integer", "minimum": 0},
+        "equity": {"type": "number"},
+        "cash": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "schemaContract": {
+      "type": "object",
+      "required": [
+        "contract",
+        "malformed_indexes",
+        "malformed_triggers",
+        "missing_foreign_keys",
+        "malformed_optional_foreign_keys",
+        "campaign_defaults",
+        "campaign_defaults_compatible",
+        "foreign_key_breaks",
+        "legacy_read_probe",
+        "previous_image_paper_write_mode",
+        "passed"
+      ],
+      "properties": {
+        "contract": {"const": "paper-schema-expand-v4"},
+        "malformed_indexes": {"type": "array", "items": {"type": "string"}},
+        "malformed_triggers": {"type": "array", "items": {"type": "string"}},
+        "missing_foreign_keys": {"type": "array", "items": {"type": "array"}},
+        "malformed_optional_foreign_keys": {"type": "array", "items": {"type": "object"}},
+        "campaign_defaults": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+        "campaign_defaults_compatible": {"type": "boolean"},
+        "foreign_key_breaks": {"type": "array", "items": {"type": "array"}},
+        "legacy_read_probe": {"type": "boolean"},
+        "previous_image_paper_write_mode": {"const": "disabled_during_rollback_window"},
+        "passed": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

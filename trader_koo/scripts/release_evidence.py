@@ -45,6 +45,27 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_bytes(canonical_json_bytes(payload) + b"\n")
 
 
+def _validate_database_manifest(payload: dict[str, Any]) -> None:
+    """Enforce v2 relationships JSON Schema cannot express."""
+    contract = payload.get("report_admission_contract")
+    if not isinstance(contract, dict) or not isinstance(contract.get("passed"), bool):
+        raise RuntimeError("release database manifest lacks admission contract status")
+    if contract["passed"] is False:
+        sample = contract.get("affected_attempt_sample")
+        if not isinstance(sample, list):
+            raise RuntimeError("release database failure sample is malformed")
+        invalid_count = int(contract.get("invalid_row_count", -1))
+        reported_count = int(contract.get("reported_attempt_count", -1))
+        limit = int(contract.get("diagnostic_limit", -1))
+        if (
+            reported_count != len(sample)
+            or not 0 < reported_count <= limit
+            or reported_count > invalid_count
+            or bool(contract.get("truncated")) != (invalid_count > reported_count)
+        ):
+            raise RuntimeError("release database failure counts are inconsistent")
+
+
 def _code_sha() -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
@@ -295,6 +316,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             },
             "passed": False,
         }
+        _validate_database_manifest(failure_manifest)
         _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
         raise RuntimeError("database copy report-admission contract failed") from contract_failure
     manifest = {
@@ -326,6 +348,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         and not account["accounting_breaks"]
         and schema_contract["passed"]
     )
+    _validate_database_manifest(manifest)
     _write_json(output_dir / "database-migration-manifest.json", manifest)
     if not manifest["passed"]:
         raise RuntimeError("database copy migration or accounting invariant failed")

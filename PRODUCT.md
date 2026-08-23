@@ -156,6 +156,11 @@ producer and schema move together in this release; historical v1 artifacts stay
 immutable, rollback uses the prior producer, and dual emission is unnecessary.
 When a sample is truncated, operators must enumerate all invalid rows with a
 reviewed copy of the verifier predicate rather than repair only the sample.
+The producer validates relationships JSON Schema cannot express: reported count
+equals sample length, never exceeds the total or limit, and `truncated` is true
+exactly when the total exceeds the reported sample. Root `passed` may be false
+while the admission sub-contract passed when a later integrity, accounting, or
+paper-schema gate blocks the release.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
