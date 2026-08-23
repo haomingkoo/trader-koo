@@ -307,9 +307,15 @@ class TestLLMSanitizeBeforeValidation:
         raw = {
             "observation": "A" * 300,
             "action": "Watch for entry.",
+            "intent": {
+                "signal_bias": "bullish",
+                "actionability": "conditional",
+                "decision_delta": "none",
+            },
         }
         result = validate_llm_output(raw, SetupRewrite)
         assert not result.is_valid
+        assert any(error.startswith("observation:") for error in result.errors)
 
     def test_maybe_rewrite_no_schema_failure_on_long_llm_reply(self):
         """maybe_rewrite_setup_copy: oversized LLM reply is trimmed, not fallen back."""

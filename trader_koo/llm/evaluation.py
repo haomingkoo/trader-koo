@@ -205,9 +205,9 @@ def evaluate_setup_rewrite(
         errors.add("unsupported_ticker_claim")
 
     baseline = context.get("baseline") if isinstance(context.get("baseline"), dict) else {}
-    if _normal(output.get("action")) != _normal(baseline.get("action")):
+    if str(output.get("action") or "").strip() != str(baseline.get("action") or "").strip():
         errors.add("action_changed")
-    if _normal(output.get("risk_note")) != _normal(baseline.get("risk_note")):
+    if str(output.get("risk_note") or "").strip() != str(baseline.get("risk_note") or "").strip():
         errors.add("risk_note_changed")
     if output.get("intent") != intent_contract(context):
         errors.add("intent_contract_mismatch")

@@ -648,7 +648,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             "version": EVALUATOR_VERSION, "passed": False,
             "errors": ["schema_validation_failed"],
             "semantic_outcome": "contradicted", "prose_quality_scored": False,
-            "decision_scope": "narrative_only",
+            "decision_scope": "observation_narrative_only",
         }
     )
     accepted = validation_result.is_valid and bool(evaluation["passed"])
@@ -684,9 +684,11 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             validated_dict,
             field_limits={"observation": 260, "action": 180, "risk_note": 80},
         )
-        out = {key: str(sanitized.get(key) or "") for key in (
-            "observation", "action", "risk_note",
-        )}
+        out = {
+            "observation": str(sanitized.get("observation") or ""),
+            "action": baseline["action"],
+            "risk_note": baseline["risk_note"],
+        }
         # Only record success when validation actually passes
         _safe_note_success(
             db_path,

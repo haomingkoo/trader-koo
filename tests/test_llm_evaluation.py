@@ -75,6 +75,12 @@ def test_decision_text_and_typed_intent_are_immutable() -> None:
     ), context)
     assert rephrased_action["errors"] == ["action_changed"]
 
+    changed_case = evaluate_setup_rewrite(_candidate(
+        context,
+        action="wait for confirmation.",
+    ), context)
+    assert changed_case["errors"] == ["action_changed"]
+
     rephrased_risk = evaluate_setup_rewrite(_candidate(
         context,
         risk_note="Use a protective stop.",
