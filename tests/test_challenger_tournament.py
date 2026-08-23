@@ -12,10 +12,20 @@ from trader_koo.research.challenger_tournament import (
     c2_signal,
     c3_exposure,
     chronological_split,
+    dataset_audit,
     frozen_preregistration,
     holm_adjust,
     run_challenger_tournament,
 )
+
+
+def _unverified_dataset(rows: list[tuple[object, ...]]) -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE price_daily (ticker TEXT,date TEXT,open REAL,close REAL,volume REAL)"
+    )
+    conn.executemany("INSERT INTO price_daily VALUES (?,?,?,?,?)", rows)
+    return conn
 
 
 def test_preregistration_freezes_exactly_three_config_hashes() -> None:
@@ -100,6 +110,36 @@ def test_unverified_database_fails_all_challengers_before_holdout_access() -> No
     assert {
         result["status"] for result in artifact["challenger_results"].values()
     } == {"failed_data_gate"}
+
+
+def test_dataset_hash_binds_exact_market_rows_independent_of_insert_order() -> None:
+    rows = [
+        ("SPY", "2020-01-02", 100, 101, 1_000_000),
+        ("AAA", "2020-01-02", 20, 21, 2_000_000),
+    ]
+    first = dataset_audit(_unverified_dataset(rows))
+    reordered = dataset_audit(_unverified_dataset(list(reversed(rows))))
+    changed = dataset_audit(_unverified_dataset([
+        rows[0], ("AAA", "2020-01-02", 20, 22, 2_000_000),
+    ]))
+
+    assert first["market_rows_sha256"] == reordered["market_rows_sha256"]
+    assert first["dataset_sha256"] == reordered["dataset_sha256"]
+    assert changed["market_rows_sha256"] != first["market_rows_sha256"]
+    assert changed["dataset_sha256"] != first["dataset_sha256"]
+
+
+def test_dataset_audit_excludes_non_tradable_negative_yield_context() -> None:
+    audit = dataset_audit(_unverified_dataset([
+        ("SPY", "2020-03-19", 100, 101, 1_000_000),
+        ("AAA", "2020-03-19", 20, 21, 2_000_000),
+        ("^IRX", "2020-03-19", -0.033, -0.028, 0),
+    ]))
+
+    assert "invalid_price_value" not in audit["reasons"]
+    assert audit["ticker_count"] == 2
+    assert audit["row_count"] == 2
+    assert audit["excluded_context_row_count"] == 1
 
 
 def test_malformed_market_rows_fail_closed_without_raising() -> None:

@@ -11,13 +11,17 @@ import hashlib
 import json
 import math
 import statistics
+from pathlib import Path
 from typing import Any, Iterable
 
 from trader_koo.db.price_contract import research_price_contract
+from trader_koo.ml.features import ML_CONTEXT_TICKERS
+from trader_koo.report.runs import current_code_version
 from trader_koo.research.next_open_baseline import canonical_json_bytes
 
 SCHEMA_VERSION = "challenger-tournament-v1"
 MAX_HOLDING_SESSIONS = 21
+IMPLEMENTATION_PATH = Path(__file__)
 
 CHALLENGERS: dict[str, dict[str, Any]] = {
     "C1": {
@@ -250,11 +254,23 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
     end_date: dt.date | None = None
     spy_prices: list[tuple[dt.date, float]] = []
     invalid_spy_prices = 0
+    market_rows_hasher = hashlib.sha256()
+    excluded_context_rows = 0
     for ticker, date_value, open_value, close_value, volume_value in conn.execute(
-        "SELECT ticker,date,open,close,volume FROM price_daily"
+        """SELECT ticker,date,open,close,volume FROM price_daily
+           ORDER BY ticker,date,open,close,volume"""
     ):
-        row_count += 1
         ticker_name = str(ticker).strip() if ticker is not None else ""
+        if ticker_name != "SPY" and (
+            ticker_name in ML_CONTEXT_TICKERS or ticker_name.startswith("^")
+        ):
+            excluded_context_rows += 1
+            continue
+        market_rows_hasher.update(canonical_json_bytes([
+            ticker, date_value, open_value, close_value, volume_value,
+        ]))
+        market_rows_hasher.update(b"\n")
+        row_count += 1
         if ticker_name:
             tickers.add(ticker_name)
         else:
@@ -335,6 +351,8 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
     snapshot = {
         "price_start": start, "price_end": end, "years": years,
         "ticker_count": ticker_count, "row_count": row_count,
+        "market_rows_sha256": market_rows_hasher.hexdigest(),
+        "excluded_context_row_count": excluded_context_rows,
         "volatility_regime_count": regime_count,
         "price_contract": contract, "universe_treatment": universe,
         "membership_table": membership_table,
@@ -364,6 +382,10 @@ def run_challenger_tournament(conn: Any) -> dict[str, Any]:
         }
         body = {
             "schema_version": SCHEMA_VERSION,
+            "code_sha": current_code_version(),
+            "implementation_sha256": hashlib.sha256(
+                IMPLEMENTATION_PATH.read_bytes()
+            ).hexdigest(),
             "status": "blocked_before_validation",
             "preregistration": preregistration,
             "dataset_audit": audit,
@@ -386,6 +408,10 @@ def run_challenger_tournament(conn: Any) -> dict[str, Any]:
     }
     body = {
         "schema_version": SCHEMA_VERSION,
+        "code_sha": current_code_version(),
+        "implementation_sha256": hashlib.sha256(
+            IMPLEMENTATION_PATH.read_bytes()
+        ).hexdigest(),
         "status": "blocked_before_validation",
         "preregistration": preregistration,
         "dataset_audit": audit,

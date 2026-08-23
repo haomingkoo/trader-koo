@@ -143,7 +143,7 @@ def _tournament_result() -> dict[str, Any]:
         "manifest": {
             "strategy_version": prereg.get("schema_version"),
             "code_sha": payload.get("code_sha"),
-            "implementation_sha256": None,
+            "implementation_sha256": payload.get("implementation_sha256"),
             "data_snapshot_hash": audit.get("dataset_sha256"),
             "universe_basis": audit.get("universe_treatment"),
             "return_basis": (audit.get("price_contract") or {}).get("basis"),
