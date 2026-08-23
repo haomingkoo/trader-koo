@@ -233,9 +233,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
         "SELECT 1 FROM report_schema_migrations WHERE migration=?",
         (admission_contract_migration,),
     ).fetchone() is None
-    invalid_attempts = conn.execute(
-        """SELECT COUNT(*) FROM report_admission_attempts
-           WHERE attempted_ts NOT GLOB '????-??-??T??:??:??Z'
+    invalid_admission_predicate = """attempted_ts NOT GLOB '????-??-??T??:??:??Z'
               OR attempted_ts IS NULL
               OR status IS NULL
               OR run_id IS NULL
@@ -255,15 +253,20 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                   (status='failed' AND COALESCE(error_code,'') IN ({allowed_historical_admission_codes})
                    AND TRIM(COALESCE(error_message,''))!='')
               ),1)""".format(
-                  allowed_historical_admission_codes=allowed_historical_admission_codes
-              )
+        allowed_historical_admission_codes=allowed_historical_admission_codes
+    )
+    invalid_attempts = conn.execute(
+        f"SELECT COUNT(*) FROM report_admission_attempts WHERE {invalid_admission_predicate}"
     ).fetchone()[0] if needs_admission_scan else 0
     if invalid_attempts:
         invalid_rows = conn.execute(
-            """SELECT a.attempt_id,a.run_id,a.status,a.error_code,a.error_message,
-                      a.attempted_ts,
-                      EXISTS(SELECT 1 FROM report_runs r WHERE r.run_id=a.run_id)
-               FROM report_admission_attempts a ORDER BY a.attempt_id"""
+            f"""SELECT attempt_id,run_id,status,error_code,error_message,
+                      attempted_ts,
+                      EXISTS(SELECT 1 FROM report_runs r
+                             WHERE r.run_id=report_admission_attempts.run_id)
+               FROM report_admission_attempts
+               WHERE {invalid_admission_predicate}
+               ORDER BY attempt_id LIMIT 20"""
         ).fetchall()
         diagnostics: list[dict[str, object]] = []
         historical_codes = ADMISSION_ERROR_CODES | LEGACY_ADMISSION_ERROR_CODES
@@ -285,13 +288,10 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                 code not in historical_codes or not str(message or "").strip()
             ):
                 violations.append("failure_error_metadata_invalid")
-            if violations:
-                diagnostics.append({
-                    "attempt_id": int(attempt_id),
-                    "violations": violations,
-                })
-            if len(diagnostics) == 20:
-                break
+            diagnostics.append({
+                "attempt_id": int(attempt_id),
+                "violations": violations or ["row_contract_invalid"],
+            })
         raise AdmissionLedgerContractError(int(invalid_attempts), diagnostics)
     # Reinstall the versioned validator once per ensure so a legacy trigger
     # cannot retain weaker rules. The full ledger scan above runs only once.

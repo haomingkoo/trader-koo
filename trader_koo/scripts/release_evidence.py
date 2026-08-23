@@ -243,6 +243,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     source_artifact_hash = _sha256(source)
     _snapshot(source, copy_path)
     source_snapshot_hash = _sha256(copy_path)
+    contract_failure: AdmissionLedgerContractError | None = None
     with sqlite3.connect(copy_path) as conn:
         before_counts = dict(conn.execute(
             "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
@@ -253,37 +254,40 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         try:
             ensure_report_run_schema(conn)
         except AdmissionLedgerContractError as exc:
-            failure_manifest = {
-                "schema": "release-database-copy-v1",
-                "source_artifact": source.name,
-                "source_artifact_sha256": source_artifact_hash,
-                "source_snapshot_sha256": source_snapshot_hash,
-                "migrated_copy_sha256": _sha256(copy_path),
-                "report_admission_contract": {
-                    "passed": False,
-                    "violation": "legacy_rows_invalid",
-                    "invalid_row_count": exc.invalid_count,
-                    "affected_attempts": exc.attempts,
-                },
+            contract_failure = exc
+        if contract_failure is None:
+            ensure_paper_trade_schema(conn)
+            ensure_price_series_revision_schema(conn)
+            ensure_price_repair_schema(conn)
+            integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
+            schema_version = int(conn.execute(
+                "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
+            ).fetchone()[0])
+            account = reconcile_portfolio(
+                conn, campaign_id="paper-v2", starting_capital=_build_config().starting_capital,
+            )
+            after_counts = dict(conn.execute(
+                "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
+            ).fetchall())
+            schema_contract = _schema_contract(conn)
+            conn.commit()
+    if contract_failure is not None:
+        failure_manifest = {
+            "schema": "release-database-copy-v1",
+            "source_artifact": source.name,
+            "source_artifact_sha256": source_artifact_hash,
+            "source_snapshot_sha256": source_snapshot_hash,
+            "migrated_copy_sha256": _sha256(copy_path),
+            "report_admission_contract": {
                 "passed": False,
-            }
-            _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
-            raise RuntimeError("database copy report-admission contract failed") from exc
-        ensure_paper_trade_schema(conn)
-        ensure_price_series_revision_schema(conn)
-        ensure_price_repair_schema(conn)
-        integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
-        schema_version = int(conn.execute(
-            "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
-        ).fetchone()[0])
-        account = reconcile_portfolio(
-            conn, campaign_id="paper-v2", starting_capital=_build_config().starting_capital,
-        )
-        after_counts = dict(conn.execute(
-            "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
-        ).fetchall())
-        schema_contract = _schema_contract(conn)
-        conn.commit()
+                "violation": "legacy_rows_invalid",
+                "invalid_row_count": contract_failure.invalid_count,
+                "affected_attempts": contract_failure.attempts,
+            },
+            "passed": False,
+        }
+        _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
+        raise RuntimeError("database copy report-admission contract failed") from contract_failure
     manifest = {
         "schema": "release-database-copy-v1",
         "source_artifact": source.name,

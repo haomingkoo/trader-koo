@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -118,7 +119,14 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
         conn.execute(
             """INSERT INTO report_admission_attempts
                (run_id,status,error_code,error_message,attempted_ts)
-               VALUES (?,'failed',NULL,'ValueError','2026-08-22T00:00:00Z')""",
+               VALUES (?,'failed','admission_finalize_failed',?,
+                       '2026-08-22T00:00:00Z')""",
+            (run_id, "\t"),
+        )
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'failed',NULL,'ValueError','2026-08-22T00:00:01Z')""",
             (run_id,),
         )
         conn.execute(
@@ -144,10 +152,13 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
         "violation": "legacy_rows_invalid",
         "invalid_row_count": 1,
         "affected_attempts": [{
-            "attempt_id": 1,
+            "attempt_id": 2,
             "violations": ["failure_error_metadata_invalid"],
         }],
     }
+    assert failure["migrated_copy_sha256"] == hashlib.sha256(
+        (output_dir / "database-copy.db").read_bytes()
+    ).hexdigest()
 
 
 def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> None:
