@@ -86,19 +86,31 @@ destructive parent-table rebuild on the live volume.
 6. Let the exact commit pass CI, then approve the protected dark-deploy job.
 7. Verify the public SHA, preserved campaign state, API contracts, and Chromium
    journeys. Activation remains a later, separately audited human decision.
-8. In a separate change, implement and review the versioned contract migration,
-   phase-aware initializer, contracted-schema verifier, copied-production test,
-   and rollback-incompatibility evidence. The current v4 image rejects Campaign
-   v2 activation because that migration does not exist yet.
-9. Deploy a phase-aware image that still operates safely on v4. After explicit
-   rollback-retirement approval, quiesce every v4 writer, take a named backup,
-   run and verify the contract migration under a maintenance boundary, then
-   restart and verify that same contract-aware image. Perform a named
-   non-production write smoke test with recovery criteria at each boundary.
-10. In another audited configuration transition, enable paper writes and verify
+8. Specify and review the v5 contract matrix and fixtures as its own change. It
+   must name every retained, removed, and changed table, index, trigger, foreign
+   key, default, legacy read shape, collision rule, integrity check, and schema
+   fingerprint. The current v4 image rejects Campaign v2 activation because
+   this contract and verifier do not exist yet.
+9. Separately implement the migration, phase-aware initializer, exact verifier,
+   enforceable writer-quiescence mechanism, and failure recovery for each
+   boundary.
+10. Before rollback retirement or any production migration, pass the migration,
+    rollback-incompatibility checks, and named write smoke test against a copied
+    production database in non-production.
+11. Before enabling writes, change the deployment workflow to capture and audit
+    the pre-deploy write state, preserve it through deploy and rollback, and
+    verify both success and rollback paths. Include the absent/first-release rule
+    and the required process restart for configuration changes.
+12. Only after those gates and explicit rollback-retirement approval, deploy the
+    phase-aware image while still on v4, quiesce every v4 writer, take a named
+    backup, migrate under a maintenance boundary, then restart and verify that
+    same contract-aware image.
+13. In another audited configuration transition, enable paper writes and verify
     the API reports `write_state=enabled`.
-11. Only then accept a separate human Campaign v2 activation request and verify
-    its first production admission write and audit event.
+14. Finally, run a v5 integration test covering real migration, verification,
+    audited activation idempotency, and a first admission write without test
+    bypasses. Only then accept the separate human Campaign v2 activation request
+    and verify its first production admission write and audit event.
 
 The current dark-deploy workflow deliberately resets writes to paused on every
 release. Before the first activation, the contract-aware workflow must be changed

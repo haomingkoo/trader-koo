@@ -71,14 +71,17 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 | --- | --- | --- |
 | Valid publication strictly before 09:30 ET and ticker open present | Same admitted fill and canonical fields | Same admitted fill and canonical fields |
 | Publication exactly at 09:30 ET or later | `report_published_after_intended_open` | Same rejection, intended session, and sealed inputs |
-| Publication missing or malformed | Fail closed with the matching publication reason | Same rejection and sealed inputs |
+| Publication missing or malformed | Reject the report-level admission request before any candidate decision is sealed | Refuse the unverified run before parity comparison |
 | Scheduled-session SPY observation missing | `pending` with `scheduled_spy_open_missing` | Same pending disposition and reason; no later row is consulted |
 | Scheduled-session ticker open missing | `pending` with `scheduled_ticker_open_missing` | Same pending disposition and reason; no later row is consulted |
 
-Publication chronology has precedence over observation availability: a missing,
-malformed, or late verified publication is rejected before SPY or ticker gaps
-can create a pending order. SPY precedence applies next, then ticker availability.
-This ordering is identical in live admission and replay.
+Missing or malformed publication metadata is a report-lineage error, not a
+candidate rejection; database publication guards normally make this state
+unrepresentable. For a verified report, late publication has precedence over
+observation availability and is rejected before SPY or ticker gaps can create a
+pending order. SPY precedence applies next, then ticker availability. Replay
+applies the same boundary: unverified runs are refused, while verified candidate
+runs use the same late/SPY/ticker ordering as live admission.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
