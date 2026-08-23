@@ -463,9 +463,9 @@ class TestPaperTradeDetailEndpoint:
         seeded_conn.execute(
             """INSERT INTO paper_trades
                (report_date,ticker,direction,entry_price,entry_date,status,
-                current_price,generated_ts,report_run_id)
+                current_price,generated_ts,report_run_id,campaign_id)
                VALUES ('2026-08-21','REJECT','long',100,'2026-08-21','open',
-                       101,'2026-08-21T12:00:00Z','trace-run')"""
+                       101,'2026-08-21T12:00:00Z','trace-run','paper-v2')"""
         )
         trade_id = int(seeded_conn.execute(
             "SELECT id FROM paper_trades WHERE ticker='REJECT'"
