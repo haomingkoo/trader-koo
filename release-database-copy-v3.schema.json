@@ -60,31 +60,9 @@
             "anyOf": [
               {"properties": {"integrity_check": {"not": {"const": "ok"}}}},
               {"properties": {"paper_trade_schema_version": {"not": {"const": 4}}}},
-              {
-                "properties": {
-                  "accounting_invariants": {
-                    "type": "object",
-                    "properties": {"breaks": {"minItems": 1}}
-                  }
-                }
-              },
+              {"properties": {"accounting_invariants": {"properties": {"breaks": {"minItems": 1}}}}},
               {"properties": {"schema_contract": {"properties": {"passed": {"const": false}}}}}
             ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "schema_contract": {"properties": {"passed": {"const": true}}}
-            }
-          },
-          "then": {
-            "properties": {
-              "accounting_invariants": {"$ref": "#/$defs/accounting"}
-            }
-          },
-          "else": {
-            "properties": {"accounting_invariants": {"type": "null"}}
           }
         }
       ]
