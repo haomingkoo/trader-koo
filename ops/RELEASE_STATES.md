@@ -29,6 +29,8 @@ variables. The pre-deploy database backup remains available for a separately
 approved data recovery; CD never overwrites the live SQLite volume.
 
 Configure the `production-dark` GitHub environment with required reviewers,
-`TRADER_KOO_PRODUCTION_URL`, and the Railway/admin secrets referenced by
-`.github/workflows/dark-deploy.yml`. Required branch checks should be the CI jobs
-only after one green pull-request run proves their exact names.
+the non-secret target variables `TRADER_KOO_PRODUCTION_URL`,
+`RAILWAY_PROJECT_ID`, `RAILWAY_SERVICE`, and `RAILWAY_ENVIRONMENT`, plus the
+`RAILWAY_TOKEN` and `TRADER_KOO_API_KEY` secrets referenced by
+`.github/workflows/dark-deploy.yml`. Required branch checks should be the CI
+jobs only after one green pull-request run proves their exact names.

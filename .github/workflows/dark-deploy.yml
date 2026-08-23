@@ -24,9 +24,9 @@ jobs:
       url: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-      RAILWAY_SERVICE: ${{ secrets.RAILWAY_SERVICE }}
-      RAILWAY_ENVIRONMENT: ${{ secrets.RAILWAY_ENVIRONMENT }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+      RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
       BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
       ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
