@@ -4,7 +4,12 @@ import sqlite3
 
 import pytest
 
-from trader_koo.paper_trade.schema import _rebuild_unique_key, ensure_paper_trade_schema
+from trader_koo.paper_trade.schema import (
+    PAPER_TRADE_SCHEMA_VERSION,
+    _rebuild_unique_key,
+    ensure_paper_trade_schema,
+)
+from trader_koo.scripts.release_evidence import _schema_contract
 
 
 def test_parent_unique_key_rebuild_preserves_child_foreign_keys() -> None:
@@ -66,6 +71,24 @@ def test_public_schema_initializer_rejects_caller_owned_work() -> None:
     assert conn.in_transaction is True
     conn.rollback()
     assert conn.execute("SELECT COUNT(*) FROM caller_work").fetchone()[0] == 0
+
+
+def test_v3_database_runs_v4_expand_contract_instead_of_short_circuiting() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_paper_trade_schema(conn)
+    conn.execute("DROP INDEX idx_paper_trades_legacy_compat")
+    conn.execute("UPDATE paper_trade_schema_meta SET schema_version=3 WHERE id=1")
+    conn.commit()
+
+    ensure_paper_trade_schema(conn)
+    contract = _schema_contract(conn)
+
+    assert PAPER_TRADE_SCHEMA_VERSION == 4
+    assert conn.execute(
+        "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
+    ).fetchone() == (4,)
+    assert contract["passed"] is True
+    assert contract["missing_indexes"] == []
 
 
 def test_unique_key_rebuild_rolls_back_before_committing_fk_violations() -> None:

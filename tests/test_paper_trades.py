@@ -186,6 +186,41 @@ def test_same_day_snapshot_replacement_preserves_intraday_high_water(
     assert drawdown == pytest.approx(18.18181818)
 
 
+def test_v2_snapshot_never_replaces_frozen_v1_snapshot_during_expand_window(
+    conn: sqlite3.Connection, monkeypatch,
+) -> None:
+    conn.execute(
+        "INSERT INTO paper_portfolio_snapshots (snapshot_date,campaign_id,equity_index) "
+        "VALUES ('2026-08-23','paper-v1',123.0)"
+    )
+    monkeypatch.setattr(
+        paper_summary_module,
+        "reconcile_portfolio",
+        lambda *_args, **_kwargs: {
+            "as_of_date": "2026-08-23",
+            "open_positions": 0,
+            "cash": 1_000_000.0,
+            "equity": 1_000_000.0,
+            "realized_pnl_usd": 0.0,
+            "unrealized_pnl_usd": 0.0,
+            "gross_exposure_usd": 0.0,
+            "gross_exposure_pct": 0.0,
+            "legacy_unreconciled_count": 0,
+            "accounting_breaks": [],
+        },
+    )
+
+    written = paper_summary_module.update_portfolio_snapshot(
+        conn, campaign_id="paper-v2"
+    )
+
+    assert written is False
+    assert conn.execute(
+        "SELECT campaign_id,equity_index FROM paper_portfolio_snapshots "
+        "WHERE snapshot_date='2026-08-23'"
+    ).fetchall() == [("paper-v1", 123.0)]
+
+
 def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
     kwargs["report_run_id"] = TEST_REPORT_RUN_ID
     next_date = next_scheduled_session_after(str(kwargs["report_date"]))

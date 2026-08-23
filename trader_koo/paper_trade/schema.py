@@ -12,7 +12,7 @@ from typing import Any
 # In-memory databases are never cached (each connection is a distinct DB).
 _ensured_db_paths: set[str] = set()
 _ensured_db_paths_lock = threading.Lock()
-PAPER_TRADE_SCHEMA_VERSION = 3
+PAPER_TRADE_SCHEMA_VERSION = 4
 
 
 def _resolve_main_db_path(conn: sqlite3.Connection) -> str:

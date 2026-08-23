@@ -70,9 +70,9 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 | Input at the immediate next SPY session | Live result | Replay result |
 | --- | --- | --- |
 | Valid publication strictly before 09:30 ET and ticker open present | Same admitted fill and canonical fields | Same admitted fill and canonical fields |
-| Publication exactly at 09:30 ET or later | `publication_after_intended_open` | Same rejection, intended session, and sealed inputs |
+| Publication exactly at 09:30 ET or later | `report_published_after_intended_open` | Same rejection, intended session, and sealed inputs |
 | Publication missing or malformed | Fail closed with the matching publication reason | Same rejection and sealed inputs |
-| SPY calendar missing | No fill; remain pending or reject by the same policy stage | No substituted ticker calendar and no fill |
+| Scheduled-session SPY observation missing | `pending` with `awaiting_next_session_open` | Same pending disposition and reason; no later row is consulted |
 | Immediate ticker open missing | No roll-forward fill | No roll-forward fill |
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,

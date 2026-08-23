@@ -118,6 +118,7 @@ jobs:
         run: >-
           railway variable set
           "TRADER_KOO_GIT_SHA=${RELEASE_SHA}"
+          "TRADER_KOO_PAPER_TRADE_ENABLED=0"
           --skip-deploys
           --service "$RAILWAY_SERVICE"
           --environment "$RAILWAY_ENVIRONMENT"

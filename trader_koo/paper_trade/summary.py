@@ -26,7 +26,7 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return row is not None
 
 
-def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> None:
+def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> bool:
     """Persist the one cash + positions = equity account projection."""
     campaign = conn.execute(
         "SELECT starting_capital FROM paper_campaigns WHERE campaign_id=?",
@@ -39,6 +39,20 @@ def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> 
         starting_capital=starting_capital,
     )
     snapshot_date = account["as_of_date"] or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    occupying_campaign = conn.execute(
+        "SELECT campaign_id FROM paper_portfolio_snapshots "
+        "WHERE snapshot_date=? AND campaign_id!=? LIMIT 1",
+        (snapshot_date, campaign_id),
+    ).fetchone()
+    if occupying_campaign:
+        LOG.warning(
+            "Portfolio snapshot %s retained for %s during compatibility window; "
+            "%s snapshot was not written",
+            snapshot_date,
+            occupying_campaign[0],
+            campaign_id,
+        )
+        return False
     previous = conn.execute(
         """SELECT equity,high_water_equity FROM paper_portfolio_snapshots
            WHERE campaign_id=? AND snapshot_date<? ORDER BY snapshot_date DESC LIMIT 1""",
@@ -69,14 +83,40 @@ def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> 
     gross_win = sum(value for value in pnls if value > 0)
     gross_loss = abs(sum(value for value in pnls if value < 0))
     conn.execute(
-        """INSERT OR REPLACE INTO paper_portfolio_snapshots
+        """INSERT INTO paper_portfolio_snapshots
                (snapshot_date,campaign_id,open_trades,closed_trades_total,wins,losses,
                 win_rate_pct,avg_pnl_pct,avg_r_multiple,total_pnl_pct,max_drawdown_pct,
                 profit_factor,equity_index,best_trade_pct,worst_trade_pct,
                 starting_capital,cash,equity,realized_pnl_usd,unrealized_pnl_usd,
                 gross_exposure_usd,gross_exposure_pct,high_water_equity,drawdown_pct,
                 session_pnl_usd,legacy_unreconciled_count,accounting_breaks_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(campaign_id,snapshot_date) DO UPDATE SET
+             open_trades=excluded.open_trades,
+             closed_trades_total=excluded.closed_trades_total,
+             wins=excluded.wins,
+             losses=excluded.losses,
+             win_rate_pct=excluded.win_rate_pct,
+             avg_pnl_pct=excluded.avg_pnl_pct,
+             avg_r_multiple=excluded.avg_r_multiple,
+             total_pnl_pct=excluded.total_pnl_pct,
+             max_drawdown_pct=excluded.max_drawdown_pct,
+             profit_factor=excluded.profit_factor,
+             equity_index=excluded.equity_index,
+             best_trade_pct=excluded.best_trade_pct,
+             worst_trade_pct=excluded.worst_trade_pct,
+             starting_capital=excluded.starting_capital,
+             cash=excluded.cash,
+             equity=excluded.equity,
+             realized_pnl_usd=excluded.realized_pnl_usd,
+             unrealized_pnl_usd=excluded.unrealized_pnl_usd,
+             gross_exposure_usd=excluded.gross_exposure_usd,
+             gross_exposure_pct=excluded.gross_exposure_pct,
+             high_water_equity=excluded.high_water_equity,
+             drawdown_pct=excluded.drawdown_pct,
+             session_pnl_usd=excluded.session_pnl_usd,
+             legacy_unreconciled_count=excluded.legacy_unreconciled_count,
+             accounting_breaks_json=excluded.accounting_breaks_json""",
         (
             snapshot_date, campaign_id, account["open_positions"], len(pnls), wins, losses,
             wins / len(pnls) * 100 if pnls else 0.0,
@@ -95,6 +135,7 @@ def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> 
             json.dumps(account["accounting_breaks"], sort_keys=True, separators=(",", ":")),
         ),
     )
+    return True
 
 
 def recent_trades(conn: sqlite3.Connection, *, campaign_id: str, limit: int = 20) -> list[dict[str, Any]]:

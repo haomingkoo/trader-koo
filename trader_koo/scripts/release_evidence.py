@@ -56,6 +56,75 @@ def _snapshot(source: Path, target: Path) -> None:
             source_conn.backup(target_conn)
 
 
+def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
+    indexes = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    triggers = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+    }
+    required_indexes = {
+        "idx_paper_trades_campaign_unique",
+        "idx_paper_trades_legacy_compat",
+        "idx_paper_portfolio_campaign_date",
+        "idx_paper_portfolio_legacy_compat",
+    }
+    required_triggers = {
+        "paper_trades_require_canonical_run",
+        "paper_trades_immutable_lineage",
+        "paper_v1_trades_no_insert",
+        "paper_v1_trades_no_update",
+        "paper_v1_trades_no_delete",
+    }
+    trade_columns = {
+        str(row[1]): str(row[4] or "")
+        for row in conn.execute("PRAGMA table_info(paper_trades)")
+    }
+    portfolio_columns = {
+        str(row[1]): str(row[4] or "")
+        for row in conn.execute("PRAGMA table_info(paper_portfolio_snapshots)")
+    }
+    foreign_key_breaks = [list(row) for row in conn.execute("PRAGMA foreign_key_check")]
+    legacy_read_probe = True
+    try:
+        conn.execute(
+            "SELECT report_date,ticker,direction,status FROM paper_trades LIMIT 1"
+        ).fetchall()
+        conn.execute(
+            "SELECT snapshot_date,open_trades,equity_index "
+            "FROM paper_portfolio_snapshots LIMIT 1"
+        ).fetchall()
+    except sqlite3.DatabaseError:
+        legacy_read_probe = False
+    missing_indexes = sorted(required_indexes - indexes)
+    missing_triggers = sorted(required_triggers - triggers)
+    defaults = {
+        "paper_trades.campaign_id": trade_columns.get("campaign_id"),
+        "paper_portfolio_snapshots.campaign_id": portfolio_columns.get("campaign_id"),
+    }
+    allowed_defaults = {"'paper-v1'", '\"paper-v1\"', "'paper-v2'", '\"paper-v2\"'}
+    defaults_compatible = all(value in allowed_defaults for value in defaults.values())
+    return {
+        "contract": "paper-schema-expand-v4",
+        "missing_indexes": missing_indexes,
+        "missing_triggers": missing_triggers,
+        "campaign_defaults": defaults,
+        "campaign_defaults_compatible": defaults_compatible,
+        "foreign_key_breaks": foreign_key_breaks,
+        "legacy_read_probe": legacy_read_probe,
+        "previous_image_paper_write_mode": "disabled_during_rollback_window",
+        "passed": (
+            not missing_indexes
+            and not missing_triggers
+            and defaults_compatible
+            and not foreign_key_breaks
+            and legacy_read_probe
+        ),
+    }
+
+
 def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     copy_path = output_dir / "database-copy.db"
     source_artifact_hash = _sha256(source)
@@ -78,6 +147,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         after_counts = dict(conn.execute(
             "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
         ).fetchall())
+        schema_contract = _schema_contract(conn)
         conn.commit()
     manifest = {
         "schema": "release-database-copy-v1",
@@ -94,6 +164,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             "equity": account["equity"],
             "cash": account["cash"],
         },
+        "schema_contract": schema_contract,
         "sqlite_objects_before": before_counts,
         "sqlite_objects_after": after_counts,
     }
@@ -101,6 +172,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         integrity == "ok"
         and schema_version == PAPER_TRADE_SCHEMA_VERSION
         and not account["accounting_breaks"]
+        and schema_contract["passed"]
     )
     _write_json(output_dir / "database-migration-manifest.json", manifest)
     if not manifest["passed"]:

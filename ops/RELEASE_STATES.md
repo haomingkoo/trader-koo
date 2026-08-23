@@ -39,7 +39,7 @@ first introduced, the only exception is `absent` to inactive `draft`. Activation
 different, explicitly approved release transition; later code releases can
 preserve an active campaign without invoking activation.
 
-The initial expand phase retains the legacy paper-trade and portfolio-snapshot
+Schema v4 is the initial expand phase. It retains the legacy paper-trade and portfolio-snapshot
 uniqueness rules alongside the new campaign-aware keys. This deliberately makes
 the previous image writable against the forward-migrated volume during the
 rollback window. Destructive contract migration is a separate operation after
@@ -51,8 +51,14 @@ review, and explicit data-recovery approval.
 | --- | --- |
 | Previous image + pre-expand schema | Supported before deployment |
 | New image + expand-compatible schema | Supported and migration-tested |
-| Previous image + expand-compatible schema | Supported rollback target and tested |
+| Previous image + expand-compatible schema | Read-compatible rollback target; paper writes remain disabled |
 | Any retired image + contracted schema | Unsupported; image rollback must be retired first |
+
+The copied-database gate verifies the v4 migration ID, required indexes and
+triggers, compatible campaign defaults, foreign keys, legacy read shapes,
+integrity, and accounting. It does not claim to execute the previous container;
+Campaign v2 and paper writes remain disabled throughout the image-rollback
+window.
 
 The public schema initializer owns its migration phases and rejects a connection
 that already has a transaction. Private table rebuilds use an immediate
@@ -69,7 +75,8 @@ destructive parent-table rebuild on the live volume.
 4. Land exact campaign-state verification, scoped CORS preflight behavior, and
    the Report, Chart, Paper Trades, Agent Observability, and Experiment SPA routes.
 5. Refresh research evidence in a separate artifact-only commit bound to the
-   complete implementation closure.
+   declared source and dependency-manifest closure. This is source-level
+   provenance, not a claim that two unresolved numerical environments are identical.
 6. Let the exact commit pass CI, then approve the protected dark-deploy job.
 7. Verify the public SHA, preserved campaign state, API contracts, and Chromium
    journeys. Activation remains a later, separately audited human decision.
