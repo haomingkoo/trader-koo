@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import math
 import sqlite3
 
@@ -17,6 +18,7 @@ from trader_koo.research.challenger_tournament import (
     holm_adjust,
     run_challenger_tournament,
 )
+from trader_koo.research.challenger_executor import execute_validation_tournament
 
 
 def _unverified_dataset(rows: list[tuple[object, ...]]) -> sqlite3.Connection:
@@ -24,6 +26,28 @@ def _unverified_dataset(rows: list[tuple[object, ...]]) -> sqlite3.Connection:
     conn.execute(
         "CREATE TABLE price_daily (ticker TEXT,date TEXT,open REAL,close REAL,volume REAL)"
     )
+    conn.executemany("INSERT INTO price_daily VALUES (?,?,?,?,?)", rows)
+    return conn
+
+
+def _qualified_executor_fixture() -> sqlite3.Connection:
+    conn = _unverified_dataset([])
+    dates: list[str] = []
+    day = dt.date(2019, 1, 1)
+    while len(dates) < 1_500:
+        if day.weekday() < 5:
+            dates.append(day.isoformat())
+        day += dt.timedelta(days=1)
+    rows = []
+    for ticker_index, ticker in enumerate(
+        ["SPY", *(f"T{index:02d}" for index in range(15))]
+    ):
+        for index, date in enumerate(dates):
+            trend = .00025 + ticker_index * .00001
+            close = 100 * math.exp(trend * index) * (
+                1 + .01 * math.sin(index / 17 + ticker_index)
+            )
+            rows.append((ticker, date, close * .9995, close, 5_000_000))
     conn.executemany("INSERT INTO price_daily VALUES (?,?,?,?,?)", rows)
     return conn
 
@@ -204,16 +228,42 @@ def test_audit_rejects_anonymous_market_rows() -> None:
     assert artifact["sealed_heldout"]["accessed"] is False
 
 
-def test_eligible_data_still_fails_closed_until_executor_is_sealed(monkeypatch) -> None:
+def test_eligible_data_runs_sealed_validation_without_touching_holdout(monkeypatch) -> None:
     monkeypatch.setattr(tournament, "dataset_audit", lambda _conn: {
         "eligible": True, "reasons": [], "dataset_sha256": "d" * 64,
         "price_contract": {"basis": "total_return", "eligible": True},
     })
+    monkeypatch.setattr(tournament, "execute_validation_tournament", lambda _conn, _prereg: {
+        "split": {"development": {}, "validation": {}, "heldout": {}},
+        "challenger_results": {
+            name: {"status": "validation_complete", "metrics": {}}
+            for name in CHALLENGERS
+        },
+        "holm_adjusted_p_values": {name: 1.0 for name in CHALLENGERS},
+        "selected_challenger": None,
+        "sealed_heldout": {"accessed": False, "access_log": []},
+        "prospective_shadow_candidate": None,
+    })
     artifact = run_challenger_tournament(object())
 
-    assert artifact["status"] == "blocked_before_validation"
-    assert artifact["blocking_reasons"] == ["validation_executor_not_sealed"]
+    assert artifact["status"] == "validation_complete_no_eligible_challenger"
     assert artifact["sealed_heldout"]["accessed"] is False
     assert {row["status"] for row in artifact["challenger_results"].values()} == {
-        "not_run"
+        "validation_complete"
     }
+
+
+def test_validation_executor_runs_all_challengers_on_canonical_ledger() -> None:
+    result = execute_validation_tournament(
+        _qualified_executor_fixture(), frozen_preregistration("d" * 64)
+    )
+
+    assert set(result["challenger_results"]) == {"C1", "C2", "C3"}
+    assert result["sealed_heldout"] == {"accessed": False, "access_log": []}
+    assert result["split"]["development"]["end"] < result["split"]["validation"]["start"]
+    assert result["split"]["validation"]["end"] < result["split"]["heldout"]["start"]
+    for challenger in result["challenger_results"].values():
+        assert challenger["status"] == "validation_complete"
+        assert challenger["metrics"]["trade_count"] > 0
+        assert challenger["ledger"]["engine_version"] == "portfolio-execution-v1.0"
+        assert len(challenger["walk_forward_folds"]) == 5
