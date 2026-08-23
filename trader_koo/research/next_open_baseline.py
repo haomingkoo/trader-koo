@@ -92,6 +92,7 @@ class ExecutionResult:
     max_name_weight_pct: float
     max_gross_exposure_pct: float
     open_positions: tuple[dict[str, Any], ...]
+    ledger: dict[str, Any]
 
 
 def _finite(value: Any) -> float | None:
@@ -153,20 +154,46 @@ def simulate_portfolio(
     """Execute immutable decisions through the canonical portfolio ledger."""
     config.validate()
     session_list = tuple(sorted(set(sessions)))
-    price_map = {(row.ticker, row.date): row for row in prices}
-    ordered = sorted(decisions, key=lambda row: (row.entry_date, -row.score, row.ticker, row.decision_id))
+    price_rows = tuple(sorted(prices, key=lambda row: (row.date, row.ticker)))
+    price_map = {(row.ticker, row.date): row for row in price_rows}
+    ordered = tuple(sorted(
+        decisions,
+        key=lambda row: (row.entry_date, -row.score, row.ticker, row.decision_id),
+    ))
     if len({row.decision_id for row in ordered}) != len(ordered):
         raise ValueError("decision_id must be unique")
     if any(not (row.signal_date < row.entry_date <= row.exit_date) for row in ordered):
         raise ValueError("decisions must satisfy signal_date < entry_date <= exit_date")
     by_entry: dict[str, list[ExecutionDecision]] = defaultdict(list)
     exclusions: list[dict[str, Any]] = []
+    orders: list[dict[str, Any]] = []
+    fills: list[dict[str, Any]] = []
+    cash_events: list[dict[str, Any]] = [{
+        "date": session_list[0] if session_list else None,
+        "event_type": "initial_capital",
+        "amount": config.initial_capital,
+    }]
+    position_snapshots: list[dict[str, Any]] = []
+
+    def reject(decision: ExecutionDecision, reason: str, date: str | None = None) -> None:
+        exclusions.append({"decision_id": decision.decision_id, "reason": reason})
+        orders.append({
+            "order_id": f"{decision.decision_id}:entry",
+            "decision_id": decision.decision_id,
+            "date": date or decision.entry_date,
+            "ticker": decision.ticker,
+            "direction": decision.direction,
+            "order_type": "entry",
+            "status": "rejected",
+            "reason": reason,
+        })
+
     for decision in ordered:
         if decision.entry_date not in session_list or decision.exit_date not in session_list:
-            exclusions.append({"decision_id": decision.decision_id, "reason": "execution_session_missing"})
+            reject(decision, "execution_session_missing")
             continue
         if not math.isfinite(decision.capacity_notional) or decision.capacity_notional <= 0:
-            exclusions.append({"decision_id": decision.decision_id, "reason": "capacity_unavailable"})
+            reject(decision, "capacity_unavailable")
             continue
         by_entry[decision.entry_date].append(decision)
 
@@ -203,7 +230,33 @@ def simulate_portfolio(
             position["shares"],
         )
         exit_commission = _commission(exit_price * position["shares"], config)
-        cash += position["reserve"] + gross - exit_commission
+        cash_delta = position["reserve"] + gross - exit_commission
+        cash += cash_delta
+        orders.append({
+            "order_id": f"{position['decision_id']}:exit",
+            "decision_id": position["decision_id"],
+            "date": date,
+            "ticker": position["ticker"],
+            "direction": position["direction"],
+            "order_type": "exit",
+            "status": "filled",
+            "reason": reason,
+        })
+        fills.append({
+            "fill_id": f"{position['decision_id']}:exit",
+            "order_id": f"{position['decision_id']}:exit",
+            "decision_id": position["decision_id"],
+            "date": date,
+            "side": "sell" if position["direction"] == "long" else "buy_to_cover",
+            "price": exit_price,
+            "shares": position["shares"],
+            "commission": exit_commission,
+            "reason": reason,
+        })
+        cash_events.append({
+            "date": date, "event_type": "exit_settlement",
+            "decision_id": position["decision_id"], "amount": cash_delta,
+        })
         trades.append({
             **{key: value for key, value in position.items() if key != "reserve"},
             "exit_date": date,
@@ -226,7 +279,12 @@ def simulate_portfolio(
             if config.cash_rate_bps_annual is None:
                 financing_priced = False
             else:
-                cash += max(cash, 0) * config.cash_rate_bps_annual / 10_000 / 252
+                interest = max(cash, 0) * config.cash_rate_bps_annual / 10_000 / 252
+                cash += interest
+                if interest:
+                    cash_events.append({
+                        "date": date, "event_type": "cash_interest", "amount": interest,
+                    })
             for position in positions:
                 if position["direction"] != "short":
                     continue
@@ -242,6 +300,10 @@ def simulate_portfolio(
                 charge = marked_short_value * config.short_borrow_bps_annual / 10_000 / 252
                 cash -= charge
                 position["borrow"] += charge
+                cash_events.append({
+                    "date": date, "event_type": "short_borrow",
+                    "decision_id": position["decision_id"], "amount": -charge,
+                })
 
         # Barrier-managed campaign positions release capital before today's
         # open-order admissions. Gap exits use the open; intraday collisions
@@ -301,19 +363,19 @@ def simulate_portfolio(
         adv_used: dict[str, float] = defaultdict(float)
         for decision in by_entry.get(date, []):
             if decision.direction not in {"long", "short"}:
-                exclusions.append({"decision_id": decision.decision_id, "reason": "unsupported_direction"})
+                reject(decision, "unsupported_direction", date)
                 continue
             row = price_map.get((decision.ticker, date))
             raw_open = _finite(row.open if row else None)
             if raw_open is None or raw_open <= 0:
-                exclusions.append({"decision_id": decision.decision_id, "reason": "immediate_next_session_open_missing"})
+                reject(decision, "immediate_next_session_open_missing", date)
                 continue
             if len(positions) >= config.max_positions:
-                exclusions.append({"decision_id": decision.decision_id, "reason": "position_capacity_full"})
+                reject(decision, "position_capacity_full", date)
                 continue
             equity, exposure = mark(date, "open")
             if equity is None or equity <= 0:
-                exclusions.append({"decision_id": decision.decision_id, "reason": "current_equity_unpriceable"})
+                reject(decision, "current_equity_unpriceable", date)
                 continue
             entry_price = _adverse(raw_open, decision.direction, config.entry_slippage_bps, entry=True)
             name_room = max(0.0, equity * config.max_name_pct / 100 - exposure.get(decision.ticker, 0))
@@ -330,7 +392,7 @@ def simulate_portfolio(
             # fill price can exceed the cap at the contemporaneous open mark.
             shares = int(target / max(raw_open, entry_price))
             if shares < 1:
-                exclusions.append({"decision_id": decision.decision_id, "reason": "capacity_below_one_share"})
+                reject(decision, "capacity_below_one_share", date)
                 continue
             reserve = shares * entry_price
             commission = _commission(reserve, config)
@@ -348,9 +410,36 @@ def simulate_portfolio(
                 reserve = shares * entry_price
                 commission = _commission(reserve, config) if shares else 0.0
             if shares < 1:
-                exclusions.append({"decision_id": decision.decision_id, "reason": "insufficient_cash"})
+                reject(decision, "insufficient_cash", date)
                 continue
             cash -= reserve + commission
+            orders.append({
+                "order_id": f"{decision.decision_id}:entry",
+                "decision_id": decision.decision_id,
+                "date": date,
+                "ticker": decision.ticker,
+                "direction": decision.direction,
+                "order_type": "entry",
+                "status": "filled",
+                "target_notional": target,
+                "capacity_notional": decision.capacity_notional,
+            })
+            fills.append({
+                "fill_id": f"{decision.decision_id}:entry",
+                "order_id": f"{decision.decision_id}:entry",
+                "decision_id": decision.decision_id,
+                "date": date,
+                "side": "buy" if decision.direction == "long" else "sell_short",
+                "price": entry_price,
+                "shares": shares,
+                "commission": commission,
+                "reason": "next_open",
+            })
+            cash_events.append({
+                "date": date, "event_type": "entry_reserve",
+                "decision_id": decision.decision_id,
+                "amount": -(reserve + commission),
+            })
             adv_used[decision.ticker] += reserve
             positions.append({
                 **dict(decision.metadata),
@@ -386,7 +475,20 @@ def simulate_portfolio(
             row = price_map.get((position["ticker"], date))
             raw_close = _finite(row.close if row else None)
             if raw_close is None or raw_close <= 0:
-                exclusions.append({"decision_id": position["decision_id"], "reason": "exact_exit_close_missing"})
+                exclusions.append({
+                    "decision_id": position["decision_id"],
+                    "reason": "exact_exit_close_missing",
+                })
+                orders.append({
+                    "order_id": f"{position['decision_id']}:exit",
+                    "decision_id": position["decision_id"],
+                    "date": date,
+                    "ticker": position["ticker"],
+                    "direction": position["direction"],
+                    "order_type": "exit",
+                    "status": "rejected",
+                    "reason": "exact_exit_close_missing",
+                })
                 remaining.append(position)
                 continue
             close_position(position, raw_close, date, "scheduled_close")
@@ -418,21 +520,86 @@ def simulate_portfolio(
                 "gross_exposure_pct": gross / equity * 100 if equity > 0 else None,
                 "net_exposure_pct": net / equity * 100 if equity > 0 else None,
             })
+        position_snapshots.append({
+            "date": date,
+            "positions": [{
+                **{key: value for key, value in position.items() if key != "reserve"},
+                "reserved_cash": position["reserve"],
+                "mark_price": (
+                    _finite(price_map[(position["ticker"], date)].close)
+                    if (position["ticker"], date) in price_map else None
+                ),
+            } for position in positions],
+        })
         previous = date
 
     valid = [float(row["equity"]) for row in curve if row.get("equity") is not None]
+    decisions_payload = [dataclasses.asdict(row) for row in ordered]
+    config_payload = dataclasses.asdict(config)
+    input_payload = {
+        "decisions": decisions_payload,
+        "prices": [dataclasses.asdict(row) for row in price_rows],
+        "sessions": session_list,
+        "config": config_payload,
+    }
+    open_positions = [
+        {key: value for key, value in row.items() if key != "reserve"}
+        for row in positions
+    ]
+    components = {
+        "config": config_payload,
+        "market_data": {
+            "prices": [dataclasses.asdict(row) for row in price_rows],
+            "sessions": session_list,
+        },
+        "decisions": decisions_payload,
+        "orders": orders,
+        "fills": fills,
+        "cash": {
+            "initial": config.initial_capital,
+            "final": cash,
+            "events": cash_events,
+        },
+        "positions": position_snapshots,
+        "equity": curve,
+        "costs": {
+            "commissions": sum(float(row["commission"]) for row in fills),
+            "short_borrow": -sum(
+                float(row["amount"]) for row in cash_events
+                if row["event_type"] == "short_borrow"
+            ),
+            "cash_interest": sum(
+                float(row["amount"]) for row in cash_events
+                if row["event_type"] == "cash_interest"
+            ),
+        },
+        "rejections": exclusions,
+        "open_positions": open_positions,
+    }
+    component_hashes = {key: _sha256(value) for key, value in components.items()}
+    ledger_body = _canonical({
+        "schema_version": "portfolio-ledger-v1",
+        "engine_version": "portfolio-execution-v1.0",
+        **components,
+        "provenance": {
+            "config_sha256": _sha256(config_payload),
+            "input_sha256": _sha256(input_payload),
+            "component_sha256": component_hashes,
+        },
+    })
+    ledger = {
+        **ledger_body,
+        "provenance": {
+            **ledger_body["provenance"],
+            "ledger_sha256": _sha256(ledger_body),
+        },
+    }
     return ExecutionResult(
         tuple(trades), tuple(exclusions), tuple(curve), financing_priced,
         config.initial_capital, valid[-1] if valid else None, max_name * 100,
         max_gross * 100,
-        tuple({key: value for key, value in row.items() if key != "reserve"} for row in positions),
+        tuple(open_positions), ledger,
     )
-
-
-# Compatibility import for callers migrated before the canonical seam was
-# named explicitly. New adapters call ``simulate_portfolio``.
-execute_portfolio = simulate_portfolio
-
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -836,6 +1003,7 @@ def _run_next_open_baseline(
                     "max_name_weight_pct": result.max_name_weight_pct, "max_gross_exposure_pct": result.max_gross_exposure_pct},
         "exclusions": sorted(exclusions, key=lambda row: (int(row.get("call_id", 0)), str(row.get("reason", "")))),
         "trades": enriched, "equity_curve": list(result.equity_curve),
+        "execution_ledger": result.ledger,
         "provenance": {"config_sha256": config_hash, "input_sha256": input_hash,
                        "implementation_sha256": _implementation_hash(),
                        "canonical_report_lineage_enforced": lineage_contract_ready,

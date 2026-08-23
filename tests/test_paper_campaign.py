@@ -29,6 +29,13 @@ from trader_koo.paper_trades import create_paper_trades_from_report as _create_p
 from trader_koo.paper_trades import fill_pending_paper_orders
 from trader_koo.paper_trades import paper_trade_summary
 from trader_koo.paper_trade.replay import replay_campaign
+from trader_koo.research.next_open_baseline import (
+    BaselineConfig,
+    ExecutionDecision,
+    SessionPrice,
+    canonical_json_bytes,
+    simulate_portfolio,
+)
 from trader_koo.report.runs import (
     complete_report_run,
     publish_report_run,
@@ -682,6 +689,44 @@ def test_chronological_replay_models_costs_overlap_exits_and_parity():
     assert {trade["exit_reason"] for trade in second["trades"]} >= {"target_hit", "stopped_out"}
     assert second["walk_forward"]["training_dates"]
     assert "held_out" in second
+
+
+def test_baseline_and_campaign_replay_seal_identical_complete_ledgers():
+    config = replace(_build_config(), max_open=2, expiry_days=2)
+    runs = [{
+        "report_run_id": "ledger-run", "report_date": "2026-08-20",
+        "candidates": [{**_candidate("AAA"), "critic_outcome": {"approved": True}}],
+    }]
+    prices = [
+        {"ticker": "AAA", "date": "2026-08-21", "open": 150, "high": 151,
+         "low": 149, "close": 150, "volume": 1_000_000},
+        {"ticker": "AAA", "date": "2026-08-24", "open": 150, "high": 166,
+         "low": 149, "close": 165, "volume": 1_000_000},
+    ]
+    campaign = replay_campaign(
+        candidate_runs=runs, price_rows=prices, spy_rows=[], config=config,
+        _include_splits=False,
+    )
+    fixture_decisions = []
+    for raw in campaign["execution_ledger"]["decisions"]:
+        payload = dict(raw)
+        payload["metadata"] = tuple(tuple(item) for item in payload["metadata"])
+        fixture_decisions.append(ExecutionDecision(**payload))
+    fixture_prices = [SessionPrice(**row) for row in campaign[
+        "execution_ledger"
+    ]["market_data"]["prices"]]
+    baseline = simulate_portfolio(
+        fixture_decisions, fixture_prices,
+        campaign["execution_ledger"]["market_data"]["sessions"],
+        BaselineConfig(**campaign["execution_ledger"]["config"]),
+    )
+
+    assert canonical_json_bytes(baseline.ledger) == canonical_json_bytes(
+        campaign["execution_ledger"]
+    )
+    assert baseline.ledger["provenance"]["ledger_sha256"] == campaign[
+        "execution_ledger_hash"
+    ]
 
 
 def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():

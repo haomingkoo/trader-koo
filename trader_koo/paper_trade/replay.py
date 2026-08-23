@@ -233,6 +233,8 @@ def replay_campaign(*, candidate_runs: list[dict[str, Any]], price_rows: list[di
         "engine_version": ENGINE_VERSION, "policy_hash": canonical_hash(config_snapshot(config)),
         "dataset_hash": canonical_hash({"candidate_runs": candidate_runs, "price_rows": price_rows, "spy_rows": spy_rows}),
         "metrics": metrics, "trades": trades,
+        "execution_ledger": execution.ledger,
+        "execution_ledger_hash": execution.ledger["provenance"]["ledger_sha256"],
         "open_positions": [dict(item) for item in execution.open_positions],
         "exclusions": [dict(item) for item in execution.exclusions],
         "decisions": decisions, "equity_curve": curve, "replay_live_parity": parity,

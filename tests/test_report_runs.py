@@ -668,6 +668,30 @@ def test_schema_ensure_does_not_commit_caller_transaction(tmp_path: Path):
     assert conn.execute("SELECT COUNT(*) FROM caller_work").fetchone() == (0,)
 
 
+def test_concurrent_schema_ensure_serializes_trigger_replacement(tmp_path: Path):
+    db_path = tmp_path / "concurrent-report.db"
+    barrier = threading.Barrier(4)
+
+    def ensure() -> None:
+        conn = sqlite3.connect(db_path, timeout=10)
+        barrier.wait()
+        ensure_report_run_schema(conn)
+        conn.close()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _index: ensure(), range(4)))
+
+    conn = sqlite3.connect(db_path)
+    triggers = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        )
+    }
+    assert "report_runs_valid_transition" in triggers
+    assert "report_runs_snapshot_immutable" in triggers
+    conn.close()
+
+
 def test_resolver_is_read_only_inside_backtest_snapshot(tmp_path: Path):
     db_path = tmp_path / "report.db"
     conn = sqlite3.connect(db_path)

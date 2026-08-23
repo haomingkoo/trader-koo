@@ -89,8 +89,21 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 
 
 def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
-    """Install/migrate the registry without committing the caller transaction."""
+    """Install/migrate the registry atomically without committing caller work."""
     caller_transaction = conn.in_transaction
+    if not caller_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        _ensure_report_run_schema(conn)
+    except Exception:
+        if not caller_transaction:
+            conn.rollback()
+        raise
+    if not caller_transaction:
+        conn.commit()
+
+
+def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS report_runs (
             run_id TEXT PRIMARY KEY,
@@ -306,8 +319,6 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"CREATE TRIGGER {name} {body}")
         except sqlite3.OperationalError as exc:
             raise sqlite3.OperationalError(f"cannot create {name}: {exc}") from exc
-    if not caller_transaction:
-        conn.commit()
 
 
 def start_report_run(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import sqlite3
 
@@ -13,8 +14,8 @@ from trader_koo.research.next_open_baseline import (
     SessionPrice,
     artifact_state,
     canonical_json_bytes,
-    execute_portfolio,
     run_next_open_baseline,
+    simulate_portfolio,
     write_artifact,
 )
 
@@ -46,8 +47,8 @@ def _decision(
 def test_canonical_execution_is_next_open_exact_close_and_byte_stable() -> None:
     config = BaselineConfig(initial_capital=100_000, position_pct=10, max_name_pct=10)
     args = ([_decision("1")], _prices(), [f"2026-01-{day:02d}" for day in range(1, 12)], config)
-    first = execute_portfolio(*args)
-    second = execute_portfolio(*args)
+    first = simulate_portfolio(*args)
+    second = simulate_portfolio(*args)
 
     assert canonical_json_bytes(first) == canonical_json_bytes(second)
     assert first.trades[0]["entry_date"] == "2026-01-02"
@@ -56,9 +57,37 @@ def test_canonical_execution_is_next_open_exact_close_and_byte_stable() -> None:
     assert first.trades[0]["exit_price"] == pytest.approx(111.5 * .999)
 
 
+def test_canonical_execution_seals_the_complete_portfolio_ledger() -> None:
+    config = BaselineConfig(initial_capital=100_000, position_pct=10, max_name_pct=10)
+    result = simulate_portfolio(
+        [_decision("1")], _prices(),
+        [f"2026-01-{day:02d}" for day in range(1, 12)], config,
+    )
+    ledger = result.ledger
+
+    assert set(ledger) == {
+        "schema_version", "engine_version", "config", "market_data",
+        "decisions", "orders", "fills", "cash", "positions", "equity",
+        "costs", "rejections",
+        "open_positions", "provenance",
+    }
+    assert {row["order_type"] for row in ledger["orders"]} == {"entry", "exit"}
+    assert sum(row["amount"] for row in ledger["cash"]["events"]) == pytest.approx(
+        ledger["cash"]["final"]
+    )
+    assert ledger["costs"]["commissions"] == pytest.approx(
+        sum(row["commission"] for row in ledger["fills"])
+    )
+    for component, digest in ledger["provenance"]["component_sha256"].items():
+        assert hashlib.sha256(canonical_json_bytes(ledger[component])).hexdigest() == digest
+    body = {**ledger, "provenance": dict(ledger["provenance"])}
+    expected = body["provenance"].pop("ledger_sha256")
+    assert hashlib.sha256(canonical_json_bytes(body)).hexdigest() == expected
+
+
 def test_execution_rejects_future_informed_chronology() -> None:
     with pytest.raises(ValueError, match="signal_date < entry_date <= exit_date"):
-        execute_portfolio(
+        simulate_portfolio(
             [_decision("future", signal="2026-01-03", entry="2026-01-02", exit_="2026-01-03")],
             _prices(tickers=("AAA",), days=3),
             ["2026-01-01", "2026-01-02", "2026-01-03"],
@@ -71,7 +100,7 @@ def test_open_orders_cannot_spend_same_day_close_proceeds() -> None:
         initial_capital=10_500, position_pct=100, max_name_pct=100,
         commission_bps_per_side=0, minimum_commission_per_side=0,
     )
-    result = execute_portfolio(
+    result = simulate_portfolio(
         [
             _decision("old", signal="2025-12-31", entry="2026-01-01", exit_="2026-01-02"),
             _decision("new", ticker="BBB", entry="2026-01-02", exit_="2026-01-03"),
@@ -89,7 +118,7 @@ def test_same_ticker_orders_share_name_and_adv_limits() -> None:
         initial_capital=100_000, position_pct=10, max_name_pct=15, max_adv_pct=100,
         commission_bps_per_side=0, minimum_commission_per_side=0,
     )
-    result = execute_portfolio(
+    result = simulate_portfolio(
         [_decision("1", capacity=12_000), _decision("2", capacity=12_000, score=89)],
         _prices(tickers=("AAA",), days=11),
         [f"2026-01-{day:02d}" for day in range(1, 12)],
@@ -103,17 +132,17 @@ def test_same_ticker_orders_share_name_and_adv_limits() -> None:
 def test_cash_interest_and_short_borrow_change_daily_equity_and_sizing() -> None:
     sessions = [f"2026-01-{day:02d}" for day in range(1, 4)]
     decisions = [_decision("1", direction="short", signal="2025-12-31", entry="2026-01-01", exit_="2026-01-03")]
-    free = execute_portfolio(
+    free = simulate_portfolio(
         decisions, _prices(tickers=("AAA",), days=3), sessions,
         BaselineConfig(initial_capital=100_000, cash_rate_bps_annual=0, short_borrow_bps_annual=0),
     )
-    financed = execute_portfolio(
+    financed = simulate_portfolio(
         decisions, _prices(tickers=("AAA",), days=3), sessions,
         BaselineConfig(initial_capital=100_000, cash_rate_bps_annual=500, short_borrow_bps_annual=1000),
     )
     assert financed.trades[0]["borrow"] > 0
     assert financed.equity_curve[1]["equity"] != free.equity_curve[1]["equity"]
-    unpriced = execute_portfolio(
+    unpriced = simulate_portfolio(
         decisions, _prices(tickers=("AAA",), days=3), sessions,
         BaselineConfig(initial_capital=100_000, short_borrow_bps_annual=None),
     )
@@ -128,8 +157,8 @@ def test_short_borrow_uses_daily_marked_value() -> None:
     low[1] = dataclasses.replace(low[1], close=50)
     high[1] = dataclasses.replace(high[1], close=200)
     config = BaselineConfig(initial_capital=100_000, cash_rate_bps_annual=0, short_borrow_bps_annual=1000)
-    low_result = execute_portfolio([decision], low, sessions, config)
-    high_result = execute_portfolio([decision], high, sessions, config)
+    low_result = simulate_portfolio([decision], low, sessions, config)
+    high_result = simulate_portfolio([decision], high, sessions, config)
     assert high_result.trades[0]["borrow"] > low_result.trades[0]["borrow"]
 
 
@@ -139,7 +168,7 @@ def test_short_entry_respects_marked_name_cap() -> None:
         SessionPrice("AAA", "2026-01-02", 100, 100),
         SessionPrice("AAA", "2026-01-03", 100, 100),
     ]
-    result = execute_portfolio(
+    result = simulate_portfolio(
         [_decision("1", direction="short", signal="2026-01-01", entry="2026-01-02", exit_="2026-01-03")],
         prices,
         [row.date for row in prices],
@@ -153,7 +182,7 @@ def test_short_entry_respects_cap_after_slippage_and_commission() -> None:
         SessionPrice("AAA", "2026-01-01", 100, 100),
         SessionPrice("AAA", "2026-01-02", 100, 100),
     ]
-    result = execute_portfolio(
+    result = simulate_portfolio(
         [_decision("1", direction="short", signal="2025-12-31", entry="2026-01-01", exit_="2026-01-02")],
         prices,
         ["2026-01-01", "2026-01-02"],
@@ -164,7 +193,7 @@ def test_short_entry_respects_cap_after_slippage_and_commission() -> None:
 
 
 def test_same_session_exit_still_records_opening_risk() -> None:
-    result = execute_portfolio(
+    result = simulate_portfolio(
         [_decision("1", signal="2025-12-31", entry="2026-01-01", exit_="2026-01-01")],
         [SessionPrice("AAA", "2026-01-01", 100, 101)],
         ["2026-01-01"],
@@ -178,7 +207,7 @@ def test_same_session_exit_still_records_opening_risk() -> None:
 def test_null_marks_are_not_valid_observations() -> None:
     prices = _prices(tickers=("AAA",), days=3)
     prices[1] = dataclasses.replace(prices[1], close=None)
-    result = execute_portfolio(
+    result = simulate_portfolio(
         [_decision("1", signal="2025-12-31", entry="2026-01-01", exit_="2026-01-03")], prices,
         ["2026-01-01", "2026-01-02", "2026-01-03"], BaselineConfig(initial_capital=100_000),
     )
