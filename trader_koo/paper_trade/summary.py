@@ -44,10 +44,16 @@ def update_portfolio_snapshot(conn: sqlite3.Connection, *, campaign_id: str) -> 
            WHERE campaign_id=? AND snapshot_date<? ORDER BY snapshot_date DESC LIMIT 1""",
         (campaign_id, snapshot_date),
     ).fetchone()
+    current = conn.execute(
+        """SELECT high_water_equity FROM paper_portfolio_snapshots
+           WHERE campaign_id=? AND snapshot_date=?""",
+        (campaign_id, snapshot_date),
+    ).fetchone()
     previous_equity = float(previous[0]) if previous and previous[0] is not None else starting_capital
     previous_high = float(previous[1]) if previous and previous[1] is not None else starting_capital
+    current_high = float(current[0]) if current and current[0] is not None else starting_capital
     equity = float(account["equity"])
-    high_water = max(previous_high, equity, starting_capital)
+    high_water = max(previous_high, current_high, equity, starting_capital)
     drawdown = (high_water - equity) / high_water * 100 if high_water else 0.0
     closed_rows = conn.execute(
         """SELECT pnl_pct,r_multiple FROM paper_trades

@@ -32,6 +32,7 @@ def verify(base_url: str, expected_sha: str, api_key: str) -> dict[str, Any]:
     auth_code, agents = _get(
         base_url, "/api/admin/agent-observability", api_key=api_key,
     )
+    paper_status, paper = _get(base_url, "/api/paper-trades/summary")
     contracts = {
         "release": release_status == 200 and release.get("git_sha") == expected_sha,
         "health": health_status == 200 and health.get("ok") is True,
@@ -43,11 +44,15 @@ def verify(base_url: str, expected_sha: str, api_key: str) -> dict[str, Any]:
         ),
         "admin_rejects_missing_key": unauth_code in {401, 403},
         "admin_accepts_valid_key": auth_code == 200 and agents.get("ok") is True,
+        "campaign_v2_inactive": (
+            paper_status == 200
+            and (paper.get("campaign_health") or {}).get("campaign_id") == "paper-v2"
+            and (paper.get("campaign_health") or {}).get("status") != "active"
+        ),
     }
     api_paths = {
         "report": "/api/daily-report",
         "chart": "/api/dashboard/SPY/quick?months=12",
-        "paper_trades": "/api/paper-trades/summary",
         "experiment_results": "/api/research/experiments",
     }
     for name, path in api_paths.items():

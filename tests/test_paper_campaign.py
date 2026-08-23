@@ -49,6 +49,14 @@ from trader_koo.db.price_contract import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _fixed_report_publication_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep next-open chronology deterministic as wall-clock time advances."""
+    monkeypatch.setattr(
+        "trader_koo.report.runs._utc_now", lambda: "2026-08-21T12:02:00Z"
+    )
+
+
 def _candidate(
     ticker: str,
     *,
@@ -298,7 +306,7 @@ def test_live_path_persists_every_ranked_candidate_and_exact_disposition():
     _activate(conn)
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('PASS','2026-08-22',150,155,149,154,1000000)"""
+           VALUES ('PASS','2026-08-24',150,155,149,154,1000000)"""
     )
 
     inserted = create_paper_trades_from_report(
@@ -569,6 +577,35 @@ def test_pending_order_never_skips_a_missing_immediate_session_open():
     assert conn.execute("SELECT entry_date FROM paper_trades").fetchone()[0] == "2026-08-24"
 
 
+def test_report_published_after_intended_open_cannot_backdate_a_fill(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "trader_koo.report.runs._utc_now", lambda: "2026-08-23T12:02:00Z"
+    )
+    conn = _db()
+    _activate(conn)
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('STALE','2026-08-22',150,151,149,150,1000000),
+                  ('SPY','2026-08-22',650,651,649,650,1000000)"""
+    )
+
+    assert create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("STALE")], report_date="2026-08-21",
+        generated_ts="stale-ts", report_run_id="stale-run",
+    ) == 0
+    result = fill_pending_paper_orders(conn, through_date="2026-08-22")
+
+    assert result == {"filled": 0, "rejected": 1, "still_pending": 0}
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    payload = json.loads(conn.execute(
+        """SELECT payload_json FROM paper_order_events
+           WHERE event_type='rejected'"""
+    ).fetchone()[0])
+    assert payload["decision"]["reason_code"] == "report_published_after_intended_open"
+
+
 def test_pending_order_payload_is_immutable_and_hash_verified_before_fill():
     conn = _db()
     _activate(conn)
@@ -803,7 +840,7 @@ def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():
     candidate = {**_candidate("PARITY"), "critic_outcome": {"approved": True}}
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('PARITY','2026-08-22',150,151,149,150,1000000)"""
+           VALUES ('PARITY','2026-08-24',150,151,149,150,1000000)"""
     )
     create_paper_trades_from_report(
         conn, setup_rows=[candidate], report_date="2026-08-21",
@@ -824,7 +861,7 @@ def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():
             }],
         }],
         price_rows=[{
-            "ticker": "PARITY", "date": "2026-08-22", "open": 150,
+                "ticker": "PARITY", "date": "2026-08-24", "open": 150,
             "high": 151, "low": 149, "close": 150, "volume": 1_000_000,
         }],
         spy_rows=[], config=_build_config(),

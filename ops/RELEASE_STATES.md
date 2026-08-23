@@ -18,15 +18,22 @@ Trader Koo deliberately separates these states:
 ## Evidence and rollback
 
 Each CI run stores hash-bound database migration, replay, and execution-ledger
-JSON artifacts. Dark deployment first downloads the latest production backup,
-runs additive migrations against a separate copy, and retains only manifests in
-GitHub Actions—not the database itself.
+JSON artifacts. Dark deployment first requests a fresh consistent online SQLite
+backup, downloads that exact latest backup, runs additive migrations against a
+separate copy, and retains only manifests in GitHub Actions—not the database
+itself.
 
-Before upload, the workflow records the active Railway deployment. Any failed
+Before upload, the workflow records the active Railway deployment and commit
+hash from Railway's deployment metadata. Any failed
 deploy or post-deploy check invokes Railway's `deploymentRollback` mutation for
-that exact previous deployment. Railway rollback restores its image and custom
-variables. The pre-deploy database backup remains available for a separately
-approved data recovery; CD never overwrites the live SQLite volume.
+that exact previous deployment, then verifies both health and the previous SHA.
+The public `/api/release` contract is checked too when the restored image
+supports it; this keeps the first migration from an older image bootstrappable.
+Railway rollback restores its image and custom variables. The pre-deploy database
+backup remains available for a separately approved data recovery; CD never
+overwrites the live SQLite volume. Dark-deploy verification also fails unless
+`paper-v2` remains inactive; activation requires a different, explicitly approved
+release transition.
 
 Configure the `production-dark` GitHub environment with required reviewers,
 the non-secret target variables `TRADER_KOO_PRODUCTION_URL`,

@@ -210,6 +210,9 @@ def require_admin(
     provided_key: str | None = Security(_API_KEY_HEADER),
 ) -> dict[str, str]:
     """FastAPI dependency applied once to the complete admin router."""
+    existing = getattr(request.state, "admin_identity", None)
+    if isinstance(existing, dict):
+        return existing
     authenticator = getattr(request.app.state, "admin_authenticator", None)
     if not isinstance(authenticator, AdminAuthenticator):
         raise HTTPException(

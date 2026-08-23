@@ -7,6 +7,7 @@ import json
 import logging
 import sqlite3
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.config import config_snapshot
@@ -36,6 +37,7 @@ from trader_koo.research.next_open_baseline import (
 )
 
 LOG = logging.getLogger(__name__)
+_MARKET_TZ = ZoneInfo("America/New_York")
 
 
 def _pending_order_hash(
@@ -134,7 +136,7 @@ def _require_published_canonical_report(
     if not required.issubset(columns):
         raise ValueError("report_runs registry does not expose verified publication lineage")
     row = conn.execute(
-        "SELECT artifact_path FROM report_runs WHERE run_id=?",
+        "SELECT artifact_path,published_ts FROM report_runs WHERE run_id=?",
         (report_run_id,),
     ).fetchone()
     if not row or not str(row[0] or "").strip():
@@ -150,7 +152,58 @@ def _require_published_canonical_report(
     )
     if resolved is None:
         raise ValueError("paper admission requires the current verified publication")
-    return {"report_complete": True, "is_canonical": True}
+    return {
+        "report_complete": True,
+        "is_canonical": True,
+        "published_ts": str(row[1] or ""),
+    }
+
+
+def _publication_precedes_session_open(published_ts: str, session_date: str) -> bool:
+    """Return whether immutable publication existed before the US cash open."""
+    try:
+        published = dt.datetime.fromisoformat(published_ts.replace("Z", "+00:00"))
+        if published.tzinfo is None:
+            return False
+        session = dt.date.fromisoformat(session_date)
+        market_open = dt.datetime.combine(
+            session, dt.time(hour=9, minute=30), tzinfo=_MARKET_TZ,
+        ).astimezone(dt.timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    return published.astimezone(dt.timezone.utc) < market_open
+
+
+def _advance_paper_book(
+    conn: sqlite3.Connection,
+    *,
+    config: PaperTradeConfig,
+    through_date: str,
+) -> None:
+    """Apply each session's opens before its barriers and closing marks."""
+    earliest = conn.execute(
+        "SELECT MIN(report_date) FROM paper_pending_orders WHERE status='pending'"
+    ).fetchone()[0]
+    if not earliest:
+        _mark_to_market(conn, config=config, through_date=through_date)
+        return
+    sessions = [
+        str(row[0])
+        for row in conn.execute(
+            """SELECT date FROM price_daily
+               WHERE ticker='SPY' AND date>? AND date<=? AND open IS NOT NULL
+               ORDER BY date""",
+            (str(earliest), through_date),
+        )
+    ]
+    if not sessions:
+        _mark_to_market(conn, config=config, through_date=through_date)
+        return
+    for session_date in sessions:
+        fill_pending_paper_orders(
+            conn, config=config, through_date=session_date,
+        )
+        _mark_to_market(conn, config=config, through_date=session_date)
 
 
 def _build_review(
@@ -732,8 +785,7 @@ def _create_paper_trades_from_report(
             or current_price_contract.get("revision") != expected_price_revision
         ):
             return 0
-    _mark_to_market(conn, config=config, through_date=report_date)
-    fill_pending_paper_orders(conn, config=config, through_date=report_date)
+    _advance_paper_book(conn, config=config, through_date=report_date)
     resolve_breadth_shadow_outcomes(
         conn, through_date=report_date, base_config=config
     )
@@ -1048,7 +1100,13 @@ def _create_paper_trades_from_report_in_transaction(
                 "WHERE ticker = ? AND date > ? ORDER BY date ASC LIMIT 1",
                 (ticker, report_date),
             ).fetchone()
-            if next_open_row and next_open_row[0] is not None:
+            if (
+                next_open_row
+                and next_open_row[0] is not None
+                and _publication_precedes_session_open(
+                    str(lineage.get("published_ts") or ""), str(next_open_row[1])
+                )
+            ):
                 raw_entry = float(next_open_row[0])
                 entry_date_actual = next_open_row[1]
                 execution_ready = True
@@ -1113,7 +1171,7 @@ def _create_paper_trades_from_report_in_transaction(
                 "  WHERE ticker = ? AND volume IS NOT NULL AND date <= ?"
                 "  ORDER BY date DESC LIMIT 20"
                 ")",
-                (ticker, entry_date_actual or report_date),
+                (ticker, report_date),
             ).fetchone()
             if vol_row and vol_row[0] and vol_row[0] > 0:
                 avg_daily_volume = float(vol_row[0])
@@ -1623,7 +1681,7 @@ def fill_pending_paper_orders(
         )
         if str(order_hash) != expected_order_hash:
             raise ValueError(f"pending order {order_id} failed immutable hash verification")
-        _require_published_canonical_report(
+        lineage = _require_published_canonical_report(
             conn, str(report_run_id), require_current=False
         )
         session_query = (
@@ -1657,7 +1715,15 @@ def fill_pending_paper_orders(
             (campaign_id,),
         ).fetchone()[0])
         block = None
-        if not campaign or str(campaign[0]) != "active":
+        if not _publication_precedes_session_open(
+            str(lineage.get("published_ts") or ""), intended_session
+        ):
+            block = {
+                "gate": "execution.next_open",
+                "reason_code": "report_published_after_intended_open",
+                "detail": "Verified report publication did not precede the intended session open.",
+            }
+        elif not campaign or str(campaign[0]) != "active":
             block = {"gate": "campaign_lifecycle", "reason_code": "campaign_not_active", "detail": "Campaign is not active at execution."}
         elif str(campaign[1]) != str(policy_version):
             block = {"gate": "campaign_lifecycle", "reason_code": "policy_version_changed", "detail": "Pending order policy no longer matches campaign."}

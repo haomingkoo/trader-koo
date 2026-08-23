@@ -5,11 +5,16 @@ Tests Requirements 17.2, 17.3, 17.8
 
 import pytest
 from datetime import timedelta
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
 from trader_koo.ratelimit.service import RateLimiter, RateLimitConfig
 from trader_koo.ratelimit.middleware import RateLimitMiddleware
+from trader_koo.middleware.auth import (
+    AdminAuthConfig,
+    AdminAuthenticator,
+    require_admin,
+)
 
 
 @pytest.fixture
@@ -137,6 +142,38 @@ class TestRateLimitMiddleware:
 
         response = client.get("/api/test", headers={"X-Forwarded-For": "192.168.1.2"})
         assert response.status_code == 429
+
+    def test_admin_is_authenticated_before_per_user_rate_limit(self):
+        app = FastAPI()
+        audits: list[dict[str, object]] = []
+        app.state.admin_authenticator = AdminAuthenticator(
+            AdminAuthConfig(api_key="secret", username="operator"),
+            audit_recorder=lambda **payload: audits.append(payload),
+        )
+        config = RateLimitConfig(
+            public_limit=1,
+            public_window=timedelta(seconds=60),
+            authenticated_limit=3,
+            authenticated_window=timedelta(seconds=60),
+        )
+        app.add_middleware(
+            RateLimitMiddleware,
+            rate_limiter=RateLimiter(config),
+            config=config,
+        )
+
+        @app.get("/api/admin/test", dependencies=[Depends(require_admin)])
+        def admin_endpoint():
+            return {"ok": True}
+
+        with TestClient(app) as admin_client:
+            first = admin_client.get("/api/admin/test", headers={"X-API-Key": "secret"})
+            second = admin_client.get("/api/admin/test", headers={"X-API-Key": "secret"})
+
+        assert first.status_code == second.status_code == 200
+        assert first.headers["X-RateLimit-Limit"] == "3"
+        assert second.headers["X-RateLimit-Remaining"] == "1"
+        assert len(audits) == 2
 
 
 if __name__ == "__main__":

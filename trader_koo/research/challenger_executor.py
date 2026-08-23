@@ -68,32 +68,38 @@ def c1_signal(history: dict[str, list[float]]) -> dict[str, Any]:
 
 
 def c2_signal(
-    history: dict[str, list[tuple[float, float]]],
-    spy_closes: list[float],
+    history: dict[str, list[SessionPrice]],
+    spy_rows: list[SessionPrice],
 ) -> dict[str, Any]:
-    if len(spy_closes) < 127 or min(spy_closes[-127:]) <= 0:
+    spy_by_date = {row.date: row for row in spy_rows}
+    if len(spy_by_date) < 127:
         return {"residuals": {}, "weights_pct": {}}
-    spy_daily = daily_returns(spy_closes[-127:])
-    spy_mean = statistics.fmean(spy_daily)
-    spy_variance = sum((value - spy_mean) ** 2 for value in spy_daily)
-    spy_five = spy_closes[-1] / spy_closes[-6] - 1
     eligible: list[tuple[str, float]] = []
     for ticker, rows in history.items():
-        if len(rows) < 127:
+        asset_by_date = {row.date: row for row in rows}
+        aligned_dates = sorted(set(asset_by_date) & set(spy_by_date))[-127:]
+        if len(aligned_dates) < 127:
             continue
-        closes = [float(row[0]) for row in rows]
-        if min(closes[-127:]) <= 0:
+        asset = [asset_by_date[date] for date in aligned_dates]
+        market = [spy_by_date[date] for date in aligned_dates]
+        closes = [float(row.close) for row in asset]
+        spy_closes = [float(row.close) for row in market]
+        if min(closes) <= 0 or min(spy_closes) <= 0:
             continue
-        dollar_volume = [float(close) * float(volume) for close, volume in rows[-20:]]
+        dollar_volume = [float(row.close) * float(row.volume or 0) for row in asset[-20:]]
         if statistics.median(dollar_volume) < 50_000_000:
             continue
-        daily = daily_returns(closes[-127:])
+        daily = daily_returns(closes)
+        spy_daily = daily_returns(spy_closes)
         mean = statistics.fmean(daily)
+        spy_mean = statistics.fmean(spy_daily)
+        spy_variance = sum((value - spy_mean) ** 2 for value in spy_daily)
         covariance = sum(
             (asset - mean) * (market - spy_mean)
             for asset, market in zip(daily, spy_daily)
         )
         beta = covariance / spy_variance if spy_variance > 0 else 0
+        spy_five = spy_closes[-1] / spy_closes[-6] - 1
         residual = closes[-1] / closes[-6] - 1 - beta * spy_five
         eligible.append((ticker, residual))
     selected_count = min(20, math.ceil(len(eligible) * .1))
@@ -196,11 +202,8 @@ def _decisions(
             scores = signal["scores"]
             weights = signal["weights_pct"]
         elif challenger == "C2":
-            spy = [row.close for row in by_ticker["SPY"] if row.date <= signal_date]
-            signal = c2_signal({
-                ticker: [(row.close, float(row.volume or 0)) for row in rows]
-                for ticker, rows in history.items()
-            }, spy)
+            spy = [row for row in by_ticker["SPY"] if row.date <= signal_date]
+            signal = c2_signal(history, spy)
             scores = {ticker: -value for ticker, value in signal["residuals"].items()}
             weights = signal["weights_pct"]
         else:
@@ -272,11 +275,26 @@ def _execute(
     )
     result = simulate_portfolio(decisions, prices, allowed_dates, config)
     curve = [dict(row) for row in result.equity_curve]
-    equities = [float(row["equity"]) for row in curve if row.get("equity") is not None]
-    daily = daily_returns(equities)
+    equity_by_date = {
+        str(row["date"]): float(row["equity"])
+        for row in curve
+        if row.get("date") is not None and row.get("equity") is not None
+    }
     spy_map = {row.date: row.close for row in by_ticker["SPY"]}
-    spy_values = [spy_map[date] for date in allowed_dates if date in spy_map]
+    required_dates = list(allowed_dates)
+    missing_equity = [date for date in required_dates if date not in equity_by_date]
+    missing_spy = [date for date in required_dates if date not in spy_map]
+    if missing_equity or missing_spy:
+        raise ValueError(
+            "challenger metrics require date-aligned strategy and SPY marks: "
+            f"missing_equity={missing_equity[:5]}, missing_spy={missing_spy[:5]}"
+        )
+    equities = [equity_by_date[date] for date in required_dates]
+    daily = daily_returns(equities)
+    spy_values = [spy_map[date] for date in required_dates]
     spy_daily = daily_returns(spy_values)
+    if len(daily) != len(spy_daily):
+        raise ValueError("challenger strategy and SPY return counts are not aligned")
     active = [left - right for left, right in zip(daily, spy_daily)]
     ci, p_value = _bootstrap(active, int.from_bytes(challenger.encode(), "big"))
     net_return = (equities[-1] / equities[0] - 1) * 100 if len(equities) > 1 else None

@@ -237,6 +237,9 @@ def test_authenticated_override_controls_the_enforcement_middleware():
         assert response.status_code == 200
         status = limiter.get_status("ip:testclient")
         assert status is not None and status["has_override"] is True
+        # The authenticated admin call belongs to user:admin, not the public
+        # client-IP bucket. The override therefore permits one public request.
+        assert client.get("/api/probe").status_code == 200
         assert client.get("/api/probe").status_code == 429
 
 

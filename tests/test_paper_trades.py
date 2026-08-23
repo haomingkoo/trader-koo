@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from trader_koo.paper_trade import summary as paper_summary_module
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_decision,
@@ -150,6 +151,38 @@ def conn(tmp_path: Path):
         _seed_price(db, ticker, close)
     db.commit()
     return db
+
+
+def test_same_day_snapshot_replacement_preserves_intraday_high_water(
+    conn: sqlite3.Connection, monkeypatch,
+) -> None:
+    equities = iter((1_100_000.0, 900_000.0))
+
+    def account_projection(*_args, **_kwargs):
+        equity = next(equities)
+        return {
+            "as_of_date": "2026-08-23",
+            "open_positions": 0,
+            "cash": equity,
+            "equity": equity,
+            "realized_pnl_usd": equity - 1_000_000,
+            "unrealized_pnl_usd": 0.0,
+            "gross_exposure_usd": 0.0,
+            "gross_exposure_pct": 0.0,
+            "legacy_unreconciled_count": 0,
+            "accounting_breaks": [],
+        }
+
+    monkeypatch.setattr(paper_summary_module, "reconcile_portfolio", account_projection)
+    paper_summary_module.update_portfolio_snapshot(conn, campaign_id="paper-v2")
+    paper_summary_module.update_portfolio_snapshot(conn, campaign_id="paper-v2")
+
+    high_water, drawdown = conn.execute(
+        """SELECT high_water_equity,drawdown_pct FROM paper_portfolio_snapshots
+           WHERE campaign_id='paper-v2' AND snapshot_date='2026-08-23'"""
+    ).fetchone()
+    assert high_water == pytest.approx(1_100_000)
+    assert drawdown == pytest.approx(18.18181818)
 
 
 def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):

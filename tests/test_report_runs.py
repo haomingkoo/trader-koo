@@ -35,6 +35,29 @@ from trader_koo.report.setup_scoring import (
 TEST_SHA = "a" * 40
 
 
+def test_empty_configured_registry_keeps_pre_migration_report_readable(
+    tmp_path: Path,
+) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    legacy_path = report_dir / "daily_report_20260822T120000Z.json"
+    legacy_path.write_text(
+        json.dumps({"generated_ts": "2026-08-22T12:00:00Z", "ok": True}) + "\n"
+    )
+    conn = sqlite3.connect(":memory:")
+    ensure_report_run_schema(conn)
+
+    path, payload = latest_daily_report_json(report_dir, registry_conn=conn)
+
+    assert path == legacy_path
+    assert payload is not None
+    assert payload["report_run"] == {
+        "run_id": None,
+        "state": "unlinked_legacy",
+        "lineage": "unlinked legacy",
+    }
+
+
 def _report(*tickers: str, accepted: int = 1) -> dict:
     rows = [
         {

@@ -608,7 +608,7 @@ Phase 3: Report generation (generate_daily_report.py)
     └── Publish the verified run manifest, then update compatibility copies
 ```
 
-Reports are served via `/api/report/daily` and optionally emailed to subscribers.
+Reports are served via `/api/daily-report` and optionally emailed to subscribers.
 
 ---
 
@@ -616,26 +616,33 @@ Reports are served via `/api/report/daily` and optionally emailed to subscribers
 
 The v2 frontend lives in `trader_koo/frontend-v2/`. It is built at deploy time and served as static files by FastAPI at `/` (root).
 
-### Pages (10, lazy-loaded)
+### Pages (15 application routes plus a lazy-loaded 404)
 
 | Page | Route | Purpose |
 |------|-------|---------|
-| `ChartPage` | `/chart/:ticker?` | Main dashboard — OHLCV chart with overlays |
+| `GuidePage` | `/` | Product guide and navigation entry point |
+| `ChartPage` | `/chart` | Main dashboard — OHLCV chart with overlays |
 | `CryptoPage` | `/crypto` | Real-time crypto prices + indicators |
 | `OpportunitiesPage` | `/opportunities` | Valuation screens + filters |
 | `ReportPage` | `/report` | Daily market report viewer |
+| `ExperimentResultsPage` | `/experiments` | Reproducible experiment artifacts and evidence gates |
+| `AgentObservabilityPage` | `/agent-observability` | Redacted LLM traces, validation, and fallback evidence |
+| `AlertsPage` | `/alerts` | Price, volatility, and crypto alert history |
 | `EarningsPage` | `/earnings` | Earnings calendar + estimates |
 | `VixPage` | `/vix` | VIX analysis + term structure |
-| `PaperTradePage` | `/paper` | Paper trading dashboard |
-| `PolymarketPage` | `/polymarket` | Prediction market probabilities |
-| `GuidePage` | `/guide` | User guide / documentation |
+| `PaperTradePage` | `/paper-trades` | Paper trading dashboard |
+| `OptionsPage` | `/options` | Options premium proxy snapshots |
+| `HyperliquidPage` | `/hyperliquid` | Whale positions and counter-trade studies |
+| `PolymarketPage` | `/markets` | Prediction market probabilities |
+| `MethodologyPage` | `/methodology` | Pipeline and evidence methodology |
 | `NotFoundPage` | `*` | 404 handler |
 
 ### State management
 
 - **Zustand** for chart state (selected ticker, timeframe, overlay toggles, zoom range)
+- **TanStack Query** for shared server-state fetching, caching, invalidation, and mutations
 - React Router for navigation with lazy-loaded route splitting
-- No global API state library — data is fetched per-page with standard `useEffect` + `useState`
+- Local `useState` remains for component-only presentation state
 
 ### Component architecture
 
@@ -736,18 +743,24 @@ legacy`; no run identity or publication lineage is inferred for them.
 
 ## Security
 
-### Authentication middleware
+### Admin authentication
 
-A Starlette `@app.middleware("http")` intercepts `/api/admin/*` requests. It extracts `X-API-Key` from headers and compares against `TRADER_KOO_API_KEY` using `secrets.compare_digest()` to prevent timing-based key enumeration.
-
-When `TRADER_KOO_API_KEY` is unset (local dev), admin auth is bypassed.
+The complete `/api/admin/*` router is protected by one FastAPI dependency. It
+extracts `X-API-Key` and compares it with `TRADER_KOO_API_KEY` using
+`secrets.compare_digest()`. Failed attempts are audited and repeated failures
+are temporarily blocked per client IP. Missing production configuration fails
+closed; an open local admin surface requires both non-strict auth and explicit
+`TRADER_KOO_DEVELOPMENT_MODE=1`.
 
 ### Rate limiting
 
-Rate limiting via `slowapi`:
-- **Public endpoints**: 100 requests/minute per IP
-- **Admin endpoints**: 10 requests/minute per IP
-- Applied at the router level, not globally
+One application middleware applies configurable quotas before route handling:
+- **Public endpoints**: 300 requests/minute per IP by default
+- **Authenticated endpoints**: 1,000 requests/hour per identity by default
+- **Export endpoints**: 10 requests/hour per identity by default
+
+Admin requests are authenticated before quota classification, and the router
+dependency reuses that identity so successful requests are audited once.
 
 ### Audit logging
 

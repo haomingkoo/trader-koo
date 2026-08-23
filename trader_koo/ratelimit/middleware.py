@@ -9,11 +9,12 @@ import logging
 from datetime import timedelta
 from typing import Callable, Optional
 
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from trader_koo.backend.utils import client_ip as _client_ip
+from trader_koo.middleware.auth import AdminAuthenticator
 from trader_koo.ratelimit.service import RateLimiter, RateLimitConfig
 
 LOG = logging.getLogger(__name__)
@@ -126,6 +127,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not path.startswith("/api/") or path in ("/api/health", "/api/status"):
             return await call_next(request)
+
+        # Router dependencies run after HTTP middleware.  Authenticate the
+        # admin surface here so valid admins receive the per-user quota instead
+        # of being pooled into an anonymous proxy-IP bucket.  ``require_admin``
+        # reuses this identity and therefore does not authenticate or audit the
+        # request twice.
+        if path == "/api/admin" or path.startswith("/api/admin/"):
+            authenticator = getattr(request.app.state, "admin_authenticator", None)
+            if isinstance(authenticator, AdminAuthenticator):
+                try:
+                    authenticator.authenticate(
+                        request, request.headers.get("X-API-Key")
+                    )
+                except HTTPException as exc:
+                    # Exceptions raised outside the router dependency layer do
+                    # not pass through FastAPI's exception handler. Preserve
+                    # the same public response contract at this earlier seam.
+                    return JSONResponse(
+                        status_code=exc.status_code,
+                        content={"detail": exc.detail},
+                        headers=exc.headers,
+                    )
 
         # Get rate limit parameters
         rate_limiter = self._resolve_rate_limiter(request)

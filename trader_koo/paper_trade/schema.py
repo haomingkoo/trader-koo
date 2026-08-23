@@ -62,18 +62,43 @@ def _rebuild_unique_key(conn: sqlite3.Connection, table: str, old: str, new: str
     sql = str(row[0] or "") if row else ""
     if old not in sql:
         return
+    # SQLite normally rewrites child foreign-key declarations when a parent is
+    # renamed.  This migration immediately drops the renamed legacy table, so
+    # that behaviour would strand children on ``<table>__campaign_migration``.
+    # Run the documented legacy-rename sequence with FK enforcement suspended,
+    # then prove the restored graph before returning.
+    foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    legacy_alter = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    conn.commit()
+    if foreign_keys:
+        conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("PRAGMA legacy_alter_table=ON")
     legacy = f"{table}__campaign_migration"
     columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({table})")]
-    conn.execute(f"ALTER TABLE {table} RENAME TO {legacy}")
-    create_sql = sql.replace(f"CREATE TABLE {table}", f"CREATE TABLE {table}", 1).replace(old, new, 1)
-    if table == "paper_trades":
-        create_sql = create_sql.replace(
-            "campaign_id TEXT", "campaign_id TEXT NOT NULL DEFAULT 'paper-v2'", 1
+    try:
+        conn.execute(f"ALTER TABLE {table} RENAME TO {legacy}")
+        create_sql = sql.replace(old, new, 1)
+        if table == "paper_trades":
+            create_sql = create_sql.replace(
+                "campaign_id TEXT", "campaign_id TEXT NOT NULL DEFAULT 'paper-v2'", 1
+            )
+        conn.execute(create_sql)
+        joined = ",".join(f'"{column}"' for column in columns)
+        conn.execute(f"INSERT INTO {table} ({joined}) SELECT {joined} FROM {legacy}")
+        conn.execute(f"DROP TABLE {legacy}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA legacy_alter_table={legacy_alter}")
+        if foreign_keys:
+            conn.execute("PRAGMA foreign_keys=ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(
+            f"foreign-key violations after rebuilding {table}: {violations[:5]}"
         )
-    conn.execute(create_sql)
-    joined = ",".join(f'"{column}"' for column in columns)
-    conn.execute(f"INSERT INTO {table} ({joined}) SELECT {joined} FROM {legacy}")
-    conn.execute(f"DROP TABLE {legacy}")
 
 
 def _widen_candidate_dispositions(conn: sqlite3.Connection) -> None:

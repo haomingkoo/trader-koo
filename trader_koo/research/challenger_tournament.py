@@ -254,6 +254,13 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
         if _table_exists(conn, name)
     ), None)
     universe = "point_in_time_membership" if membership_table else "fixed_universe_survivor_study"
+    if membership_table is None:
+        reasons.append("point_in_time_universe_membership_required")
+    else:
+        # Detection alone is not evidence that every historical signal was
+        # filtered through the table. Keep validation sealed until the executor
+        # implements and tests that date-aware membership join.
+        reasons.append("point_in_time_universe_membership_enforcement_unimplemented")
     snapshot = {
         "price_start": start, "price_end": end, "years": years,
         "ticker_count": ticker_count, "row_count": row_count,

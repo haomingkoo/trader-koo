@@ -72,12 +72,19 @@ jobs:
             '.services[$service].source.repo == null' \
             > /dev/null
 
-      - name: Download the latest production database backup
-        run: >-
-          curl --fail --silent --show-error
-          --header "X-API-Key: ${ADMIN_API_KEY}"
-          "${BASE_URL}/api/admin/backups/latest"
-          --output /tmp/production-backup.db.gz
+      - name: Create and download a fresh consistent production backup
+        run: |
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "X-API-Key: ${ADMIN_API_KEY}" \
+            "${BASE_URL}/api/admin/backups" \
+            --output /tmp/backup-created.json
+          jq -e '.ok == true and (.backup_name | length > 0)' /tmp/backup-created.json > /dev/null
+          curl --fail --silent --show-error \
+            --header "X-API-Key: ${ADMIN_API_KEY}" \
+            "${BASE_URL}/api/admin/backups/latest" \
+            --output /tmp/production-backup.db.gz
+          test -s /tmp/production-backup.db.gz
 
       - name: Verify migrations and replay against the production copy
         run: >-
@@ -88,9 +95,13 @@ jobs:
       - name: Record previous verified deployment
         id: previous
         run: |
-          deployment_id=$(railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" | jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty')
+          railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-deployments.json
+          deployment_id=$(jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty' /tmp/previous-deployments.json)
+          release_sha=$(jq -r '[.[] | select(.status == "SUCCESS")][0].meta.commitHash // empty' /tmp/previous-deployments.json)
           test -n "$deployment_id"
+          test -n "$release_sha"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
 
       - name: Bind release identity without starting a second deployment
         run: >-
@@ -140,10 +151,19 @@ jobs:
           test -n "$rollback_id"
           echo "id=$rollback_id" >> "$GITHUB_OUTPUT"
           for attempt in $(seq 1 30); do
-            status=$(railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" | jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .status')
+            railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-deployments.json
+            status=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .status' /tmp/rollback-deployments.json)
             if [ "$status" = "SUCCESS" ]; then
+              rollback_sha=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .meta.commitHash // empty' /tmp/rollback-deployments.json)
+              test "$rollback_sha" = "${{ steps.previous.outputs.sha }}"
               curl --fail --silent --show-error "${BASE_URL}/api/health" > /tmp/rollback-health.json
               jq -e '.ok == true' /tmp/rollback-health.json > /dev/null
+              release_status=$(curl --silent --show-error --output /tmp/rollback-release.json --write-out '%{http_code}' "${BASE_URL}/api/release")
+              if [ "$release_status" = "200" ]; then
+                jq -e --arg sha "${{ steps.previous.outputs.sha }}" '.git_sha == $sha' /tmp/rollback-release.json > /dev/null
+              else
+                test "$release_status" = "404"
+              fi
               exit 0
             fi
             if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ]; then
@@ -160,10 +180,11 @@ jobs:
             --arg schema "dark-deploy-manifest-v1" \
             --arg git_sha "$RELEASE_SHA" \
             --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
+            --arg previous_git_sha "${{ steps.previous.outputs.sha }}" \
             --arg dark_deployment_id "${{ steps.deployed.outputs.id }}" \
             --arg rollback_deployment_id "${{ steps.rollback.outputs.id }}" \
             --arg job_status "${{ job.status }}" \
-            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, verification_status: $job_status, campaign_activation_invoked: false}' \
+            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, verification_status: $job_status, campaign_activation_invoked: false}' \
             > release-evidence/deployment-manifest.json
 
       - name: Upload deployment evidence

@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,7 @@ from trader_koo.research.challenger_tournament import (
     run_challenger_tournament,
 )
 from trader_koo.research.challenger_executor import execute_validation_tournament
+from trader_koo.research.next_open_baseline import SessionPrice
 
 
 def _unverified_dataset(rows: list[tuple[object, ...]]) -> sqlite3.Connection:
@@ -106,16 +108,56 @@ def test_c1_is_12_1_top_quintile_with_inverse_volatility_cap() -> None:
 
 
 def test_c2_is_liquid_bottom_decile_residual_reversal() -> None:
-    spy = [100 + index * .1 for index in range(127)]
+    dates = [(dt.date(2020, 1, 1) + dt.timedelta(days=index)).isoformat() for index in range(127)]
+    spy = [
+        SessionPrice("SPY", date, close, close, volume=1_000_000)
+        for date, close in zip(dates, (100 + index * .1 for index in range(127)))
+    ]
     history = {}
     for ticker_index in range(10):
         closes = [100 + index * .1 for index in range(127)]
         closes[-1] -= ticker_index
-        history[f"T{ticker_index}"] = [(close, 1_000_000) for close in closes]
+        ticker = f"T{ticker_index}"
+        history[ticker] = [
+            SessionPrice(ticker, date, close, close, volume=1_000_000)
+            for date, close in zip(dates, closes)
+        ]
     signal = c2_signal(history, spy)
 
     assert signal["weights_pct"] == {"T9": 10.0}
     assert signal["residuals"]["T9"] < signal["residuals"]["T0"]
+
+
+def test_c2_aligns_asset_and_spy_returns_by_date() -> None:
+    dates = [(dt.date(2020, 1, 1) + dt.timedelta(days=index)).isoformat() for index in range(128)]
+    spy = [
+        SessionPrice("SPY", date, 100 + index, 100 + index, volume=1_000_000)
+        for index, date in enumerate(dates)
+    ]
+    # The asset misses one interior SPY session but still has 127 aligned rows.
+    # Positional zipping would pair every return after the gap to the wrong day.
+    asset = [
+        SessionPrice("AAA", date, 100 + index, 100 + index, volume=1_000_000)
+        for index, date in enumerate(dates)
+        if index != 64
+    ]
+
+    result = c2_signal({"AAA": asset}, spy)
+
+    assert set(result["residuals"]) == {"AAA"}
+    aligned_spy = [row.close for row in spy if row.date in {item.date for item in asset}]
+    asset_returns = executor.daily_returns([row.close for row in asset])
+    spy_returns = executor.daily_returns(aligned_spy)
+    asset_mean = sum(asset_returns) / len(asset_returns)
+    spy_mean = sum(spy_returns) / len(spy_returns)
+    beta = sum(
+        (left - asset_mean) * (right - spy_mean)
+        for left, right in zip(asset_returns, spy_returns)
+    ) / sum((value - spy_mean) ** 2 for value in spy_returns)
+    expected = asset[-1].close / asset[-6].close - 1 - beta * (
+        aligned_spy[-1] / aligned_spy[-6] - 1
+    )
+    assert result["residuals"]["AAA"] == pytest.approx(expected)
 
 
 def test_c3_uses_trailing_trend_and_realized_volatility_without_leverage() -> None:
@@ -290,6 +332,29 @@ def test_validation_executor_runs_all_challengers_on_canonical_ledger() -> None:
     assert set(result["challenger_results"]["C2"]["cost_scenarios"]) == {
         "10.0", "25.0", "50.0",
     }
+
+
+def test_executor_fails_closed_when_strategy_and_spy_marks_are_not_date_aligned(
+    monkeypatch,
+) -> None:
+    sessions = ["2026-01-01", "2026-01-02", "2026-01-03"]
+    spy = [
+        SessionPrice("SPY", date, 100 + index, 100 + index, volume=1_000_000)
+        for index, date in enumerate(sessions)
+    ]
+    monkeypatch.setattr(
+        executor,
+        "simulate_portfolio",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            equity_curve=[
+                {"date": sessions[0], "equity": 1_000_000},
+                {"date": sessions[2], "equity": 1_010_000},
+            ]
+        ),
+    )
+
+    with pytest.raises(ValueError, match="date-aligned"):
+        executor._execute("C3", sessions, {"SPY": spy}, sessions, 1.0)
 
 
 def test_selected_challenger_consumes_heldout_once_and_replays_stored_result(

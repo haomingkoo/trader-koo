@@ -146,13 +146,21 @@ def latest_daily_report_json(
     if registry_conn is None:
         owned_registry_conn = _configured_registry_connection(report_dir)
         registry_conn = owned_registry_conn
+    legacy_allowed = registry_conn is None
     if registry_conn is not None:
         try:
             reconcile_report_publication(registry_conn, report_dir=report_dir)
             resolved = resolve_published_report(
                 registry_conn, report_dir=report_dir, require_current=True
             )
-            return resolved if resolved is not None else (None, None)
+            if resolved is not None:
+                return resolved
+            registered = registry_conn.execute(
+                "SELECT COUNT(*) FROM report_runs"
+            ).fetchone()[0]
+            legacy_allowed = int(registered or 0) == 0
+            if not legacy_allowed:
+                return None, None
         except Exception as exc:
             LOG.error("Canonical report publication reconciliation failed: %s", exc)
             return None, None
@@ -161,7 +169,7 @@ def latest_daily_report_json(
                 owned_registry_conn.close()
     # A manifest without its DB registry is not evidence. Only pre-registry
     # directories may use the explicitly labelled legacy fallback.
-    if (report_dir / LATEST_MANIFEST).exists():
+    if not legacy_allowed or (report_dir / LATEST_MANIFEST).exists():
         return None, None
     path = _resolve_latest_report_file(report_dir)
     if path is None:

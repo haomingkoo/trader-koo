@@ -34,3 +34,24 @@ Sober, exact, and quietly confident. The product should feel like a well-maintai
 ## Accessibility & Inclusion
 
 Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone for state, retain visible focus treatment, respect reduced-motion preferences, and keep data warnings readable in both supported themes.
+
+## Release acceptance
+
+- A published report resolves through its immutable run record and verified
+  artifact hashes; a missing or mismatched lineage is displayed as unavailable.
+- Every experiment result exposes its implementation hash, data basis, split,
+  gate results, and artifact identity. Validation cannot read the sealed held-out
+  partition, and the seal is only trusted inside the controlled evidence store.
+- Historical universe claims fail closed until point-in-time membership is
+  enforced; the current index membership is never presented as historical proof.
+- Paper entries use the first eligible open after verified publication. That
+  session's high, low, close, and final volume cannot influence admission,
+  sizing, or the entry fill.
+- Live and replay execution produce the same canonical ledger for the same
+  campaign policy, report lineage, and market data.
+- A dark deployment verifies the exact commit and an inactive `paper-v2`
+  campaign through the public API. Activation is a separate authenticated,
+  audited human action.
+- The Report, Chart, Paper Trades, Agent Traces, and Experiment Results journeys
+  pass in Chromium with keyboard focus, non-color status labels, and no clipped
+  decision text.
