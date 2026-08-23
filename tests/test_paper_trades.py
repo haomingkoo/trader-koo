@@ -719,7 +719,7 @@ class TestMarkToMarket:
     def _insert_open_trade(self, conn, ticker="AAPL", entry_price=100.0, direction="long",
                            stop_loss=95.0, target_price=110.0, entry_date=None):
         if entry_date is None:
-            entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+            entry_date = "2026-03-13"
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, status, current_price, unrealized_pnl_pct,
@@ -924,7 +924,7 @@ class TestMarkToMarket:
             "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
         ).fetchone()
         assert trade[0] == "stopped_out"
-        assert trade[1] == 93.0  # gap fill: at open, NOT at stop level
+        assert trade[1] == pytest.approx(92.907)  # open gap plus adverse exit slippage
 
     def test_both_stop_and_target_hit_intraday_takes_stop(self, conn):
         """If both stop and target hit intraday (not at open), conservative: assume stop with slippage."""
@@ -942,6 +942,30 @@ class TestMarkToMarket:
         assert trade[0] == "stopped_out"
         # Long stop with slippage: 95 * (1 - 0.0005) = 94.9525
         assert trade[1] < 95.0  # slippage makes it worse
+
+    def test_missed_sessions_replay_in_order_instead_of_using_latest_bar(self, conn):
+        self._insert_open_trade(
+            conn, "AAPL", 100.0, stop_loss=95.0, target_price=110.0,
+            entry_date="2026-03-13",
+        )
+        _seed_price(
+            conn, "AAPL", 96.0, date="2026-03-14",
+            high=101.0, low=94.0, open_=100.0,
+        )
+        _seed_price(
+            conn, "AAPL", 108.0, date="2026-03-15",
+            high=109.0, low=107.0, open_=108.0,
+        )
+
+        result = mark_to_market(conn)
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status,exit_date,exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "stopped_out"
+        assert trade[1] == "2026-03-14"
+        assert trade[2] < 95.0
 
     def test_triggers_target_hit(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, target_price=110.0)
@@ -994,7 +1018,10 @@ class TestMarkToMarket:
     def test_triggers_expiry(self, conn):
         old_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=20)).strftime("%Y-%m-%d")
         self._insert_open_trade(conn, "AAPL", 100.0, entry_date=old_date)
-        _seed_price(conn, "AAPL", 102.0)
+        price_date = (
+            dt.datetime.strptime(old_date, "%Y-%m-%d") + dt.timedelta(days=14)
+        ).strftime("%Y-%m-%d")
+        _seed_price(conn, "AAPL", 102.0, date=price_date)
         # Seed 11 trading days of SPY so trading-day expiry triggers (>= 10)
         base = dt.datetime.strptime(old_date, "%Y-%m-%d")
         for i in range(1, 15):
@@ -1040,7 +1067,11 @@ class TestMarkToMarket:
         )
         conn.commit()
         # Target hit at 90 (limit order, no slippage)
-        _seed_price(conn, "AAPL", 88.0, high=95.0, low=87.0, open_=93.0)
+        _seed_price(
+            conn, "AAPL", 88.0,
+            date=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"),
+            high=95.0, low=87.0, open_=93.0,
+        )
 
         mark_to_market(conn)
         conn.commit()
@@ -1646,7 +1677,7 @@ class TestTradingDayExpiry:
     def _insert_open_trade(self, conn, ticker="AAPL", entry_price=100.0, direction="long",
                            stop_loss=95.0, target_price=110.0, entry_date=None):
         if entry_date is None:
-            entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+            entry_date = "2026-03-13"
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, status, current_price, unrealized_pnl_pct,
@@ -1703,7 +1734,7 @@ class TestTradingDayExpiry:
 
     def test_mtm_trailing_updates_stop_to_breakeven(self, conn):
         """Trade at 1.25R should move stop to breakeven."""
-        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        entry_date = "2026-03-13"
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
         # Seed the persisted entry stop distance used by trailing-stop logic
@@ -1722,7 +1753,7 @@ class TestTradingDayExpiry:
 
     def test_mtm_trailing_mid_level(self, conn):
         """Trade at 1.5R should trail with mid cushion."""
-        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        entry_date = "2026-03-13"
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
         conn.execute(
@@ -1741,7 +1772,7 @@ class TestTradingDayExpiry:
 
     def test_mtm_trailing_prefers_persisted_entry_stop_distance(self, conn):
         """Trailing math should use stored entry risk, not raw ATR%."""
-        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        entry_date = "2026-03-13"
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
         conn.execute(

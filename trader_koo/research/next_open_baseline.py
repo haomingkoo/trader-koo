@@ -139,9 +139,51 @@ def _commission(notional: float, config: BaselineConfig) -> float:
     return max(config.minimum_commission_per_side, notional * config.commission_bps_per_side / 10_000)
 
 
-def _adverse(price: float, direction: str, bps: float, *, entry: bool) -> float:
+def adverse_fill_price(price: float, direction: str, bps: float, *, entry: bool) -> float:
     sign = 1 if (direction == "long") == entry else -1
     return price * (1 + sign * bps / 10_000)
+
+
+@dataclasses.dataclass(frozen=True)
+class BarrierExit:
+    reason: str
+    raw_price: float
+    apply_slippage: bool
+
+
+def resolve_barrier_exit(
+    *,
+    direction: str,
+    open_price: float,
+    high: float,
+    low: float,
+    close: float,
+    stop_loss: float | None,
+    target_price: float | None,
+    expired: bool,
+) -> BarrierExit | None:
+    """Resolve one OHLC bar conservatively for both live and replay paths."""
+    if direction == "long":
+        if stop_loss is not None and open_price <= stop_loss:
+            return BarrierExit("stopped_out", open_price, True)
+        if target_price is not None and open_price >= target_price:
+            return BarrierExit("target_hit", target_price, False)
+        if stop_loss is not None and low <= stop_loss:
+            return BarrierExit("stopped_out", stop_loss, True)
+        if target_price is not None and high >= target_price:
+            return BarrierExit("target_hit", target_price, False)
+    elif direction == "short":
+        if stop_loss is not None and open_price >= stop_loss:
+            return BarrierExit("stopped_out", open_price, True)
+        if target_price is not None and open_price <= target_price:
+            return BarrierExit("target_hit", target_price, False)
+        if stop_loss is not None and high >= stop_loss:
+            return BarrierExit("stopped_out", stop_loss, True)
+        if target_price is not None and low <= target_price:
+            return BarrierExit("target_hit", target_price, False)
+    else:
+        raise ValueError("direction must be long or short")
+    return BarrierExit("expired", close, True) if expired else None
 
 
 def _pnl(direction: str, entry: float, exit_: float, shares: int) -> float:
@@ -233,11 +275,15 @@ def simulate_portfolio(
         return total, dict(exposure)
 
     def close_position(
-        position: dict[str, Any], raw_exit: float, date: str, reason: str
+        position: dict[str, Any], raw_exit: float, date: str, reason: str,
+        *, apply_slippage: bool = True,
     ) -> None:
         nonlocal cash
-        exit_price = _adverse(
-            raw_exit, position["direction"], config.exit_slippage_bps, entry=False
+        exit_price = (
+            adverse_fill_price(
+                raw_exit, position["direction"], config.exit_slippage_bps, entry=False
+            )
+            if apply_slippage else raw_exit
         )
         gross = _pnl(
             position["direction"], position["entry_price"], exit_price,
@@ -369,35 +415,23 @@ def simulate_portfolio(
             direction = position["direction"]
             stop = _finite(position.get("stop_loss"))
             target = _finite(position.get("target_price"))
-            reason: str | None = None
-            raw_exit: float | None = None
-            if direction == "long" and stop is not None and target is not None:
-                if open_ <= stop:
-                    reason, raw_exit = "stopped_out", open_
-                elif open_ >= target:
-                    reason, raw_exit = "target_hit", open_
-                elif low <= stop:
-                    reason, raw_exit = "stopped_out", stop
-                elif high >= target:
-                    reason, raw_exit = "target_hit", target
-            elif direction == "short" and stop is not None and target is not None:
-                if open_ >= stop:
-                    reason, raw_exit = "stopped_out", open_
-                elif open_ <= target:
-                    reason, raw_exit = "target_hit", open_
-                elif high >= stop:
-                    reason, raw_exit = "stopped_out", stop
-                elif low <= target:
-                    reason, raw_exit = "target_hit", target
-            if (
-                reason is None
-                and position["bars_held"] >= position["max_holding_sessions"]
-            ):
-                reason, raw_exit = "expired", close
-            if reason is None or raw_exit is None:
+            barrier = resolve_barrier_exit(
+                direction=direction,
+                open_price=open_,
+                high=high,
+                low=low,
+                close=close,
+                stop_loss=stop,
+                target_price=target,
+                expired=position["bars_held"] >= position["max_holding_sessions"],
+            )
+            if barrier is None:
                 survivors.append(position)
             else:
-                close_position(position, raw_exit, date, reason)
+                close_position(
+                    position, barrier.raw_price, date, barrier.reason,
+                    apply_slippage=barrier.apply_slippage,
+                )
         positions = survivors
 
         # Today's close proceeds do not exist while open orders are admitted.
@@ -418,7 +452,7 @@ def simulate_portfolio(
             if equity is None or equity <= 0:
                 reject(decision, "current_equity_unpriceable", date)
                 continue
-            entry_price = _adverse(raw_open, decision.direction, config.entry_slippage_bps, entry=True)
+            entry_price = adverse_fill_price(raw_open, decision.direction, config.entry_slippage_bps, entry=True)
             name_room = max(0.0, equity * config.max_name_pct / 100 - exposure.get(decision.ticker, 0))
             adv_room = max(0.0, decision.capacity_notional - adv_used[decision.ticker])
             target = min(

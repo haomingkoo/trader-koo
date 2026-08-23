@@ -25,6 +25,10 @@ from trader_koo.paper_trade.decision import (
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema, register_bot_version
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
 from trader_koo.db.price_contract import research_price_contract
+from trader_koo.research.next_open_baseline import (
+    adverse_fill_price,
+    resolve_barrier_exit,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -1550,6 +1554,128 @@ def fill_pending_paper_orders(
     return resolved
 
 
+def _trade_expired(
+    conn: sqlite3.Connection,
+    *,
+    entry_date: str,
+    price_date: str,
+    config: PaperTradeConfig,
+) -> bool:
+    try:
+        if config.expiry_use_trading_days:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM price_daily "
+                "WHERE ticker='SPY' AND date>? AND date<=?",
+                (entry_date, price_date),
+            ).fetchone()
+            sessions = int(row[0]) if row and row[0] else 0
+            if sessions:
+                return sessions >= config.expiry_days
+        entry = dt.date.fromisoformat(entry_date)
+        current = dt.date.fromisoformat(price_date)
+        return (current - entry).days >= config.expiry_days
+    except (TypeError, ValueError):
+        return False
+
+
+def _apply_trade_bar(
+    conn: sqlite3.Connection,
+    *,
+    trade: dict[str, Any],
+    price_row: sqlite3.Row | tuple[Any, ...],
+    config: PaperTradeConfig,
+) -> bool:
+    """Apply one chronological OHLC bar; return whether it closed the trade."""
+    current_price = float(price_row[0])
+    price_date = str(price_row[1])
+    day_high = float(price_row[2]) if price_row[2] is not None else current_price
+    day_low = float(price_row[3]) if price_row[3] is not None else current_price
+    day_open = float(price_row[4]) if price_row[4] is not None else current_price
+    new_hwm = max(trade["high_water_mark"] or day_high, day_high)
+    new_lwm = min(trade["low_water_mark"] or day_low, day_low)
+    barrier = resolve_barrier_exit(
+        direction=trade["direction"],
+        open_price=day_open,
+        high=day_high,
+        low=day_low,
+        close=current_price,
+        stop_loss=trade["stop_loss"],
+        target_price=trade["target_price"],
+        expired=_trade_expired(
+            conn,
+            entry_date=trade["entry_date"],
+            price_date=price_date,
+            config=config,
+        ),
+    )
+    if barrier is not None:
+        exit_price = (
+            adverse_fill_price(
+                barrier.raw_price,
+                trade["direction"],
+                config.exit_slippage_bps,
+                entry=False,
+            )
+            if barrier.apply_slippage else barrier.raw_price
+        )
+        reason = (
+            _stop_exit_reason(trade["direction"], trade["entry_price"], exit_price)
+            if barrier.reason == "stopped_out" else barrier.reason
+        )
+        _close_trade(
+            conn,
+            trade["trade_id"],
+            exit_price,
+            price_date,
+            reason,
+            trade["direction"],
+            trade["entry_price"],
+            trade["stop_loss"],
+            config=config,
+        )
+        return True
+
+    original_risk = _resolve_original_risk(
+        entry_price=trade["entry_price"],
+        current_stop=trade["stop_loss"],
+        stop_distance_pct=trade["stop_distance_pct"],
+        atr_at_entry=trade["atr_at_entry"],
+        config=config,
+    )
+    new_stop = compute_trailing_stop(
+        direction=trade["direction"],
+        entry_price=trade["entry_price"],
+        original_risk=original_risk,
+        current_hwm=new_hwm,
+        current_lwm=new_lwm,
+        current_stop=trade["stop_loss"],
+        config=config,
+    )
+    conn.execute(
+        """UPDATE paper_trades SET
+               current_price=?, unrealized_pnl_pct=?, last_mtm_date=?,
+               high_water_mark=?, low_water_mark=?, stop_loss=?, updated_ts=?
+           WHERE id=?""",
+        (
+            current_price,
+            round(compute_pnl(trade["direction"], trade["entry_price"], current_price), 2),
+            price_date,
+            new_hwm,
+            new_lwm,
+            new_stop,
+            dt.datetime.now(dt.timezone.utc).isoformat(),
+            trade["trade_id"],
+        ),
+    )
+    trade.update(
+        high_water_mark=new_hwm,
+        low_water_mark=new_lwm,
+        stop_loss=new_stop,
+        last_mtm_date=price_date,
+    )
+    return False
+
+
 def _mark_to_market(
     conn: sqlite3.Connection,
     *,
@@ -1573,7 +1699,7 @@ def _mark_to_market(
             f"""
         SELECT id, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, high_water_mark, low_water_mark,
-               stop_distance_pct, atr_at_entry
+               stop_distance_pct, atr_at_entry, last_mtm_date
         FROM paper_trades
         WHERE campaign_id=? AND status = 'open'
           AND report_run_id IN ({placeholders})
@@ -1587,193 +1713,50 @@ def _mark_to_market(
         update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
         return {"open_trades": 0, "updated": 0, "closed": 0}
 
-    today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     updated = 0
     closed = 0
     blocked: list[dict[str, Any]] = []
 
     for row in open_rows:
-        trade_id, ticker, direction, entry_price, entry_date = row[:5]
-        target_price, stop_loss, high_water_mark, low_water_mark = row[5:9]
-        stop_distance_pct, atr_at_entry = row[9:]
+        trade = {
+            "trade_id": int(row[0]),
+            "ticker": str(row[1]),
+            "direction": str(row[2]),
+            "entry_price": float(row[3]),
+            "entry_date": str(row[4]),
+            "target_price": float(row[5]) if row[5] is not None else None,
+            "stop_loss": float(row[6]) if row[6] is not None else None,
+            "high_water_mark": float(row[7]) if row[7] is not None else None,
+            "low_water_mark": float(row[8]) if row[8] is not None else None,
+            "stop_distance_pct": float(row[9]) if row[9] is not None else None,
+            "atr_at_entry": float(row[10]) if row[10] is not None else None,
+            "last_mtm_date": str(row[11]) if row[11] is not None else None,
+        }
 
-        contract = research_price_contract(conn, [str(ticker)])
+        contract = research_price_contract(conn, [trade["ticker"]])
         if not contract.get("eligible"):
             blocked.append({
-                "trade_id": int(trade_id),
-                "ticker": str(ticker),
+                "trade_id": trade["trade_id"],
+                "ticker": trade["ticker"],
                 "reason": str(contract.get("reason") or "price_series_unresolved"),
             })
             continue
 
-        price_row = conn.execute(
+        price_rows = conn.execute(
             "SELECT CAST(close AS REAL), date, "
             "CAST(high AS REAL), CAST(low AS REAL), CAST(open AS REAL) "
             "FROM price_daily "
-            "WHERE ticker = ? ORDER BY date DESC LIMIT 1",
-            (ticker,),
-        ).fetchone()
-
-        if not price_row or price_row[0] is None:
+            "WHERE ticker=? AND date>? AND close IS NOT NULL "
+            "ORDER BY date ASC",
+            (trade["ticker"], trade["last_mtm_date"] or trade["entry_date"]),
+        ).fetchall()
+        if not price_rows:
             continue
-
-        current_price = float(price_row[0])
-        price_date = price_row[1]
-        day_high = float(price_row[2]) if price_row[2] is not None else current_price
-        day_low = float(price_row[3]) if price_row[3] is not None else current_price
-        day_open = float(price_row[4]) if price_row[4] is not None else current_price
-        unrealized = round(compute_pnl(direction, entry_price, current_price), 2)
-        # Track HWM/LWM using intraday extremes for realistic trailing stops
-        new_hwm = max(high_water_mark or day_high, day_high)
-        new_lwm = min(low_water_mark or day_low, day_low)
-
-        # --- Stop / target detection using OHLC ---
-        # Priority 1: Check if OPEN itself breaches stop or target (no ambiguity)
-        # Priority 2: Check intraday high/low
-        # Priority 3: If both stop AND target hit intraday, assume stop first (conservative)
-        hit_stop = False
-        hit_target = False
-
-        if direction == "long":
-            open_hits_stop = stop_loss is not None and day_open <= stop_loss
-            open_hits_target = target_price is not None and day_open >= target_price
-            intraday_hits_stop = stop_loss is not None and day_low <= stop_loss
-            intraday_hits_target = target_price is not None and day_high >= target_price
-        else:  # short
-            open_hits_stop = stop_loss is not None and day_open >= stop_loss
-            open_hits_target = target_price is not None and day_open <= target_price
-            intraday_hits_stop = stop_loss is not None and day_high >= stop_loss
-            intraday_hits_target = target_price is not None and day_low <= target_price
-
-        # Apply exit slippage multiplier
-        exit_slip = config.exit_slippage_bps / 10_000
-
-        if open_hits_stop:
-            # Open gapped past stop - fill at OPEN (realistic gap loss)
-            hit_stop = True
-            current_price = day_open
-        elif open_hits_target:
-            # Open gapped past target - fill at target (limit order fills at limit)
-            hit_target = True
-            current_price = target_price
-        elif intraday_hits_stop and intraday_hits_target:
-            # Both hit intraday - conservative: assume stop hit first
-            hit_stop = True
-            if direction == "long":
-                current_price = round(stop_loss * (1 - exit_slip), 4)
-            else:
-                current_price = round(stop_loss * (1 + exit_slip), 4)
-        elif intraday_hits_stop:
-            hit_stop = True
-            # Stop is a market order - apply slippage against you
-            if direction == "long":
-                current_price = round(stop_loss * (1 - exit_slip), 4)
-            else:
-                current_price = round(stop_loss * (1 + exit_slip), 4)
-        elif intraday_hits_target:
-            # Target is a limit order - fills at exact level (no slippage)
-            hit_target = True
-            current_price = target_price
-
-        expired = False
-        try:
-            if config.expiry_use_trading_days:
-                # Count actual trading days using SPY price rows
-                td_row = conn.execute(
-                    "SELECT COUNT(*) FROM price_daily "
-                    "WHERE ticker = 'SPY' AND date > ? AND date <= ?",
-                    (entry_date, today),
-                ).fetchone()
-                days_held = int(td_row[0]) if td_row and td_row[0] else 0
-                if days_held >= config.expiry_days:
-                    expired = True
-                elif days_held == 0:
-                    # Fallback: no SPY data → use calendar days
-                    entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")
-                    today_dt = dt.datetime.strptime(today, "%Y-%m-%d")
-                    if (today_dt - entry_dt).days >= config.expiry_days:
-                        expired = True
-            else:
-                # Legacy calendar-day fallback
-                entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")
-                today_dt = dt.datetime.strptime(today, "%Y-%m-%d")
-                if (today_dt - entry_dt).days >= config.expiry_days:
-                    expired = True
-        except (ValueError, TypeError):
-            pass
-
-        original_risk = _resolve_original_risk(
-            entry_price=float(entry_price or 0.0),
-            current_stop=float(stop_loss) if isinstance(stop_loss, (int, float)) else None,
-            stop_distance_pct=float(stop_distance_pct) if isinstance(stop_distance_pct, (int, float)) else None,
-            atr_at_entry=float(atr_at_entry) if isinstance(atr_at_entry, (int, float)) else None,
-            config=config,
-        )
-
-        if hit_stop:
-            exit_reason = _stop_exit_reason(direction, float(entry_price), current_price)
-            _close_trade(
-                conn,
-                trade_id,
-                current_price,
-                today,
-                exit_reason,
-                direction,
-                entry_price,
-                stop_loss,
-                config=config,
-            )
-            closed += 1
-        elif hit_target:
-            _close_trade(
-                conn,
-                trade_id,
-                current_price,
-                today,
-                "target_hit",
-                direction,
-                entry_price,
-                stop_loss,
-                config=config,
-            )
-            closed += 1
-        elif expired:
-            _close_trade(
-                conn,
-                trade_id,
-                current_price,
-                today,
-                "expired",
-                direction,
-                entry_price,
-                stop_loss,
-                config=config,
-            )
-            closed += 1
-        else:
-            # Graduated trailing stop (uses original_risk from ATR at entry)
-            new_stop = compute_trailing_stop(
-                direction=direction,
-                entry_price=entry_price,
-                original_risk=original_risk,
-                current_hwm=new_hwm,
-                current_lwm=new_lwm,
-                current_stop=stop_loss,
-                config=config,
-            )
-
-            now = dt.datetime.now(dt.timezone.utc).isoformat()
-            conn.execute(
-                """
-                UPDATE paper_trades SET
-                    current_price = ?, unrealized_pnl_pct = ?,
-                    last_mtm_date = ?, high_water_mark = ?, low_water_mark = ?,
-                    stop_loss = ?, updated_ts = ?
-                WHERE id = ?
-                """,
-                (current_price, unrealized, price_date, new_hwm, new_lwm, new_stop, now, trade_id),
-            )
         updated += 1
+        for price_row in price_rows:
+            if _apply_trade_bar(conn, trade=trade, price_row=price_row, config=config):
+                closed += 1
+                break
 
     update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
     return {
