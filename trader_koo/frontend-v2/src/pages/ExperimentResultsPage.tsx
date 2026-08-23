@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, Download, FileWarning, LockKeyhole } from "lucide-react";
+import type { FormEvent } from "react";
+import { AlertTriangle, Check, Download, FileWarning, LockKeyhole, Send } from "lucide-react";
 import { useExperimentResults } from "../api/hooks";
 import type { ExperimentResult } from "../api/types";
+import { apiFetch } from "../api/client";
 import Badge from "../components/ui/Badge";
 import Spinner from "../components/ui/Spinner";
 
@@ -130,6 +132,81 @@ function ChallengerTable({ experiment }: { experiment: ExperimentResult }) {
   );
 }
 
+function ArtifactAnalyst({ experiment }: { experiment: ExperimentResult }) {
+  const [question, setQuestion] = useState("Why is this experiment invalid?");
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [citations, setCitations] = useState<string[]>([]);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      const response = await apiFetch<{
+        analysis: { answer: string; citations: string[] };
+      }>(`/api/research/experiments/${experiment.experiment_id}/analysis`, {
+        method: "POST",
+        body: JSON.stringify({ question }),
+      });
+      setAnswer(response.analysis.answer);
+      setCitations(response.analysis.citations);
+    } catch (caught) {
+      setError(String((caught as Error)?.message ?? "Analysis unavailable"));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <section aria-labelledby="analyst-heading" className="border-y border-[var(--line)] py-5">
+      <div className="grid gap-5 lg:grid-cols-[16rem_1fr]">
+        <div>
+          <div className="mb-2 flex items-center gap-2">
+            <h2 id="analyst-heading" className="text-base font-semibold text-[var(--text)]">Artifact analyst</h2>
+            <Badge variant="muted">rules, not an agent</Badge>
+          </div>
+          <p className="text-xs leading-5 text-[var(--muted)]">
+            Ask about the sealed manifest. Questions are not retained, no external model runs, and no decision can change.
+          </p>
+        </div>
+        <div>
+          <form onSubmit={submit} className="flex gap-2">
+            <label className="sr-only" htmlFor="artifact-question">Question about this experiment</label>
+            <input
+              id="artifact-question"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              minLength={3}
+              maxLength={500}
+              className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)]"
+              placeholder="Why did this fail?"
+            />
+            <button
+              type="submit"
+              disabled={pending || question.trim().length < 3}
+              className="inline-flex items-center gap-2 rounded-md bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" aria-hidden="true" />
+              {pending ? "Checking" : "Ask"}
+            </button>
+          </form>
+          {error && <p className="mt-3 text-xs text-[var(--red)]" role="alert">{error}</p>}
+          {answer && (
+            <div className="mt-3 rounded-md bg-[var(--surface-subtle)] p-3" aria-live="polite">
+              <p className="text-sm leading-6 text-[var(--text)]">{answer}</p>
+              <p className="mt-2 font-mono text-[10px] text-[var(--muted)]">
+                Evidence: {citations.join(", ")}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function ExperimentResultsPage() {
   useEffect(() => { document.title = "Experiment Results | Trader Koo"; }, []);
   const { data, isLoading, error } = useExperimentResults();
@@ -233,6 +310,8 @@ export default function ExperimentResultsPage() {
       </section>
 
       <ChallengerTable experiment={selected} />
+
+      <ArtifactAnalyst key={selected.experiment_id} experiment={selected} />
 
       <section className="grid gap-6 lg:grid-cols-[1fr_18rem]" aria-labelledby="manifest-heading">
         <div>

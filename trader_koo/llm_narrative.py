@@ -21,6 +21,7 @@ from trader_koo.llm_health import (
 from trader_koo.llm.schemas import SetupRewrite
 from trader_koo.llm.sanitizer import sanitize_llm_output
 from trader_koo.llm.validator import generate_fallback_narrative, validate_llm_output
+from trader_koo.llm.observability import record_llm_call
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _CACHE_LOCK = threading.Lock()
@@ -458,6 +459,47 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         return dict(cached)
 
     _rewrite_fn = _gemini_chat_rewrite if _llm_provider() == "gemini" else _azure_chat_rewrite
+    trace_started = dt.datetime.now(dt.timezone.utc)
+
+    def record_trace(
+        *,
+        proposed: dict[str, Any] | None,
+        final: dict[str, Any],
+        usage: dict[str, Any] | None,
+        validator: str,
+        fallback_reason: str | None,
+        status: str,
+    ) -> None:
+        usage = usage if isinstance(usage, dict) else {}
+        provider = _llm_provider()
+        configured = _gemini_cfg() if provider == "gemini" else _azure_cfg()
+        try:
+            record_llm_call(
+                db_path,
+                source=source,
+                role="narrative_rewriter",
+                stage="setup_copy_rewrite",
+                provider=provider,
+                model=str(usage.get("model") or configured.get("model") or "") or None,
+                deployment=str(
+                    usage.get("deployment") or configured.get("deployment") or ""
+                ) or None,
+                prompt_template_version="setup-rewrite-v1",
+                input_payload=context,
+                proposed_output=proposed,
+                deterministic_pre=context["baseline"],
+                final_adjudicated=final,
+                started_at=trace_started,
+                usage=usage,
+                validator_result=validator,
+                fallback_reason=fallback_reason,
+                terminal_status=status,
+                ticker=context.get("ticker"),
+                decision_scope="narrative_only",
+            )
+        except Exception:
+            LOG.warning("Failed to persist append-only LLM trace", exc_info=True)
+
     try:
         rewritten, usage_meta = _rewrite_fn(context)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
@@ -473,7 +515,12 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         _set_runtime_disable()
         LOG.warning("LLM rewrite failed (%s); using fallback narrative", error_class)
         fallback = generate_fallback_narrative(context)
-        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        out = sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        record_trace(
+            proposed=None, final=out, usage=None, validator="not_run",
+            fallback_reason="request_failed", status="fallback",
+        )
+        return out
     except Exception as exc:
         _safe_note_failure(
             db_path,
@@ -486,7 +533,12 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         _set_runtime_disable()
         LOG.warning("LLM rewrite failed (%s); using fallback narrative", type(exc).__name__)
         fallback = generate_fallback_narrative(context)
-        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        out = sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        record_trace(
+            proposed=None, final=out, usage=None, validator="not_run",
+            fallback_reason="unexpected_exception", status="fallback",
+        )
+        return out
 
     _safe_note_token_usage(
         db_path,
@@ -508,7 +560,13 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         _set_runtime_disable()
         LOG.warning("LLM returned empty response; cooldown activated, using fallback")
         fallback = generate_fallback_narrative(context)
-        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        out = sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        record_trace(
+            proposed=None, final=out, usage=usage_meta,
+            validator="not_run", fallback_reason="empty_llm_response",
+            status="fallback",
+        )
+        return out
 
     # Sanitize raw LLM output (strip HTML, trim to schema field limits) before
     # validation so that slightly-over-length strings don't trigger fallback.
@@ -545,6 +603,15 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             source=source,
             ticker=context.get("ticker"),
         )
+
+    record_trace(
+        proposed=rewritten,
+        final=out,
+        usage=usage_meta,
+        validator="passed" if validation_result.is_valid else "failed",
+        fallback_reason=None if validation_result.is_valid else "schema_validation_failed",
+        status="success" if validation_result.is_valid else "fallback",
+    )
 
     with _CACHE_LOCK:
         _PROMPT_CACHE[prompt_hash] = dict(out)

@@ -13,6 +13,7 @@ from trader_koo.research.strategy_evidence import evidence_snapshot_by_hash
 from trader_koo.research.next_open_baseline import artifact_state
 from trader_koo.research.experiment_results import (
     experiment_catalogue,
+    analyze_experiment,
     experiment_download,
     experiment_result,
 )
@@ -21,6 +22,10 @@ from trader_koo.paper_trade.campaign import EvidenceIntegrityError, verify_decis
 
 class NotesUpdate(BaseModel):
     notes: str = ""
+
+
+class ExperimentAnalysisRequest(BaseModel):
+    question: str
 
 router = APIRouter()
 
@@ -107,6 +112,19 @@ def api_experiment_download(experiment_id: str, component: str) -> dict[str, Any
     if artifact is None:
         raise HTTPException(status_code=404, detail="Experiment artifact not found")
     return artifact
+
+
+@router.post("/api/research/experiments/{experiment_id}/analysis")
+def api_experiment_analysis(
+    experiment_id: str, body: ExperimentAnalysisRequest
+) -> dict[str, Any]:
+    question = " ".join(body.question.split())
+    if not 3 <= len(question) <= 500:
+        raise HTTPException(status_code=422, detail="Question must be 3 to 500 characters")
+    analysis = analyze_experiment(experiment_id, question)
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Experiment result not found")
+    return {"ok": True, "experiment_id": experiment_id, "analysis": analysis}
 
 
 @router.get("/api/paper-trades/decisions")

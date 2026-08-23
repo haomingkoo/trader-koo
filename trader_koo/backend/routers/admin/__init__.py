@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 from trader_koo.backend.routers.admin.alert_quality import (
     router as alert_quality_router,
 )
+from trader_koo.backend.routers.admin.agents import router as agents_router
 from trader_koo.backend.routers.admin.backups import (
     router as backups_router,
 )
@@ -42,6 +43,7 @@ from trader_koo.ratelimit.api import router as rate_limit_router
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 router.include_router(alert_quality_router)
+router.include_router(agents_router)
 router.include_router(pipeline_router)
 router.include_router(paper_campaigns_router)
 router.include_router(ml_router)

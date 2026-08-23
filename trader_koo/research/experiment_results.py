@@ -190,3 +190,71 @@ def experiment_download(experiment_id: str, component: str) -> dict[str, Any] | 
         value = result["_download"].get(component)
         return copy.deepcopy(value) if isinstance(value, dict) else None
     return None
+
+
+def analyze_experiment(experiment_id: str, question: str) -> dict[str, Any] | None:
+    """Answer bounded artifact questions with rules, never an invented agent."""
+    result = experiment_result(experiment_id)
+    if result is None:
+        return None
+    normalized = " ".join(str(question or "").split())[:500]
+    lower = normalized.lower()
+    citations: list[str] = []
+    if any(term in lower for term in ("why", "invalid", "blocked", "fail")):
+        warnings = [str(item).replace("_", " ") for item in result["warnings"]]
+        answer = (
+            "This experiment is invalid because " + "; ".join(warnings) + "."
+            if warnings else "No verified failure evidence is available."
+        )
+        citations = ["warnings", "status", "evidence_label"]
+    elif "held" in lower or "seal" in lower:
+        heldout = result.get("heldout") or {}
+        answer = (
+            "The sealed held-out window has not been accessed."
+            if heldout.get("accessed") is False
+            else "The artifact does not prove an untouched sealed held-out window."
+        )
+        citations = ["heldout.accessed", "heldout.access_log"]
+    elif any(term in lower for term in ("winner", "select", "promot", "activate")):
+        answer = (
+            "No challenger was selected. This surface cannot promote or activate a campaign."
+            if not result.get("selected")
+            else "A selected result is recorded, but activation still requires a separate human gate."
+        )
+        citations = ["selected", "automatic_promotion", "challengers"]
+    elif any(term in lower for term in ("return", "performance", "metric", "sharpe")):
+        available = {
+            key: value for key, value in (result.get("metrics") or {}).items()
+            if isinstance(value, (int, float))
+        }
+        answer = (
+            "Qualified performance metrics are unavailable; the UI correctly shows N/A."
+            if not available
+            else "Available descriptive metrics are: " + ", ".join(
+                f"{key.replace('_', ' ')} {value}" for key, value in available.items()
+            ) + "."
+        )
+        citations = ["metrics", "warnings"]
+    elif any(term in lower for term in ("reproduce", "download", "manifest", "hash")):
+        answer = (
+            "Use the manifest download and verify its artifact, data snapshot, and config hashes. "
+            "A complete ledger is available only when the ledger link is present."
+        )
+        citations = ["manifest", "downloads"]
+    else:
+        answer = (
+            f"{result['title']} is labelled {result['evidence_label']} with status "
+            f"{str(result['status']).replace('_', ' ')}. Ask why it failed, whether the "
+            "held-out window was accessed, what metrics exist, or how to reproduce it."
+        )
+        citations = ["title", "evidence_label", "status"]
+    return {
+        "answer": answer,
+        "citations": citations,
+        "analysis_mode": "deterministic_artifact_rules",
+        "llm_used": False,
+        "agent_used": False,
+        "decision_fields_changed": False,
+        "can_activate_campaign": False,
+        "question_retained": False,
+    }

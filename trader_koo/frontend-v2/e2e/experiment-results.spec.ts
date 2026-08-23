@@ -31,4 +31,11 @@ test("failed tournament remains visible with sealed holdout untouched", async ({
   await expect(results.getByText("N/A").first()).toBeVisible();
   await expect(results).toContainText("Complete ledger unavailable");
   await expect(page.getByRole("button", { name: /activate/i })).toHaveCount(0);
+
+  await page.getByLabel("Question about this experiment").fill(
+    "Was the sealed held-out window accessed?",
+  );
+  await page.getByRole("button", { name: "Ask" }).click();
+  await expect(results).toContainText("has not been accessed");
+  await expect(results).toContainText("rules, not an agent");
 });

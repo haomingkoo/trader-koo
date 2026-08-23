@@ -2,6 +2,7 @@ import { lazy } from "react";
 import type { ComponentType, LazyExoticComponent } from "react";
 import {
   BarChart3,
+  Activity,
   Bell,
   Bitcoin,
   BookOpen,
@@ -90,6 +91,16 @@ export const appRoutes: AppRouteDefinition[] = [
     loaderTitle: "Loading experiment results",
     loaderDetail: "Verifying manifests, evidence states, and reproducible artifacts.",
     load: () => import("../pages/ExperimentResultsPage"),
+  },
+  {
+    path: "agent-observability",
+    navPath: "/agent-observability",
+    label: "Agent Traces",
+    navGroup: "Method",
+    Icon: Activity,
+    loaderTitle: "Loading agent traces",
+    loaderDetail: "Checking redacted LLM spans, validation, fallback, and contribution records.",
+    load: () => import("../pages/AgentObservabilityPage"),
   },
   {
     path: "alerts",

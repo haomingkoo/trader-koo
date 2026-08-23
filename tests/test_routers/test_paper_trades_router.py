@@ -239,6 +239,21 @@ class TestPaperTradeSummaryEndpoint:
         response = test_app.get("/api/research/experiments/unknown")
         assert response.status_code == 404
 
+    def test_artifact_analysis_is_bounded_rules_not_an_agent(self, test_app):
+        response = test_app.post(
+            "/api/research/experiments/challenger-tournament/analysis",
+            json={"question": "Was the sealed held-out window accessed?"},
+        )
+
+        assert response.status_code == 200
+        analysis = response.json()["analysis"]
+        assert analysis["llm_used"] is False
+        assert analysis["agent_used"] is False
+        assert analysis["decision_fields_changed"] is False
+        assert analysis["can_activate_campaign"] is False
+        assert analysis["question_retained"] is False
+        assert "has not been accessed" in analysis["answer"]
+
     def test_sealed_decisions_api_preserves_exact_rank_gate_and_hashes(
         self, test_app, seeded_conn, tmp_path
     ):

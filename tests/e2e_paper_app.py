@@ -4,15 +4,18 @@ from __future__ import annotations
 import os
 import sqlite3
 import hashlib
+import datetime as dt
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 DB_PATH = Path(os.environ["TRADER_KOO_DB_PATH"])
 if DB_PATH.exists():
     DB_PATH.unlink()
 
 from trader_koo.backend.routers.paper_trades import router
+from trader_koo.llm.observability import observability_summary, record_llm_call
+from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator, require_admin
 from trader_koo.paper_trades import create_paper_trades_from_report, ensure_paper_trade_schema
 from trader_koo.report.runs import complete_report_run, publish_report_run, sha256_file
 from trader_koo.report.serializer import write_reports
@@ -64,5 +67,28 @@ create_paper_trades_from_report(
 conn.commit()
 conn.close()
 
+trace_start = dt.datetime(2026, 8, 21, 22, 5, tzinfo=dt.timezone.utc)
+record_llm_call(
+    DB_PATH, source="chart_commentary", role="narrative_rewriter",
+    stage="setup_copy_rewrite", provider="azure_openai", model="gpt-fixture",
+    deployment="fixture-deployment", prompt_template_version="setup-rewrite-v1",
+    input_payload={"ticker": "REJECT"},
+    proposed_output={"observation": "Candidate rejected by deterministic tier rule."},
+    deterministic_pre={"observation": "Tier F candidate."},
+    final_adjudicated={"observation": "Candidate rejected by deterministic tier rule."},
+    started_at=trace_start, ended_at=trace_start + dt.timedelta(milliseconds=42),
+    usage={"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+    validator_result="passed", fallback_reason=None, terminal_status="success",
+    ticker="REJECT",
+)
+
 app = FastAPI()
+app.state.admin_authenticator = AdminAuthenticator(
+    AdminAuthConfig(api_key="e2e-agent-key")
+)
 app.include_router(router)
+
+
+@app.get("/api/admin/agent-observability", dependencies=[Depends(require_admin)])
+def agent_observability_fixture():
+    return {"ok": True, **observability_summary(DB_PATH, limit=100)}
