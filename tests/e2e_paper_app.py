@@ -83,7 +83,7 @@ record_llm_call(
     evaluation_result={
         "version": "setup-grounding-v12", "passed": True, "errors": [],
         "semantic_outcome": "rephrased", "prose_quality_scored": False,
-        "decision_scope": "narrative_only",
+        "decision_scope": "observation_narrative_only",
     },
     cache_identity_sha256="a" * 64,
 )
@@ -93,6 +93,95 @@ app.state.admin_authenticator = AdminAuthenticator(
     AdminAuthConfig(api_key="e2e-agent-key")
 )
 app.include_router(router)
+
+
+@app.get("/api/daily-report")
+def daily_report_fixture():
+    setups = [
+        {
+            "ticker": "IP",
+            "score": 87.3,
+            "calibrated_hit_prob": 0.55,
+            "probability_sample_size": 2116,
+            "setup_tier": "A",
+            "signal_bias": "bullish",
+            "options_positioning_signal": "elevated_iv_event_risk",
+            "options_iv_rank_pct": 71,
+            "options_oi_rank_pct": 29,
+            "news_sentiment_score": 25,
+            "macro_news_score": 25,
+            "observation": "IP has mixed evidence with a neutral trend and no candle confirmation.",
+            "action": (
+                "Watch-only. The setup is mixed due to a neutral trend state and lack of "
+                "candle confirmation. Wait for clearer signals from trend, levels, and participation."
+            ),
+            "risk_note": "Event risk remains elevated.",
+            "technical_read": "Bullish bias, neutral trend, no candle confirmation.",
+            "debate_v1": {
+                "version": "rule-v1",
+                "consensus": {
+                    "consensus_state": "watch",
+                    "consensus_bias": "neutral",
+                    "agreement_score": 0,
+                    "disagreement_count": 2,
+                },
+                "roles": [],
+            },
+        },
+        {
+            "ticker": "COR",
+            "score": 79.4,
+            "calibrated_hit_prob": 0.5,
+            "probability_sample_size": 420,
+            "setup_tier": "B",
+            "signal_bias": "bullish",
+            "options_positioning_signal": "underpriced_positioning",
+            "options_iv_rank_pct": 17,
+            "options_oi_rank_pct": 100,
+            "news_sentiment_score": 25,
+            "macro_news_score": 25,
+            "observation": "The latest bearish YOLO context conflicts with the bullish read.",
+            "action": (
+                "Directional conflict: latest bearish YOLO context disagrees with current bullish "
+                "read. Watchlist only until candles and levels resolve."
+            ),
+            "risk_note": "Fresh opposite YOLO signal.",
+            "technical_read": "Directional evidence remains unresolved.",
+        },
+    ]
+    return {
+        "ok": True,
+        "detail": None,
+        "latest": {
+            "generated_ts": "2026-08-21T22:00:00Z",
+            "latest_data": {"price_date": "2026-08-21"},
+            "warnings": [],
+            "risk_filters": {
+                "trade_mode": "normal",
+                "hard_blocks": 0,
+                "soft_flags": 0,
+                "conditions": [],
+            },
+            "signals": {
+                "tonight_key_changes": [],
+                "regime_context": None,
+                "setup_quality_top": setups,
+                "setup_evaluation": {},
+                "sector_heatmap": [{
+                    "sector": "Unknown",
+                    "avg_pct_change": 0.53,
+                    "median_pct_change": 0.41,
+                    "pct_advancing": 65,
+                    "tickers": 551,
+                    "advancers": 358,
+                    "decliners": 193,
+                    "unchanged": 0,
+                    "near_high_count": 70,
+                    "near_low_count": 17,
+                }],
+            },
+        },
+    }
 
 
 @app.get("/api/admin/agent-observability", dependencies=[Depends(require_admin)])

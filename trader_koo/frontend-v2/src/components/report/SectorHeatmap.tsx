@@ -59,8 +59,10 @@ export default function SectorHeatmap({ rows }: Props) {
             style={{ backgroundColor: cellColor(row.avg_pct_change) }}
           >
             {/* Sector name */}
-            <div className="text-xs font-semibold text-[var(--text)] truncate">
-              {row.sector}
+            <div className="text-xs font-semibold text-[var(--text)]">
+              {String(row.sector).trim().toLowerCase() === "unknown"
+                ? "Unclassified sector"
+                : row.sector}
             </div>
 
             {/* Avg change - prominent */}
