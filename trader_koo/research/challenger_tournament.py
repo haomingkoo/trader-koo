@@ -340,6 +340,26 @@ def run_challenger_tournament(conn: Any) -> dict[str, Any]:
             "automatic_promotion": False,
         }
         return {**body, "artifact_sha256": _sha256(body)}
-    raise NotImplementedError(
-        "eligible total-return data requires the separately reviewed validation executor"
-    )
+    results = {
+        name: {
+            "status": "not_run", "reasons": ["validation_executor_not_sealed"],
+            "config_sha256": preregistration["config_hashes"][name],
+            "metrics": None,
+        }
+        for name in CHALLENGERS
+    }
+    body = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "blocked_before_validation",
+        "preregistration": preregistration,
+        "dataset_audit": audit,
+        "split": None,
+        "challenger_results": results,
+        "holm_adjusted_p_values": None,
+        "selected_challenger": None,
+        "sealed_heldout": {"accessed": False, "access_log": []},
+        "prospective_shadow_candidate": None,
+        "automatic_promotion": False,
+        "blocking_reasons": ["validation_executor_not_sealed"],
+    }
+    return {**body, "artifact_sha256": _sha256(body)}

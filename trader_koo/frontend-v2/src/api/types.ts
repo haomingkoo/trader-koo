@@ -1291,6 +1291,7 @@ export interface ExperimentResult {
   manifest: {
     strategy_version: string | null;
     code_sha: string | null;
+    implementation_sha256: string | null;
     data_snapshot_hash: string | null;
     universe_basis: string | null;
     return_basis: string | null;

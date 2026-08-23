@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from trader_koo.research import challenger_tournament as tournament
 from trader_koo.research.challenger_tournament import (
     CHALLENGERS,
     c1_signal,
@@ -99,3 +100,18 @@ def test_unverified_database_fails_all_challengers_before_holdout_access() -> No
     assert {
         result["status"] for result in artifact["challenger_results"].values()
     } == {"failed_data_gate"}
+
+
+def test_eligible_data_still_fails_closed_until_executor_is_sealed(monkeypatch) -> None:
+    monkeypatch.setattr(tournament, "dataset_audit", lambda _conn: {
+        "eligible": True, "reasons": [], "dataset_sha256": "d" * 64,
+        "price_contract": {"basis": "total_return", "eligible": True},
+    })
+    artifact = run_challenger_tournament(object())
+
+    assert artifact["status"] == "blocked_before_validation"
+    assert artifact["blocking_reasons"] == ["validation_executor_not_sealed"]
+    assert artifact["sealed_heldout"]["accessed"] is False
+    assert {row["status"] for row in artifact["challenger_results"].values()} == {
+        "not_run"
+    }

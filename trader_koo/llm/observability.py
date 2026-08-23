@@ -123,8 +123,6 @@ def ensure_observability_schema(conn: sqlite3.Connection) -> None:
             final_adjudicated_sha256 TEXT NOT NULL,
             changed_fields_json TEXT NOT NULL,
             decision_changed INTEGER NOT NULL,
-            outcome_trade_id INTEGER,
-            outcome_linkage_label TEXT,
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS llm_outcome_links (
@@ -267,13 +265,12 @@ def record_llm_call(
                    contribution_id,trace_id,decision_scope,deterministic_pre_sha256,
                    proposed_change_json,proposed_change_sha256,
                    final_adjudicated_sha256,changed_fields_json,decision_changed,
-                   outcome_linkage_label
-               ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                   created_ts
+               ) VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
             (
                 str(uuid.uuid4()), trace_id, decision_scope, redacted_hash(pre),
                 _canonical(proposed)[:8000], proposed_hash, redacted_hash(final),
                 _canonical(changed_fields), int(bool(changed_fields)),
-                "observational_non_causal" if decision_scope != "narrative_only" else None,
             ),
         )
         conn.commit()

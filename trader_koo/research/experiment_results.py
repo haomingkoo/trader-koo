@@ -1,7 +1,6 @@
 """Hash-verified, read-only experiment results catalogue."""
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -64,7 +63,8 @@ def _baseline_result() -> dict[str, Any]:
         "warnings": sorted(set(str(item) for item in warnings)),
         "manifest": {
             "strategy_version": payload.get("method"),
-            "code_sha": provenance.get("implementation_sha256"),
+            "code_sha": provenance.get("code_sha"),
+            "implementation_sha256": provenance.get("implementation_sha256"),
             "data_snapshot_hash": provenance.get("input_sha256"),
             "universe_basis": "fixed_current_universe_survivor_study",
             "return_basis": payload.get("return_basis"),
@@ -139,7 +139,8 @@ def _tournament_result() -> dict[str, Any]:
         "warnings": sorted(set(str(item) for item in warnings)),
         "manifest": {
             "strategy_version": prereg.get("schema_version"),
-            "code_sha": None,
+            "code_sha": payload.get("code_sha"),
+            "implementation_sha256": None,
             "data_snapshot_hash": audit.get("dataset_sha256"),
             "universe_basis": audit.get("universe_treatment"),
             "return_basis": (audit.get("price_contract") or {}).get("basis"),
@@ -188,7 +189,7 @@ def experiment_download(experiment_id: str, component: str) -> dict[str, Any] | 
         if result["experiment_id"] != experiment_id:
             continue
         value = result["_download"].get(component)
-        return copy.deepcopy(value) if isinstance(value, dict) else None
+        return value if isinstance(value, dict) else None
     return None
 
 

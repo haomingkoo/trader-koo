@@ -52,6 +52,8 @@ function ManifestRows({ experiment }: { experiment: ExperimentResult }) {
     ["Universe", words(experiment.manifest.universe_basis)],
     ["Return basis", words(experiment.manifest.return_basis)],
     ["Benchmark", experiment.manifest.benchmark ?? "N/A"],
+    ["Code SHA", shortHash(experiment.manifest.code_sha)],
+    ["Implementation", shortHash(experiment.manifest.implementation_sha256)],
     ["Data snapshot", shortHash(experiment.manifest.data_snapshot_hash)],
     ["Config", shortHash(experiment.manifest.config_hash)],
     ["Artifact", shortHash(experiment.manifest.artifact_hash)],
