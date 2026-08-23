@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v8"
-CACHE_VERSION = "setup-rewrite-cache-v9"
+EVALUATOR_VERSION = "setup-grounding-v9"
+CACHE_VERSION = "setup-rewrite-cache-v10"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -46,11 +46,11 @@ def _normal(value: Any) -> str:
 
 
 def _contains(text: str, phrase: str) -> bool:
-    return re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text) is not None
+    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
 
 
 def _affirmed(text: str, phrase: str) -> bool:
-    for match in re.finditer(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text):
+    for match in re.finditer(rf"(?<!\w){re.escape(phrase)}(?!\w)", text):
         clause_prefix = re.split(r"[.;,]", text[:match.start()])[-1][-60:]
         if not re.search(
             r"\b(?:do\s+not|don't|never|avoid|not|no)\s+(?:\w+\s+){0,2}$",
@@ -58,6 +58,15 @@ def _affirmed(text: str, phrase: str) -> bool:
         ):
             return True
     return False
+
+
+def _event_affirmed(text: str, phrase: str) -> bool:
+    if not _affirmed(text, phrase):
+        return False
+    return re.search(
+        rf"\b{re.escape(phrase)}\b.{{0,20}}\b(?:has|have|is|was|did)?\s*(?:not|never)\b",
+        text,
+    ) is None
 
 
 def _unit(path: str, currency: bool, percent: bool) -> str:
@@ -179,19 +188,25 @@ def _action_side(text: str) -> str | None:
             continue
         negated_start = re.match(r"^(?:do\s+not|don't|never|avoid)\b", clause) is not None
         long_entry = not negated_start and bool(re.search(
-            r"^(?:buy|go\s+long|long|enter(?:\s+a)?\s+long|open(?:\s+a)?\s+long)\b|"
-            r"\b(?:to|should|could|may|can|consider)\s+(?:buy|go\s+long|enter\s+long)\b|"
+            r"^(?:buy|go\s+long|long(?!-)|enter(?:\s+a)?\s+long|open(?:\s+a)?\s+long)\b|"
+            r"\b(?:to|should|could|may|can|will|would|shall|must|consider|"
+            r"intend\s+to|plan\s+to|going\s+to)\s+(?:buy|go\s+long|enter\s+long)\b|"
             r"\b(?:consider|before|after)\s+buying\b|"
-            r"\b(?:breakout|above\s+resistance)\b",
+            r"\b(?:will|would|shall|must|going\s+to)\s+open(?:\s+a)?\s+long\b",
             clause,
-        ))
+        )) or _event_affirmed(clause, "breakout") or _event_affirmed(
+            clause, "above resistance"
+        )
         short_entry = not negated_start and bool(re.search(
-            r"^(?:sell|go\s+short|short|enter(?:\s+a)?\s+short|open(?:\s+a)?\s+short)\b|"
-            r"\b(?:to|should|could|may|can|consider)\s+(?:sell|go\s+short|enter\s+short)\b|"
+            r"^(?:sell|go\s+short|short(?!-)|enter(?:\s+a)?\s+short|open(?:\s+a)?\s+short)\b|"
+            r"\b(?:to|should|could|may|can|will|would|shall|must|consider|"
+            r"intend\s+to|plan\s+to|going\s+to)\s+(?:sell|go\s+short|enter\s+short)\b|"
             r"\b(?:consider|before|after)\s+selling\b|"
-            r"\b(?:breakdown|below\s+support)\b",
+            r"\b(?:will|would|shall|must|going\s+to)\s+open(?:\s+a)?\s+short\b",
             clause,
-        ))
+        )) or _event_affirmed(clause, "breakdown") or _event_affirmed(
+            clause, "below support"
+        )
         long_side = long_side or long_entry
         short_side = short_side or short_entry
     if long_side and short_side or len(exit_targets) > 1 or exit_targets and (long_side or short_side):

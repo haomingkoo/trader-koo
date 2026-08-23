@@ -189,6 +189,33 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
         direction_with_stop["errors"]
     )
 
+    declarative = evaluate_setup_rewrite({
+        **wait_context["baseline"], "action": "We will sell after confirmation.",
+    }, wait_context)
+    assert {"action_type_changed", "direction_action_contradiction"}.issubset(
+        declarative["errors"]
+    )
+
+    no_breakout = _context(baseline={
+        "observation": "AAA remains unconfirmed.",
+        "action": "No breakout yet; wait for confirmation.",
+        "risk_note": "Risk remains bounded.",
+    })
+    added_breakout_trade = evaluate_setup_rewrite({
+        **no_breakout["baseline"], "action": "Buy only after confirmation.",
+    }, no_breakout)
+    assert "action_type_changed" in added_breakout_trade["errors"]
+
+    no_breakdown = _context(signal_bias="bearish", baseline={
+        "observation": "AAA remains unconfirmed.",
+        "action": "Breakdown has not occurred; wait for confirmation.",
+        "risk_note": "Risk remains bounded.",
+    })
+    added_breakdown_trade = evaluate_setup_rewrite({
+        **no_breakdown["baseline"], "action": "Sell only after confirmation.",
+    }, no_breakdown)
+    assert "action_type_changed" in added_breakdown_trade["errors"]
+
 
 def test_mixed_observation_and_protective_risk_do_not_change_action() -> None:
     context = _context(baseline={
@@ -304,6 +331,16 @@ def test_risk_controls_cannot_be_negated_or_weakened() -> None:
             **context["baseline"], "risk_note": output_risk,
         }, context)
         assert result["passed"] is True
+
+    stop_loss_context = _context(baseline={
+        "observation": "AAA has a bullish setup.",
+        "action": "Wait for confirmation.",
+        "risk_note": "Use a stop-loss.",
+    })
+    removed_stop_loss = evaluate_setup_rewrite({
+        **stop_loss_context["baseline"], "risk_note": "Risk remains.",
+    }, stop_loss_context)
+    assert "risk_posture_weakened" in removed_stop_loss["errors"]
 
 
 def test_grounding_rejects_prompt_injection_and_stale_evidence() -> None:
