@@ -397,6 +397,7 @@ export function PaperCampaignHealthPanel({
           <div className="mt-1 text-xs text-[var(--muted)]">
             Campaign <span className="font-mono text-[var(--text)]">{health.campaign_id}</span>
             {" · status "}<span className="font-mono text-[var(--text)]">{health.status}</span>
+            {" · writes "}<span className="font-mono text-[var(--text)]">{health.write_state ?? "unknown"}</span>
             {" · policy "}<span className="font-mono text-[var(--text)]">{health.policy_version}</span>
             {typeof health.starting_capital === "number" && ` · ${fmtDollars(health.starting_capital)} starting capital`}
           </div>

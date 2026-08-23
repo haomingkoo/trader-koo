@@ -1100,13 +1100,13 @@ def _create_paper_trades_from_report_in_transaction(
                 if spy_ready
                 else None
             )
-            if (
-                next_open_row
-                and next_open_row[0] is not None
+            publication_ready = bool(
+                intended_session
                 and publication_precedes_session_open(
-                    str(lineage.get("published_ts") or ""), str(next_open_row[1])
+                    str(lineage.get("published_ts") or ""), intended_session
                 )
-            ):
+            )
+            if next_open_row and next_open_row[0] is not None:
                 raw_entry = float(next_open_row[0])
                 entry_date_actual = next_open_row[1]
                 execution_ready = True
@@ -1127,6 +1127,11 @@ def _create_paper_trades_from_report_in_transaction(
                 if not spy_ready else "scheduled_ticker_open_missing"
                 if not execution_ready else None
             )
+            _decision_runtime_context["source_context"] = {
+                "report_run_id": report_run_id,
+                "intended_session": intended_session,
+                "price_date": str(next_open_row[1]) if next_open_row else None,
+            }
             levels = compute_stop_and_target(
                 row, direction, config=config, entry_price=entry_price
             )
@@ -1146,6 +1151,34 @@ def _create_paper_trades_from_report_in_transaction(
                 final_gate="trade_plan",
                 reason_code="invalid_stop_target_or_fill",
                 reasons=[f"Trade plan could not be computed: {type(exc).__name__}."],
+            )
+            continue
+
+        if not publication_ready:
+            reason_code = (
+                "report_published_after_intended_open"
+                if str(lineage.get("published_ts") or "")
+                else "report_publication_timestamp_unavailable"
+            )
+            detail = (
+                "Verified report publication did not precede the intended session open."
+                if str(lineage.get("published_ts") or "")
+                else "Verified report publication chronology is unavailable."
+            )
+            _decision_runtime_context["portfolio_block"] = {
+                "gate": "execution.next_open",
+                "reason_code": reason_code,
+                "detail": detail,
+            }
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                final_gate="execution.next_open",
+                reason_code=reason_code,
+                reasons=[detail],
             )
             continue
 

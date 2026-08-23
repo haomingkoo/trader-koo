@@ -423,6 +423,9 @@ def transition_campaign(conn: sqlite3.Connection, *, campaign_id: str, action: s
             raise ValueError(f"unknown campaign {campaign_id}")
         before = str(row[0])
         if action == "activate":
+            from trader_koo.paper_trade.schema import require_contracted_paper_schema
+
+            require_contracted_paper_schema(conn)
             if before == "frozen":
                 raise ValueError("frozen campaigns cannot be reactivated")
             promotion = conn.execute(

@@ -181,7 +181,17 @@ def paper_trade_summary(
     config = _build_config()
     if campaign_id:
         config = replace(config, campaign_id=campaign_id)
-    return _paper_trade_summary_impl(conn, window_days=window_days, config=config)
+    summary = _paper_trade_summary_impl(conn, window_days=window_days, config=config)
+    health = summary.get("campaign_health")
+    if isinstance(health, dict):
+        health["write_state"] = "enabled" if PAPER_TRADE_ENABLED else "paused"
+        if health.get("status") == "active" and not PAPER_TRADE_ENABLED:
+            reasons = list(health.get("health_reasons") or [])
+            if "paper_writes_paused" not in reasons:
+                reasons.append("paper_writes_paused")
+            health["health_reasons"] = reasons
+            health["healthy"] = False
+    return summary
 
 
 def manually_close_trade(

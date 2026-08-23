@@ -240,12 +240,23 @@ def _seed_promotion(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _mark_contracted_for_test(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP INDEX idx_paper_trades_legacy_compat")
+    conn.execute("DROP INDEX idx_paper_portfolio_legacy_compat")
+    conn.execute("UPDATE paper_trade_schema_meta SET schema_version=5 WHERE id=1")
+    conn.commit()
+
+
 def _activate(conn: sqlite3.Connection) -> None:
     _seed_promotion(conn)
+    _mark_contracted_for_test(conn)
     transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="test-admin",
         reason="test activation", idempotency_key=f"activate-{id(conn)}",
     )
+    # Business-path fixtures exercise an already-active campaign on the current
+    # expand schema; production v4 cannot perform this transition itself.
+    ensure_paper_trade_schema(conn)
 
 
 def test_legacy_trades_are_backfilled_to_immutable_v1_once():
@@ -430,6 +441,7 @@ def test_inactive_campaign_records_sealed_shadow_set_without_trading():
 def test_lifecycle_is_idempotent_audited_atomic_and_reversible():
     conn = _db()
     _seed_promotion(conn)
+    _mark_contracted_for_test(conn)
     first = transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="alice",
         reason="paper validation approved", idempotency_key="activate-paper-v2-001",
@@ -672,19 +684,16 @@ def test_report_published_after_intended_open_cannot_backdate_a_fill(
         conn, setup_rows=[_candidate("STALE")], report_date="2026-08-21",
         generated_ts="stale-ts", report_run_id="stale-run",
     ) == 0
-    result = fill_pending_paper_orders(conn, through_date="2026-08-24")
-
-    assert result == {"filled": 0, "rejected": 1, "still_pending": 0}
     assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
-    payload = json.loads(conn.execute(
-        """SELECT payload_json FROM paper_order_events
-           WHERE event_type='rejected'"""
-    ).fetchone()[0])
-    assert payload["decision"]["reason_code"] == "report_published_after_intended_open"
-    sealed_inputs = json.loads(conn.execute(
-        """SELECT inputs_json FROM paper_candidate_decisions
-           WHERE report_run_id='stale-run'"""
-    ).fetchone()[0])
+    decision_row = conn.execute(
+        """SELECT disposition,reason_code,inputs_json,inputs_hash
+           FROM paper_candidate_decisions WHERE report_run_id='stale-run'"""
+    ).fetchone()
+    assert decision_row[:2] == (
+        "rejected", "report_published_after_intended_open",
+    )
+    assert conn.execute("SELECT COUNT(*) FROM paper_pending_orders").fetchone()[0] == 0
+    sealed_inputs = json.loads(decision_row[2])
     replay = replay_campaign(
         candidate_runs=[{
             "report_run_id": "stale-run",
@@ -704,13 +713,14 @@ def test_report_published_after_intended_open_cannot_backdate_a_fill(
         spy_rows=[], config=_build_config(), _include_splits=False,
         expected_execution={
             "stale-run:1": {
-                "disposition": payload["decision"]["disposition"],
-                "inputs_hash": payload["decision"]["inputs_hash"],
+                "disposition": decision_row[0],
+                "inputs_hash": decision_row[3],
             }
         },
     )
-    assert replay["replay_live_parity"] == "matched"
-    assert replay["decisions"][0]["inputs_hash"] == payload["decision"]["inputs_hash"]
+    assert replay["decisions"][0]["inputs"] == sealed_inputs
+    assert replay["replay_live_parity"] == "matched", replay
+    assert replay["decisions"][0]["inputs_hash"] == decision_row[3]
 
 
 def test_pending_order_payload_is_immutable_and_hash_verified_before_fill():
@@ -810,12 +820,13 @@ def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload():
             report_run_id=started_run,
         )
     conn.commit()
-    with pytest.raises(ValueError, match="promotion evidence"):
+    with pytest.raises(ValueError, match="contracted paper schema"):
         transition_campaign(
             conn, campaign_id="paper-v2", action="activate", actor="alice",
             reason="attempt without evidence", idempotency_key="no-evidence-001",
         )
     _seed_promotion(conn)
+    _mark_contracted_for_test(conn)
     transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="alice",
         reason="approved evidence", idempotency_key="payload-bound-001",
@@ -1054,6 +1065,7 @@ def test_replay_fails_closed_without_an_observed_spy_calendar():
 def test_activation_never_falls_back_to_older_eligible_experiment():
     conn = _db()
     _seed_promotion(conn)
+    _mark_contracted_for_test(conn)
     with pytest.raises(sqlite3.IntegrityError, match="preregistrations are immutable"):
         conn.execute(
             "UPDATE paper_campaign_preregistrations SET gates_json='{}'"

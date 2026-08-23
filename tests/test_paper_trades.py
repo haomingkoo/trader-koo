@@ -63,6 +63,7 @@ def test_global_dark_release_gate_blocks_all_facade_mutations(
         paper_facade.fill_pending_paper_orders(conn)
     with pytest.raises(paper_facade.PaperTradeWritesDisabled):
         paper_facade.manually_close_trade(conn, trade_id=1)
+    assert paper_facade.paper_trade_summary(conn)["campaign_health"]["write_state"] == "paused"
 
 
 @pytest.fixture()

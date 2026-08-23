@@ -78,9 +78,13 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
 and the sealed-input hash. Later-session OHLCV is never an allowed substitute.
-Pending orders retry only the exact intended date when that observation is
-backfilled; they never advance to another date. They remain visibly pending
-until an audited operator resolves the data gap or rolls back the campaign.
+Pending orders automatically retry only the exact intended date when that
+observation is backfilled; every fill or rejection is appended to the immutable
+order-event ledger, and they never advance to another date. Campaign rollback
+does not silently cancel unresolved orders: they remain visibly pending until a
+separately audited terminal-resolution operation is implemented or the exact
+observation arrives. Operators must include unresolved pending orders in every
+rollback review.
 
 ### Release-state acceptance matrix
 

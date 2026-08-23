@@ -13,6 +13,34 @@ from typing import Any
 _ensured_db_paths: set[str] = set()
 _ensured_db_paths_lock = threading.Lock()
 PAPER_TRADE_SCHEMA_VERSION = 4
+PAPER_TRADE_MIN_CONTRACTED_SCHEMA_VERSION = 5
+
+
+def require_contracted_paper_schema(conn: sqlite3.Connection) -> None:
+    """Fail closed until a later migration retires v4 rollback compatibility."""
+    row = (
+        conn.execute(
+            "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
+        ).fetchone()
+        if _table_exists(conn, "paper_trade_schema_meta")
+        else None
+    )
+    version = int(row[0]) if row else 0
+    legacy_indexes = {
+        str(index_row[0])
+        for index_row in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='index' AND name IN "
+            "('idx_paper_trades_legacy_compat','idx_paper_portfolio_legacy_compat')"
+        )
+    }
+    if (
+        version < PAPER_TRADE_MIN_CONTRACTED_SCHEMA_VERSION
+        or legacy_indexes
+    ):
+        raise ValueError(
+            "activation requires a verified contracted paper schema and retired image rollback"
+        )
 
 
 def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
@@ -266,8 +294,8 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_paper_trades_report_run ON paper_trades(report_run_id)"
     )
     # Legacy databases use paper-v1 as the default so a rolled-back image that
-    # does not know about campaign_id remains writable. Fresh databases declare
-    # the paper-v2 default in CREATE TABLE above.
+    # does not know about campaign_id can still read the expanded schema. Fresh
+    # databases declare the paper-v2 default in CREATE TABLE above.
     _ensure_column(
         conn,
         "paper_trades",
@@ -280,9 +308,10 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "UPDATE paper_trades SET campaign_id='paper-v1' WHERE campaign_id IS NULL"
     )
     # Expand phase: retain the legacy global key so the previous production
-    # image remains writable during the automatic rollback window, and add the
-    # campaign-aware key used by this image. The legacy key is contracted only
-    # in a separately verified activation migration.
+    # image can read the schema during the rollback window, and add the
+    # campaign-aware key used by this image. Its automatic lifecycle remains
+    # disabled by the release environment. The legacy key is contracted only in
+    # a separately verified activation migration.
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_campaign_unique "
         "ON paper_trades(campaign_id,report_date,ticker,direction)"

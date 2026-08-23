@@ -181,12 +181,6 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 )
                 if not publication_ready:
                     context["portfolio_block"] = _publication_block(published_ts)
-                    context["duplicate"] = False
-                    context["portfolio_context"] = {
-                        "open_count": int(
-                            (context.get("portfolio_context") or {}).get("open_count") or 0
-                        )
-                    }
                     context["source_context"] = {
                         "report_run_id": run["report_run_id"],
                         "intended_session": intended_session,

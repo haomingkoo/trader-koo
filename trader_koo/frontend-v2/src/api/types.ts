@@ -1056,6 +1056,7 @@ export interface PaperCampaignHealth {
   label?: string;
   policy_version?: string;
   status?: string;
+  write_state?: "enabled" | "paused";
   starting_capital?: number;
   reports_observed?: number;
   consecutive_eligible_zero_admission_reports?: number;

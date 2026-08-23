@@ -411,11 +411,10 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
             "idempotency_key": "admin-activation-002",
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 409
+    assert "contracted paper schema" in response.json()["detail"]
     verify = sqlite3.connect(db_path)
-    assert verify.execute(
-        "SELECT actor,reason FROM paper_campaign_audit"
-    ).fetchone() == ("campaign-owner", "paper validation approved")
+    assert verify.execute("SELECT COUNT(*) FROM paper_campaign_audit").fetchone()[0] == 0
     verify.close()
 
 

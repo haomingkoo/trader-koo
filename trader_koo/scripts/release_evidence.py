@@ -142,12 +142,15 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
     required_foreign_keys = {
         ("paper_trade_events", "trade_id", "paper_trades", "id"),
         ("paper_trade_annotations", "trade_id", "paper_trades", "id"),
+        ("paper_trades", "report_run_id", "report_runs", "run_id"),
         ("paper_pending_orders", "campaign_id", "paper_campaigns", "campaign_id"),
         ("paper_order_events", "order_id", "paper_pending_orders", "order_id"),
         ("paper_campaign_audit", "campaign_id", "paper_campaigns", "campaign_id"),
         ("paper_campaign_preregistrations", "campaign_id", "paper_campaigns", "campaign_id"),
         ("paper_campaign_experiments", "campaign_id", "paper_campaigns", "campaign_id"),
+        ("paper_campaign_experiments", "preregistration_id", "paper_campaign_preregistrations", "preregistration_id"),
         ("paper_campaign_approvals", "campaign_id", "paper_campaigns", "campaign_id"),
+        ("paper_campaign_approvals", "experiment_id", "paper_campaign_experiments", "experiment_id"),
     }
     actual_foreign_keys: set[tuple[str, str, str, str]] = set()
     for table in {item[0] for item in required_foreign_keys}:
