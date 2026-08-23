@@ -253,7 +253,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         # admission lineage has its own versioned migration and must always be
         # verified explicitly on the copied database.
         try:
-            ensure_report_run_schema(conn)
+            ensure_report_run_schema(conn, verify_admission_contract=True)
         except AdmissionLedgerContractError as exc:
             contract_failure = exc
         if contract_failure is None:

@@ -135,10 +135,6 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
                 (run_id, attempted_ts),
             )
         conn.execute(
-            "DELETE FROM report_schema_migrations "
-            "WHERE migration='admission-ledger-contract-v4'"
-        )
-        conn.execute(
             "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
             "VALUES ('admission-ledger-contract-v2','2026-08-21T00:00:00Z')"
         )
@@ -155,6 +151,7 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
     failure = json.loads(
         (output_dir / "database-migration-manifest.json").read_text()
     )
+    assert failure["schema"] == "release-database-copy-v2"
     assert failure["passed"] is False
     assert failure["report_admission_contract"] == {
         "passed": False,
@@ -186,6 +183,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
 
     manifest = migrate_copy(source, output_dir)
 
+    assert manifest["schema"] == "release-database-copy-v2"
     assert manifest["passed"] is True
     assert manifest["report_admission_contract"] == {
         "passed": True,

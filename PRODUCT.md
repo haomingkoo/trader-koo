@@ -132,6 +132,15 @@ information to infer a truthful replacement phase.
 Release database evidence uses the versioned `release-database-copy-v2`
 manifest. Failed contracts report the total count and an explicitly truncated,
 ascending sample of at most 20 numeric attempt IDs with invariant categories.
+Required root fields are `schema`, source/copy hashes,
+`report_admission_contract`, and `passed`. Success names the verified migration;
+failure includes `violation`, total/reported counts, limit, truncation, ordering,
+and `affected_attempt_sample`. Known invariant categories are `run_id_missing`,
+`run_id_unknown`, `attempted_ts_invalid`, `status_invalid`,
+`success_error_metadata_present`, `failure_error_metadata_invalid`, and the
+forward-compatible fallback `row_contract_invalid`; consumers must tolerate
+unknown future categories but reject unknown root schema versions. Version 1 is
+not emitted by this release.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,

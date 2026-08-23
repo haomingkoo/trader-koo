@@ -98,13 +98,17 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
-def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
+def ensure_report_run_schema(
+    conn: sqlite3.Connection, *, verify_admission_contract: bool = False
+) -> None:
     """Install/migrate the registry atomically without committing caller work."""
     caller_transaction = conn.in_transaction
     if not caller_transaction:
         conn.execute("BEGIN IMMEDIATE")
     try:
-        _ensure_report_run_schema(conn)
+        _ensure_report_run_schema(
+            conn, verify_admission_contract=verify_admission_contract
+        )
     except Exception:
         if not caller_transaction:
             conn.rollback()
@@ -113,7 +117,9 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
-def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
+def _ensure_report_run_schema(
+    conn: sqlite3.Connection, *, verify_admission_contract: bool = False
+) -> None:
     allowed_admission_codes = ",".join(
         f"'{code}'" for code in sorted(ADMISSION_ERROR_CODES)
     )
@@ -214,7 +220,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                 OR
                 (status='failed' AND COALESCE(error_code,'') IN ({allowed_admission_codes})
                  AND COALESCE(error_message,'') GLOB '[A-Za-z_]*'
-                 AND COALESCE(error_message,'') NOT GLOB '*[^A-Za-z0-9_.]*')
+                 AND COALESCE(error_message,'') NOT GLOB '*[^A-Za-z0-9_]*')
             )
         )""".format(allowed_admission_codes=allowed_admission_codes)
     )
@@ -231,7 +237,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
     # v4 rescans v3 ledgers so exception-class metadata uses one exact contract
     # in SQLite validation and Python diagnostics, including whitespace.
     admission_contract_migration = "admission-ledger-contract-v4"
-    needs_admission_scan = conn.execute(
+    needs_admission_scan = verify_admission_contract or conn.execute(
         "SELECT 1 FROM report_schema_migrations WHERE migration=?",
         (admission_contract_migration,),
     ).fetchone() is None
@@ -255,7 +261,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                   OR
                   (status='failed' AND COALESCE(error_code,'') IN ({allowed_historical_admission_codes})
                    AND COALESCE(error_message,'') GLOB '[A-Za-z_]*'
-                   AND COALESCE(error_message,'') NOT GLOB '*[^A-Za-z0-9_.]*')
+                   AND COALESCE(error_message,'') NOT GLOB '*[^A-Za-z0-9_]*')
               ),1)""".format(
         allowed_historical_admission_codes=allowed_historical_admission_codes
     )
@@ -290,7 +296,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                 violations.append("success_error_metadata_present")
             elif status == "failed" and (
                 code not in historical_codes
-                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", str(message or "")) is None
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(message or "")) is None
             ):
                 violations.append("failure_error_metadata_invalid")
             diagnostics.append({
@@ -323,7 +329,7 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                  OR
                  (NEW.status='failed' AND COALESCE(NEW.error_code,'') IN ({allowed_admission_codes})
                   AND COALESCE(NEW.error_message,'') GLOB '[A-Za-z_]*'
-                  AND COALESCE(NEW.error_message,'') NOT GLOB '*[^A-Za-z0-9_.]*')
+                  AND COALESCE(NEW.error_message,'') NOT GLOB '*[^A-Za-z0-9_]*')
              ),1)
            BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END""".format(
                allowed_admission_codes=allowed_admission_codes
