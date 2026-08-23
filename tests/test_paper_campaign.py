@@ -512,7 +512,8 @@ def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
 
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('WAIT','2026-08-24',152,160,151,158,1000000)"""
+           VALUES ('WAIT','2026-08-24',152,160,151,158,1000000),
+                  ('SPY','2026-08-24',650,651,649,650,1000000)"""
     )
     record_price_series_revision(
         conn, "WAIT",
@@ -532,6 +533,40 @@ def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
     health = paper_trade_summary(conn)["campaign_health"]
     assert health["latest_report"]["admitted"] == 1
     assert health["latest_report"]["candidates"][0]["tradeability"] == "actionable"
+
+
+def test_pending_order_never_skips_a_missing_immediate_session_open():
+    conn = _db()
+    _activate(conn)
+    create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("LATE")], report_date="2026-08-21",
+        generated_ts="late-ts", report_run_id="late-run",
+    )
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SPY','2026-08-24',650,651,649,650,1000000),
+                  ('SPY','2026-08-25',651,652,650,651,1000000),
+                  ('LATE','2026-08-25',152,160,151,158,1000000)"""
+    )
+
+    assert fill_pending_paper_orders(conn, through_date="2026-08-25") == {
+        "filled": 0, "rejected": 0, "still_pending": 1,
+    }
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('LATE','2026-08-24',151,152,150,151,1000000)"""
+    )
+    record_price_series_revision(
+        conn, "LATE",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                  "vendor_action_ledger": []},
+        fetch_timestamp="2026-08-25T00:00:00Z",
+    )
+    result = fill_pending_paper_orders(conn, through_date="2026-08-25")
+    assert result == {"filled": 1, "rejected": 0, "still_pending": 0}
+    assert conn.execute("SELECT entry_date FROM paper_trades").fetchone()[0] == "2026-08-24"
 
 
 def test_pending_order_payload_is_immutable_and_hash_verified_before_fill():

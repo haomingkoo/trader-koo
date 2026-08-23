@@ -1449,16 +1449,25 @@ def fill_pending_paper_orders(
         _require_published_canonical_report(
             conn, str(report_run_id), require_current=False
         )
-        query = (
-            "SELECT CAST(open AS REAL),date FROM price_daily "
-            "WHERE ticker=? AND date>? AND open IS NOT NULL"
+        session_query = (
+            "SELECT date FROM price_daily "
+            "WHERE ticker='SPY' AND date>? AND open IS NOT NULL"
         )
-        params: list[Any] = [ticker, report_date]
+        session_params: list[Any] = [report_date]
         if through_date:
-            query += " AND date<=?"
-            params.append(through_date)
-        query += " ORDER BY date ASC LIMIT 1"
-        open_row = conn.execute(query, params).fetchone()
+            session_query += " AND date<=?"
+            session_params.append(through_date)
+        session_query += " ORDER BY date ASC LIMIT 1"
+        intended_row = conn.execute(session_query, session_params).fetchone()
+        if not intended_row:
+            resolved["still_pending"] += 1
+            continue
+        intended_session = str(intended_row[0])
+        open_row = conn.execute(
+            "SELECT CAST(open AS REAL),date FROM price_daily "
+            "WHERE ticker=? AND date=? AND open IS NOT NULL",
+            (ticker, intended_session),
+        ).fetchone()
         if not open_row:
             resolved["still_pending"] += 1
             continue
@@ -1490,7 +1499,9 @@ def fill_pending_paper_orders(
             "duplicate": False, "execution_ready": True,
             "market_context": json.loads(str(market_json)),
             "portfolio_context": {"open_count": open_count},
-            "source_context": {"report_run_id": report_run_id, "price_date": open_row[1]},
+            "source_context": {"report_run_id": report_run_id,
+                               "intended_session": intended_session,
+                               "price_date": open_row[1]},
         }
         decision = decide_candidate(row=row, rank=int(rank), config=config, context=context)
         event_payload = {
