@@ -106,6 +106,23 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
     }, exit_context)
     assert protective_exit["passed"] is True
 
+    wrong_exit_target = evaluate_setup_rewrite({
+        **exit_context["baseline"], "action": "Close the short position after confirmation.",
+    }, exit_context)
+    assert "action_type_changed" in wrong_exit_target["errors"]
+
+    market_close = _context(baseline={
+        "observation": "AAA has a bullish setup.",
+        "action": "Buy at the close.",
+        "risk_note": "Use a protective stop.",
+    })
+    reversed_at_close = evaluate_setup_rewrite({
+        **market_close["baseline"], "action": "Sell at the close.",
+    }, market_close)
+    assert {"action_type_changed", "direction_action_contradiction"}.issubset(
+        reversed_at_close["errors"]
+    )
+
     mixed_negation = evaluate_setup_rewrite({
         **wait_context["baseline"],
         "action": "Do not sell now; sell only after confirmation.",
@@ -204,9 +221,13 @@ def test_risk_controls_cannot_be_negated_or_weakened() -> None:
     cases = [
         ("Use a protective stop.", "Do not use a protective stop."),
         ("Use a protective stop.", "Stops should never be used."),
+        ("Use a protective stop.", "Stops should not be required."),
+        ("Use a protective stop.", "Stops are not required."),
         ("Limit position size.", "Increase position size."),
+        ("Limit position size.", "Position size should not be limited."),
         ("Keep risk bounded.", "Accept unlimited risk."),
         ("Keep risk bounded.", "Risk is not bounded."),
+        ("Keep risk bounded.", "Risk should not be bounded."),
     ]
     for baseline_risk, output_risk in cases:
         context = _context(baseline={

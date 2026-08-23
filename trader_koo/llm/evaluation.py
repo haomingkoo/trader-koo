@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v5"
-CACHE_VERSION = "setup-rewrite-cache-v6"
+EVALUATOR_VERSION = "setup-grounding-v6"
+CACHE_VERSION = "setup-rewrite-cache-v7"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -146,9 +146,24 @@ def _action_side(text: str) -> str | None:
     action = _normal(text)
     long_side = False
     short_side = False
+    exit_targets: set[str] = set()
     for clause in re.split(r"[.;]", action):
+        exit_target = re.search(
+            r"\b(?:exit|close|cover)\s+(?:the\s+)?(long|short)(?:\s+position)?\b",
+            clause,
+        )
+        if exit_target:
+            exit_targets.add(exit_target.group(1))
+            continue
+        if re.search(r"\bbuy\s+to\s+cover\b", clause):
+            exit_targets.add("short")
+            continue
+        if re.search(r"\bsell\s+to\s+close\b", clause):
+            exit_targets.add("long")
+            continue
         protective_exit = bool(re.search(
-            r"\b(?:exit|close|cover)\b|\bstop\s+to\s+(?:buy|sell)\b|"
+            r"\b(?:exit|close|cover)\s+(?:the\s+)?position\b|"
+            r"\bstop\s+to\s+(?:buy|sell)\b|"
             r"^(?:use|place|set|keep)\b.*\bstop\b|"
             r"^(?:buy|sell)\b.*\bif\s+(?:invalidated|stopped)\b",
             clause,
@@ -161,11 +176,13 @@ def _action_side(text: str) -> str | None:
         short_side = short_side or any(_affirmed(clause, term) for term in (
             "sell", "short", "breakdown", "below support",
         ))
-    if long_side and short_side:
+    if long_side and short_side or len(exit_targets) > 1 or exit_targets and (long_side or short_side):
         return "mixed"
-    if not long_side and not short_side:
-        return None
-    return "long" if long_side else "short"
+    if long_side or short_side:
+        return "long" if long_side else "short"
+    if exit_targets:
+        return f"exit_{next(iter(exit_targets))}"
+    return None
 
 
 def _action_mode(text: str) -> str:
@@ -199,10 +216,13 @@ def _risk_posture(text: str) -> tuple[set[str], bool]:
         r"\b(?:stops?|risk|siz(?:e|ing)|limit|bounded|protect(?:ion|ive)?)\b",
         risk,
     )) or bool(re.search(
-        r"\bstops?\b.{0,20}\b(?:never|not)\s+be\s+used\b|"
+        r"\bstops?\b.{0,20}\b(?:never|not)\s+be\s+(?:used|required|necessary)\b|"
+        r"\bstops?\b.{0,20}\b(?:is|are)\s+not\s+(?:required|necessary)\b|"
         r"\bstops?\b.{0,20}\b(?:is|are)\s+(?:optional|unnecessary)\b|"
         r"\bstops?\b.{0,20}\b(?:may|can|should)\s+be\s+(?:removed|loosened)\b|"
-        r"\brisk\b.{0,20}\b(?:is|may|can)\s+(?:not\s+bounded|unbounded)\b|"
+        r"\brisk\b.{0,20}\b(?:is|may|can|should|must)\s+(?:not\s+bounded|unbounded)\b|"
+        r"\brisk\b.{0,20}\b(?:should|must)\s+not\s+be\s+(?:bounded|required)\b|"
+        r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:should|must)\s+not\s+be\s+(?:limited|bounded|constrained)\b|"
         r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:may|can|should)\s+be\s+increased\b",
         risk,
     )) or any(phrase in risk for phrase in (
