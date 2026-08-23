@@ -13,7 +13,9 @@ import argparse
 import datetime as dt
 import gzip
 import logging
+import sqlite3
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -46,9 +48,15 @@ def backup_database(
     t0 = time.monotonic()
     src_size = db_path.stat().st_size
 
-    # Stream-compress to avoid loading entire DB into memory
-    with db_path.open("rb") as f_in, gzip.open(dest, "wb", compresslevel=6) as f_out:
-        shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
+    # A raw file copy can capture SQLite between WAL writes.  Take a consistent
+    # online snapshot first, then compress that immutable file.
+    with tempfile.TemporaryDirectory(prefix="trader-koo-backup-") as tmp_dir:
+        snapshot = Path(tmp_dir) / "snapshot.db"
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as source:
+            with sqlite3.connect(snapshot) as target:
+                source.backup(target)
+        with snapshot.open("rb") as f_in, gzip.open(dest, "wb", compresslevel=6) as f_out:
+            shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
 
     elapsed = round(time.monotonic() - t0, 2)
     dest_size = dest.stat().st_size

@@ -8,11 +8,20 @@ from fastapi.responses import FileResponse
 
 from trader_koo.scripts.backup_db import (
     DEFAULT_BACKUP_DIR,
+    backup_database,
     latest_backup_path,
     list_backups,
 )
+from trader_koo.backend.services.database import DB_PATH
 
 router = APIRouter(tags=["admin", "admin-backups"])
+
+
+@router.post("/api/admin/backups")
+def admin_create_backup() -> dict[str, Any]:
+    """Create a consistent online SQLite backup before a release migration."""
+    result = backup_database(DB_PATH, DEFAULT_BACKUP_DIR)
+    return {"ok": True, **result}
 
 
 @router.get("/api/admin/backups")
