@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -9,7 +10,7 @@ from trader_koo.paper_trade.schema import (
     _rebuild_unique_key,
     ensure_paper_trade_schema,
 )
-from trader_koo.scripts.release_evidence import _schema_contract
+from trader_koo.scripts.release_evidence import _schema_contract, migrate_copy
 
 
 def test_parent_unique_key_rebuild_preserves_child_foreign_keys() -> None:
@@ -89,6 +90,50 @@ def test_v3_database_runs_v4_expand_contract_instead_of_short_circuiting() -> No
     ).fetchone() == (4,)
     assert contract["passed"] is True
     assert contract["malformed_indexes"] == []
+
+
+def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> None:
+    source = tmp_path / "current-v4.db"
+    with sqlite3.connect(source) as conn:
+        ensure_paper_trade_schema(conn)
+        run_id = conn.execute(
+            """INSERT INTO report_runs
+               (run_id,report_kind,status,started_ts,config_json,config_hash,code_version)
+               VALUES ('legacy-run','daily','started','2026-08-21T00:00:00Z',
+                       '{}',?,?) RETURNING run_id""",
+            ("a" * 64, "b" * 40),
+        ).fetchone()[0]
+        conn.execute("DROP TABLE report_admission_attempts")
+        conn.execute(
+            """CREATE TABLE report_admission_attempts (
+                   attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   run_id TEXT,
+                   status TEXT,
+                   error_code TEXT,
+                   error_message TEXT,
+                   attempted_ts TEXT
+               )"""
+        )
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'failed',NULL,'ValueError','2026-08-22T00:00:00Z')""",
+            (run_id,),
+        )
+        conn.execute(
+            "DELETE FROM report_schema_migrations "
+            "WHERE migration='admission-ledger-contract-v3'"
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
+            "VALUES ('admission-ledger-contract-v2','2026-08-21T00:00:00Z')"
+        )
+        conn.commit()
+
+    output_dir = tmp_path / "evidence"
+    output_dir.mkdir()
+    with pytest.raises(RuntimeError, match="legacy report admission attempts"):
+        migrate_copy(source, output_dir)
 
 
 def test_v4_expand_contract_accepts_legacy_trade_table_without_lineage_fk() -> None:

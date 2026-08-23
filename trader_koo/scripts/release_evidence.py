@@ -18,6 +18,7 @@ from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
 from trader_koo.paper_trade.replay import replay_campaign
 from trader_koo.paper_trade.schema import PAPER_TRADE_SCHEMA_VERSION, ensure_paper_trade_schema
 from trader_koo.paper_trades import _build_config
+from trader_koo.report.runs import ensure_report_run_schema
 from trader_koo.research.next_open_baseline import (
     BaselineConfig,
     ExecutionDecision,
@@ -245,6 +246,10 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         before_counts = dict(conn.execute(
             "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
         ).fetchall())
+        # Paper schema v4 may already be current and short-circuit. Report
+        # admission lineage has its own versioned migration and must always be
+        # verified explicitly on the copied database.
+        ensure_report_run_schema(conn)
         ensure_paper_trade_schema(conn)
         ensure_price_series_revision_schema(conn)
         ensure_price_repair_schema(conn)
@@ -269,6 +274,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         "integrity_check": integrity,
         "paper_trade_schema_version": schema_version,
         "expected_paper_trade_schema_version": PAPER_TRADE_SCHEMA_VERSION,
+        "report_admission_contract": "verified",
         "accounting_invariants": {
             "breaks": account["accounting_breaks"],
             "legacy_unreconciled_count": account["legacy_unreconciled_count"],
