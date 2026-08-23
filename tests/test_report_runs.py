@@ -361,7 +361,11 @@ def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> N
     )
     conn.commit()
     conn.execute(
-        "DELETE FROM report_schema_migrations WHERE migration='admission-ledger-contract-v2'"
+        "DELETE FROM report_schema_migrations WHERE migration='admission-ledger-contract-v3'"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
+        "VALUES ('admission-ledger-contract-v2','2026-08-21T00:00:00Z')"
     )
 
     ensure_report_run_schema(conn)
@@ -472,7 +476,11 @@ def test_legacy_admission_scan_rejects_null_contract_fields(
         (None if null_run else run_id, status, error_code, error_message, attempted_ts),
     )
     conn.execute(
-        "DELETE FROM report_schema_migrations WHERE migration='admission-ledger-contract-v2'"
+        "DELETE FROM report_schema_migrations WHERE migration='admission-ledger-contract-v3'"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
+        "VALUES ('admission-ledger-contract-v2','2026-08-21T00:00:00Z')"
     )
     conn.commit()
 

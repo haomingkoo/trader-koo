@@ -225,7 +225,9 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                applied_ts TEXT NOT NULL
            )"""
     )
-    admission_contract_migration = "admission-ledger-contract-v2"
+    # v3 intentionally rescans databases marked by v2, whose NULL validation
+    # used SQLite three-valued logic incorrectly.
+    admission_contract_migration = "admission-ledger-contract-v3"
     needs_admission_scan = conn.execute(
         "SELECT 1 FROM report_schema_migrations WHERE migration=?",
         (admission_contract_migration,),
