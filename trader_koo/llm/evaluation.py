@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v6"
-CACHE_VERSION = "setup-rewrite-cache-v7"
+EVALUATOR_VERSION = "setup-grounding-v7"
+CACHE_VERSION = "setup-rewrite-cache-v8"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -147,19 +147,23 @@ def _action_side(text: str) -> str | None:
     long_side = False
     short_side = False
     exit_targets: set[str] = set()
-    for clause in re.split(r"[.;]", action):
-        exit_target = re.search(
+    for clause in re.split(r"[.;]|\b(?:and\s+then|then|and|but)\b", action):
+        targets = {
+            match.group(1) for match in re.finditer(
             r"\b(?:exit|close|cover)\s+(?:the\s+)?(long|short)(?:\s+position)?\b",
             clause,
-        )
-        if exit_target:
-            exit_targets.add(exit_target.group(1))
+            )
+        }
+        if targets:
+            exit_targets.update(targets)
             continue
         if re.search(r"\bbuy\s+to\s+cover\b", clause):
             exit_targets.add("short")
             continue
         if re.search(r"\bsell\s+to\s+close\b", clause):
             exit_targets.add("long")
+            continue
+        if re.match(r"^\s*(?:exit|close|cover)\b", clause):
             continue
         protective_exit = bool(re.search(
             r"\b(?:exit|close|cover)\s+(?:the\s+)?position\b|"
@@ -223,6 +227,9 @@ def _risk_posture(text: str) -> tuple[set[str], bool]:
         r"\brisk\b.{0,20}\b(?:is|may|can|should|must)\s+(?:not\s+bounded|unbounded)\b|"
         r"\brisk\b.{0,20}\b(?:should|must)\s+not\s+be\s+(?:bounded|required)\b|"
         r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:should|must)\s+not\s+be\s+(?:limited|bounded|constrained)\b|"
+        r"\bstops?\b.{0,20}\b(?:need\s+not|(?:do|does)n't\s+need\s+to)\s+be\s+(?:used|required)\b|"
+        r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:need\s+not|(?:do|does)n't\s+need\s+to)\s+be\s+(?:limited|bounded|constrained)\b|"
+        r"\brisk\b.{0,20}\b(?:need\s+not|(?:do|does)n't\s+need\s+to)\s+be\s+bounded\b|"
         r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:may|can|should)\s+be\s+increased\b",
         risk,
     )) or any(phrase in risk for phrase in (

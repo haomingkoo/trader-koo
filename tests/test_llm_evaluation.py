@@ -111,6 +111,32 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
     }, exit_context)
     assert "action_type_changed" in wrong_exit_target["errors"]
 
+    compound_entry = evaluate_setup_rewrite({
+        **exit_context["baseline"],
+        "action": "Close the long position and open a short position after confirmation.",
+    }, exit_context)
+    assert {"action_type_changed", "ambiguous_directional_action"}.issubset(
+        compound_entry["errors"]
+    )
+
+    multiple_exits = evaluate_setup_rewrite({
+        **exit_context["baseline"],
+        "action": "Exit the long position and close the short position after confirmation.",
+    }, exit_context)
+    assert {"action_type_changed", "ambiguous_directional_action"}.issubset(
+        multiple_exits["errors"]
+    )
+
+    targetless_exit = _context(baseline={
+        "observation": "AAA has a bullish setup.",
+        "action": "Exit if price closes below support.",
+        "risk_note": "Use a protective stop.",
+    })
+    unchanged_targetless = evaluate_setup_rewrite(
+        dict(targetless_exit["baseline"]), targetless_exit
+    )
+    assert unchanged_targetless["passed"] is True
+
     market_close = _context(baseline={
         "observation": "AAA has a bullish setup.",
         "action": "Buy at the close.",
@@ -223,11 +249,14 @@ def test_risk_controls_cannot_be_negated_or_weakened() -> None:
         ("Use a protective stop.", "Stops should never be used."),
         ("Use a protective stop.", "Stops should not be required."),
         ("Use a protective stop.", "Stops are not required."),
+        ("Use a protective stop.", "Stops need not be used."),
         ("Limit position size.", "Increase position size."),
         ("Limit position size.", "Position size should not be limited."),
+        ("Limit position size.", "Position size need not be limited."),
         ("Keep risk bounded.", "Accept unlimited risk."),
         ("Keep risk bounded.", "Risk is not bounded."),
         ("Keep risk bounded.", "Risk should not be bounded."),
+        ("Keep risk bounded.", "Risk need not be bounded."),
     ]
     for baseline_risk, output_risk in cases:
         context = _context(baseline={
