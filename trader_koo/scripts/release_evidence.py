@@ -158,20 +158,24 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
             for row in conn.execute(f"PRAGMA foreign_key_list({table})")
         )
     missing_foreign_keys = sorted(required_foreign_keys - actual_foreign_keys)
-    optional_lineage_targets = {
-        (str(row[2]), str(row[4]))
-        for row in conn.execute("PRAGMA foreign_key_list(paper_trades)")
-        if str(row[3]) == "report_run_id"
-    }
+    paper_trade_foreign_keys: dict[int, list[tuple[str, str, str]]] = {}
+    for row in conn.execute("PRAGMA foreign_key_list(paper_trades)"):
+        paper_trade_foreign_keys.setdefault(int(row[0]), []).append(
+            (str(row[3]), str(row[2]), str(row[4]))
+        )
+    malformed_lineage_constraints = [
+        {"id": constraint_id, "mappings": [list(item) for item in mappings]}
+        for constraint_id, mappings in sorted(paper_trade_foreign_keys.items())
+        if any(item[0] == "report_run_id" for item in mappings)
+        and mappings != [("report_run_id", "report_runs", "run_id")]
+    ]
     malformed_optional_foreign_keys = (
-        []
-        if not optional_lineage_targets
-        or optional_lineage_targets == {("report_runs", "run_id")}
-        else [{
+        [{
             "table": "paper_trades",
             "column": "report_run_id",
-            "targets": sorted([list(item) for item in optional_lineage_targets]),
+            "constraints": malformed_lineage_constraints,
         }]
+        if malformed_lineage_constraints else []
     )
     trade_columns = {
         str(row[1]): str(row[4] or "")

@@ -336,7 +336,9 @@ def replay_and_seal_promotion(conn, *, experiment_id: str, preregistration_id: s
     }
     sealed_candidate_runs = []
     publication_rows = conn.execute(
-        f"SELECT run_id,published_ts FROM report_runs WHERE run_id IN ({placeholders})",
+        f"""SELECT run_id,published_ts FROM report_runs
+            WHERE status='published' AND publication_verified=1
+              AND run_id IN ({placeholders})""",
         tuple(run_ids),
     ).fetchall()
     publication_by_run = {str(row[0]): str(row[1] or "") for row in publication_rows}

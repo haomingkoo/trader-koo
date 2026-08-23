@@ -144,8 +144,41 @@ def test_v4_expand_contract_rejects_malformed_optional_lineage_fk() -> None:
     assert contract["malformed_optional_foreign_keys"] == [{
         "table": "paper_trades",
         "column": "report_run_id",
-        "targets": [["wrong_runs", "id"]],
+        "constraints": [{
+            "id": 0,
+            "mappings": [["report_run_id", "wrong_runs", "id"]],
+        }],
     }]
+    assert contract["passed"] is False
+
+
+def test_v4_expand_contract_rejects_composite_optional_lineage_fk() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE report_runs(
+            run_id TEXT,
+            report_kind TEXT,
+            UNIQUE(run_id, report_kind)
+        );
+        CREATE TABLE paper_trades(
+            id INTEGER PRIMARY KEY,
+            report_run_id TEXT,
+            report_kind TEXT,
+            FOREIGN KEY(report_run_id, report_kind)
+                REFERENCES report_runs(run_id, report_kind)
+        );
+        """
+    )
+
+    contract = _schema_contract(conn)
+
+    malformed = contract["malformed_optional_foreign_keys"]
+    assert len(malformed) == 1
+    assert malformed[0]["constraints"][0]["mappings"] == [
+        ["report_run_id", "report_runs", "run_id"],
+        ["report_kind", "report_runs", "report_kind"],
+    ]
     assert contract["passed"] is False
 
 

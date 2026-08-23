@@ -77,11 +77,12 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 
 Missing or malformed publication metadata is a report-lineage error, not a
 candidate rejection; database publication guards normally make this state
-unrepresentable. For a verified report, late publication has precedence over
+unrepresentable. The promotion-parity replay refuses any run that is not stored
+as verified and published before comparing candidates. For a verified report,
+late publication has precedence over
 observation availability and is rejected before SPY or ticker gaps can create a
-pending order. SPY precedence applies next, then ticker availability. Replay
-applies the same boundary: unverified runs are refused, while verified candidate
-runs use the same late/SPY/ticker ordering as live admission.
+pending order. SPY precedence applies next, then ticker availability. Verified
+candidate runs use the same late/SPY/ticker ordering as live admission.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
