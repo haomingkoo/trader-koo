@@ -249,7 +249,28 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         # Paper schema v4 may already be current and short-circuit. Report
         # admission lineage has its own versioned migration and must always be
         # verified explicitly on the copied database.
-        ensure_report_run_schema(conn)
+        try:
+            ensure_report_run_schema(conn)
+        except RuntimeError as exc:
+            if not str(exc).startswith(
+                "legacy report admission attempts violate the audit contract:"
+            ):
+                raise
+            failure_manifest = {
+                "schema": "release-database-copy-v1",
+                "source_artifact": source.name,
+                "source_artifact_sha256": source_artifact_hash,
+                "source_snapshot_sha256": source_snapshot_hash,
+                "migrated_copy_sha256": _sha256(copy_path),
+                "report_admission_contract": {
+                    "passed": False,
+                    "violation": "legacy_rows_invalid",
+                    "diagnostic": str(exc),
+                },
+                "passed": False,
+            }
+            _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
+            raise RuntimeError("database copy report-admission contract failed") from exc
         ensure_paper_trade_schema(conn)
         ensure_price_series_revision_schema(conn)
         ensure_price_repair_schema(conn)
@@ -274,7 +295,10 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         "integrity_check": integrity,
         "paper_trade_schema_version": schema_version,
         "expected_paper_trade_schema_version": PAPER_TRADE_SCHEMA_VERSION,
-        "report_admission_contract": "verified",
+        "report_admission_contract": {
+            "passed": True,
+            "migration": "admission-ledger-contract-v3",
+        },
         "accounting_invariants": {
             "breaks": account["accounting_breaks"],
             "legacy_unreconciled_count": account["legacy_unreconciled_count"],

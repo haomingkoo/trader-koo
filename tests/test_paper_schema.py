@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -132,8 +133,35 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
 
     output_dir = tmp_path / "evidence"
     output_dir.mkdir()
-    with pytest.raises(RuntimeError, match="legacy report admission attempts"):
+    with pytest.raises(RuntimeError, match="report-admission contract failed"):
         migrate_copy(source, output_dir)
+    failure = json.loads(
+        (output_dir / "database-migration-manifest.json").read_text()
+    )
+    assert failure["passed"] is False
+    assert failure["report_admission_contract"] == {
+        "passed": False,
+        "violation": "legacy_rows_invalid",
+        "diagnostic": (
+            "legacy report admission attempts violate the audit contract: invalid_rows=1"
+        ),
+    }
+
+
+def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> None:
+    source = tmp_path / "clean.db"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE release_seed(id INTEGER PRIMARY KEY)")
+    output_dir = tmp_path / "clean-evidence"
+    output_dir.mkdir()
+
+    manifest = migrate_copy(source, output_dir)
+
+    assert manifest["passed"] is True
+    assert manifest["report_admission_contract"] == {
+        "passed": True,
+        "migration": "admission-ledger-contract-v3",
+    }
 
 
 def test_v4_expand_contract_accepts_legacy_trade_table_without_lineage_fk() -> None:

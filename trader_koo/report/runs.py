@@ -258,7 +258,10 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
               )
     ).fetchone()[0] if needs_admission_scan else 0
     if invalid_attempts:
-        raise RuntimeError("legacy report admission attempts violate the audit contract")
+        raise RuntimeError(
+            "legacy report admission attempts violate the audit contract: "
+            f"invalid_rows={invalid_attempts}"
+        )
     # Reinstall the versioned validator once per ensure so a legacy trigger
     # cannot retain weaker rules. The full ledger scan above runs only once.
     conn.execute("DROP TRIGGER IF EXISTS report_admission_attempts_valid_insert")

@@ -154,6 +154,7 @@ jobs:
           --output-dir release-evidence
 
       - name: Upload immutable release evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@v6
         with:
           name: release-evidence-${{ github.sha }}
