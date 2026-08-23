@@ -127,6 +127,28 @@ def test_v4_expand_contract_accepts_legacy_trade_table_without_lineage_fk() -> N
     )
 
 
+def test_v4_expand_contract_rejects_malformed_optional_lineage_fk() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE wrong_runs(id TEXT PRIMARY KEY);
+        CREATE TABLE paper_trades(
+            id INTEGER PRIMARY KEY,
+            report_run_id TEXT REFERENCES wrong_runs(id)
+        );
+        """
+    )
+
+    contract = _schema_contract(conn)
+
+    assert contract["malformed_optional_foreign_keys"] == [{
+        "table": "paper_trades",
+        "column": "report_run_id",
+        "targets": [["wrong_runs", "id"]],
+    }]
+    assert contract["passed"] is False
+
+
 def test_schema_contract_rejects_correctly_named_malformed_objects() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_paper_trade_schema(conn)

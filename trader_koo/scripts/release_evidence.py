@@ -158,6 +158,21 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
             for row in conn.execute(f"PRAGMA foreign_key_list({table})")
         )
     missing_foreign_keys = sorted(required_foreign_keys - actual_foreign_keys)
+    optional_lineage_targets = {
+        (str(row[2]), str(row[4]))
+        for row in conn.execute("PRAGMA foreign_key_list(paper_trades)")
+        if str(row[3]) == "report_run_id"
+    }
+    malformed_optional_foreign_keys = (
+        []
+        if not optional_lineage_targets
+        or optional_lineage_targets == {("report_runs", "run_id")}
+        else [{
+            "table": "paper_trades",
+            "column": "report_run_id",
+            "targets": sorted([list(item) for item in optional_lineage_targets]),
+        }]
+    )
     trade_columns = {
         str(row[1]): str(row[4] or "")
         for row in conn.execute("PRAGMA table_info(paper_trades)")
@@ -189,6 +204,7 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
         "malformed_indexes": sorted(malformed_indexes),
         "malformed_triggers": malformed_triggers,
         "missing_foreign_keys": [list(item) for item in missing_foreign_keys],
+        "malformed_optional_foreign_keys": malformed_optional_foreign_keys,
         "campaign_defaults": defaults,
         "campaign_defaults_compatible": defaults_compatible,
         "foreign_key_breaks": foreign_key_breaks,
@@ -198,6 +214,7 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
             not malformed_indexes
             and not malformed_triggers
             and not missing_foreign_keys
+            and not malformed_optional_foreign_keys
             and defaults_compatible
             and not foreign_key_breaks
             and legacy_read_probe
