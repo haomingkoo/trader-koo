@@ -5,7 +5,9 @@ const python = process.env.E2E_PYTHON || "python3";
 
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
+  // Tests share one API process and one SQLite fixture.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   reporter: "line",

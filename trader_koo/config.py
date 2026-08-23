@@ -487,38 +487,9 @@ class Config:
             )
 
     @staticmethod
-    def _as_bool(value: Any) -> bool:
-        """Convert environment variable value to boolean.
-
-        Args:
-            value: The value to convert.
-
-        Returns:
-            True if value is "1", "true", "yes", or "on" (case-insensitive).
-            False otherwise.
-        """
-        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-    @staticmethod
     def _parse_cors_origins(value: str) -> list[str]:
-        """Parse comma-separated CORS origins from environment variable.
-
-        Args:
-            value: Comma-separated list of origins.
-
-        Returns:
-            List of origin strings (empty list if value is empty).
-        """
-        if not value or not value.strip():
-            return []
-
-        origins = []
-        for origin in value.split(","):
-            origin = origin.strip()
-            if origin:
-                origins.append(origin)
-
-        return origins
+        """Return the non-empty origins in a comma-separated setting."""
+        return [item.strip() for item in (value or "").split(",") if item.strip()]
 
     def _validate_cors_origins(self) -> None:
         """Validate that all CORS origins follow allowed patterns.
