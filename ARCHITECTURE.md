@@ -739,6 +739,13 @@ A completed, failed, interrupted, or hash-mismatched run is never selected by
 timestamp. Pre-migration reports remain readable but are labelled `unlinked
 legacy`; no run identity or publication lineage is inferred for them.
 
+Paper live execution and replay share one chronology rule: the report targets
+the immediate next observed SPY session, its verified publication timestamp must
+be strictly before 09:30 America/New_York on that date, and a late publication
+expires rather than rolling forward. Replay inputs include `published_ts`, so a
+missing timestamp or late report fails closed with the same decision reason as
+live execution.
+
 ---
 
 ## Security

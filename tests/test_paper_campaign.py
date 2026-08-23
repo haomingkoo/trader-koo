@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
+from trader_koo.paper_trade.chronology import publication_precedes_session_open
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
     DivergentDecisionSetError,
@@ -77,6 +78,18 @@ def _candidate(
         "debate_agreement_score": 80.0,
         "risk_note": "Standard risk controls.",
     }
+
+
+def test_publication_cutoff_is_strict_and_dst_aware() -> None:
+    assert publication_precedes_session_open(
+        "2026-08-24T13:29:59Z", "2026-08-24"
+    ) is True
+    assert publication_precedes_session_open(
+        "2026-08-24T13:30:00Z", "2026-08-24"
+    ) is False
+    assert publication_precedes_session_open(
+        "2026-01-05T14:29:59Z", "2026-01-05"
+    ) is True
 
 
 def _db() -> sqlite3.Connection:
@@ -306,7 +319,8 @@ def test_live_path_persists_every_ranked_candidate_and_exact_disposition():
     _activate(conn)
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('PASS','2026-08-24',150,155,149,154,1000000)"""
+           VALUES ('PASS','2026-08-24',150,155,149,154,1000000),
+                  ('SPY','2026-08-24',650,651,649,650,1000000)"""
     )
 
     inserted = create_paper_trades_from_report(
@@ -577,6 +591,26 @@ def test_pending_order_never_skips_a_missing_immediate_session_open():
     assert conn.execute("SELECT entry_date FROM paper_trades").fetchone()[0] == "2026-08-24"
 
 
+def test_immediate_admission_does_not_skip_a_missing_spy_session() -> None:
+    conn = _db()
+    _activate(conn)
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SPY','2026-08-24',650,651,649,650,1000000),
+                  ('SPY','2026-08-25',651,652,650,651,1000000),
+                  ('SKIP','2026-08-25',152,160,151,158,1000000)"""
+    )
+
+    inserted = create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("SKIP")], report_date="2026-08-21",
+        generated_ts="skip-ts", report_run_id="skip-run",
+    )
+
+    assert inserted == 0
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert conn.execute("SELECT status FROM paper_pending_orders").fetchone()[0] == "pending"
+
+
 def test_report_published_after_intended_open_cannot_backdate_a_fill(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -723,11 +757,13 @@ def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload():
 def test_chronological_replay_models_costs_overlap_exits_and_parity():
     config = replace(_build_config(), max_open=2, expiry_days=2)
     runs = [
-        {"report_run_id": "r1", "report_date": "2026-08-20", "candidates": [
+        {"report_run_id": "r1", "report_date": "2026-08-20",
+         "published_ts": "2026-08-20T12:00:00Z", "candidates": [
             {**_candidate("AAA"), "critic_outcome": {"approved": True}},
             {**_candidate("BBB"), "critic_outcome": {"approved": True}},
         ]},
-        {"report_run_id": "r2", "report_date": "2026-08-21", "candidates": [
+        {"report_run_id": "r2", "report_date": "2026-08-21",
+         "published_ts": "2026-08-21T12:00:00Z", "candidates": [
             {**_candidate("CCC"), "critic_outcome": {"approved": True}},
         ]},
     ]
@@ -770,6 +806,7 @@ def test_baseline_and_campaign_replay_seal_identical_complete_ledgers():
     config = replace(_build_config(), max_open=2, expiry_days=2)
     runs = [{
         "report_run_id": "ledger-run", "report_date": "2026-08-20",
+        "published_ts": "2026-08-20T12:00:00Z",
         "candidates": [{**_candidate("AAA"), "critic_outcome": {"approved": True}}],
     }]
     prices = [
@@ -810,6 +847,7 @@ def test_replay_rejects_missing_immediate_open_and_uses_only_causal_volume():
     config = replace(_build_config(), expiry_days=2)
     runs = [{
         "report_run_id": "causal-run", "report_date": "2026-08-20",
+        "published_ts": "2026-08-20T12:00:00Z",
         "candidates": [{**_candidate("LATE"), "critic_outcome": {"approved": True}}],
     }]
     prices = [
@@ -840,7 +878,8 @@ def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():
     candidate = {**_candidate("PARITY"), "critic_outcome": {"approved": True}}
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('PARITY','2026-08-24',150,151,149,150,1000000)"""
+           VALUES ('PARITY','2026-08-24',150,151,149,150,1000000),
+                  ('SPY','2026-08-24',650,651,649,650,1000000)"""
     )
     create_paper_trades_from_report(
         conn, setup_rows=[candidate], report_date="2026-08-21",
@@ -855,6 +894,7 @@ def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():
     replay = replay_campaign(
         candidate_runs=[{
             "report_run_id": "parity-live-run", "report_date": "2026-08-21",
+            "published_ts": "2026-08-21T12:02:00Z",
             "candidates": [{
                 "__sealed_candidate": evidence["candidate"],
                 "__sealed_context": evidence["context"],
@@ -874,6 +914,32 @@ def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():
     assert replay["decisions"][0]["inputs"] == evidence
     assert replay["replay_live_parity"] == "matched"
     assert replay["decisions"][0]["inputs_hash"] == inputs_hash
+
+
+def test_replay_rejects_the_same_late_publication_as_live_execution():
+    replay = replay_campaign(
+        candidate_runs=[{
+            "report_run_id": "late-publication-run",
+            "report_date": "2026-08-21",
+            "published_ts": "2026-08-24T14:00:00Z",
+            "candidates": [{
+                **_candidate("LATEPUB"),
+                "critic_outcome": {"approved": True},
+            }],
+        }],
+        price_rows=[{
+            "ticker": "LATEPUB", "date": "2026-08-24", "open": 150,
+            "high": 151, "low": 149, "close": 150, "volume": 1_000_000,
+        }],
+        spy_rows=[], config=_build_config(), _include_splits=False,
+    )
+
+    decision = replay["decisions"][0]
+    assert decision["disposition"] == "rejected"
+    assert decision["inputs"]["context"]["portfolio_block"]["reason_code"] == (
+        "report_published_after_intended_open"
+    )
+    assert replay["trades"] == []
 
 
 def test_activation_never_falls_back_to_older_eligible_experiment():

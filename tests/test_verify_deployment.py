@@ -41,7 +41,7 @@ def test_verify_deployment_rejects_wrong_release(monkeypatch) -> None:
         verify_deployment.verify("https://example.invalid", "a" * 40, "key")
 
 
-def test_verify_deployment_rejects_active_campaign(monkeypatch) -> None:
+def test_verify_deployment_preserves_active_campaign_on_later_releases(monkeypatch) -> None:
     def fake_get(_base_url, path, *, api_key=None):
         if path == "/api/release":
             return 200, {"ok": True, "git_sha": "a" * 40}
@@ -56,5 +56,10 @@ def test_verify_deployment_rejects_active_campaign(monkeypatch) -> None:
         return 200, {"ok": True}
 
     monkeypatch.setattr(verify_deployment, "_get", fake_get)
-    with pytest.raises(RuntimeError, match="campaign_v2_inactive"):
+    result = verify_deployment.verify(
+        "https://example.invalid", "a" * 40, "key", "active"
+    )
+    assert result["observed_campaign_status"] == "active"
+
+    with pytest.raises(RuntimeError, match="campaign_v2_status_preserved"):
         verify_deployment.verify("https://example.invalid", "a" * 40, "key")

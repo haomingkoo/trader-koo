@@ -120,6 +120,7 @@ def replay_smoke(output_dir: Path, code_sha: str) -> dict[str, Any]:
     }
     runs = [{
         "report_run_id": "release-smoke", "report_date": "2026-08-20",
+        "published_ts": "2026-08-20T12:00:00Z",
         "candidates": [candidate],
     }]
     prices = [

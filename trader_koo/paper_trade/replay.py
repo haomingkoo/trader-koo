@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Any
 
 from trader_koo.paper_trade.campaign import canonical_hash, decide_candidate, record_promotion_experiment
+from trader_koo.paper_trade.chronology import publication_precedes_session_open
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.decision import direction_from_row
 from trader_koo.research.next_open_baseline import (
@@ -14,6 +15,20 @@ from trader_koo.research.next_open_baseline import (
 )
 
 ENGINE_VERSION = "portfolio-execution-v1.0"
+
+
+def _publication_block(published_ts: str) -> dict[str, str]:
+    if not published_ts:
+        return {
+            "gate": "execution.next_open",
+            "reason_code": "report_publication_timestamp_unavailable",
+            "detail": "Replay requires verified publication chronology.",
+        }
+    return {
+        "gate": "execution.next_open",
+        "reason_code": "report_published_after_intended_open",
+        "detail": "Verified report publication did not precede the intended session open.",
+    }
 
 
 def _max_drawdown(values: list[float]) -> float:
@@ -94,6 +109,7 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
     executable: list[ExecutionDecision] = []
     for run in sorted(candidate_runs, key=lambda item: (str(item["report_date"]), str(item["report_run_id"]))):
         report_date = str(run["report_date"])
+        published_ts = str(run.get("published_ts") or "")
         for rank, raw_candidate in enumerate(run.get("candidates") or [], start=1):
             sealed = raw_candidate.get("__sealed_context") if isinstance(raw_candidate, dict) else None
             candidate = (
@@ -105,6 +121,10 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
             intended_session = next((date for date in sessions if date > report_date), None)
             next_bar = next((bar for bar in by_ticker.get(ticker, [])
                              if bar["date"] == intended_session and bar.get("open") is not None), None)
+            publication_ready = bool(
+                intended_session
+                and publication_precedes_session_open(published_ts, intended_session)
+            )
             execution_key = f"{run['report_run_id']}:{rank}"
             raw_entry = float(next_bar["open"]) if next_bar else None
             direction = direction_from_row(candidate) if isinstance(candidate, dict) else "long"
@@ -119,7 +139,11 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
             context = {
                 "entry_price": entry,
                 "avg_daily_volume": causal_avg_volume,
-                "portfolio_block": None,
+                "portfolio_block": (
+                    None
+                    if publication_ready
+                    else _publication_block(published_ts)
+                ),
                 "critic_outcome": candidate.get("critic_outcome") or {"approved": False, "error": "missing_replay_critic_evidence"},
                 "campaign_active": True, "duplicate": False,
                 "execution_ready": next_bar is not None,
@@ -135,6 +159,13 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                     entry_price=entry,
                     execution_ready=next_bar is not None,
                 )
+                if not publication_ready:
+                    context["portfolio_block"] = _publication_block(published_ts)
+                    context["source_context"] = {
+                        "report_run_id": run["report_run_id"],
+                        "intended_session": intended_session,
+                        "price_date": next_bar["date"] if next_bar else None,
+                    }
             decision = decide_candidate(row=candidate, rank=rank, config=config, context=context)
             decisions.append({"execution_key": execution_key, **decision})
             if decision["disposition"] != "admitted" or next_bar is None:
@@ -284,6 +315,15 @@ def replay_and_seal_promotion(conn, *, experiment_id: str, preregistration_id: s
         (str(row[0]), int(row[1])): json.loads(str(row[4])) for row in live_rows
     }
     sealed_candidate_runs = []
+    publication_rows = conn.execute(
+        f"SELECT run_id,published_ts FROM report_runs WHERE run_id IN ({placeholders})",
+        tuple(run_ids),
+    ).fetchall()
+    publication_by_run = {str(row[0]): str(row[1] or "") for row in publication_rows}
+    if set(publication_by_run) != set(run_ids) or any(
+        not value for value in publication_by_run.values()
+    ):
+        raise ValueError("promotion parity requires verified publication timestamps")
     for run in candidate_runs:
         run_id = str(run["report_run_id"])
         sealed_candidates = []
@@ -293,7 +333,11 @@ def replay_and_seal_promotion(conn, *, experiment_id: str, preregistration_id: s
                 "__sealed_candidate": evidence["candidate"],
                 "__sealed_context": evidence["context"],
             })
-        sealed_candidate_runs.append({**run, "candidates": sealed_candidates})
+        sealed_candidate_runs.append({
+            **run,
+            "published_ts": publication_by_run[run_id],
+            "candidates": sealed_candidates,
+        })
     result = replay_campaign(candidate_runs=sealed_candidate_runs, price_rows=price_rows, spy_rows=spy_rows,
                              config=config, expected_execution=expected_execution)
     evidence = record_promotion_experiment(

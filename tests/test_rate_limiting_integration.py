@@ -7,6 +7,7 @@ import pytest
 from datetime import timedelta
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
+from fastapi.middleware.cors import CORSMiddleware
 
 from trader_koo.ratelimit.service import RateLimiter, RateLimitConfig
 from trader_koo.ratelimit.middleware import RateLimitMiddleware
@@ -174,6 +175,42 @@ class TestRateLimitMiddleware:
         assert first.headers["X-RateLimit-Limit"] == "3"
         assert second.headers["X-RateLimit-Remaining"] == "1"
         assert len(audits) == 2
+
+    def test_admin_cors_preflight_reaches_cors_without_api_key(self):
+        app = FastAPI()
+        audits: list[dict[str, object]] = []
+        app.state.admin_authenticator = AdminAuthenticator(
+            AdminAuthConfig(api_key="secret"),
+            audit_recorder=lambda **payload: audits.append(payload),
+        )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["https://admin.example"],
+            allow_methods=["GET"],
+            allow_headers=["X-API-Key"],
+        )
+        app.add_middleware(
+            RateLimitMiddleware,
+            rate_limiter=RateLimiter(RateLimitConfig()),
+        )
+
+        @app.get("/api/admin/test", dependencies=[Depends(require_admin)])
+        def admin_endpoint():
+            return {"ok": True}
+
+        with TestClient(app) as admin_client:
+            response = admin_client.options(
+                "/api/admin/test",
+                headers={
+                    "Origin": "https://admin.example",
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "X-API-Key",
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "https://admin.example"
+        assert audits == []
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import gzip
+import hashlib
 import logging
 import sqlite3
 import shutil
@@ -42,7 +43,7 @@ def backup_database(
 
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     dest = backup_dir / f"{BACKUP_PREFIX}{stamp}{BACKUP_SUFFIX}"
 
     t0 = time.monotonic()
@@ -60,6 +61,10 @@ def backup_database(
 
     elapsed = round(time.monotonic() - t0, 2)
     dest_size = dest.stat().st_size
+    digest = hashlib.sha256()
+    with dest.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
     ratio = round(dest_size / src_size * 100, 1) if src_size else 0.0
 
     LOG.info(
@@ -81,6 +86,7 @@ def backup_database(
         "backup_name": dest.name,
         "src_size_bytes": src_size,
         "dest_size_bytes": dest_size,
+        "sha256": digest.hexdigest(),
         "compression_ratio_pct": ratio,
         "elapsed_sec": elapsed,
         "pruned_count": len(pruned),
@@ -131,6 +137,21 @@ def latest_backup_path(backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path | None:
     pattern = f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"
     files = sorted(backup_dir.glob(pattern), key=lambda p: p.name, reverse=True)
     return files[0] if files else None
+
+
+def backup_path_by_name(
+    backup_name: str,
+    backup_dir: Path = DEFAULT_BACKUP_DIR,
+) -> Path | None:
+    """Resolve one generated backup name without accepting arbitrary paths."""
+    if (
+        Path(backup_name).name != backup_name
+        or not backup_name.startswith(BACKUP_PREFIX)
+        or not backup_name.endswith(BACKUP_SUFFIX)
+    ):
+        return None
+    candidate = backup_dir / backup_name
+    return candidate if candidate.is_file() else None
 
 
 # ---------------------------------------------------------------------------

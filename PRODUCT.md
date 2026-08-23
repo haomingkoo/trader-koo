@@ -39,19 +39,26 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 
 - A published report resolves through its immutable run record and verified
   artifact hashes; a missing or mismatched lineage is displayed as unavailable.
+  The only exception is a pre-migration report directory whose registry exists
+  but contains zero runs and has no manifest. It may be displayed as visibly
+  `unlinked legacy` and is never eligible for paper admission or research proof.
 - Every experiment result exposes its implementation hash, data basis, split,
   gate results, and artifact identity. Validation cannot read the sealed held-out
   partition, and the seal is only trusted inside the controlled evidence store.
 - Historical universe claims fail closed until point-in-time membership is
   enforced; the current index membership is never presented as historical proof.
-- Paper entries use the first eligible open after verified publication. That
-  session's high, low, close, and final volume cannot influence admission,
-  sizing, or the entry fill.
+- Paper entries target exactly the first recorded market session after the
+  report date. Verified publication must be strictly earlier than 09:30 ET on
+  that session; equality or later publication expires the order rather than
+  rolling it to another day. The session's high, low, close, and final volume
+  cannot influence admission, sizing, or the entry fill. SPY session rows define
+  the observed trading calendar, including holidays.
 - Live and replay execution produce the same canonical ledger for the same
   campaign policy, report lineage, and market data.
-- A dark deployment verifies the exact commit and an inactive `paper-v2`
-  campaign through the public API. Activation is a separate authenticated,
-  audited human action.
+- The first Campaign v2 dark deployment verifies the exact commit and introduces
+  `paper-v2` inactive. Later software releases must preserve the pre-deploy
+  campaign status, including `active`; CI/CD never activates, resets, or rolls
+  back the campaign. Activation is a separate authenticated, audited human action.
 - The Report, Chart, Paper Trades, Agent Traces, and Experiment Results journeys
   pass in Chromium with keyboard focus, non-color status labels, and no clipped
   decision text.

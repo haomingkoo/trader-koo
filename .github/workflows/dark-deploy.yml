@@ -55,7 +55,7 @@ jobs:
           make backend-install
           npm ci --prefix trader_koo/frontend-v2
           npx --prefix trader_koo/frontend-v2 playwright install --with-deps chromium
-          npm install --global @railway/cli
+          npm install --global @railway/cli@5.27.0
 
       - name: Link the exact Railway target
         run: >-
@@ -79,12 +79,19 @@ jobs:
             --header "X-API-Key: ${ADMIN_API_KEY}" \
             "${BASE_URL}/api/admin/backups" \
             --output /tmp/backup-created.json
-          jq -e '.ok == true and (.backup_name | length > 0)' /tmp/backup-created.json > /dev/null
+          jq -e '.ok == true and (.backup_name | length > 0) and (.sha256 | length == 64) and .dest_size_bytes > 0' /tmp/backup-created.json > /dev/null
+          backup_name=$(jq -r '.backup_name' /tmp/backup-created.json)
+          backup_sha=$(jq -r '.sha256' /tmp/backup-created.json)
+          backup_size=$(jq -r '.dest_size_bytes' /tmp/backup-created.json)
+          mkdir -p release-evidence
+          jq '{schema: "production-backup-v1", backup_name, sha256, dest_size_bytes}' \
+            /tmp/backup-created.json > release-evidence/production-backup-manifest.json
           curl --fail --silent --show-error \
             --header "X-API-Key: ${ADMIN_API_KEY}" \
-            "${BASE_URL}/api/admin/backups/latest" \
+            "${BASE_URL}/api/admin/backups/${backup_name}" \
             --output /tmp/production-backup.db.gz
-          test -s /tmp/production-backup.db.gz
+          test "$(wc -c < /tmp/production-backup.db.gz | tr -d ' ')" = "$backup_size"
+          test "$(sha256sum /tmp/production-backup.db.gz | cut -d' ' -f1)" = "$backup_sha"
 
       - name: Verify migrations and replay against the production copy
         run: >-
@@ -98,10 +105,17 @@ jobs:
           railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-deployments.json
           deployment_id=$(jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty' /tmp/previous-deployments.json)
           release_sha=$(jq -r '[.[] | select(.status == "SUCCESS")][0].meta.commitHash // empty' /tmp/previous-deployments.json)
+          curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
+          campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
+          if [ "$campaign_status" = "absent" ]; then
+            campaign_status="inactive"
+          fi
+          case "$campaign_status" in active|draft|frozen|inactive) ;; *) exit 1 ;; esac
           test -n "$deployment_id"
           test -n "$release_sha"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "campaign_status=$campaign_status" >> "$GITHUB_OUTPUT"
 
       - name: Bind release identity without starting a second deployment
         run: >-
@@ -133,6 +147,7 @@ jobs:
           --base-url "$BASE_URL"
           --expected-sha "$RELEASE_SHA"
           --api-key "$ADMIN_API_KEY"
+          --expected-campaign-status "${{ steps.previous.outputs.campaign_status }}"
 
       - name: Verify production Chromium journeys
         working-directory: trader_koo/frontend-v2
@@ -176,15 +191,17 @@ jobs:
       - name: Write deployment manifest
         if: ${{ always() }}
         run: |
+          mkdir -p release-evidence
           jq -n \
             --arg schema "dark-deploy-manifest-v1" \
             --arg git_sha "$RELEASE_SHA" \
             --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
             --arg previous_git_sha "${{ steps.previous.outputs.sha }}" \
+            --arg expected_campaign_status "${{ steps.previous.outputs.campaign_status }}" \
             --arg dark_deployment_id "${{ steps.deployed.outputs.id }}" \
             --arg rollback_deployment_id "${{ steps.rollback.outputs.id }}" \
             --arg job_status "${{ job.status }}" \
-            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, verification_status: $job_status, campaign_activation_invoked: false}' \
+            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, verification_status: $job_status, campaign_activation_invoked: false}' \
             > release-evidence/deployment-manifest.json
 
       - name: Upload deployment evidence

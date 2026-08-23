@@ -62,6 +62,8 @@ def _rebuild_unique_key(conn: sqlite3.Connection, table: str, old: str, new: str
     sql = str(row[0] or "") if row else ""
     if old not in sql:
         return
+    if conn.in_transaction:
+        raise RuntimeError("unique-key migration requires an explicit transaction boundary")
     # SQLite normally rewrites child foreign-key declarations when a parent is
     # renamed.  This migration immediately drops the renamed legacy table, so
     # that behaviour would strand children on ``<table>__campaign_migration``.
@@ -69,13 +71,13 @@ def _rebuild_unique_key(conn: sqlite3.Connection, table: str, old: str, new: str
     # then prove the restored graph before returning.
     foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
     legacy_alter = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0])
-    conn.commit()
     if foreign_keys:
         conn.execute("PRAGMA foreign_keys=OFF")
     conn.execute("PRAGMA legacy_alter_table=ON")
     legacy = f"{table}__campaign_migration"
     columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({table})")]
     try:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(f"ALTER TABLE {table} RENAME TO {legacy}")
         create_sql = sql.replace(old, new, 1)
         if table == "paper_trades":
@@ -86,6 +88,11 @@ def _rebuild_unique_key(conn: sqlite3.Connection, table: str, old: str, new: str
         joined = ",".join(f'"{column}"' for column in columns)
         conn.execute(f"INSERT INTO {table} ({joined}) SELECT {joined} FROM {legacy}")
         conn.execute(f"DROP TABLE {legacy}")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                f"foreign-key violations after rebuilding {table}: {violations[:5]}"
+            )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -94,11 +101,6 @@ def _rebuild_unique_key(conn: sqlite3.Connection, table: str, old: str, new: str
         conn.execute(f"PRAGMA legacy_alter_table={legacy_alter}")
         if foreign_keys:
             conn.execute("PRAGMA foreign_keys=ON")
-    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if violations:
-        raise sqlite3.IntegrityError(
-            f"foreign-key violations after rebuilding {table}: {violations[:5]}"
-        )
 
 
 def _widen_candidate_dispositions(conn: sqlite3.Connection) -> None:
@@ -259,6 +261,10 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE paper_trades SET campaign_id='paper-v1' WHERE campaign_id IS NULL"
     )
+    # The table rebuild owns the following transaction because SQLite can only
+    # suspend FK rename propagation outside a transaction. Additive work above
+    # is resumable if this guarded phase rolls back.
+    conn.commit()
     _rebuild_unique_key(
         conn,
         "paper_trades",
@@ -425,6 +431,7 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_candidate_decisions", "tradeability", "tradeability TEXT NOT NULL DEFAULT 'not_actionable'")
     _ensure_column(conn, "paper_candidate_decisions", "inputs_json", "inputs_json TEXT NOT NULL DEFAULT '{}'")
     _widen_candidate_dispositions(conn)
+    conn.commit()
     _rebuild_unique_key(
         conn,
         "paper_candidate_decisions",
@@ -756,6 +763,7 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         )
     """)
     _ensure_column(conn, "paper_portfolio_snapshots", "campaign_id", "campaign_id TEXT NOT NULL DEFAULT 'paper-v1'")
+    conn.commit()
     _rebuild_unique_key(
         conn,
         "paper_portfolio_snapshots",

@@ -7,10 +7,10 @@ import json
 import logging
 import sqlite3
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.config import config_snapshot
+from trader_koo.paper_trade.chronology import publication_precedes_session_open
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
     canonical_json,
@@ -37,7 +37,6 @@ from trader_koo.research.next_open_baseline import (
 )
 
 LOG = logging.getLogger(__name__)
-_MARKET_TZ = ZoneInfo("America/New_York")
 
 
 def _pending_order_hash(
@@ -157,21 +156,6 @@ def _require_published_canonical_report(
         "is_canonical": True,
         "published_ts": str(row[1] or ""),
     }
-
-
-def _publication_precedes_session_open(published_ts: str, session_date: str) -> bool:
-    """Return whether immutable publication existed before the US cash open."""
-    try:
-        published = dt.datetime.fromisoformat(published_ts.replace("Z", "+00:00"))
-        if published.tzinfo is None:
-            return False
-        session = dt.date.fromisoformat(session_date)
-        market_open = dt.datetime.combine(
-            session, dt.time(hour=9, minute=30), tzinfo=_MARKET_TZ,
-        ).astimezone(dt.timezone.utc)
-    except (TypeError, ValueError):
-        return False
-    return published.astimezone(dt.timezone.utc) < market_open
 
 
 def _advance_paper_book(
@@ -1092,18 +1076,28 @@ def _create_paper_trades_from_report_in_transaction(
             raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
         direction = str(evaluation["direction"])
 
-        # Entry price is strictly the first later-session open.  The signal
-        # close may be used to preflight the plan, never as an executable fill.
+        # Entry price is strictly the ticker open on the immediate next SPY
+        # session. A missing ticker bar cannot silently roll the fill forward.
         try:
-            next_open_row = conn.execute(
-                "SELECT CAST(open AS REAL), date FROM price_daily "
-                "WHERE ticker = ? AND date > ? ORDER BY date ASC LIMIT 1",
-                (ticker, report_date),
+            intended_row = conn.execute(
+                "SELECT date FROM price_daily "
+                "WHERE ticker='SPY' AND date>? AND open IS NOT NULL "
+                "ORDER BY date ASC LIMIT 1",
+                (report_date,),
             ).fetchone()
+            next_open_row = (
+                conn.execute(
+                    "SELECT CAST(open AS REAL),date FROM price_daily "
+                    "WHERE ticker=? AND date=? AND open IS NOT NULL",
+                    (ticker, str(intended_row[0])),
+                ).fetchone()
+                if intended_row
+                else None
+            )
             if (
                 next_open_row
                 and next_open_row[0] is not None
-                and _publication_precedes_session_open(
+                and publication_precedes_session_open(
                     str(lineage.get("published_ts") or ""), str(next_open_row[1])
                 )
             ):
@@ -1715,7 +1709,7 @@ def fill_pending_paper_orders(
             (campaign_id,),
         ).fetchone()[0])
         block = None
-        if not _publication_precedes_session_open(
+        if not publication_precedes_session_open(
             str(lineage.get("published_ts") or ""), intended_session
         ):
             block = {

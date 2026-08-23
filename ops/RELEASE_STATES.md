@@ -8,7 +8,8 @@ Trader Koo deliberately separates these states:
    replay evidence, and real Chromium journeys.
 3. **Merged**: the commit is present on `main`; this is not a deployment.
 4. **Dark deployed**: Railway built the exact commit after CI and the production
-   database backup passed copy-only migrations. Campaign v2 remains inactive.
+   database backup passed copy-only migrations. The first Campaign v2 release is
+   inactive; later releases preserve the campaign's pre-deploy lifecycle state.
 5. **Production verified**: exact SHA, API contracts, auth behavior, and the real
    Report, Chart, Paper Trades, Agent Observability, and Experiment Results pages
    passed against the public service.
@@ -19,7 +20,7 @@ Trader Koo deliberately separates these states:
 
 Each CI run stores hash-bound database migration, replay, and execution-ledger
 JSON artifacts. Dark deployment first requests a fresh consistent online SQLite
-backup, downloads that exact latest backup, runs additive migrations against a
+backup, downloads that exact named and hash-verified backup, runs additive migrations against a
 separate copy, and retains only manifests in GitHub Actions—not the database
 itself.
 
@@ -32,8 +33,20 @@ supports it; this keeps the first migration from an older image bootstrappable.
 Railway rollback restores its image and custom variables. The pre-deploy database
 backup remains available for a separately approved data recovery; CD never
 overwrites the live SQLite volume. Dark-deploy verification also fails unless
-`paper-v2` remains inactive; activation requires a different, explicitly approved
-release transition.
+the `paper-v2` status matches its pre-deploy state. When Campaign v2 is first
+introduced, an absent legacy state maps only to inactive. Activation requires a
+different, explicitly approved release transition; later code releases can
+preserve an active campaign without invoking activation.
+
+## Ordered rollout
+
+1. Land shared live/replay chronology and prove late-publication parity.
+2. Land transaction-owned schema migration and named-backup verification.
+3. Refresh research evidence in a separate artifact-only commit bound to the
+   complete implementation closure.
+4. Let the exact commit pass CI, then approve the protected dark-deploy job.
+5. Verify the public SHA, preserved campaign state, API contracts, and Chromium
+   journeys. Activation remains a later, separately audited human decision.
 
 Configure the `production-dark` GitHub environment with required reviewers,
 the non-secret target variables `TRADER_KOO_PRODUCTION_URL`,

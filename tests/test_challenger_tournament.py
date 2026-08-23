@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import math
 import sqlite3
 from types import SimpleNamespace
@@ -8,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from trader_koo.research import challenger_executor as executor
+from trader_koo.research import experiment_results
 from trader_koo.research import challenger_tournament as tournament
 from trader_koo.research.challenger_tournament import (
     CHALLENGERS,
@@ -81,6 +84,33 @@ def test_preregistration_freezes_exactly_three_config_hashes() -> None:
     assert set(first["config_hashes"]) == set(CHALLENGERS)
     assert first["selection"]["automatic_promotion"] is False
     assert first["selection"]["heldout_reuse"] is False
+
+
+def test_tournament_hash_covers_signal_and_execution_implementation() -> None:
+    digest = hashlib.sha256()
+    for path in sorted(tournament.IMPLEMENTATION_PATHS, key=lambda item: item.name):
+        digest.update(path.name.encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+
+    assert tournament._implementation_hash() == digest.hexdigest()
+
+
+def test_tournament_loader_rejects_a_different_implementation(tmp_path) -> None:
+    body = {
+        "schema_version": "challenger-tournament-v1",
+        "implementation_sha256": "0" * 64,
+        "status": "blocked_before_validation",
+    }
+    artifact = {**body, "artifact_sha256": tournament._sha256(body)}
+    path = tmp_path / "tournament.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    loaded = experiment_results._load_tournament(path)
+
+    assert loaded["available"] is False
+    assert loaded["warnings"] == ["tournament_implementation_hash_mismatch"]
 
 
 def test_chronological_split_purges_and_embargoes_holding_overlap() -> None:

@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from trader_koo.scripts.backup_db import (
     DEFAULT_BACKUP_DIR,
+    backup_path_by_name,
     backup_database,
     latest_backup_path,
     list_backups,
@@ -44,6 +45,19 @@ def admin_download_latest_backup() -> Any:
     path = latest_backup_path(DEFAULT_BACKUP_DIR)
     if path is None or not path.exists():
         return {"ok": False, "detail": "No backups available"}
+    return FileResponse(
+        str(path),
+        media_type="application/gzip",
+        filename=path.name,
+    )
+
+
+@router.get("/api/admin/backups/{backup_name}")
+def admin_download_named_backup(backup_name: str) -> Any:
+    """Download the exact immutable backup returned by the create endpoint."""
+    path = backup_path_by_name(backup_name, DEFAULT_BACKUP_DIR)
+    if path is None:
+        return {"ok": False, "detail": "Backup not found"}
     return FileResponse(
         str(path),
         media_type="application/gzip",

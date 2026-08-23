@@ -30,6 +30,11 @@ from trader_koo.research.next_open_baseline import canonical_json_bytes
 SCHEMA_VERSION = "challenger-tournament-v1"
 MAX_HOLDING_SESSIONS = 21
 IMPLEMENTATION_PATH = Path(__file__)
+IMPLEMENTATION_PATHS = (
+    IMPLEMENTATION_PATH,
+    IMPLEMENTATION_PATH.with_name("challenger_executor.py"),
+    IMPLEMENTATION_PATH.with_name("next_open_baseline.py"),
+)
 
 CHALLENGERS: dict[str, dict[str, Any]] = {
     "C1": {
@@ -72,6 +77,17 @@ CHALLENGERS: dict[str, dict[str, Any]] = {
 
 def _sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _implementation_hash() -> str:
+    """Hash the complete local signal and portfolio execution closure."""
+    digest = hashlib.sha256()
+    for path in sorted(IMPLEMENTATION_PATHS, key=lambda item: item.name):
+        digest.update(path.name.encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def frozen_preregistration(dataset_hash: str) -> dict[str, Any]:
@@ -300,9 +316,7 @@ def run_challenger_tournament(
         body = {
             "schema_version": SCHEMA_VERSION,
             "code_sha": current_code_version(),
-            "implementation_sha256": hashlib.sha256(
-                IMPLEMENTATION_PATH.read_bytes()
-            ).hexdigest(),
+            "implementation_sha256": _implementation_hash(),
             "status": "blocked_before_validation",
             "preregistration": preregistration,
             "dataset_audit": audit,
@@ -322,9 +336,7 @@ def run_challenger_tournament(
     body = {
         "schema_version": SCHEMA_VERSION,
         "code_sha": current_code_version(),
-        "implementation_sha256": hashlib.sha256(
-            IMPLEMENTATION_PATH.read_bytes()
-        ).hexdigest(),
+        "implementation_sha256": _implementation_hash(),
         "status": (
             "sealed_heldout_complete"
             if execution["sealed_heldout"]["accessed"]

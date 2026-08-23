@@ -4,7 +4,7 @@ import gzip
 import sqlite3
 from pathlib import Path
 
-from trader_koo.scripts.backup_db import backup_database
+from trader_koo.scripts.backup_db import backup_database, backup_path_by_name
 
 
 def test_backup_database_creates_consistent_compressed_snapshot(tmp_path: Path) -> None:
@@ -23,3 +23,8 @@ def test_backup_database_creates_consistent_compressed_snapshot(tmp_path: Path) 
     with sqlite3.connect(restored) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("SELECT value FROM evidence").fetchone()[0] == "preserved"
+    assert len(str(result["sha256"])) == 64
+    assert backup_path_by_name(str(result["backup_name"]), tmp_path / "backups") == Path(
+        str(result["backup_path"])
+    )
+    assert backup_path_by_name("../source.db", tmp_path / "backups") is None

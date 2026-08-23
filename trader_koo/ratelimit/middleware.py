@@ -127,6 +127,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not path.startswith("/api/") or path in ("/api/health", "/api/status"):
             return await call_next(request)
+        if request.method == "OPTIONS":
+            return await call_next(request)
 
         # Router dependencies run after HTTP middleware.  Authenticate the
         # admin surface here so valid admins receive the per-user quota instead

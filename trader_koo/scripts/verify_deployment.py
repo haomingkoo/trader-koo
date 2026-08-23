@@ -1,4 +1,4 @@
-"""Fail-closed HTTP verification for an inactive Trader Koo release."""
+"""Fail-closed HTTP verification for a state-preserving Trader Koo release."""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +24,12 @@ def _get(base_url: str, path: str, *, api_key: str | None = None) -> tuple[int, 
         return exc.code, payload
 
 
-def verify(base_url: str, expected_sha: str, api_key: str) -> dict[str, Any]:
+def verify(
+    base_url: str,
+    expected_sha: str,
+    api_key: str,
+    expected_campaign_status: str = "inactive",
+) -> dict[str, Any]:
     release_status, release = _get(base_url, "/api/release")
     health_status, health = _get(base_url, "/api/health")
     status_code, status = _get(base_url, "/api/status")
@@ -33,6 +38,13 @@ def verify(base_url: str, expected_sha: str, api_key: str) -> dict[str, Any]:
         base_url, "/api/admin/agent-observability", api_key=api_key,
     )
     paper_status, paper = _get(base_url, "/api/paper-trades/summary")
+    campaign = paper.get("campaign_health") or {}
+    campaign_status = str(campaign.get("status") or "")
+    campaign_status_matches = (
+        campaign_status != "active"
+        if expected_campaign_status == "inactive"
+        else campaign_status == expected_campaign_status
+    )
     contracts = {
         "release": release_status == 200 and release.get("git_sha") == expected_sha,
         "health": health_status == 200 and health.get("ok") is True,
@@ -44,10 +56,10 @@ def verify(base_url: str, expected_sha: str, api_key: str) -> dict[str, Any]:
         ),
         "admin_rejects_missing_key": unauth_code in {401, 403},
         "admin_accepts_valid_key": auth_code == 200 and agents.get("ok") is True,
-        "campaign_v2_inactive": (
+        "campaign_v2_status_preserved": (
             paper_status == 200
-            and (paper.get("campaign_health") or {}).get("campaign_id") == "paper-v2"
-            and (paper.get("campaign_health") or {}).get("status") != "active"
+            and campaign.get("campaign_id") == "paper-v2"
+            and campaign_status_matches
         ),
     }
     api_paths = {
@@ -61,7 +73,13 @@ def verify(base_url: str, expected_sha: str, api_key: str) -> dict[str, Any]:
     failed = sorted(name for name, passed in contracts.items() if not passed)
     if failed:
         raise RuntimeError(f"deployment verification failed: {', '.join(failed)}")
-    return {"ok": True, "expected_sha": expected_sha, "contracts": contracts}
+    return {
+        "ok": True,
+        "expected_sha": expected_sha,
+        "expected_campaign_status": expected_campaign_status,
+        "observed_campaign_status": campaign_status,
+        "contracts": contracts,
+    }
 
 
 def main() -> None:
@@ -69,8 +87,14 @@ def main() -> None:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--api-key", required=True)
+    parser.add_argument("--expected-campaign-status", default="inactive")
     args = parser.parse_args()
-    print(json.dumps(verify(args.base_url, args.expected_sha, args.api_key), sort_keys=True))
+    print(json.dumps(verify(
+        args.base_url,
+        args.expected_sha,
+        args.api_key,
+        args.expected_campaign_status,
+    ), sort_keys=True))
 
 
 if __name__ == "__main__":
