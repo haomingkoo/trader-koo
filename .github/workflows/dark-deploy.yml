@@ -83,24 +83,79 @@ jobs:
 
       - name: Create and download a fresh consistent production backup
         run: |
-          curl --fail --silent --show-error \
+          mkdir -p release-evidence
+          backup_status=$(curl --silent --show-error \
             --request POST \
             --header "X-API-Key: ${ADMIN_API_KEY}" \
             "${BASE_URL}/api/admin/backups" \
-            --output /tmp/backup-created.json
-          jq -e '.ok == true and (.backup_name | length > 0) and (.sha256 | length == 64) and .dest_size_bytes > 0' /tmp/backup-created.json > /dev/null
-          backup_name=$(jq -r '.backup_name' /tmp/backup-created.json)
-          backup_sha=$(jq -r '.sha256' /tmp/backup-created.json)
-          backup_size=$(jq -r '.dest_size_bytes' /tmp/backup-created.json)
-          mkdir -p release-evidence
-          jq '{schema: "production-backup-v1", backup_name, sha256, dest_size_bytes}' \
-            /tmp/backup-created.json > release-evidence/production-backup-manifest.json
+            --output /tmp/backup-created.json \
+            --write-out '%{http_code}')
+          case "$backup_status" in
+            200)
+              jq -e '.ok == true and (.backup_name | length > 0) and (.sha256 | length == 64) and .dest_size_bytes > 0' \
+                /tmp/backup-created.json > /dev/null
+              backup_name=$(jq -r '.backup_name' /tmp/backup-created.json)
+              backup_sha=$(jq -r '.sha256' /tmp/backup-created.json)
+              backup_size=$(jq -r '.dest_size_bytes' /tmp/backup-created.json)
+              backup_source=release-api
+              backup_url="${BASE_URL}/api/admin/backups/${backup_name}"
+              ;;
+            405)
+              # The pre-release service can only list/download backups. Accept
+              # one online SQLite snapshot created explicitly for this bootstrap.
+              curl --fail --silent --show-error \
+                --header "X-API-Key: ${ADMIN_API_KEY}" \
+                "${BASE_URL}/api/admin/backups" \
+                --output /tmp/backup-list.json
+              backup_name=$(jq -r '.backups[0].name // empty' /tmp/backup-list.json)
+              python - "$backup_name" <<'PY'
+          import datetime as dt
+          import re
+          import sys
+
+          name = sys.argv[1]
+          match = re.fullmatch(
+              r"trader_koo_backup_(\d{8}T\d{12}Z)_consistent\.db\.gz",
+              name,
+          )
+          if match is None:
+              raise SystemExit("latest backup is not a consistent release bootstrap")
+          created = dt.datetime.strptime(
+              match.group(1), "%Y%m%dT%H%M%S%fZ"
+          ).replace(tzinfo=dt.timezone.utc)
+          age_seconds = (dt.datetime.now(dt.timezone.utc) - created).total_seconds()
+          if not 0 <= age_seconds <= 1800:
+              raise SystemExit("consistent release bootstrap is not fresh")
+          PY
+              backup_source=legacy-consistent-bootstrap
+              backup_url="${BASE_URL}/api/admin/backups/latest"
+              ;;
+            *)
+              echo "Production backup endpoint returned HTTP ${backup_status}" >&2
+              exit 1
+              ;;
+          esac
           curl --fail --silent --show-error \
             --header "X-API-Key: ${ADMIN_API_KEY}" \
-            "${BASE_URL}/api/admin/backups/${backup_name}" \
+            "$backup_url" \
             --output /tmp/production-backup.db.gz
-          test "$(wc -c < /tmp/production-backup.db.gz | tr -d ' ')" = "$backup_size"
-          test "$(sha256sum /tmp/production-backup.db.gz | cut -d' ' -f1)" = "$backup_sha"
+          downloaded_size=$(wc -c < /tmp/production-backup.db.gz | tr -d ' ')
+          downloaded_sha=$(sha256sum /tmp/production-backup.db.gz | cut -d' ' -f1)
+          if [ "$backup_status" = 200 ]; then
+            test "$downloaded_size" = "$backup_size"
+            test "$downloaded_sha" = "$backup_sha"
+          else
+            backup_size=$downloaded_size
+            backup_sha=$downloaded_sha
+          fi
+          jq -n \
+            --arg schema "production-backup-v1" \
+            --arg backup_name "$backup_name" \
+            --arg sha256 "$backup_sha" \
+            --arg source "$backup_source" \
+            --argjson dest_size_bytes "$backup_size" \
+            '{schema: $schema, backup_name: $backup_name, sha256: $sha256, dest_size_bytes: $dest_size_bytes, source: $source}' \
+            > release-evidence/production-backup-manifest.json
 
       - name: Verify migrations and replay against the production copy
         run: >-
