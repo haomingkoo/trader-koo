@@ -58,6 +58,7 @@ def _snapshot(source: Path, target: Path) -> None:
 
 def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     copy_path = output_dir / "database-copy.db"
+    source_artifact_hash = _sha256(source)
     _snapshot(source, copy_path)
     source_snapshot_hash = _sha256(copy_path)
     with sqlite3.connect(copy_path) as conn:
@@ -81,6 +82,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     manifest = {
         "schema": "release-database-copy-v1",
         "source_artifact": source.name,
+        "source_artifact_sha256": source_artifact_hash,
         "source_snapshot_sha256": source_snapshot_hash,
         "migrated_copy_sha256": _sha256(copy_path),
         "integrity_check": integrity,
