@@ -8,7 +8,7 @@ from typing import Any
 
 from trader_koo.paper_trade.campaign import canonical_hash, decide_candidate, record_promotion_experiment
 from trader_koo.paper_trade.chronology import (
-    next_session_after,
+    next_scheduled_session_after,
     publication_precedes_session_open,
 )
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
@@ -124,9 +124,13 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 else raw_candidate
             )
             ticker = str(candidate.get("ticker") or "").upper()
-            intended_session = next_session_after(report_date, sessions)
-            next_bar = next((bar for bar in by_ticker.get(ticker, [])
-                             if bar["date"] == intended_session and bar.get("open") is not None), None)
+            intended_session = next_scheduled_session_after(report_date)
+            spy_ready = intended_session in session_index
+            next_bar = (
+                next((bar for bar in by_ticker.get(ticker, [])
+                      if bar["date"] == intended_session and bar.get("open") is not None), None)
+                if spy_ready else None
+            )
             publication_ready = bool(
                 intended_session
                 and publication_precedes_session_open(published_ts, intended_session)

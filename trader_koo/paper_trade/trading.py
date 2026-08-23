@@ -11,7 +11,7 @@ from typing import Any
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trade.chronology import (
-    next_session_after,
+    next_scheduled_session_after,
     publication_precedes_session_open,
 )
 from trader_koo.paper_trade.campaign import (
@@ -1082,23 +1082,22 @@ def _create_paper_trades_from_report_in_transaction(
         # Entry price is strictly the ticker open on the immediate next SPY
         # session. A missing ticker bar cannot silently roll the fill forward.
         try:
-            observed_sessions = [
-                str(item[0])
-                for item in conn.execute(
-                    "SELECT date FROM price_daily "
-                    "WHERE ticker='SPY' AND date>? AND open IS NOT NULL "
-                    "ORDER BY date ASC",
-                    (report_date,),
-                )
-            ]
-            intended_session = next_session_after(report_date, observed_sessions)
+            intended_session = next_scheduled_session_after(report_date)
+            spy_ready = bool(
+                intended_session
+                and conn.execute(
+                    "SELECT 1 FROM price_daily "
+                    "WHERE ticker='SPY' AND date=? AND open IS NOT NULL",
+                    (intended_session,),
+                ).fetchone()
+            )
             next_open_row = (
                 conn.execute(
                     "SELECT CAST(open AS REAL),date FROM price_daily "
                     "WHERE ticker=? AND date=? AND open IS NOT NULL",
                     (ticker, intended_session),
                 ).fetchone()
-                if intended_session
+                if spy_ready
                 else None
             )
             if (
@@ -1685,21 +1684,19 @@ def fill_pending_paper_orders(
         lineage = _require_published_canonical_report(
             conn, str(report_run_id), require_current=False
         )
-        session_query = (
-            "SELECT date FROM price_daily "
-            "WHERE ticker='SPY' AND date>? AND open IS NOT NULL"
-        )
-        session_params: list[Any] = [report_date]
-        if through_date:
-            session_query += " AND date<=?"
-            session_params.append(through_date)
-        session_query += " ORDER BY date ASC LIMIT 1"
-        intended_sessions = [
-            str(item[0])
-            for item in conn.execute(session_query, session_params).fetchall()
-        ]
-        intended_session = next_session_after(str(report_date), intended_sessions)
-        if not intended_session:
+        intended_session = next_scheduled_session_after(str(report_date))
+        if (
+            not intended_session
+            or (through_date is not None and intended_session > through_date)
+        ):
+            resolved["still_pending"] += 1
+            continue
+        spy_ready = conn.execute(
+            "SELECT 1 FROM price_daily "
+            "WHERE ticker='SPY' AND date=? AND open IS NOT NULL",
+            (intended_session,),
+        ).fetchone()
+        if not spy_ready:
             resolved["still_pending"] += 1
             continue
         open_row = conn.execute(

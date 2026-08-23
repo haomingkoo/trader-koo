@@ -11,6 +11,7 @@ import pytest
 
 from trader_koo.paper_trade import summary as paper_summary_module
 from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.chronology import next_scheduled_session_after
 from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_decision,
     compute_position_plan as _compute_position_plan_decision,
@@ -187,9 +188,8 @@ def test_same_day_snapshot_replacement_preserves_intraday_high_water(
 
 def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
     kwargs["report_run_id"] = TEST_REPORT_RUN_ID
-    next_date = (
-        dt.date.fromisoformat(str(kwargs["report_date"])) + dt.timedelta(days=1)
-    ).isoformat()
+    next_date = next_scheduled_session_after(str(kwargs["report_date"]))
+    assert next_date is not None
     if conn.execute(
         "SELECT 1 FROM price_daily WHERE ticker='SPY' AND date=?", (next_date,)
     ).fetchone() is None:
@@ -550,7 +550,7 @@ class TestCreatePaperTrades:
         event = conn.execute(
             "SELECT event_type,event_date,payload_json,payload_hash FROM paper_trade_events"
         ).fetchone()
-        assert event[0:2] == ("fill", "2026-03-15")
+        assert event[0:2] == ("fill", "2026-03-16")
         assert json.loads(event[2])["fill_source"] == "immediate_next_session_open"
         assert len(event[3]) == 64
         accounting = conn.execute(
@@ -756,8 +756,8 @@ class TestCreatePaperTrades:
             decision_version="paper-campaign-v2.0",
             min_reward_r_multiple=2.0,
         )
-        _seed_price(conn, "AAPL", 150.0, date="2026-03-15")
-        _seed_price(conn, "SPY", 500.0, date="2026-03-15")
+        _seed_price(conn, "AAPL", 150.0, date="2026-03-16")
+        _seed_price(conn, "SPY", 500.0, date="2026-03-16")
 
         inserted = _create_paper_trades_from_report_impl(
             conn,

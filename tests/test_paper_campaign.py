@@ -602,7 +602,7 @@ def test_pending_order_never_skips_a_missing_immediate_session_open():
     assert conn.execute("SELECT entry_date FROM paper_trades").fetchone()[0] == "2026-08-24"
 
 
-def test_immediate_admission_does_not_skip_a_missing_spy_session() -> None:
+def test_immediate_admission_does_not_skip_a_missing_ticker_open() -> None:
     conn = _db()
     _activate(conn)
     conn.execute(
@@ -622,25 +622,45 @@ def test_immediate_admission_does_not_skip_a_missing_spy_session() -> None:
     assert conn.execute("SELECT status FROM paper_pending_orders").fetchone()[0] == "pending"
 
 
+def test_missing_immediate_spy_observation_never_rolls_to_a_later_session() -> None:
+    conn = _db()
+    _activate(conn)
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SPY','2026-08-25',651,652,650,651,1000000),
+                  ('NOSPY','2026-08-25',152,160,151,158,1000000)"""
+    )
+
+    inserted = create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("NOSPY")], report_date="2026-08-21",
+        generated_ts="no-spy-ts", report_run_id="no-spy-run",
+    )
+    resolved = fill_pending_paper_orders(conn, through_date="2026-08-25")
+
+    assert inserted == 0
+    assert resolved == {"filled": 0, "rejected": 0, "still_pending": 1}
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+
 def test_report_published_after_intended_open_cannot_backdate_a_fill(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        "trader_koo.report.runs._utc_now", lambda: "2026-08-23T12:02:00Z"
+        "trader_koo.report.runs._utc_now", lambda: "2026-08-24T14:02:00Z"
     )
     conn = _db()
     _activate(conn)
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('STALE','2026-08-22',150,151,149,150,1000000),
-                  ('SPY','2026-08-22',650,651,649,650,1000000)"""
+           VALUES ('STALE','2026-08-24',150,151,149,150,1000000),
+                  ('SPY','2026-08-24',650,651,649,650,1000000)"""
     )
 
     assert create_paper_trades_from_report(
         conn, setup_rows=[_candidate("STALE")], report_date="2026-08-21",
         generated_ts="stale-ts", report_run_id="stale-run",
     ) == 0
-    result = fill_pending_paper_orders(conn, through_date="2026-08-22")
+    result = fill_pending_paper_orders(conn, through_date="2026-08-24")
 
     assert result == {"filled": 0, "rejected": 1, "still_pending": 0}
     assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
@@ -657,16 +677,16 @@ def test_report_published_after_intended_open_cannot_backdate_a_fill(
         candidate_runs=[{
             "report_run_id": "stale-run",
             "report_date": "2026-08-21",
-            "published_ts": "2026-08-23T12:02:00Z",
+            "published_ts": "2026-08-24T14:02:00Z",
             "candidates": [{
                 "__sealed_candidate": sealed_inputs["candidate"],
                 "__sealed_context": sealed_inputs["context"],
             }],
         }],
         price_rows=[
-            {"ticker": "STALE", "date": "2026-08-22", "open": 150,
+            {"ticker": "STALE", "date": "2026-08-24", "open": 150,
              "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
-            {"ticker": "SPY", "date": "2026-08-22", "open": 650,
+            {"ticker": "SPY", "date": "2026-08-24", "open": 650,
              "high": 651, "low": 649, "close": 650, "volume": 1_000_000},
         ],
         spy_rows=[], config=_build_config(), _include_splits=False,
@@ -1013,7 +1033,7 @@ def test_replay_fails_closed_without_an_observed_spy_calendar():
         spy_rows=[], config=_build_config(), _include_splits=False,
     )
 
-    assert replay["decisions"][0]["disposition"] == "rejected"
+    assert replay["decisions"][0]["disposition"] == "pending"
     assert replay["decisions"][0]["inputs"]["context"]["execution_ready"] is False
     assert replay["trades"] == []
 

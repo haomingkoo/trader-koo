@@ -47,12 +47,13 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
   partition, and the seal is only trusted inside the controlled evidence store.
 - Historical universe claims fail closed until point-in-time membership is
   enforced; the current index membership is never presented as historical proof.
-- Paper entries target exactly the first recorded market session after the
+- Paper entries target exactly the first scheduled NYSE session after the
   report date. Verified publication must be strictly earlier than 09:30 ET on
   that session; equality or later publication expires the order rather than
   rolling it to another day. The session's high, low, close, and final volume
-  cannot influence admission, sizing, or the entry fill. SPY session rows define
-  the observed trading calendar, including holidays.
+  cannot influence admission, sizing, or the entry fill. The NYSE calendar
+  defines the intended date; an observed SPY open must exist on that exact date
+  or execution fails closed without consulting a later row.
 - Live and replay execution produce the same canonical ledger for the same
   campaign policy, report lineage, and market data.
 - The first Campaign v2 dark deployment verifies the exact commit and introduces
