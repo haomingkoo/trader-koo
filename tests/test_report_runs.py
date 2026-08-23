@@ -396,6 +396,11 @@ def test_retry_has_a_separate_cohort_and_setup_calls_never_union(
     assert admit_published_report(
         conn, run_id=second, report_dir=tmp_path / "reports"
     )["setup_calls"] == 1
+    assert conn.execute(
+        "SELECT status,error_code,error_message FROM report_admission_attempts "
+        "WHERE run_id=? ORDER BY attempt_id DESC LIMIT 1",
+        (second,),
+    ).fetchone() == ("succeeded", None, None)
 
     cohorts = {
         run_id: json.loads(snapshot)
@@ -1074,6 +1079,11 @@ def test_admission_uses_immutable_inputs_and_rolls_back_as_one_transaction(
     with pytest.raises(RuntimeError, match="paper admission failed"):
         admit_published_report(conn, run_id=run_id, report_dir=tmp_path / "reports")
     assert conn.execute("SELECT COUNT(*) FROM setup_call_evaluations").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT status,error_code,error_message FROM report_admission_attempts "
+        "WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("failed", "RuntimeError", "RuntimeError")
 
 
 def test_email_dispatch_happens_only_after_publication_and_admission(

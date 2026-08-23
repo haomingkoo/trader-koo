@@ -89,12 +89,20 @@ candidate runs use the same late/SPY/ticker ordering as live admission.
 A lineage refusal aborts the admission transaction before decision sets, orders,
 or trades are written. Missing/unpublished lineage raises
 `ReportLineageError(code="report_not_verified_published")`; structurally invalid
-lineage raises `ReportLineageError(code="report_publication_lineage_invalid")`.
-Both are retryable only after the same run has valid verified-publication
-evidence. Every outer admission attempt appends a success or failure fact to the
-immutable `report_admission_attempts` ledger, including the stable error code;
-it never rewrites an immutable published run. The nightly process preserves the
-original exception for scheduler and log handling. There is no paper-admission
+lineage raises `ReportLineageError(code="report_publication_lineage_invalid")`;
+a valid superseded run raises
+`ReportLineageError(code="report_not_current_publication")`. The first two are
+retryable only after the same run has valid verified-publication evidence. A
+superseded run is terminal and callers must use the current canonical run.
+
+After schema initialization, a known-run outer admission appends a success fact
+or attempts a separate durable failure fact in the immutable
+`report_admission_attempts` ledger. A process crash before the failure insert, an
+unknown run ID, or an audit-storage failure can leave no failure fact; that
+condition is logged and the original exception is preserved. Stored failures
+contain the stable code and exception class, never raw error text or file paths.
+The API rejects caller-owned transactions, and the ledger does not rewrite an
+immutable published run. There is no paper-admission
 HTTP endpoint that maps it to a transport status in v4. The lower-level
 `replay_campaign()` simulation accepts caller-supplied research fixtures; only
 `replay_and_seal_promotion()` is the lineage-verified promotion boundary.

@@ -11,6 +11,7 @@ import datetime as dt
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -22,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from trader_koo.paper_trade.errors import ReportLineageError
+
+LOG = logging.getLogger(__name__)
 
 LATEST_MANIFEST = "daily_report_latest.manifest.json"
 PUBLICATION_LOCK = ".daily_report_publication.lock"
@@ -183,6 +186,13 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
             error_code TEXT,
             error_message TEXT,
             attempted_ts TEXT NOT NULL
+                CHECK (attempted_ts GLOB '????-??-??T??:??:??Z'),
+            CHECK (
+                (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
+                OR
+                (status='failed' AND TRIM(COALESCE(error_code,''))!=''
+                 AND TRIM(COALESCE(error_message,''))!='')
+            )
         )"""
     )
     conn.execute(
@@ -886,7 +896,7 @@ def _record_admission_attempt(
             run_id,
             status,
             getattr(error, "code", type(error).__name__) if error else None,
-            str(error)[:4000] if error else None,
+            type(error).__name__ if error else None,
             _utc_now(),
         ),
     )
@@ -899,6 +909,8 @@ def admit_published_report(
     report_dir: Path,
 ) -> dict[str, int]:
     """Admit only the current verified artifact's immutable accepted decisions."""
+    if conn.in_transaction:
+        raise RuntimeError("report admission requires a clean transaction boundary")
     from trader_koo.paper_trades import PAPER_TRADE_ENABLED, create_paper_trades_from_report
     from trader_koo.paper_trade.schema import ensure_paper_trade_schema
     from trader_koo.paper_trade.trading import _require_published_canonical_report
@@ -971,5 +983,9 @@ def admit_published_report(
             conn.commit()
         except Exception:
             conn.rollback()
+            LOG.exception(
+                "Could not persist failed admission attempt for report run %s",
+                run_id,
+            )
         raise
     return {"setup_calls": int(calls), "paper_trades": int(trades)}

@@ -32,7 +32,7 @@ from trader_koo.paper_trades import _build_config
 from trader_koo.paper_trades import create_paper_trades_from_report as _create_paper_trades_from_report
 from trader_koo.paper_trades import fill_pending_paper_orders
 from trader_koo.paper_trades import paper_trade_summary
-from trader_koo.paper_trade.replay import replay_campaign
+from trader_koo.paper_trade.replay import replay_and_seal_promotion, replay_campaign
 from trader_koo.paper_trade.trading import (
     ReportLineageError,
     _require_published_canonical_report,
@@ -893,6 +893,48 @@ def test_outer_admission_persists_lineage_failure_without_candidate_writes(
     assert conn.execute("SELECT COUNT(*) FROM paper_decision_sets").fetchone()[0] == 0
     with pytest.raises(sqlite3.IntegrityError, match="admission attempts are immutable"):
         conn.execute("DELETE FROM report_admission_attempts")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'succeeded','forged','forged','2026-08-21T12:00:00Z')""",
+            (run_id,),
+        )
+
+
+def test_promotion_verifies_lineage_before_candidate_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _db()
+
+    def reject_lineage(*args, **kwargs):
+        raise ReportLineageError(
+            "report_not_verified_published", "unverified promotion fixture"
+        )
+
+    monkeypatch.setattr(
+        "trader_koo.paper_trade.trading._require_published_canonical_report",
+        reject_lineage,
+    )
+
+    with pytest.raises(ReportLineageError) as error:
+        replay_and_seal_promotion(
+            conn,
+            experiment_id="blocked-exp",
+            preregistration_id="blocked-prereg",
+            campaign_id="paper-v2",
+            candidate_runs=[{
+                "report_run_id": "unverified-run",
+                "report_date": "2026-08-21",
+                "candidates": [_candidate("BLOCKED")],
+            }],
+            price_rows=[],
+            spy_rows=[],
+            config=_build_config(),
+        )
+
+    assert error.value.code == "report_not_verified_published"
+    assert conn.execute("SELECT COUNT(*) FROM paper_campaign_experiments").fetchone()[0] == 0
 
 
 def test_chronological_replay_models_costs_overlap_exits_and_parity():
