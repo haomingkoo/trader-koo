@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v4"
-CACHE_VERSION = "setup-rewrite-cache-v5"
+EVALUATOR_VERSION = "setup-grounding-v5"
+CACHE_VERSION = "setup-rewrite-cache-v6"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -147,16 +147,13 @@ def _action_side(text: str) -> str | None:
     long_side = False
     short_side = False
     for clause in re.split(r"[.;]", action):
-        immediate = any(_affirmed(clause, phrase) for phrase in (
-            "buy now", "sell now", "enter now", "act now", "open a position", "initiate",
+        protective_exit = bool(re.search(
+            r"\b(?:exit|close|cover)\b|\bstop\s+to\s+(?:buy|sell)\b|"
+            r"^(?:use|place|set|keep)\b.*\bstop\b|"
+            r"^(?:buy|sell)\b.*\bif\s+(?:invalidated|stopped)\b",
+            clause,
         ))
-        protective = any(_contains(clause, term) for term in (
-            "stop", "exit", "invalidation", "protect", "cover",
-        ))
-        entry_context = immediate or any(_contains(clause, term) for term in (
-            "confirmation", "entry", "setup", "open position",
-        ))
-        if protective and not entry_context:
+        if protective_exit:
             continue
         long_side = long_side or any(_affirmed(clause, term) for term in (
             "buy", "long", "breakout", "above resistance",
@@ -202,8 +199,11 @@ def _risk_posture(text: str) -> tuple[set[str], bool]:
         r"\b(?:stops?|risk|siz(?:e|ing)|limit|bounded|protect(?:ion|ive)?)\b",
         risk,
     )) or bool(re.search(
-        r"\b(?:stops?|risk|siz(?:e|ing)|limit|bounded|protect(?:ion|ive)?)\b"
-        r".{0,30}\b(?:should\s+|must\s+)?(?:never|not)\b",
+        r"\bstops?\b.{0,20}\b(?:never|not)\s+be\s+used\b|"
+        r"\bstops?\b.{0,20}\b(?:is|are)\s+(?:optional|unnecessary)\b|"
+        r"\bstops?\b.{0,20}\b(?:may|can|should)\s+be\s+(?:removed|loosened)\b|"
+        r"\brisk\b.{0,20}\b(?:is|may|can)\s+(?:not\s+bounded|unbounded)\b|"
+        r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:may|can|should)\s+be\s+increased\b",
         risk,
     )) or any(phrase in risk for phrase in (
         "unbounded", "increase position size", "increase size", "unlimited risk",

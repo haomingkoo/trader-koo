@@ -84,6 +84,28 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
         reversed_with_stop["errors"]
     )
 
+    direct_with_stop = _context(baseline={
+        "observation": "AAA has a bullish setup.",
+        "action": "Buy with a stop.",
+        "risk_note": "Use a protective stop.",
+    })
+    reversed_direct = evaluate_setup_rewrite({
+        **direct_with_stop["baseline"], "action": "Sell with a stop.",
+    }, direct_with_stop)
+    assert {"action_type_changed", "direction_action_contradiction"}.issubset(
+        reversed_direct["errors"]
+    )
+
+    exit_context = _context(baseline={
+        "observation": "AAA has a bullish setup.",
+        "action": "Exit the long position after confirmation.",
+        "risk_note": "Use a protective stop.",
+    })
+    protective_exit = evaluate_setup_rewrite({
+        **exit_context["baseline"], "action": "Close the long position after confirmation.",
+    }, exit_context)
+    assert protective_exit["passed"] is True
+
     mixed_negation = evaluate_setup_rewrite({
         **wait_context["baseline"],
         "action": "Do not sell now; sell only after confirmation.",
@@ -196,6 +218,21 @@ def test_risk_controls_cannot_be_negated_or_weakened() -> None:
             **context["baseline"], "risk_note": output_risk,
         }, context)
         assert "risk_posture_weakened" in result["errors"]
+
+    protective_cases = [
+        ("Use protective stops.", "Stops should not be loosened."),
+        ("Limit position size.", "Position size must not increase."),
+    ]
+    for baseline_risk, output_risk in protective_cases:
+        context = _context(baseline={
+            "observation": "AAA has a bullish setup.",
+            "action": "Wait for confirmation.",
+            "risk_note": baseline_risk,
+        })
+        result = evaluate_setup_rewrite({
+            **context["baseline"], "risk_note": output_risk,
+        }, context)
+        assert result["passed"] is True
 
 
 def test_grounding_rejects_prompt_injection_and_stale_evidence() -> None:
