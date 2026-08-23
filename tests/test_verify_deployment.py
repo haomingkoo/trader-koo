@@ -26,7 +26,9 @@ def test_verify_deployment_checks_exact_sha_auth_and_public_contracts(monkeypatc
         return responses[path]
 
     monkeypatch.setattr(verify_deployment, "_get", fake_get)
-    result = verify_deployment.verify("https://example.invalid", "a" * 40, "key")
+    result = verify_deployment.verify(
+        "https://example.invalid", "a" * 40, "key", "draft"
+    )
     assert result["ok"] is True
     assert all(result["contracts"].values())
 
@@ -62,4 +64,26 @@ def test_verify_deployment_preserves_active_campaign_on_later_releases(monkeypat
     assert result["observed_campaign_status"] == "active"
 
     with pytest.raises(RuntimeError, match="campaign_v2_status_preserved"):
-        verify_deployment.verify("https://example.invalid", "a" * 40, "key")
+        verify_deployment.verify(
+            "https://example.invalid", "a" * 40, "key", "draft"
+        )
+
+
+def test_verify_deployment_allows_only_absent_to_draft_bootstrap(monkeypatch) -> None:
+    def fake_get(_base_url, path, *, api_key=None):
+        if path == "/api/release":
+            return 200, {"ok": True, "git_sha": "a" * 40}
+        if path == "/api/health":
+            return 200, {"ok": True}
+        if path == "/api/status":
+            return 200, {"ok": True, "service_meta": {}}
+        if path == "/api/admin/agent-observability":
+            return (200, {"ok": True}) if api_key else (401, {})
+        if path == "/api/paper-trades/summary":
+            return 200, {"campaign_health": {"campaign_id": "paper-v2", "status": "draft"}}
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(verify_deployment, "_get", fake_get)
+    assert verify_deployment.verify(
+        "https://example.invalid", "a" * 40, "key", "absent"
+    )["ok"] is True

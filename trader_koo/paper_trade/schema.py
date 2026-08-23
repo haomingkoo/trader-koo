@@ -137,10 +137,19 @@ def decode_json_list(raw: Any) -> list[str]:
 
 
 def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
-    """Create paper_trades and paper_portfolio_snapshots tables."""
+    """Own and commit schema migration phases on a clean connection boundary."""
     from trader_koo.paper_trade.shadow import ensure_shadow_schema
     from trader_koo.report.runs import ensure_report_run_schema
 
+    # Normal business operations may call the idempotent initializer from an
+    # owned transaction after startup. A current schema is a read-only no-op;
+    # only an actual migration requires the clean boundary below.
+    if _schema_is_current(conn):
+        return
+    if conn.in_transaction:
+        raise RuntimeError(
+            "paper schema initialization requires a clean transaction boundary"
+        )
     ensure_report_run_schema(conn)
     db_path = _resolve_main_db_path(conn)
     # In-memory DBs (path '' or ':memory:') are never cached: each connection
@@ -158,6 +167,7 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
             report_date TEXT NOT NULL,
             generated_ts TEXT,
             report_run_id TEXT REFERENCES report_runs(run_id),
+            campaign_id TEXT NOT NULL DEFAULT 'paper-v2',
             ticker TEXT NOT NULL,
             direction TEXT NOT NULL CHECK (direction IN ('long', 'short')),
             entry_price REAL NOT NULL,
@@ -255,27 +265,36 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_trades_report_run ON paper_trades(report_run_id)"
     )
-    _ensure_column(conn, "paper_trades", "campaign_id", "campaign_id TEXT")
+    # Legacy databases use paper-v1 as the default so a rolled-back image that
+    # does not know about campaign_id remains writable. Fresh databases declare
+    # the paper-v2 default in CREATE TABLE above.
+    _ensure_column(
+        conn,
+        "paper_trades",
+        "campaign_id",
+        "campaign_id TEXT NOT NULL DEFAULT 'paper-v1'",
+    )
     _ensure_column(conn, "paper_trades", "policy_version", "policy_version TEXT")
 
     conn.execute(
         "UPDATE paper_trades SET campaign_id='paper-v1' WHERE campaign_id IS NULL"
     )
-    # The table rebuild owns the following transaction because SQLite can only
-    # suspend FK rename propagation outside a transaction. Additive work above
-    # is resumable if this guarded phase rolls back.
-    conn.commit()
-    _rebuild_unique_key(
-        conn,
-        "paper_trades",
-        "UNIQUE(report_date, ticker, direction)",
-        "UNIQUE(campaign_id, report_date, ticker, direction)",
+    # Expand phase: retain the legacy global key so the previous production
+    # image remains writable during the automatic rollback window, and add the
+    # campaign-aware key used by this image. The legacy key is contracted only
+    # in a separately verified activation migration.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_campaign_unique "
+        "ON paper_trades(campaign_id,report_date,ticker,direction)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_legacy_compat "
+        "ON paper_trades(report_date,ticker,direction)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(campaign_id, status, entry_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_ticker ON paper_trades(campaign_id, ticker, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_family ON paper_trades(campaign_id, setup_family, direction, status)")
-    # Rebuilding the table removes its triggers. Install the authoritative
-    # lineage guards only after the campaign-aware unique-key migration.
+    # Install the authoritative lineage guards after both compatibility keys.
     conn.execute("DROP TRIGGER IF EXISTS paper_trades_require_canonical_run")
     conn.execute("DROP TRIGGER IF EXISTS paper_trades_immutable_lineage")
     conn.execute("""
@@ -743,7 +762,7 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             snapshot_date TEXT NOT NULL,
-            campaign_id TEXT NOT NULL DEFAULT 'paper-v1',
+            campaign_id TEXT NOT NULL DEFAULT 'paper-v2',
             open_trades INTEGER NOT NULL DEFAULT 0,
             closed_trades_total INTEGER NOT NULL DEFAULT 0,
             wins INTEGER NOT NULL DEFAULT 0,
@@ -763,18 +782,9 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         )
     """)
     _ensure_column(conn, "paper_portfolio_snapshots", "campaign_id", "campaign_id TEXT NOT NULL DEFAULT 'paper-v1'")
-    conn.commit()
-    _rebuild_unique_key(
-        conn,
-        "paper_portfolio_snapshots",
-        "snapshot_date TEXT NOT NULL UNIQUE",
-        "snapshot_date TEXT NOT NULL",
-    )
-    _rebuild_unique_key(
-        conn,
-        "paper_portfolio_snapshots",
-        "snapshot_date TEXT PRIMARY KEY",
-        "snapshot_date TEXT NOT NULL",
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_portfolio_legacy_compat "
+        "ON paper_portfolio_snapshots(snapshot_date)"
     )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_portfolio_campaign_date "

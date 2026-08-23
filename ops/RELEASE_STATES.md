@@ -20,9 +20,10 @@ Trader Koo deliberately separates these states:
 
 Each CI run stores hash-bound database migration, replay, and execution-ledger
 JSON artifacts. Dark deployment first requests a fresh consistent online SQLite
-backup, downloads that exact named and hash-verified backup, runs additive migrations against a
-separate copy, and retains only manifests in GitHub Actions—not the database
-itself.
+backup, downloads that exact named and hash-verified regular file, runs
+expand-compatible migrations against a separate copy, and retains only manifests
+in GitHub Actions—not the database itself. A missing named backup is HTTP 404;
+path traversal and symlinks are rejected.
 
 Before upload, the workflow records the active Railway deployment and commit
 hash from Railway's deployment metadata. Any failed
@@ -33,19 +34,44 @@ supports it; this keeps the first migration from an older image bootstrappable.
 Railway rollback restores its image and custom variables. The pre-deploy database
 backup remains available for a separately approved data recovery; CD never
 overwrites the live SQLite volume. Dark-deploy verification also fails unless
-the `paper-v2` status matches its pre-deploy state. When Campaign v2 is first
-introduced, an absent legacy state maps only to inactive. Activation requires a
+the `paper-v2` status exactly matches its pre-deploy state. When Campaign v2 is
+first introduced, the only exception is `absent` to inactive `draft`. Activation requires a
 different, explicitly approved release transition; later code releases can
 preserve an active campaign without invoking activation.
 
+The initial expand phase retains the legacy paper-trade and portfolio-snapshot
+uniqueness rules alongside the new campaign-aware keys. This deliberately makes
+the previous image writable against the forward-migrated volume during the
+rollback window. Destructive contract migration is a separate operation after
+the old-image rollback window is retired and before multi-campaign activation;
+it requires a fresh named backup, integrity and foreign-key checks, free-space
+review, and explicit data-recovery approval.
+
+| Image and schema combination | Support |
+| --- | --- |
+| Previous image + pre-expand schema | Supported before deployment |
+| New image + expand-compatible schema | Supported and migration-tested |
+| Previous image + expand-compatible schema | Supported rollback target and tested |
+| Any retired image + contracted schema | Unsupported; image rollback must be retired first |
+
+The public schema initializer owns its migration phases and rejects a connection
+that already has a transaction. Private table rebuilds use an immediate
+transaction, restore foreign-key settings, run `foreign_key_check` before
+commit, and roll back on interruption. The initial dark release does not run a
+destructive parent-table rebuild on the live volume.
+
 ## Ordered rollout
 
-1. Land shared live/replay chronology and prove late-publication parity.
-2. Land transaction-owned schema migration and named-backup verification.
-3. Refresh research evidence in a separate artifact-only commit bound to the
+1. Land shared live/replay SPY chronology and prove the full chronology matrix.
+2. Land named-backup HTTP, hash, freshness, regular-file, and authorization evidence.
+3. Land schema transaction ownership, expand compatibility, copied-production
+   upgrade checks, and previous-image rollback compatibility.
+4. Land exact campaign-state verification, scoped CORS preflight behavior, and
+   the Report, Chart, Paper Trades, Agent Observability, and Experiment SPA routes.
+5. Refresh research evidence in a separate artifact-only commit bound to the
    complete implementation closure.
-4. Let the exact commit pass CI, then approve the protected dark-deploy job.
-5. Verify the public SHA, preserved campaign state, API contracts, and Chromium
+6. Let the exact commit pass CI, then approve the protected dark-deploy job.
+7. Verify the public SHA, preserved campaign state, API contracts, and Chromium
    journeys. Activation remains a later, separately audited human decision.
 
 Configure the `production-dark` GitHub environment with required reviewers,

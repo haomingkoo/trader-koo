@@ -212,6 +212,28 @@ class TestRateLimitMiddleware:
         assert response.headers["access-control-allow-origin"] == "https://admin.example"
         assert audits == []
 
+    def test_bare_admin_options_does_not_bypass_authentication(self):
+        app = FastAPI()
+        audits: list[dict[str, object]] = []
+        app.state.admin_authenticator = AdminAuthenticator(
+            AdminAuthConfig(api_key="secret"),
+            audit_recorder=lambda **payload: audits.append(payload),
+        )
+        app.add_middleware(
+            RateLimitMiddleware,
+            rate_limiter=RateLimiter(RateLimitConfig()),
+        )
+
+        @app.get("/api/admin/test", dependencies=[Depends(require_admin)])
+        def admin_endpoint():
+            return {"ok": True}
+
+        with TestClient(app) as admin_client:
+            response = admin_client.options("/api/admin/test")
+
+        assert response.status_code == 401
+        assert len(audits) == 1
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

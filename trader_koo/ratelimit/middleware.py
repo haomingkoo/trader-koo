@@ -127,7 +127,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not path.startswith("/api/") or path in ("/api/health", "/api/status"):
             return await call_next(request)
-        if request.method == "OPTIONS":
+        if (
+            request.method == "OPTIONS"
+            and request.headers.get("Origin")
+            and request.headers.get("Access-Control-Request-Method")
+        ):
             return await call_next(request)
 
         # Router dependencies run after HTTP middleware.  Authenticate the

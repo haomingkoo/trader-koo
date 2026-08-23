@@ -28,3 +28,6 @@ def test_backup_database_creates_consistent_compressed_snapshot(tmp_path: Path) 
         str(result["backup_path"])
     )
     assert backup_path_by_name("../source.db", tmp_path / "backups") is None
+    symlink = tmp_path / "backups" / "trader_koo_backup_symlink.db.gz"
+    symlink.symlink_to(source)
+    assert backup_path_by_name(symlink.name, tmp_path / "backups") is None

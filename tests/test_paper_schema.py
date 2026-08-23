@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from trader_koo.paper_trade.schema import _rebuild_unique_key
+from trader_koo.paper_trade.schema import _rebuild_unique_key, ensure_paper_trade_schema
 
 
 def test_parent_unique_key_rebuild_preserves_child_foreign_keys() -> None:
@@ -53,6 +53,19 @@ def test_unique_key_rebuild_does_not_commit_a_caller_transaction() -> None:
     assert conn.in_transaction is True
     conn.rollback()
     assert conn.execute("SELECT COUNT(*) FROM item").fetchone()[0] == 0
+
+
+def test_public_schema_initializer_rejects_caller_owned_work() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE caller_work(value TEXT)")
+    conn.execute("INSERT INTO caller_work VALUES ('uncommitted')")
+
+    with pytest.raises(RuntimeError, match="clean transaction boundary"):
+        ensure_paper_trade_schema(conn)
+
+    assert conn.in_transaction is True
+    conn.rollback()
+    assert conn.execute("SELECT COUNT(*) FROM caller_work").fetchone()[0] == 0
 
 
 def test_unique_key_rebuild_rolls_back_before_committing_fk_violations() -> None:

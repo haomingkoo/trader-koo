@@ -151,7 +151,13 @@ def backup_path_by_name(
     ):
         return None
     candidate = backup_dir / backup_name
-    return candidate if candidate.is_file() else None
+    if candidate.is_symlink() or not candidate.is_file():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        return None
+    return resolved if resolved.parent == backup_dir.resolve() else None
 
 
 # ---------------------------------------------------------------------------

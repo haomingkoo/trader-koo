@@ -11,8 +11,9 @@ import hashlib
 import json
 import math
 import statistics
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.features import ML_CONTEXT_TICKERS
@@ -30,10 +31,17 @@ from trader_koo.research.next_open_baseline import canonical_json_bytes
 SCHEMA_VERSION = "challenger-tournament-v1"
 MAX_HOLDING_SESSIONS = 21
 IMPLEMENTATION_PATH = Path(__file__)
+REPOSITORY_ROOT = IMPLEMENTATION_PATH.parents[2]
 IMPLEMENTATION_PATHS = (
-    IMPLEMENTATION_PATH,
-    IMPLEMENTATION_PATH.with_name("challenger_executor.py"),
-    IMPLEMENTATION_PATH.with_name("next_open_baseline.py"),
+    "trader_koo/research/challenger_tournament.py",
+    "trader_koo/research/challenger_executor.py",
+    "trader_koo/research/next_open_baseline.py",
+    "trader_koo/db/price_contract.py",
+    "trader_koo/ml/features.py",
+)
+IMPLEMENTATION_ENVIRONMENT_PATHS = (
+    "pyproject.toml",
+    "trader_koo/requirements.txt",
 )
 
 CHALLENGERS: dict[str, dict[str, Any]] = {
@@ -79,15 +87,26 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
+def _implementation_manifest() -> dict[str, Any]:
+    """Describe the maintained source, data-gate, and runtime closure."""
+    def hashes(paths: tuple[str, ...]) -> dict[str, str]:
+        return {
+            relative: hashlib.sha256((REPOSITORY_ROOT / relative).read_bytes()).hexdigest()
+            for relative in sorted(paths)
+        }
+
+    return {
+        "schema_version": "challenger-implementation-v1",
+        "python_requires": ">=3.11",
+        "source_files": hashes(IMPLEMENTATION_PATHS),
+        "environment_files": hashes(IMPLEMENTATION_ENVIRONMENT_PATHS),
+        "context_tickers_sha256": _sha256(sorted(ML_CONTEXT_TICKERS)),
+    }
+
+
 def _implementation_hash() -> str:
-    """Hash the complete local signal and portfolio execution closure."""
-    digest = hashlib.sha256()
-    for path in sorted(IMPLEMENTATION_PATHS, key=lambda item: item.name):
-        digest.update(path.name.encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
+    """Hash the declared signal, execution, data-gate, and runtime closure."""
+    return _sha256(_implementation_manifest())
 
 
 def frozen_preregistration(dataset_hash: str) -> dict[str, Any]:
@@ -317,6 +336,7 @@ def run_challenger_tournament(
             "schema_version": SCHEMA_VERSION,
             "code_sha": current_code_version(),
             "implementation_sha256": _implementation_hash(),
+            "implementation_manifest": _implementation_manifest(),
             "status": "blocked_before_validation",
             "preregistration": preregistration,
             "dataset_audit": audit,
@@ -337,6 +357,7 @@ def run_challenger_tournament(
         "schema_version": SCHEMA_VERSION,
         "code_sha": current_code_version(),
         "implementation_sha256": _implementation_hash(),
+        "implementation_manifest": _implementation_manifest(),
         "status": (
             "sealed_heldout_complete"
             if execution["sealed_heldout"]["accessed"]

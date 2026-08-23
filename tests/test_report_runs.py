@@ -514,8 +514,9 @@ def test_paper_trade_lineage_guard_preserves_preexisting_legacy_rows():
     conn.execute(
         """INSERT INTO paper_trades (
                report_date, ticker, direction, entry_price, entry_date, status
-           ) VALUES ('2026-08-21', 'LEGACY', 'long', 100.0, '2026-08-21', 'open')"""
+               ) VALUES ('2026-08-21', 'LEGACY', 'long', 100.0, '2026-08-21', 'open')"""
     )
+    conn.commit()
     ensure_paper_trade_schema(conn)
 
     assert conn.execute(
@@ -524,9 +525,10 @@ def test_paper_trade_lineage_guard_preserves_preexisting_legacy_rows():
     with pytest.raises(sqlite3.IntegrityError, match="canonical published"):
         conn.execute(
             """INSERT INTO paper_trades (
-                   report_date, ticker, direction, entry_price, entry_date, status
+                   report_date, ticker, direction, entry_price, entry_date, status,
+                   campaign_id
                ) VALUES ('2026-08-22', 'NEW-UNLINKED', 'long', 100.0,
-                         '2026-08-22', 'open')"""
+                         '2026-08-22', 'open', 'paper-v2')"""
         )
     with pytest.raises(sqlite3.IntegrityError, match="lineage is immutable"):
         conn.execute(

@@ -3,9 +3,22 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Iterable
 from zoneinfo import ZoneInfo
 
 _MARKET_TZ = ZoneInfo("America/New_York")
+
+
+def next_session_after(report_date: str, sessions: Iterable[str]) -> str | None:
+    """Return the immediate observed session after the report date."""
+    try:
+        cutoff = dt.date.fromisoformat(report_date)
+        parsed = sorted(
+            (dt.date.fromisoformat(str(value)), str(value)) for value in set(sessions)
+        )
+    except (TypeError, ValueError):
+        return None
+    return next((raw for date, raw in parsed if date > cutoff), None)
 
 
 def publication_precedes_session_open(

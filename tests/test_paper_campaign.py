@@ -275,6 +275,7 @@ def test_legacy_trades_are_backfilled_to_immutable_v1_once():
     conn.execute(
         "INSERT INTO paper_portfolio_snapshots (snapshot_date,open_trades) VALUES ('2026-03-18',0)"
     )
+    conn.commit()
 
     ensure_paper_trade_schema(conn)
 
@@ -293,9 +294,8 @@ def test_legacy_trades_are_backfilled_to_immutable_v1_once():
     assert conn.execute(
         "SELECT notes FROM paper_trade_annotations WHERE trade_id=1"
     ).fetchone()[0] == "reviewed"
-    # Legacy global unique keys are rebuilt as campaign-scoped keys. The
-    # campaign-aware columns are the durable migration proof; new v2 rows are
-    # separately required to enter through verified report lineage.
+    # Expand compatibility keeps the old global key for image rollback while
+    # adding the campaign-aware key for the new image.
     unique_indexes = [
         row[1] for row in conn.execute("PRAGMA index_list(paper_trades)")
         if row[2]
@@ -305,10 +305,21 @@ def test_legacy_trades_are_backfilled_to_immutable_v1_once():
         == ["campaign_id", "report_date", "ticker", "direction"]
         for index in unique_indexes
     )
+    assert any(
+        [item[2] for item in conn.execute(f"PRAGMA index_info({index})")]
+        == ["report_date", "ticker", "direction"]
+        for index in unique_indexes
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """INSERT INTO paper_portfolio_snapshots
+               (campaign_id,snapshot_date,open_trades)
+               VALUES ('paper-v2','2026-03-18',0)"""
+        )
     conn.execute(
         """INSERT INTO paper_portfolio_snapshots
            (campaign_id,snapshot_date,open_trades)
-           VALUES ('paper-v2','2026-03-18',0)"""
+           VALUES ('paper-v2','2026-03-19',0)"""
     )
     assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 42
     assert conn.execute("SELECT COUNT(*) FROM paper_portfolio_snapshots").fetchone()[0] == 2
@@ -798,6 +809,10 @@ def test_chronological_replay_models_costs_overlap_exits_and_parity():
         ]},
     ]
     prices = [
+        {"ticker": "SPY", "date": "2026-08-20", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "SPY", "date": "2026-08-21", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "SPY", "date": "2026-08-24", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "SPY", "date": "2026-08-25", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1_000_000},
         {"ticker": "AAA", "date": "2026-08-20", "open": 149, "high": 151, "low": 148, "close": 150, "volume": 900_000},
         {"ticker": "BBB", "date": "2026-08-20", "open": 149, "high": 151, "low": 148, "close": 150, "volume": 900_000},
         {"ticker": "AAA", "date": "2026-08-21", "open": 150, "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
@@ -840,6 +855,12 @@ def test_baseline_and_campaign_replay_seal_identical_complete_ledgers():
         "candidates": [{**_candidate("AAA"), "critic_outcome": {"approved": True}}],
     }]
     prices = [
+        {"ticker": "SPY", "date": "2026-08-20", "open": 100, "high": 101,
+         "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "SPY", "date": "2026-08-21", "open": 100, "high": 101,
+         "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "SPY", "date": "2026-08-24", "open": 100, "high": 101,
+         "low": 99, "close": 100, "volume": 1_000_000},
         {"ticker": "AAA", "date": "2026-08-20", "open": 149, "high": 151,
          "low": 148, "close": 150, "volume": 900_000},
         {"ticker": "AAA", "date": "2026-08-21", "open": 150, "high": 151,
@@ -883,7 +904,7 @@ def test_replay_rejects_missing_immediate_open_and_uses_only_causal_volume():
     prices = [
         {"ticker": "LATE", "date": "2026-08-20", "open": 150, "high": 151,
          "low": 149, "close": 150, "volume": 100},
-        {"ticker": "MARKET", "date": "2026-08-21", "open": 100, "high": 101,
+        {"ticker": "SPY", "date": "2026-08-21", "open": 100, "high": 101,
          "low": 99, "close": 100, "volume": 1_000_000},
         {"ticker": "LATE", "date": "2026-08-24", "open": 150, "high": 151,
          "low": 149, "close": 150, "volume": 100_000_000},
@@ -933,6 +954,9 @@ def test_replay_parity_uses_the_exact_sealed_live_decision_inputs():
         price_rows=[{
                 "ticker": "PARITY", "date": "2026-08-24", "open": 150,
             "high": 151, "low": 149, "close": 150, "volume": 1_000_000,
+        }, {
+            "ticker": "SPY", "date": "2026-08-24", "open": 650,
+            "high": 651, "low": 649, "close": 650, "volume": 1_000_000,
         }],
         spy_rows=[], config=_build_config(),
         expected_execution={
@@ -960,6 +984,9 @@ def test_replay_rejects_the_same_late_publication_as_live_execution():
         price_rows=[{
             "ticker": "LATEPUB", "date": "2026-08-24", "open": 150,
             "high": 151, "low": 149, "close": 150, "volume": 1_000_000,
+        }, {
+            "ticker": "SPY", "date": "2026-08-24", "open": 650,
+            "high": 651, "low": 649, "close": 650, "volume": 1_000_000,
         }],
         spy_rows=[], config=_build_config(), _include_splits=False,
     )
@@ -969,6 +996,25 @@ def test_replay_rejects_the_same_late_publication_as_live_execution():
     assert decision["inputs"]["context"]["portfolio_block"]["reason_code"] == (
         "report_published_after_intended_open"
     )
+    assert replay["trades"] == []
+
+
+def test_replay_fails_closed_without_an_observed_spy_calendar():
+    replay = replay_campaign(
+        candidate_runs=[{
+            "report_run_id": "no-calendar-run", "report_date": "2026-08-21",
+            "published_ts": "2026-08-21T12:00:00Z",
+            "candidates": [{**_candidate("NOCAL"), "critic_outcome": {"approved": True}}],
+        }],
+        price_rows=[{
+            "ticker": "NOCAL", "date": "2026-08-24", "open": 150,
+            "high": 151, "low": 149, "close": 150, "volume": 1_000_000,
+        }],
+        spy_rows=[], config=_build_config(), _include_splits=False,
+    )
+
+    assert replay["decisions"][0]["disposition"] == "rejected"
+    assert replay["decisions"][0]["inputs"]["context"]["execution_ready"] is False
     assert replay["trades"] == []
 
 

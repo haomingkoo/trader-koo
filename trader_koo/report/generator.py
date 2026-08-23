@@ -16,6 +16,7 @@ import pandas as pd
 from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.db.price_contract import research_price_contract
 from trader_koo.llm_narrative import llm_enabled, llm_status
+from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.paper_trades import (
     PAPER_TRADE_ENABLED,
     mark_to_market,
@@ -1357,6 +1358,9 @@ def fetch_report_payload(
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
+        # Startup-style schema ownership must happen before report evaluation
+        # opens any business transaction. Later paper calls are then no-ops.
+        ensure_paper_trade_schema(conn)
         counts = conn.execute(
             """
             SELECT

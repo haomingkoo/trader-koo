@@ -28,7 +28,7 @@ def verify(
     base_url: str,
     expected_sha: str,
     api_key: str,
-    expected_campaign_status: str = "inactive",
+    expected_campaign_status: str = "draft",
 ) -> dict[str, Any]:
     release_status, release = _get(base_url, "/api/release")
     health_status, health = _get(base_url, "/api/health")
@@ -41,8 +41,8 @@ def verify(
     campaign = paper.get("campaign_health") or {}
     campaign_status = str(campaign.get("status") or "")
     campaign_status_matches = (
-        campaign_status != "active"
-        if expected_campaign_status == "inactive"
+        campaign_status == "draft"
+        if expected_campaign_status == "absent"
         else campaign_status == expected_campaign_status
     )
     contracts = {
@@ -87,7 +87,7 @@ def main() -> None:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--api-key", required=True)
-    parser.add_argument("--expected-campaign-status", default="inactive")
+    parser.add_argument("--expected-campaign-status", default="draft")
     args = parser.parse_args()
     print(json.dumps(verify(
         args.base_url,

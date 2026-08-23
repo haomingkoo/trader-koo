@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import math
 import sqlite3
@@ -87,20 +86,25 @@ def test_preregistration_freezes_exactly_three_config_hashes() -> None:
 
 
 def test_tournament_hash_covers_signal_and_execution_implementation() -> None:
-    digest = hashlib.sha256()
-    for path in sorted(tournament.IMPLEMENTATION_PATHS, key=lambda item: item.name):
-        digest.update(path.name.encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
+    manifest = tournament._implementation_manifest()
 
-    assert tournament._implementation_hash() == digest.hexdigest()
+    assert set(manifest["source_files"]) == set(tournament.IMPLEMENTATION_PATHS)
+    assert set(manifest["environment_files"]) == set(
+        tournament.IMPLEMENTATION_ENVIRONMENT_PATHS
+    )
+    assert "trader_koo/db/price_contract.py" in manifest["source_files"]
+    assert "trader_koo/ml/features.py" in manifest["source_files"]
+    assert manifest["context_tickers_sha256"] == tournament._sha256(
+        sorted(tournament.ML_CONTEXT_TICKERS)
+    )
+    assert tournament._implementation_hash() == tournament._sha256(manifest)
 
 
 def test_tournament_loader_rejects_a_different_implementation(tmp_path) -> None:
     body = {
         "schema_version": "challenger-tournament-v1",
         "implementation_sha256": "0" * 64,
+        "implementation_manifest": tournament._implementation_manifest(),
         "status": "blocked_before_validation",
     }
     artifact = {**body, "artifact_sha256": tournament._sha256(body)}
@@ -111,6 +115,23 @@ def test_tournament_loader_rejects_a_different_implementation(tmp_path) -> None:
 
     assert loaded["available"] is False
     assert loaded["warnings"] == ["tournament_implementation_hash_mismatch"]
+
+
+def test_tournament_loader_rejects_a_different_implementation_manifest(tmp_path) -> None:
+    body = {
+        "schema_version": "challenger-tournament-v1",
+        "implementation_sha256": tournament._implementation_hash(),
+        "implementation_manifest": {"schema_version": "stale"},
+        "status": "blocked_before_validation",
+    }
+    artifact = {**body, "artifact_sha256": tournament._sha256(body)}
+    path = tmp_path / "tournament.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    loaded = experiment_results._load_tournament(path)
+
+    assert loaded["available"] is False
+    assert loaded["warnings"] == ["tournament_implementation_manifest_mismatch"]
 
 
 def test_chronological_split_purges_and_embargoes_holding_overlap() -> None:

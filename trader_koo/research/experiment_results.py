@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from trader_koo.research.challenger_tournament import _implementation_hash
+from trader_koo.research.challenger_tournament import (
+    _implementation_hash,
+    _implementation_manifest,
+)
 from trader_koo.research.next_open_baseline import (
     artifact_state as baseline_state,
     canonical_json_bytes,
@@ -42,6 +45,11 @@ def _load_tournament(path: Path = TOURNAMENT_PATH) -> dict[str, Any]:
         return {
             **unavailable,
             "warnings": ["tournament_implementation_hash_mismatch"],
+        }
+    if payload.get("implementation_manifest") != _implementation_manifest():
+        return {
+            **unavailable,
+            "warnings": ["tournament_implementation_manifest_mismatch"],
         }
     return {"available": True, "artifact_path": str(path), **payload}
 

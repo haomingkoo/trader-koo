@@ -124,6 +124,12 @@ def replay_smoke(output_dir: Path, code_sha: str) -> dict[str, Any]:
         "candidates": [candidate],
     }]
     prices = [
+        {"ticker": "SPY", "date": "2026-08-20", "open": 100, "high": 101,
+         "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "SPY", "date": "2026-08-21", "open": 100, "high": 101,
+         "low": 99, "close": 100, "volume": 1_000_000},
+        {"ticker": "SPY", "date": "2026-08-24", "open": 100, "high": 101,
+         "low": 99, "close": 100, "volume": 1_000_000},
         {"ticker": "FIXTURE", "date": "2026-08-20", "open": 99, "high": 101,
          "low": 98, "close": 100, "volume": 1_000_000},
         {"ticker": "FIXTURE", "date": "2026-08-21", "open": 100, "high": 101,

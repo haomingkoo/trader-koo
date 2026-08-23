@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from trader_koo.scripts.backup_db import (
@@ -57,7 +57,7 @@ def admin_download_named_backup(backup_name: str) -> Any:
     """Download the exact immutable backup returned by the create endpoint."""
     path = backup_path_by_name(backup_name, DEFAULT_BACKUP_DIR)
     if path is None:
-        return {"ok": False, "detail": "Backup not found"}
+        raise HTTPException(status_code=404, detail="Backup not found")
     return FileResponse(
         str(path),
         media_type="application/gzip",

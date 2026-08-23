@@ -107,10 +107,7 @@ jobs:
           release_sha=$(jq -r '[.[] | select(.status == "SUCCESS")][0].meta.commitHash // empty' /tmp/previous-deployments.json)
           curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
           campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
-          if [ "$campaign_status" = "absent" ]; then
-            campaign_status="inactive"
-          fi
-          case "$campaign_status" in active|draft|frozen|inactive) ;; *) exit 1 ;; esac
+          case "$campaign_status" in active|draft|frozen|absent) ;; *) exit 1 ;; esac
           test -n "$deployment_id"
           test -n "$release_sha"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"

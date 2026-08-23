@@ -7,7 +7,10 @@ from collections import defaultdict
 from typing import Any
 
 from trader_koo.paper_trade.campaign import canonical_hash, decide_candidate, record_promotion_experiment
-from trader_koo.paper_trade.chronology import publication_precedes_session_open
+from trader_koo.paper_trade.chronology import (
+    next_session_after,
+    publication_precedes_session_open,
+)
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.decision import direction_from_row
 from trader_koo.research.next_open_baseline import (
@@ -103,7 +106,10 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                                    row.get("high"), row.get("low"), row.get("volume")))
     for rows in by_ticker.values():
         rows.sort(key=lambda item: item["date"])
-    sessions = sorted({row.date for row in prices})
+    sessions = sorted({
+        row.date for row in prices
+        if row.ticker == "SPY" and row.open is not None
+    })
     session_index = {date: index for index, date in enumerate(sessions)}
     decisions: list[dict[str, Any]] = []
     executable: list[ExecutionDecision] = []
@@ -118,7 +124,7 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 else raw_candidate
             )
             ticker = str(candidate.get("ticker") or "").upper()
-            intended_session = next((date for date in sessions if date > report_date), None)
+            intended_session = next_session_after(report_date, sessions)
             next_bar = next((bar for bar in by_ticker.get(ticker, [])
                              if bar["date"] == intended_session and bar.get("open") is not None), None)
             publication_ready = bool(

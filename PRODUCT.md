@@ -57,8 +57,37 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
   campaign policy, report lineage, and market data.
 - The first Campaign v2 dark deployment verifies the exact commit and introduces
   `paper-v2` inactive. Later software releases must preserve the pre-deploy
-  campaign status, including `active`; CI/CD never activates, resets, or rolls
+  campaign status, including `active`; the sole bootstrap transition is
+  `absent` to inactive `draft`. CI/CD never activates, resets, or rolls
   back the campaign. Activation is a separate authenticated, audited human action.
 - The Report, Chart, Paper Trades, Agent Traces, and Experiment Results journeys
   pass in Chromium with keyboard focus, non-color status labels, and no clipped
   decision text.
+
+### Chronology acceptance matrix
+
+| Input at the immediate next SPY session | Live result | Replay result |
+| --- | --- | --- |
+| Valid publication strictly before 09:30 ET and ticker open present | Same admitted fill and canonical fields | Same admitted fill and canonical fields |
+| Publication exactly at 09:30 ET or later | `publication_after_intended_open` | Same rejection, intended session, and sealed inputs |
+| Publication missing or malformed | Fail closed with the matching publication reason | Same rejection and sealed inputs |
+| SPY calendar missing | No fill; remain pending or reject by the same policy stage | No substituted ticker calendar and no fill |
+| Immediate ticker open missing | No roll-forward fill | No roll-forward fill |
+
+Canonical parity compares campaign, report/run lineage, ticker, direction,
+decision and reason, intended session, entry date/price, sizing inputs, costs,
+and the sealed-input hash. Later-session OHLCV is never an allowed substitute.
+
+### Release-state acceptance matrix
+
+| Pre-deploy Campaign v2 state | Required post-deploy state |
+| --- | --- |
+| Absent on the first schema bootstrap | `draft` |
+| `draft` | `draft` |
+| `frozen` | `frozen` |
+| `active` | `active` |
+
+Empty, unknown, or different states fail deployment verification and trigger
+image rollback. Operators must not overlap a human campaign transition with a
+dark deployment; a detected state race is a failed release, never an inferred
+transition.
