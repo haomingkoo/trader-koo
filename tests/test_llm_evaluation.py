@@ -45,7 +45,10 @@ def test_grounding_rejects_unsupported_facts_and_causal_copy() -> None:
         "unsupported_numeric_claim",
         "unsupported_ticker_claim",
     }
-    assert result["semantic_outcome"] == "contradicted"
+    assert result["text_outcome"] == "rejected"
+    assert result["contract_passed"] is False
+    assert result["evaluation_scope"] == "fact_and_decision_contract"
+    assert result["semantic_consistency_scored"] is False
     assert result["prose_quality_scored"] is False
 
 
@@ -96,7 +99,9 @@ def test_observation_can_be_rephrased_without_changing_decision() -> None:
     ), context)
 
     assert result["passed"] is True
-    assert result["semantic_outcome"] == "rephrased"
+    assert result["text_outcome"] == "rephrased"
+    assert result["contract_passed"] is True
+    assert result["semantic_consistency_scored"] is False
     assert result["decision_scope"] == "observation_narrative_only"
 
 

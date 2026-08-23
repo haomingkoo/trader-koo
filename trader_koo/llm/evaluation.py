@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v12"
-CACHE_VERSION = "setup-rewrite-cache-v13"
+EVALUATOR_VERSION = "setup-grounding-v13"
+CACHE_VERSION = "setup-rewrite-cache-v14"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v3"
 
 _INJECTION_MARKERS = (
@@ -215,12 +215,15 @@ def evaluate_setup_rewrite(
     exact_match = all(_normal(output.get(key)) == _normal(baseline.get(key)) for key in (
         "observation", "action", "risk_note",
     ))
-    semantic_outcome = "contradicted" if errors else "preserved" if exact_match else "rephrased"
+    text_outcome = "rejected" if errors else "preserved" if exact_match else "rephrased"
     return {
         "version": EVALUATOR_VERSION,
         "passed": not errors,
+        "contract_passed": not errors,
         "errors": sorted(errors),
-        "semantic_outcome": semantic_outcome,
+        "text_outcome": text_outcome,
+        "evaluation_scope": "fact_and_decision_contract",
+        "semantic_consistency_scored": False,
         "prose_quality_scored": False,
         "decision_scope": "observation_narrative_only",
         "intent_contract": intent_contract(context),

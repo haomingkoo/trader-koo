@@ -18,8 +18,12 @@ type Trace = {
   evaluator_version: string | null;
   evaluation_result: {
     passed: boolean;
-    semantic_outcome: string;
+    contract_passed?: boolean;
+    text_outcome?: string;
+    semantic_outcome?: string;
+    evaluation_scope?: string;
     errors: string[];
+    semantic_consistency_scored?: false;
     prose_quality_scored: false;
   } | null;
   cache_identity_sha256: string | null;
@@ -31,7 +35,8 @@ type Trace = {
   total_tokens: number;
   estimated_cost_usd: number | null;
   decision_scope: string;
-  decision_changed: number;
+  content_changed: number;
+  decision_changed: number | null;
   started_ts: string;
 };
 
@@ -57,6 +62,7 @@ type ObservabilityPayload = {
     estimated_cost_usd: number | null;
     validator_failures: number;
     decision_change_rate_pct: number | null;
+    decision_change_coverage: number;
     run_graphs: number;
     disagreements: number;
   };
@@ -77,6 +83,13 @@ function statusVariant(status: string) {
   if (status === "fallback") return "amber" as const;
   if (status === "error") return "red" as const;
   return "muted" as const;
+}
+
+function contractCheck(trace: Trace): string {
+  const evaluation = trace.evaluation_result;
+  if (!evaluation) return "N/A";
+  const passed = evaluation.contract_passed ?? evaluation.passed;
+  return `${passed ? "passed" : "failed"}: ${evaluation.text_outcome ?? evaluation.semantic_outcome ?? "unknown"}`;
 }
 
 export default function AgentObservabilityPage() {
@@ -206,7 +219,7 @@ export default function AgentObservabilityPage() {
                     <tr>
                       {[
                         "Time", "Role / stage", "Provider / model", "Context",
-                        "Validation", "Semantic check", "Fallback", "Latency", "Tokens", "Contribution",
+                        "Validation", "Contract check", "Fallback", "Latency", "Tokens", "Contribution",
                       ].map((heading) => <th key={heading} className="px-3 py-2 font-medium">{heading}</th>)}
                     </tr>
                   </thead>
@@ -218,11 +231,30 @@ export default function AgentObservabilityPage() {
                         <td className="px-3 py-3"><div className="text-[var(--text)]">{trace.provider}</div><div className="text-[var(--muted)]">{trace.model ?? trace.deployment ?? "N/A"}</div></td>
                         <td className="px-3 py-3 text-[var(--muted)]">{trace.ticker ?? trace.source}</td>
                         <td className="px-3 py-3"><Badge variant={statusVariant(trace.terminal_status)}>{trace.validator_result}</Badge></td>
-                        <td className="px-3 py-3"><div className="text-[var(--text)]">{trace.evaluation_result?.semantic_outcome ?? "N/A"}</div><div className="text-[var(--muted)]">{trace.evaluator_version ?? "not evaluated"}</div></td>
+                        <td className="px-3 py-3">
+                          <div className="text-[var(--text)]">
+                            {contractCheck(trace)}
+                          </div>
+                          <div className="text-[var(--muted)]">
+                            {trace.evaluation_result?.semantic_consistency_scored === false
+                              ? "facts + decision contract; semantics not scored"
+                              : trace.evaluator_version ?? "not evaluated"}
+                          </div>
+                        </td>
                         <td className="px-3 py-3 text-[var(--muted)]">{trace.fallback_reason?.replaceAll("_", " ") ?? "None"}</td>
                         <td className="px-3 py-3 text-[var(--muted)]">{format(trace.latency_ms, " ms")}</td>
                         <td className="px-3 py-3 text-[var(--muted)]">{trace.total_tokens}</td>
-                        <td className="px-3 py-3"><Badge variant={trace.decision_changed ? "blue" : "muted"}>{trace.decision_scope.replaceAll("_", " ")}: {trace.decision_changed ? "changed" : "unchanged"}</Badge></td>
+                        <td className="px-3 py-3">
+                          <Badge variant={trace.decision_changed ? "red" : trace.content_changed ? "blue" : "muted"}>
+                            {trace.decision_changed === null
+                              ? "legacy decision scope unknown"
+                              : trace.decision_changed
+                              ? "decision changed"
+                              : trace.content_changed
+                                ? "observation changed; decision unchanged"
+                                : "content and decision unchanged"}
+                          </Badge>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -52,8 +52,9 @@ def test_trace_is_complete_redacted_and_append_only(tmp_path) -> None:
     assert detail["trace"]["model"] == "gpt-fixture"
     assert detail["trace"]["prompt_template_version"] == "setup-rewrite-v1"
     assert detail["trace"]["latency_ms"] == pytest.approx(125)
-    assert detail["trace"]["decision_scope"] == "narrative_only"
-    assert detail["trace"]["decision_changed"] == 1
+    assert detail["trace"]["decision_scope"] == "observation_narrative_only"
+    assert detail["trace"]["content_changed"] == 1
+    assert detail["trace"]["decision_changed"] == 0
     assert detail["run_graph"]["graph_kind"] == "single_llm_call"
     conn = sqlite3.connect(db_path)
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -73,6 +74,7 @@ def test_aggregate_reconciles_success_fallback_cost_and_legacy(tmp_path) -> None
     assert summary["aggregate"]["success_rate_pct"] == 50
     assert summary["aggregate"]["fallback_rate_pct"] == 50
     assert summary["aggregate"]["validator_failures"] == 1
+    assert summary["aggregate"]["decision_change_rate_pct"] == 0
     assert summary["aggregate"]["total_tokens"] == 30
     assert summary["retention"]["credentials_stored"] is False
     assert summary["legacy_health_counters"]["label"] == "legacy"
@@ -111,6 +113,58 @@ def test_outcome_link_is_explicitly_observational_and_non_causal(tmp_path) -> No
     assert detail["outcomes"][0]["paper_trade_id"] == 7
     assert detail["outcomes"][0]["analysis_label"] == "observational_non_causal"
     assert detail["causal_interpretation"] == "observational_non_causal"
+
+
+def test_decision_change_excludes_observation_only_edits(tmp_path) -> None:
+    db_path = tmp_path / "decision-scope.db"
+    started = dt.datetime(2026, 8, 23, tzinfo=dt.timezone.utc)
+    identifiers = record_llm_call(
+        db_path,
+        source="test",
+        role="narrative_rewriter",
+        stage="setup_copy_rewrite",
+        provider="fixture",
+        model="fixture",
+        deployment=None,
+        prompt_template_version="fixture-v1",
+        input_payload={},
+        proposed_output={"observation": "after", "action": "buy"},
+        deterministic_pre={"observation": "before", "action": "wait"},
+        final_adjudicated={"observation": "after", "action": "buy"},
+        started_at=started,
+        validator_result="passed",
+        fallback_reason=None,
+        terminal_status="success",
+    )
+
+    trace = observability_trace(db_path, identifiers["trace_id"])["trace"]
+
+    assert trace["content_changed"] == 1
+    assert trace["decision_changed"] == 1
+
+
+def test_observability_schema_adds_truthful_change_columns_to_legacy_table() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """CREATE TABLE llm_contributions (
+            contribution_id TEXT PRIMARY KEY,
+            trace_id TEXT NOT NULL,
+            decision_scope TEXT NOT NULL,
+            deterministic_pre_sha256 TEXT NOT NULL,
+            proposed_change_json TEXT,
+            proposed_change_sha256 TEXT NOT NULL,
+            final_adjudicated_sha256 TEXT NOT NULL,
+            changed_fields_json TEXT NOT NULL,
+            decision_changed INTEGER NOT NULL,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+
+    observability.ensure_observability_schema(conn)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(llm_contributions)")}
+    assert {"content_changed", "decision_contract_changed"}.issubset(columns)
+    conn.close()
 
 
 def test_observability_api_is_authenticated_and_redacted(tmp_path, monkeypatch) -> None:

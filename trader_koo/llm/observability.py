@@ -125,7 +125,9 @@ def ensure_observability_schema(conn: sqlite3.Connection) -> None:
             proposed_change_sha256 TEXT NOT NULL,
             final_adjudicated_sha256 TEXT NOT NULL,
             changed_fields_json TEXT NOT NULL,
+            content_changed INTEGER,
             decision_changed INTEGER NOT NULL,
+            decision_contract_changed INTEGER,
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS llm_outcome_links (
@@ -141,6 +143,12 @@ def ensure_observability_schema(conn: sqlite3.Connection) -> None:
     for name in ("evaluator_version", "evaluation_result_json", "cache_identity_sha256"):
         if name not in trace_columns:
             conn.execute(f"ALTER TABLE llm_call_traces ADD COLUMN {name} TEXT")
+    contribution_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(llm_contributions)")
+    }
+    for name in ("content_changed", "decision_contract_changed"):
+        if name not in contribution_columns:
+            conn.execute(f"ALTER TABLE llm_contributions ADD COLUMN {name} INTEGER")
     for table in (
         "llm_run_graphs", "llm_call_traces", "llm_contributions",
         "llm_outcome_links",
@@ -203,7 +211,7 @@ def record_llm_call(
     parent_span_id: str | None = None,
     disagreement: bool = False,
     adjudicator_role: str | None = "deterministic_validator",
-    decision_scope: str = "narrative_only",
+    decision_scope: str = "observation_narrative_only",
     evaluation_result: dict[str, Any] | None = None,
     cache_identity_sha256: str | None = None,
 ) -> dict[str, str]:
@@ -225,6 +233,8 @@ def record_llm_call(
     changed_fields = sorted(
         key for key in set(pre) | set(final) if pre.get(key) != final.get(key)
     ) if isinstance(pre, dict) and isinstance(final, dict) else []
+    decision_fields = {"action", "risk_note", "intent", "signal_bias", "actionability"}
+    decision_changed = any(field in decision_fields for field in changed_fields)
     input_hash = redacted_hash(input_payload)
     output_hash = redacted_hash(final)
     proposed_hash = redacted_hash(proposed)
@@ -279,13 +289,15 @@ def record_llm_call(
             """INSERT INTO llm_contributions (
                    contribution_id,trace_id,decision_scope,deterministic_pre_sha256,
                    proposed_change_json,proposed_change_sha256,
-                   final_adjudicated_sha256,changed_fields_json,decision_changed,
+                   final_adjudicated_sha256,changed_fields_json,content_changed,
+                   decision_changed,decision_contract_changed,
                    created_ts
-               ) VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
             (
                 str(uuid.uuid4()), trace_id, decision_scope, redacted_hash(pre),
                 _canonical(proposed)[:8000], proposed_hash, redacted_hash(final),
                 _canonical(changed_fields), int(bool(changed_fields)),
+                int(bool(changed_fields)), int(decision_changed),
             ),
         )
         conn.commit()
@@ -331,7 +343,9 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
     try:
         ensure_observability_schema(conn)
         rows = conn.execute(
-            """SELECT t.*,c.decision_scope,c.changed_fields_json,c.decision_changed
+            """SELECT t.*,c.decision_scope,c.changed_fields_json,
+                      COALESCE(c.content_changed,c.decision_changed) AS content_changed,
+                      c.decision_contract_changed AS decision_changed
                FROM llm_call_traces t
                LEFT JOIN llm_contributions c ON c.trace_id=t.trace_id
                ORDER BY t.started_ts DESC,t.trace_id DESC"""
@@ -358,7 +372,7 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
             "total_tokens", "estimated_cost_usd", "retry_count",
             "validator_result", "fallback_reason", "terminal_status",
             "message_artifact_sha256", "retention_class", "decision_scope",
-            "changed_fields_json", "decision_changed",
+            "changed_fields_json", "content_changed", "decision_changed",
         )}
         try:
             trace["evaluation_result"] = json.loads(
@@ -369,6 +383,11 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
         traces.append(trace)
     def rate(count: int) -> float | None:
         return round(count / total * 100, 4) if total else None
+    decision_rows = [row for row in rows if row["decision_changed"] is not None]
+    decision_change_rate = (
+        round(sum(bool(row["decision_changed"]) for row in decision_rows) / len(decision_rows) * 100, 4)
+        if decision_rows else None
+    )
     legacy_raw = llm_health_summary(db_path, recent_limit=10)
     legacy = {
         key: legacy_raw.get(key) for key in (
@@ -377,7 +396,7 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
         )
     }
     return {
-        "schema_version": "llm-observability-v1",
+        "schema_version": "llm-observability-v2",
         "retention": {
             "prompt_storage": PROMPT_RETENTION,
             "trace_retention_days": TRACE_RETENTION_DAYS,
@@ -400,7 +419,8 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
                 if any(row["estimated_cost_usd"] is not None for row in rows) else None
             ),
             "validator_failures": sum(row["validator_result"] != "passed" for row in rows),
-            "decision_change_rate_pct": rate(sum(bool(row["decision_changed"]) for row in rows)),
+            "decision_change_rate_pct": decision_change_rate,
+            "decision_change_coverage": len(decision_rows),
             "run_graphs": int(graphs["total"] or 0) if graphs else 0,
             "disagreements": int(graphs["disagreements"] or 0) if graphs else 0,
         },
@@ -420,7 +440,8 @@ def observability_trace(db_path: Path, trace_id: str) -> dict[str, Any] | None:
             """SELECT t.*,c.decision_scope,c.deterministic_pre_sha256,
                       c.proposed_change_json,c.proposed_change_sha256,
                       c.final_adjudicated_sha256,c.changed_fields_json,
-                      c.decision_changed
+                      COALESCE(c.content_changed,c.decision_changed) AS content_changed,
+                      c.decision_contract_changed AS decision_changed
                FROM llm_call_traces t
                LEFT JOIN llm_contributions c ON c.trace_id=t.trace_id
                WHERE t.trace_id=?""",

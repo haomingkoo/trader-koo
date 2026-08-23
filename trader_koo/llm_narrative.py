@@ -646,8 +646,12 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         evaluate_setup_rewrite(rewritten, context)
         if validation_result.is_valid else {
             "version": EVALUATOR_VERSION, "passed": False,
+            "contract_passed": False,
             "errors": ["schema_validation_failed"],
-            "semantic_outcome": "contradicted", "prose_quality_scored": False,
+            "text_outcome": "rejected",
+            "evaluation_scope": "fact_and_decision_contract",
+            "semantic_consistency_scored": False,
+            "prose_quality_scored": False,
             "decision_scope": "observation_narrative_only",
         }
     )
@@ -676,7 +680,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         out, fallback_evaluation = baseline_fallback()
         evaluation = {
             **evaluation, "fallback_applied": True,
-            "final_semantic_outcome": fallback_evaluation["semantic_outcome"],
+            "final_text_outcome": fallback_evaluation["text_outcome"],
         }
     else:
         validated_dict = validation_result.data.model_dump()
