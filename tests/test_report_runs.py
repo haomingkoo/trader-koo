@@ -353,7 +353,16 @@ def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> N
            VALUES (?,'succeeded',NULL,NULL,'2026-08-22T00:00:00Z')""",
         (run_id,),
     )
+    conn.execute(
+        """INSERT INTO report_admission_attempts
+           (run_id,status,error_code,error_message,attempted_ts)
+           VALUES (?,'failed','admission_lineage_failed','ValueError','2026-08-22T00:00:01Z')""",
+        (run_id,),
+    )
     conn.commit()
+    conn.execute(
+        "DELETE FROM report_schema_migrations WHERE migration='admission-ledger-contract-v2'"
+    )
 
     ensure_report_run_schema(conn)
 
@@ -405,12 +414,70 @@ def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> N
                VALUES (?,'failed','forged','ValueError','2026-08-22T00:00:00Z')""",
             (run_id,),
         )
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'failed','admission_lineage_failed','ValueError','2026-08-22T00:00:02Z')""",
+            (run_id,),
+        )
     conn.execute(
         """INSERT INTO report_admission_attempts
            (run_id,status,error_code,error_message,attempted_ts)
            VALUES (?,'failed','admission_finalize_failed','ValueError','2026-08-22T00:00:00Z')""",
         (run_id,),
     )
+
+
+@pytest.mark.parametrize(
+    ("case", "status", "error_code", "error_message", "attempted_ts", "null_run"),
+    [
+        ("status", None, None, None, "2026-08-22T00:00:00Z", False),
+        ("error-code", "failed", None, "ValueError", "2026-08-22T00:00:00Z", False),
+        ("error-message", "failed", "admission_finalize_failed", None,
+         "2026-08-22T00:00:00Z", False),
+        ("timestamp", "succeeded", None, None, None, False),
+        ("run-id", "succeeded", None, None, "2026-08-22T00:00:00Z", True),
+    ],
+)
+def test_legacy_admission_scan_rejects_null_contract_fields(
+    tmp_path: Path,
+    case: str,
+    status: str | None,
+    error_code: str | None,
+    error_message: str | None,
+    attempted_ts: str | None,
+    null_run: bool,
+) -> None:
+    conn = sqlite3.connect(tmp_path / f"invalid-legacy-admission-{case}.db")
+    ensure_report_run_schema(conn)
+    run_id = start_report_run(
+        conn, report_kind="daily", configuration={}, code_version=TEST_SHA
+    )
+    conn.execute("DROP TABLE report_admission_attempts")
+    conn.execute(
+        """CREATE TABLE report_admission_attempts (
+               attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               run_id TEXT,
+               status TEXT,
+               error_code TEXT,
+               error_message TEXT,
+               attempted_ts TEXT
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO report_admission_attempts
+           (run_id,status,error_code,error_message,attempted_ts)
+           VALUES (?,?,?,?,?)""",
+        (None if null_run else run_id, status, error_code, error_message, attempted_ts),
+    )
+    conn.execute(
+        "DELETE FROM report_schema_migrations WHERE migration='admission-ledger-contract-v2'"
+    )
+    conn.commit()
+
+    with pytest.raises(RuntimeError, match="legacy report admission attempts"):
+        ensure_report_run_schema(conn)
 
 
 def test_legacy_terminal_run_is_preserved_but_not_trusted_as_verified_lineage():

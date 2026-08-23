@@ -122,6 +122,14 @@ migration or backup restore, never an automatic rewrite or quarantine. The
 legacy scan validates migration state; the insert trigger enforces all later
 rows.
 
+The one pre-contract code `admission_lineage_failed` is grandfathered only for
+immutable historical rows so an upgrade does not destroy or block older audit
+evidence. New inserts cannot create it. Before rollout, operators back up the
+database and run the release-evidence copied-database verifier; a refusal reports
+the admission-ledger contract, and the backup remains the rollback source. No
+automatic mapping is attempted because the old code does not contain enough
+information to infer a truthful replacement phase.
+
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
 and the sealed-input hash. Later-session OHLCV is never an allowed substitute.

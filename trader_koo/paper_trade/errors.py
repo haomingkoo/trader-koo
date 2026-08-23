@@ -15,6 +15,10 @@ ADMISSION_PHASE_ERROR_CODES = frozenset({
 
 ADMISSION_ERROR_CODES = REPORT_LINEAGE_ERROR_CODES | ADMISSION_PHASE_ERROR_CODES
 
+# A pre-release implementation could write this code. It remains readable in
+# immutable ledgers but the current insert contract cannot create it.
+LEGACY_ADMISSION_ERROR_CODES = frozenset({"admission_lineage_failed"})
+
 
 class ReportLineageError(ValueError):
     """Pre-admission failure for unverifiable report publication."""

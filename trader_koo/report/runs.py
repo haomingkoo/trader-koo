@@ -22,7 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from trader_koo.paper_trade.errors import ADMISSION_ERROR_CODES, ReportLineageError
+from trader_koo.paper_trade.errors import (
+    ADMISSION_ERROR_CODES,
+    LEGACY_ADMISSION_ERROR_CODES,
+    ReportLineageError,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -111,6 +115,10 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
 def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
     allowed_admission_codes = ",".join(
         f"'{code}'" for code in sorted(ADMISSION_ERROR_CODES)
+    )
+    allowed_historical_admission_codes = ",".join(
+        f"'{code}'"
+        for code in sorted(ADMISSION_ERROR_CODES | LEGACY_ADMISSION_ERROR_CODES)
     )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS report_runs (
@@ -225,6 +233,9 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
     invalid_attempts = conn.execute(
         """SELECT COUNT(*) FROM report_admission_attempts
            WHERE attempted_ts NOT GLOB '????-??-??T??:??:??Z'
+              OR attempted_ts IS NULL
+              OR status IS NULL
+              OR run_id IS NULL
               OR attempted_ts GLOB '*[^0-9TZ:-]*'
               OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts) IS NULL
               OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts)!=attempted_ts
@@ -235,12 +246,14 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
               OR NOT EXISTS (
                   SELECT 1 FROM report_runs WHERE run_id=report_admission_attempts.run_id
               )
-              OR NOT (
+              OR COALESCE(NOT (
                   (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                   OR
-                  (status='failed' AND COALESCE(error_code,'') IN ({allowed_admission_codes})
+                  (status='failed' AND COALESCE(error_code,'') IN ({allowed_historical_admission_codes})
                    AND TRIM(COALESCE(error_message,''))!='')
-              )""".format(allowed_admission_codes=allowed_admission_codes)
+              ),1)""".format(
+                  allowed_historical_admission_codes=allowed_historical_admission_codes
+              )
     ).fetchone()[0] if needs_admission_scan else 0
     if invalid_attempts:
         raise RuntimeError("legacy report admission attempts violate the audit contract")
@@ -250,7 +263,10 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TRIGGER IF NOT EXISTS report_admission_attempts_valid_insert
            BEFORE INSERT ON report_admission_attempts
-           WHEN NEW.attempted_ts NOT GLOB '????-??-??T??:??:??Z'
+           WHEN NEW.attempted_ts IS NULL
+             OR NEW.status IS NULL
+             OR NEW.run_id IS NULL
+             OR NEW.attempted_ts NOT GLOB '????-??-??T??:??:??Z'
              OR NEW.attempted_ts GLOB '*[^0-9TZ:-]*'
              OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts) IS NULL
              OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts)!=NEW.attempted_ts
@@ -259,13 +275,13 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
              OR substr(NEW.attempted_ts,15,2) NOT BETWEEN '00' AND '59'
              OR substr(NEW.attempted_ts,18,2) NOT BETWEEN '00' AND '59'
              OR NOT EXISTS (SELECT 1 FROM report_runs WHERE run_id=NEW.run_id)
-             OR NOT (
+             OR COALESCE(NOT (
                  (NEW.status='succeeded' AND NEW.error_code IS NULL
                   AND NEW.error_message IS NULL)
                  OR
                  (NEW.status='failed' AND COALESCE(NEW.error_code,'') IN ({allowed_admission_codes})
                   AND TRIM(COALESCE(NEW.error_message,''))!='')
-             )
+             ),1)
            BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END""".format(
                allowed_admission_codes=allowed_admission_codes
            )
