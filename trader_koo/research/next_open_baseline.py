@@ -16,6 +16,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from trader_koo.report.runs import current_code_version
+
 from trader_koo.ml.features import ML_CONTEXT_TICKERS
 
 SCHEMA_VERSION = "2.0"
@@ -1050,6 +1052,7 @@ def _run_next_open_baseline(
         "trades": enriched, "equity_curve": list(result.equity_curve),
         "execution_ledger": result.ledger,
         "provenance": {"config_sha256": config_hash, "input_sha256": input_hash,
+                       "code_sha": current_code_version(),
                        "implementation_sha256": _implementation_hash(),
                        "canonical_report_lineage_enforced": lineage_contract_ready,
                        "research_price_basis_enforced": price_contract is not None and bool(price_contract.get("eligible"))},

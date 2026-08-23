@@ -346,7 +346,13 @@ def observability_summary(db_path: Path, *, limit: int = 50) -> dict[str, Any]:
         )})
     def rate(count: int) -> float | None:
         return round(count / total * 100, 4) if total else None
-    legacy = llm_health_summary(db_path, recent_limit=10)
+    legacy_raw = llm_health_summary(db_path, recent_limit=10)
+    legacy = {
+        key: legacy_raw.get(key) for key in (
+            "degraded", "degraded_threshold", "consecutive_failures",
+            "last_success_ts", "last_failure_ts", "counts",
+        )
+    }
     return {
         "schema_version": "llm-observability-v1",
         "retention": {

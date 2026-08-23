@@ -265,16 +265,31 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
         reasons.append("consistent_total_return_basis_required")
     years = 0.0
     if start and end:
-        years = (dt.date.fromisoformat(str(end)) - dt.date.fromisoformat(str(start))).days / 365.2425
+        try:
+            years = (
+                dt.date.fromisoformat(str(end)) - dt.date.fromisoformat(str(start))
+            ).days / 365.2425
+        except ValueError:
+            reasons.append("invalid_price_date")
     if years < 5:
         reasons.append("fewer_than_five_years")
-    spy_closes = [
-        float(row[0]) for row in conn.execute(
-            "SELECT close FROM price_daily WHERE ticker='SPY' "
-            "AND close IS NOT NULL ORDER BY date"
-        )
-        if float(row[0]) > 0
-    ]
+    spy_closes: list[float] = []
+    invalid_spy_prices = 0
+    for row in conn.execute(
+        "SELECT close FROM price_daily WHERE ticker='SPY' "
+        "AND close IS NOT NULL ORDER BY date"
+    ):
+        try:
+            close = float(row[0])
+        except (TypeError, ValueError):
+            invalid_spy_prices += 1
+            continue
+        if math.isfinite(close) and close > 0:
+            spy_closes.append(close)
+        else:
+            invalid_spy_prices += 1
+    if invalid_spy_prices:
+        reasons.append("invalid_spy_price")
     rolling_volatility = [
         statistics.stdev(_returns(spy_closes[index - 20:index + 1])) * math.sqrt(252)
         for index in range(20, len(spy_closes))

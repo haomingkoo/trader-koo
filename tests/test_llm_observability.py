@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from trader_koo.backend.routers.admin import agents
 from trader_koo.backend.routers.admin import router as admin_router
+from trader_koo.llm import observability
 from trader_koo.llm.observability import (
     observability_summary,
     observability_trace,
@@ -75,6 +76,27 @@ def test_aggregate_reconciles_success_fallback_cost_and_legacy(tmp_path) -> None
     assert summary["aggregate"]["total_tokens"] == 30
     assert summary["retention"]["credentials_stored"] is False
     assert summary["legacy_health_counters"]["label"] == "legacy"
+
+
+def test_aggregate_whitelists_legacy_health_fields(tmp_path, monkeypatch) -> None:
+    db_path, _ = _record(tmp_path)
+    monkeypatch.setattr(observability, "llm_health_summary", lambda *_args, **_kwargs: {
+        "degraded": True,
+        "degraded_threshold": 3,
+        "consecutive_failures": 1,
+        "last_success_ts": None,
+        "last_failure_ts": "2026-08-23T01:02:03+00:00",
+        "counts": {"failure": 1},
+        "last_error_details": "https://example.invalid?api_key=must-not-leak",
+        "recent_events": [{"details": "must-not-leak"}],
+    })
+
+    summary = observability_summary(db_path)
+    serialized = str(summary["legacy_health_counters"])
+
+    assert "last_error_details" not in summary["legacy_health_counters"]
+    assert "recent_events" not in summary["legacy_health_counters"]
+    assert "must-not-leak" not in serialized
 
 
 def test_outcome_link_is_explicitly_observational_and_non_causal(tmp_path) -> None:
