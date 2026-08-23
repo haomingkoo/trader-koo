@@ -460,6 +460,15 @@ def test_artifact_loader_rejects_content_and_implementation_tamper(
     write_artifact(path, artifact)
     assert artifact_state(path)["available"] is True
 
+    reserved = dict(artifact)
+    reserved["available"] = True
+    reserved["provenance"] = dict(artifact["provenance"])
+    reserved["provenance"].pop("artifact_sha256")
+    reserved["provenance"]["artifact_sha256"] = baseline._sha256(reserved)
+    reserved_path = tmp_path / "reserved.json"
+    write_artifact(reserved_path, reserved)
+    assert artifact_state(reserved_path)["error"] == "artifact_schema_invalid"
+
     payload = json.loads(path.read_text())
     payload["summary"]["closed_trades"] = 2
     path.write_text(json.dumps(payload))

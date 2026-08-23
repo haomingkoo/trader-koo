@@ -1098,6 +1098,8 @@ def write_artifact(path: Path, artifact: dict[str, Any]) -> str:
 
 def _valid_artifact_shape(payload: dict[str, Any]) -> bool:
     """Validate the small, current evidence contract without a schema library."""
+    if {"available", "artifact_path"}.intersection(payload):
+        return False
     if payload.get("schema_version") != SCHEMA_VERSION or payload.get("method") != METHOD:
         return False
     if payload.get("causal_valid") is not False or payload.get("decision_eligible") is not False:
