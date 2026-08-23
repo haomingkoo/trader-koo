@@ -7,8 +7,12 @@ verified SQLite snapshot and frozen preregistration.
 """
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
+import json
 import math
 import random
+import sqlite3
 import statistics
 from collections import defaultdict
 from typing import Any
@@ -143,7 +147,11 @@ def _market(conn: Any) -> tuple[list[str], dict[str, list[SessionPrice]]]:
 def _period_ends(sessions: list[str], period: str) -> list[str]:
     groups: dict[str, str] = {}
     for date in sessions:
-        key = date[:7] if period == "month" else f"{date[:4]}-W{__import__('datetime').date.fromisoformat(date).isocalendar().week:02d}"
+        key = (
+            date[:7]
+            if period == "month"
+            else f"{date[:4]}-W{dt.date.fromisoformat(date).isocalendar().week:02d}"
+        )
         groups[key] = date
     return sorted(groups.values())
 
@@ -288,6 +296,7 @@ def _execute(
         years[str(row["exit_date"])[:4]] += max(0.0, float(row["net_pnl"]))
     concentration = max(years.values(), default=0) / positive * 100 if positive else None
     exposure = [float(row["gross_exposure_pct"]) for row in curve if row.get("gross_exposure_pct") is not None]
+    max_drawdown = _drawdown(equities)
     return {
         "metrics": {
             "net_total_return_pct": net_return,
@@ -297,8 +306,8 @@ def _execute(
             "volatility_pct": volatility,
             "sharpe": statistics.fmean(daily) / statistics.stdev(daily) * math.sqrt(252) if len(daily) > 1 and statistics.stdev(daily) else None,
             "sortino": statistics.fmean(daily) / downside_vol * math.sqrt(252) if downside_vol else None,
-            "max_drawdown_pct": _drawdown(equities),
-            "calmar": cagr / _drawdown(equities) if cagr is not None and _drawdown(equities) else None,
+            "max_drawdown_pct": max_drawdown,
+            "calmar": cagr / max_drawdown if cagr is not None and max_drawdown else None,
             "profit_factor": positive / negative if negative else None,
             "win_rate_pct": sum(value > 0 for value in pnls) / len(pnls) * 100 if pnls else None,
             "average_exposure_pct": statistics.fmean(exposure) if exposure else 0.0,
@@ -320,9 +329,163 @@ def _execute(
     }
 
 
+def _holdout_identity(
+    preregistration: dict[str, Any],
+    selected: str,
+    heldout: list[str],
+) -> str:
+    payload = {
+        "preregistration_sha256": preregistration["preregistration_sha256"],
+        "dataset_hash": preregistration["dataset_hash"],
+        "challenger": selected,
+        "config_sha256": preregistration["config_hashes"][selected],
+        "window_start": heldout[0],
+        "window_end": heldout[-1],
+    }
+    return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def _ensure_holdout_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS challenger_holdout_access (
+            access_id TEXT PRIMARY KEY,
+            preregistration_sha256 TEXT NOT NULL,
+            dataset_hash TEXT NOT NULL,
+            challenger TEXT NOT NULL,
+            config_sha256 TEXT NOT NULL,
+            window_start TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            accessed_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS challenger_holdout_results (
+            access_id TEXT PRIMARY KEY REFERENCES challenger_holdout_access(access_id),
+            result_json TEXT NOT NULL,
+            result_sha256 TEXT NOT NULL,
+            completed_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TRIGGER IF NOT EXISTS challenger_holdout_access_no_update
+        BEFORE UPDATE ON challenger_holdout_access
+        BEGIN SELECT RAISE(ABORT,'challenger holdout access is immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS challenger_holdout_access_no_delete
+        BEFORE DELETE ON challenger_holdout_access
+        BEGIN SELECT RAISE(ABORT,'challenger holdout access is immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS challenger_holdout_access_single_insert
+        BEFORE INSERT ON challenger_holdout_access
+        WHEN EXISTS (SELECT 1 FROM challenger_holdout_access)
+        BEGIN SELECT RAISE(ABORT,'challenger holdout access is sealed'); END;
+        CREATE TRIGGER IF NOT EXISTS challenger_holdout_results_no_update
+        BEFORE UPDATE ON challenger_holdout_results
+        BEGIN SELECT RAISE(ABORT,'challenger holdout result is immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS challenger_holdout_results_no_delete
+        BEFORE DELETE ON challenger_holdout_results
+        BEGIN SELECT RAISE(ABORT,'challenger holdout result is immutable'); END;
+    """)
+
+
+def _consume_holdout(
+    conn: sqlite3.Connection,
+    preregistration: dict[str, Any],
+    selected: str,
+    sessions: list[str],
+    by_ticker: dict[str, list[SessionPrice]],
+    heldout: list[str],
+) -> dict[str, Any]:
+    """Durably log access before reading, and return the sealed result on retry."""
+    if conn.in_transaction:
+        raise ValueError("sealed heldout access requires a caller-committed snapshot")
+    access_id = _holdout_identity(preregistration, selected, heldout)
+    _ensure_holdout_schema(conn)
+    prior_access = conn.execute(
+        """SELECT access_id,preregistration_sha256,dataset_hash,challenger,
+                  config_sha256,window_start,window_end,accessed_ts
+           FROM challenger_holdout_access ORDER BY accessed_ts,access_id"""
+    ).fetchall()
+    if prior_access and not any(str(row[0]) == access_id for row in prior_access):
+        raise ValueError("sealed heldout window was already consumed by different evidence")
+    stored = conn.execute(
+        "SELECT result_json,result_sha256 FROM challenger_holdout_results WHERE access_id=?",
+        (access_id,),
+    ).fetchone()
+    if stored:
+        payload = json.loads(str(stored[0]))
+        if hashlib.sha256(canonical_json_bytes(payload)).hexdigest() != str(stored[1]):
+            raise ValueError("sealed heldout result hash mismatch")
+        return payload
+    if prior_access:
+        raise ValueError("sealed heldout access is incomplete and cannot be repeated")
+    conn.execute(
+        """INSERT INTO challenger_holdout_access
+           (access_id,preregistration_sha256,dataset_hash,challenger,config_sha256,
+            window_start,window_end) VALUES (?,?,?,?,?,?,?)""",
+        (
+            access_id, preregistration["preregistration_sha256"],
+            preregistration["dataset_hash"], selected,
+            preregistration["config_hashes"][selected], heldout[0], heldout[-1],
+        ),
+    )
+    conn.commit()
+    accessed_ts = str(conn.execute(
+        "SELECT accessed_ts FROM challenger_holdout_access WHERE access_id=?",
+        (access_id,),
+    ).fetchone()[0])
+
+    spec = preregistration["challengers"][selected]
+    cost = float(spec.get("selection_cost_bps", spec.get("one_way_cost_bps", 25)))
+    stress_cost = max(float(value) for value in (
+        spec.get("one_way_cost_scenarios_bps")
+        or [cost, spec.get("stress_cost_bps", cost * 2)]
+    ))
+    selection_run = _execute(selected, sessions, by_ticker, heldout, cost)
+    stress_run = _execute(selected, sessions, by_ticker, heldout, stress_cost)
+    metrics = selection_run["metrics"]
+    stress_metrics = stress_run["metrics"]
+    gate_reasons = []
+    active_return = metrics.get("net_active_return_pct")
+    if active_return is None or float(active_return) <= 0:
+        gate_reasons.append("sealed_holdout_active_return_not_positive")
+    stress_return = stress_metrics.get("net_total_return_pct")
+    if stress_return is None or float(stress_return) < 0:
+        gate_reasons.append("sealed_holdout_double_cost_net_return_negative")
+    concentration = metrics.get("profit_concentration_pct")
+    if concentration is None or float(concentration) > float(
+        preregistration["historical_shadow_gate"]["maximum_profit_concentration_pct"]
+    ):
+        gate_reasons.append("sealed_holdout_profit_concentration_exceeded")
+    drawdown = metrics.get("max_drawdown_pct")
+    if drawdown is None or float(drawdown) > float(
+        preregistration["historical_shadow_gate"]["maximum_drawdown_pct"]
+    ):
+        gate_reasons.append("sealed_holdout_risk_rule_failed")
+    result = {
+        "access_id": access_id,
+        "accessed_ts": accessed_ts,
+        "preregistration_sha256": preregistration["preregistration_sha256"],
+        "dataset_hash": preregistration["dataset_hash"],
+        "challenger": selected,
+        "config_sha256": preregistration["config_hashes"][selected],
+        "window_start": heldout[0],
+        "window_end": heldout[-1],
+        "selection_cost": selection_run,
+        "stress_cost": stress_run,
+        "gate_reasons": gate_reasons,
+        "eligible_for_prospective_shadow": not gate_reasons,
+        "reusable_for_policy_selection": False,
+        "automatic_promotion": False,
+    }
+    result_sha = hashlib.sha256(canonical_json_bytes(result)).hexdigest()
+    conn.execute(
+        "INSERT INTO challenger_holdout_results (access_id,result_json,result_sha256) VALUES (?,?,?)",
+        (access_id, canonical_json_bytes(result).decode(), result_sha),
+    )
+    conn.commit()
+    return result
+
+
 def execute_validation_tournament(
     conn: Any,
     preregistration: dict[str, Any],
+    *,
+    consume_heldout: bool = False,
 ) -> dict[str, Any]:
     """Run development-informed chronological validation without held-out access."""
     sessions, by_ticker = _market(conn)
@@ -410,6 +573,21 @@ def execute_validation_tournament(
         key=lambda name: (float(results[name]["metrics"]["net_active_return_pct"]), name),
         default=None,
     )
+    heldout_result = (
+        _consume_holdout(
+            conn, preregistration, selected, sessions, by_ticker, heldout
+        )
+        if selected and consume_heldout else None
+    )
+    access_log = []
+    if heldout_result is not None:
+        access_log = [{
+            key: heldout_result[key]
+            for key in (
+                "access_id", "accessed_ts", "preregistration_sha256", "dataset_hash",
+                "challenger", "config_sha256", "window_start", "window_end",
+            )
+        }]
     return {
         "split": {
             "development": {"start": development[0], "end": development[-1], "session_count": len(development)},
@@ -420,6 +598,16 @@ def execute_validation_tournament(
         "challenger_results": results,
         "holm_adjusted_p_values": adjusted,
         "selected_challenger": selected,
-        "sealed_heldout": {"accessed": False, "access_log": []},
-        "prospective_shadow_candidate": selected,
+        "sealed_heldout": {
+            "accessed": heldout_result is not None,
+            "access_log": access_log,
+            "result": heldout_result,
+            "reusable_for_policy_selection": False,
+        },
+        "prospective_shadow_candidate": (
+            selected
+            if heldout_result is not None
+            and heldout_result["eligible_for_prospective_shadow"]
+            else None
+        ),
     }

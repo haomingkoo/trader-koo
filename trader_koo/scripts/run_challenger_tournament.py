@@ -15,10 +15,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--consume-heldout",
+        action="store_true",
+        help="Read the sealed 20%% once, only after validation selects a challenger",
+    )
     args = parser.parse_args()
 
     with sqlite3.connect(args.db) as conn:
-        artifact = run_challenger_tournament(conn)
+        artifact = run_challenger_tournament(
+            conn, consume_heldout=args.consume_heldout
+        )
     file_hash = write_artifact(args.output, artifact)
     print(json.dumps({
         "ok": True,

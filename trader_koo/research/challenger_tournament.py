@@ -271,7 +271,11 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
     }
 
 
-def run_challenger_tournament(conn: Any) -> dict[str, Any]:
+def run_challenger_tournament(
+    conn: Any,
+    *,
+    consume_heldout: bool = False,
+) -> dict[str, Any]:
     """Attempt exactly C1-C3, leaving sealed validation untouched on bad data."""
     audit = dataset_audit(conn)
     preregistration = frozen_preregistration(
@@ -304,7 +308,9 @@ def run_challenger_tournament(conn: Any) -> dict[str, Any]:
             "automatic_promotion": False,
         }
         return {**body, "artifact_sha256": _sha256(body)}
-    execution = execute_validation_tournament(conn, preregistration)
+    execution = execute_validation_tournament(
+        conn, preregistration, consume_heldout=consume_heldout
+    )
     selected = execution["selected_challenger"]
     body = {
         "schema_version": SCHEMA_VERSION,
@@ -313,8 +319,11 @@ def run_challenger_tournament(conn: Any) -> dict[str, Any]:
             IMPLEMENTATION_PATH.read_bytes()
         ).hexdigest(),
         "status": (
-            "validation_complete_winner_pending_sealed_holdout"
-            if selected else "validation_complete_no_eligible_challenger"
+            "sealed_heldout_complete"
+            if execution["sealed_heldout"]["accessed"]
+            else "validation_complete_winner_pending_sealed_holdout"
+            if selected
+            else "validation_complete_no_eligible_challenger"
         ),
         "preregistration": preregistration,
         "dataset_audit": audit,

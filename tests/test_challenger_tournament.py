@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from trader_koo.research import challenger_executor as executor
 from trader_koo.research import challenger_tournament as tournament
 from trader_koo.research.challenger_tournament import (
     CHALLENGERS,
@@ -50,6 +51,23 @@ def _qualified_executor_fixture() -> sqlite3.Connection:
             rows.append((ticker, date, close * .9995, close, 5_000_000))
     conn.executemany("INSERT INTO price_daily VALUES (?,?,?,?,?)", rows)
     return conn
+
+
+def _passing_executor_result() -> dict[str, object]:
+    return {
+        "metrics": {
+            "net_total_return_pct": 5.0,
+            "net_active_return_pct": 2.0,
+            "active_return_p_value": .001,
+            "profit_concentration_pct": 10.0,
+            "max_drawdown_pct": 2.0,
+            "trade_count": 10,
+        },
+        "equity_curve": [],
+        "ledger": {"engine_version": "portfolio-execution-v1.0"},
+        "decision_count": 10,
+        "rejections": [],
+    }
 
 
 def test_preregistration_freezes_exactly_three_config_hashes() -> None:
@@ -233,7 +251,7 @@ def test_eligible_data_runs_sealed_validation_without_touching_holdout(monkeypat
         "eligible": True, "reasons": [], "dataset_sha256": "d" * 64,
         "price_contract": {"basis": "total_return", "eligible": True},
     })
-    monkeypatch.setattr(tournament, "execute_validation_tournament", lambda _conn, _prereg: {
+    monkeypatch.setattr(tournament, "execute_validation_tournament", lambda _conn, _prereg, **_kwargs: {
         "split": {"development": {}, "validation": {}, "heldout": {}},
         "challenger_results": {
             name: {"status": "validation_complete", "metrics": {}}
@@ -259,7 +277,9 @@ def test_validation_executor_runs_all_challengers_on_canonical_ledger() -> None:
     )
 
     assert set(result["challenger_results"]) == {"C1", "C2", "C3"}
-    assert result["sealed_heldout"] == {"accessed": False, "access_log": []}
+    assert result["sealed_heldout"]["accessed"] is False
+    assert result["sealed_heldout"]["access_log"] == []
+    assert result["sealed_heldout"]["result"] is None
     assert result["split"]["development"]["end"] < result["split"]["validation"]["start"]
     assert result["split"]["validation"]["end"] < result["split"]["heldout"]["start"]
     for challenger in result["challenger_results"].values():
@@ -270,3 +290,64 @@ def test_validation_executor_runs_all_challengers_on_canonical_ledger() -> None:
     assert set(result["challenger_results"]["C2"]["cost_scenarios"]) == {
         "10.0", "25.0", "50.0",
     }
+
+
+def test_selected_challenger_consumes_heldout_once_and_replays_stored_result(
+    monkeypatch,
+) -> None:
+    conn = _qualified_executor_fixture()
+    conn.commit()
+
+    def passing_run(*_args, **_kwargs):
+        return _passing_executor_result()
+
+    monkeypatch.setattr(executor, "_execute", passing_run)
+    preregistration = frozen_preregistration("d" * 64)
+    first = execute_validation_tournament(
+        conn, preregistration, consume_heldout=True
+    )
+    retry = execute_validation_tournament(
+        conn, preregistration, consume_heldout=True
+    )
+
+    assert first == retry
+    assert first["selected_challenger"] == "C3"
+    assert first["prospective_shadow_candidate"] == "C3"
+    assert first["sealed_heldout"]["accessed"] is True
+    assert first["sealed_heldout"]["result"]["reusable_for_policy_selection"] is False
+    assert conn.execute("SELECT COUNT(*) FROM challenger_holdout_access").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM challenger_holdout_results").fetchone()[0] == 1
+
+    with pytest.raises(ValueError, match="already consumed by different evidence"):
+        execute_validation_tournament(
+            conn, frozen_preregistration("e" * 64), consume_heldout=True
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="access is immutable"):
+        conn.execute("UPDATE challenger_holdout_access SET challenger='C1'")
+
+
+def test_crash_after_access_log_permanently_fails_closed(monkeypatch) -> None:
+    conn = _qualified_executor_fixture()
+    conn.commit()
+    calls = 0
+
+    def crash_on_first_heldout(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 23:
+            raise RuntimeError("simulated heldout executor crash")
+        return _passing_executor_result()
+
+    monkeypatch.setattr(executor, "_execute", crash_on_first_heldout)
+    preregistration = frozen_preregistration("d" * 64)
+    with pytest.raises(RuntimeError, match="simulated heldout executor crash"):
+        execute_validation_tournament(
+            conn, preregistration, consume_heldout=True
+        )
+
+    assert conn.execute("SELECT COUNT(*) FROM challenger_holdout_access").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM challenger_holdout_results").fetchone()[0] == 0
+    with pytest.raises(ValueError, match="incomplete and cannot be repeated"):
+        execute_validation_tournament(
+            conn, preregistration, consume_heldout=True
+        )
