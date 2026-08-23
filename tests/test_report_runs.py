@@ -449,6 +449,31 @@ def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> N
     )
 
 
+def test_fresh_admission_table_check_rejects_dotted_exception_name(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "fresh-admission-check.db")
+    ensure_report_run_schema(conn)
+    run_id = start_report_run(
+        conn, report_kind="daily", configuration={}, code_version=TEST_SHA
+    )
+    conn.execute("DROP TRIGGER report_admission_attempts_valid_insert")
+
+    conn.execute(
+        """INSERT INTO report_admission_attempts
+           (run_id,status,error_code,error_message,attempted_ts)
+           VALUES (?,'failed','admission_finalize_failed','ValueError',
+                   '2026-08-22T00:00:00Z')""",
+        (run_id,),
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'failed','admission_finalize_failed','Value.Error',
+                       '2026-08-22T00:00:01Z')""",
+            (run_id,),
+        )
+
+
 @pytest.mark.parametrize(
     ("case", "status", "error_code", "error_message", "attempted_ts", "null_run"),
     [

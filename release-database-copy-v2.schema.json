@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "release-database-copy-v2.schema.json",
+  "title": "Trader Koo release database copy evidence v2",
+  "type": "object",
+  "required": [
+    "schema",
+    "source_artifact",
+    "source_artifact_sha256",
+    "source_snapshot_sha256",
+    "migrated_copy_sha256",
+    "report_admission_contract",
+    "passed"
+  ],
+  "properties": {
+    "schema": {"const": "release-database-copy-v2"},
+    "source_artifact": {"type": "string", "minLength": 1},
+    "source_artifact_sha256": {"$ref": "#/$defs/sha256"},
+    "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "migrated_copy_sha256": {"$ref": "#/$defs/sha256"},
+    "integrity_check": {"const": "ok"},
+    "paper_trade_schema_version": {"type": "integer", "minimum": 1},
+    "expected_paper_trade_schema_version": {"type": "integer", "minimum": 1},
+    "accounting_invariants": {"type": "object"},
+    "schema_contract": {"type": "object"},
+    "sqlite_objects_before": {"type": "object"},
+    "sqlite_objects_after": {"type": "object"},
+    "report_admission_contract": {"type": "object"},
+    "passed": {"type": "boolean"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "passed": {"const": true},
+        "report_admission_contract": {
+          "type": "object",
+          "required": ["passed", "migration"],
+          "properties": {
+            "passed": {"const": true},
+            "migration": {"type": "string", "pattern": "^admission-ledger-contract-v[0-9]+$"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "integrity_check",
+        "paper_trade_schema_version",
+        "expected_paper_trade_schema_version",
+        "accounting_invariants",
+        "schema_contract",
+        "sqlite_objects_before",
+        "sqlite_objects_after"
+      ]
+    },
+    {
+      "properties": {
+        "passed": {"const": false},
+        "report_admission_contract": {
+          "type": "object",
+          "required": [
+            "passed",
+            "violation",
+            "target_migration",
+            "invalid_row_count",
+            "affected_attempt_sample",
+            "reported_attempt_count",
+            "diagnostic_limit",
+            "truncated",
+            "ordering"
+          ],
+          "properties": {
+            "passed": {"const": false},
+            "violation": {"const": "legacy_rows_invalid"},
+            "target_migration": {"type": "string", "pattern": "^admission-ledger-contract-v[0-9]+$"},
+            "invalid_row_count": {"type": "integer", "minimum": 1},
+            "affected_attempt_sample": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "required": ["attempt_id", "violations"],
+                "properties": {
+                  "attempt_id": {"type": "integer", "minimum": 1},
+                  "violations": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+                },
+                "additionalProperties": false
+              }
+            },
+            "reported_attempt_count": {"type": "integer", "minimum": 1, "maximum": 20},
+            "diagnostic_limit": {"const": 20},
+            "truncated": {"type": "boolean"},
+            "ordering": {"const": "attempt_id_ascending"}
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

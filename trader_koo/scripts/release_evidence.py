@@ -285,6 +285,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             "report_admission_contract": {
                 "passed": False,
                 "violation": "legacy_rows_invalid",
+                "target_migration": ADMISSION_LEDGER_MIGRATION,
                 "invalid_row_count": contract_failure.invalid_count,
                 "affected_attempt_sample": contract_failure.attempts,
                 "reported_attempt_count": len(contract_failure.attempts),

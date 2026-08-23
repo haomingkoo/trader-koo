@@ -167,6 +167,7 @@ def test_release_copy_rescans_current_v4_admission_ledger(
     assert failure["report_admission_contract"] == {
         "passed": False,
         "violation": "legacy_rows_invalid",
+        "target_migration": "admission-ledger-contract-v5",
         "invalid_row_count": invalid_count,
         "affected_attempt_sample": [{
             "attempt_id": attempt_id,

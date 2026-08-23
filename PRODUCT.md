@@ -148,6 +148,14 @@ producer's unqualified Python exception class name. Qualified/dotted names that
 v4 accepted are invalid; operators preserve the source backup, use the failure
 sample to identify affected immutable rows, perform a separately reviewed repair
 or restore, and rerun copied-database verification before rollout.
+Failure variants identify the rejecting contract in `target_migration`. The
+normative field/type contract is
+`release-database-copy-v2.schema.json` at the repository root. Repository search
+found no runtime consumer of v1: CI and dark deploy only upload the artifact, so
+producer and schema move together in this release; historical v1 artifacts stay
+immutable, rollback uses the prior producer, and dual emission is unnecessary.
+When a sample is truncated, operators must enumerate all invalid rows with a
+reviewed copy of the verifier predicate rather than repair only the sample.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
