@@ -203,6 +203,14 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
         json.loads(Path("release-database-copy-v2.schema.json").read_text())
     )
     validator.validate(manifest)
+    unexplained_failure = deepcopy(manifest)
+    unexplained_failure["passed"] = False
+    with pytest.raises(ValidationError):
+        validator.validate(unexplained_failure)
+    invalid_defaults = deepcopy(manifest)
+    invalid_defaults["schema_contract"]["campaign_defaults"] = {}
+    with pytest.raises(ValidationError):
+        validator.validate(invalid_defaults)
 
     integrity_failure = deepcopy(manifest)
     integrity_failure.update(passed=False, integrity_check="page 4 malformed")
