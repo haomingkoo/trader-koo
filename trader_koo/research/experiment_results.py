@@ -42,7 +42,13 @@ def _load_tournament(path: Path = TOURNAMENT_PATH) -> dict[str, Any]:
 
 def _baseline_result() -> dict[str, Any]:
     state = baseline_state()
-    payload: dict[str, Any] = state if state.get("available") else {}
+    payload: dict[str, Any] = (
+        {
+            key: value for key, value in state.items()
+            if key not in {"available", "artifact_path"}
+        }
+        if state.get("available") else {}
+    )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
     warnings = list(payload.get("readiness_reasons") or state.get("readiness_reasons") or [])

@@ -241,6 +241,21 @@ class TestPaperTradeSummaryEndpoint:
         assert catalogue["available"] is True
         assert catalogue["manifest"]["artifact_hash"] == direct["provenance"]["artifact_sha256"]
 
+        downloaded = test_app.get(
+            "/api/research/experiments/next-open-baseline/download/manifest"
+        ).json()
+        check = dict(downloaded)
+        check["provenance"] = dict(downloaded["provenance"])
+        expected = check["provenance"].pop("artifact_sha256")
+        actual = hashlib.sha256(
+            json.dumps(
+                check, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+        assert "available" not in downloaded
+        assert "artifact_path" not in downloaded
+        assert actual == expected
+
     def test_experiment_manifest_is_downloadable_but_missing_ledger_is_not(
         self, test_app
     ):
