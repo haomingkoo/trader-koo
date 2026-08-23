@@ -1,0 +1,18 @@
+{
+  "schema": "frontend-dependency-audit-v1",
+  "before": {
+    "lock_sha256": "4c901a0ba6aacea238978576c2edb22d0b84f1335e002c4462e367c94f393363",
+    "summary": {"low": 1, "moderate": 0, "high": 7, "critical": 0},
+    "packages": [
+      "@babel/core", "brace-expansion", "js-yaml", "nanoid", "postcss",
+      "react-router", "react-router-dom", "vite"
+    ]
+  },
+  "after": {
+    "lock_sha256": "9c4d1339bffe0fb246d51ead3de8bf6e4239d0136fb865bd9b94c096d719c88d",
+    "summary": {"low": 0, "moderate": 0, "high": 0, "critical": 0},
+    "packages": []
+  },
+  "commands": ["npm audit --json", "npm audit --omit=dev --json"],
+  "force_upgrade_used": false
+}
