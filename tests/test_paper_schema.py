@@ -135,12 +135,20 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
                 (run_id, attempted_ts),
             )
         conn.execute(
+            "DELETE FROM report_schema_migrations "
+            "WHERE migration='admission-ledger-contract-v5'"
+        )
+        conn.execute(
             "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
             "VALUES ('admission-ledger-contract-v2','2026-08-21T00:00:00Z')"
         )
         conn.execute(
             "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
             "VALUES ('admission-ledger-contract-v3','2026-08-21T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
+            "VALUES ('admission-ledger-contract-v4','2026-08-21T00:00:00Z')"
         )
         conn.commit()
 
@@ -187,7 +195,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     assert manifest["passed"] is True
     assert manifest["report_admission_contract"] == {
         "passed": True,
-        "migration": "admission-ledger-contract-v4",
+        "migration": "admission-ledger-contract-v5",
     }
 
 

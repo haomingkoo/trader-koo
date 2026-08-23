@@ -304,7 +304,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         "expected_paper_trade_schema_version": PAPER_TRADE_SCHEMA_VERSION,
         "report_admission_contract": {
             "passed": True,
-            "migration": "admission-ledger-contract-v4",
+            "migration": "admission-ledger-contract-v5",
         },
         "accounting_invariants": {
             "breaks": account["accounting_breaks"],

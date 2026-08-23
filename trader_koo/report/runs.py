@@ -234,9 +234,9 @@ def _ensure_report_run_schema(
                applied_ts TEXT NOT NULL
            )"""
     )
-    # v4 rescans v3 ledgers so exception-class metadata uses one exact contract
+    # v5 rescans v4 ledgers so exception-class metadata uses one exact contract
     # in SQLite validation and Python diagnostics, including whitespace.
-    admission_contract_migration = "admission-ledger-contract-v4"
+    admission_contract_migration = "admission-ledger-contract-v5"
     needs_admission_scan = verify_admission_contract or conn.execute(
         "SELECT 1 FROM report_schema_migrations WHERE migration=?",
         (admission_contract_migration,),
