@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v10"
-CACHE_VERSION = "setup-rewrite-cache-v11"
+EVALUATOR_VERSION = "setup-grounding-v11"
+CACHE_VERSION = "setup-rewrite-cache-v12"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -49,13 +49,17 @@ def _contains(text: str, phrase: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
 
 
+def _predicate_negated(clause_prefix: str) -> bool:
+    return re.search(
+        r"\b(?:do\s+not|don't|never|avoid|not|no)\s*$",
+        clause_prefix,
+    ) is not None
+
+
 def _affirmed(text: str, phrase: str) -> bool:
     for match in re.finditer(rf"(?<!\w){re.escape(phrase)}(?!\w)", text):
         clause_prefix = re.split(r"[.;,]", text[:match.start()])[-1][-60:]
-        if not re.search(
-            r"\b(?:do\s+not|don't|never|avoid|not|no)\s+(?:\w+\s+){0,2}$",
-            clause_prefix,
-        ):
+        if not _predicate_negated(clause_prefix):
             return True
     return False
 
@@ -63,10 +67,7 @@ def _affirmed(text: str, phrase: str) -> bool:
 def _pattern_affirmed(text: str, pattern: str) -> bool:
     for match in re.finditer(pattern, text):
         clause_prefix = re.split(r"[.;,]", text[:match.start()])[-1][-60:]
-        if not re.search(
-            r"\b(?:do\s+not|don't|never|avoid|not|no)\s+(?:\w+\s+){0,2}$",
-            clause_prefix,
-        ):
+        if not _predicate_negated(clause_prefix):
             return True
     return False
 
@@ -76,9 +77,9 @@ def _event_affirmed(text: str, phrase: str) -> bool:
         return False
     return re.search(
         rf"\b{re.escape(phrase)}\b.{{0,30}}(?:"
-        r"\b(?:has|have|is|was|did)\s+(?:not|never)\b|"
-        r"\b(?:hasn't|haven't|isn't|wasn't|didn't)\b|"
-        r"\b(?:has|have)\s+(?:yet\s+to|failed\s+to)\s+(?:occur|happen)\b"
+        r"\b(?:has|have|had|is|was|did)\s+(?:not|never)\b|"
+        r"\b(?:hasn't|haven't|hadn't|isn't|wasn't|didn't)\b|"
+        r"\b(?:has|have|had)\s+(?:yet\s+to|failed\s+to)\s+(?:occur|happen)\b"
         r")",
         text,
     ) is None

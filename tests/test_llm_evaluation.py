@@ -227,6 +227,8 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
 
     for action in (
         "Breakout hasn't occurred; wait for confirmation.",
+        "Breakout had not occurred; wait for confirmation.",
+        "Breakout hadn't occurred; wait for confirmation.",
         "Breakdown didn't happen; wait for confirmation.",
         "Breakout has yet to occur; wait for confirmation.",
         "Breakout has failed to occur; wait for confirmation.",
@@ -245,6 +247,12 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
         "action": "We intend to buy after confirmation.",
     }, negated_intent_context)
     assert "action_type_changed" in intent_reversal["errors"]
+
+    unrelated_negation = evaluate_setup_rewrite({
+        **wait_context["baseline"],
+        "action": "Wait for confirmation with no delay before buying.",
+    }, wait_context)
+    assert "action_type_changed" in unrelated_negation["errors"]
 
 
 def test_mixed_observation_and_protective_risk_do_not_change_action() -> None:
