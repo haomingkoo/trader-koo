@@ -52,6 +52,7 @@ CHALLENGERS: dict[str, dict[str, Any]] = {
         "minimum_median_20_session_dollar_volume": 50_000_000,
         "maximum_adv_pct": 1,
         "one_way_cost_scenarios_bps": [10, 25, 50],
+        "selection_cost_bps": 25,
         "edge_must_survive_bps": 25,
         "long_only": True,
         "leverage": False,
@@ -101,6 +102,8 @@ def frozen_preregistration(dataset_hash: str) -> dict[str, Any]:
             "double_cost_net_return_minimum": 0,
             "maximum_profit_concentration_pct": 50,
             "maximum_adv_pct": 1,
+            "maximum_drawdown_pct": 25,
+            "holm_adjusted_p_value_max": .05,
             "risk_rule_required": True,
         },
         "prohibited": [

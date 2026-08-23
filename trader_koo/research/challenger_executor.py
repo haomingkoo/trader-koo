@@ -273,6 +273,10 @@ def _execute(
     ci, p_value = _bootstrap(active, int.from_bytes(challenger.encode(), "big"))
     net_return = (equities[-1] / equities[0] - 1) * 100 if len(equities) > 1 else None
     spy_return = (spy_values[-1] / spy_values[0] - 1) * 100 if len(spy_values) > 1 else None
+    cagr = (
+        ((equities[-1] / equities[0]) ** (252 / (len(equities) - 1)) - 1) * 100
+        if len(equities) > 1 and equities[0] > 0 else None
+    )
     volatility = statistics.stdev(daily) * math.sqrt(252) * 100 if len(daily) > 1 else None
     downside = [min(value, 0) for value in daily]
     downside_vol = statistics.pstdev(downside) if len(downside) > 1 else 0
@@ -287,17 +291,24 @@ def _execute(
     return {
         "metrics": {
             "net_total_return_pct": net_return,
+            "cagr_pct": cagr,
             "spy_total_return_pct": spy_return,
             "net_active_return_pct": net_return - spy_return if net_return is not None and spy_return is not None else None,
             "volatility_pct": volatility,
             "sharpe": statistics.fmean(daily) / statistics.stdev(daily) * math.sqrt(252) if len(daily) > 1 and statistics.stdev(daily) else None,
             "sortino": statistics.fmean(daily) / downside_vol * math.sqrt(252) if downside_vol else None,
             "max_drawdown_pct": _drawdown(equities),
+            "calmar": cagr / _drawdown(equities) if cagr is not None and _drawdown(equities) else None,
             "profit_factor": positive / negative if negative else None,
             "win_rate_pct": sum(value > 0 for value in pnls) / len(pnls) * 100 if pnls else None,
             "average_exposure_pct": statistics.fmean(exposure) if exposure else 0.0,
             "turnover_pct": sum(float(row.get("entry_notional") or 0) for row in result.trades) / 1_000_000 * 100,
             "trade_count": len(result.trades),
+            "capacity_min_notional": min(
+                (decision.capacity_notional for decision in decisions), default=None
+            ),
+            "maximum_adv_pct": 1.0,
+            "one_way_cost_bps": cost_bps,
             "profit_concentration_pct": concentration,
             "active_daily_mean_block_ci95": ci,
             "active_return_p_value": p_value,
@@ -326,9 +337,19 @@ def execute_validation_tournament(
     p_values: dict[str, float] = {}
     for name in ("C1", "C2", "C3"):
         spec = preregistration["challengers"][name]
-        cost = float(spec.get("one_way_cost_bps", 25))
-        base = _execute(name, sessions, by_ticker, validation, cost)
-        stress = _execute(name, sessions, by_ticker, validation, cost * 2)
+        cost = float(spec.get("selection_cost_bps", spec.get("one_way_cost_bps", 25)))
+        scenario_costs = spec.get("one_way_cost_scenarios_bps") or [
+            cost, float(spec.get("stress_cost_bps", cost * 2)),
+        ]
+        scenario_runs = {
+            float(value): _execute(name, sessions, by_ticker, validation, float(value))
+            for value in sorted(set(scenario_costs))
+        }
+        base = scenario_runs[cost]
+        cost_scenarios = {
+            str(value): run["metrics"] for value, run in scenario_runs.items()
+        }
+        stress = scenario_runs[max(scenario_runs)]["metrics"]
         fold_ranges = [
             validation[index * len(validation) // 5:(index + 1) * len(validation) // 5]
             for index in range(5)
@@ -352,28 +373,34 @@ def execute_validation_tournament(
         reasons = []
         if positive_pct < 70:
             reasons.append("positive_active_return_in_fewer_than_70_pct_of_folds")
-        stress_return = stress["metrics"].get("net_total_return_pct")
+        stress_return = stress.get("net_total_return_pct")
         if stress_return is None or float(stress_return) < 0:
             reasons.append("double_cost_net_return_negative")
         concentration = metrics.get("profit_concentration_pct")
         if concentration is None or float(concentration) > 50:
             reasons.append("profit_concentration_exceeds_50_pct")
         drawdown = metrics.get("max_drawdown_pct")
-        if drawdown is None or float(drawdown) > 25:
+        maximum_drawdown = float(
+            preregistration["historical_shadow_gate"]["maximum_drawdown_pct"]
+        )
+        if drawdown is None or float(drawdown) > maximum_drawdown:
             reasons.append("maximum_drawdown_exceeds_25_pct")
         p_values[name] = float(metrics.get("active_return_p_value") or 1.0)
         results[name] = {
             "status": "validation_complete",
             "config_sha256": preregistration["config_hashes"][name],
             **base,
-            "cost_stress_2x": stress["metrics"],
+            "cost_scenarios": cost_scenarios,
             "walk_forward_folds": folds,
             "positive_net_active_return_fold_pct": positive_pct,
             "gate_reasons": reasons,
         }
     adjusted = holm_adjust(p_values)
     for name, value in adjusted.items():
-        if value > .05:
+        significance = float(
+            preregistration["historical_shadow_gate"]["holm_adjusted_p_value_max"]
+        )
+        if value > significance:
             results[name]["gate_reasons"].append("holm_adjusted_active_return_not_significant")
         results[name]["holm_adjusted_p_value"] = value
         results[name]["eligible_for_selection"] = not results[name]["gate_reasons"]

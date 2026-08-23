@@ -267,3 +267,6 @@ def test_validation_executor_runs_all_challengers_on_canonical_ledger() -> None:
         assert challenger["metrics"]["trade_count"] > 0
         assert challenger["ledger"]["engine_version"] == "portfolio-execution-v1.0"
         assert len(challenger["walk_forward_folds"]) == 5
+    assert set(result["challenger_results"]["C2"]["cost_scenarios"]) == {
+        "10.0", "25.0", "50.0",
+    }
