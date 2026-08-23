@@ -23,6 +23,10 @@ from trader_koo.paper_trade.decision import (
     evaluate_setup_for_paper_trade,
 )
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema, register_bot_version
+from trader_koo.paper_trade.shadow import (
+    record_breadth_shadow,
+    resolve_breadth_shadow_outcomes,
+)
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
 from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
 from trader_koo.db.price_contract import research_price_contract
@@ -730,6 +734,9 @@ def _create_paper_trades_from_report(
             return 0
     _mark_to_market(conn, config=config, through_date=report_date)
     fill_pending_paper_orders(conn, config=config, through_date=report_date)
+    resolve_breadth_shadow_outcomes(
+        conn, through_date=report_date, base_config=config
+    )
     register_bot_version(
         conn,
         bot_version=config.bot_version,
@@ -813,6 +820,14 @@ def _create_paper_trades_from_report_in_transaction(
         raise DivergentDecisionSetError(
             f"divergent retry for report_run_id={report_run_id} campaign_id={config.campaign_id}"
         )
+    record_breadth_shadow(
+        conn,
+        report_run_id=report_run_id,
+        report_date=report_date,
+        generated_ts=generated_ts,
+        setup_rows=setup_rows,
+        base_config=config,
+    )
     open_count = conn.execute(
         "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
         (config.campaign_id,),

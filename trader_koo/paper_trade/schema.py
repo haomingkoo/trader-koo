@@ -12,7 +12,7 @@ from typing import Any
 # In-memory databases are never cached (each connection is a distinct DB).
 _ensured_db_paths: set[str] = set()
 _ensured_db_paths_lock = threading.Lock()
-PAPER_TRADE_SCHEMA_VERSION = 2
+PAPER_TRADE_SCHEMA_VERSION = 3
 
 
 def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
@@ -111,6 +111,7 @@ def decode_json_list(raw: Any) -> list[str]:
 
 def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     """Create paper_trades and paper_portfolio_snapshots tables."""
+    from trader_koo.paper_trade.shadow import ensure_shadow_schema
     from trader_koo.report.runs import ensure_report_run_schema
 
     ensure_report_run_schema(conn)
@@ -808,6 +809,7 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_paper_reflections_ticker "
         "ON paper_trade_reflections(ticker, exit_date)"
     )
+    ensure_shadow_schema(conn)
     conn.execute(
         """CREATE TABLE IF NOT EXISTS paper_trade_schema_meta (
                id INTEGER PRIMARY KEY CHECK (id=1),

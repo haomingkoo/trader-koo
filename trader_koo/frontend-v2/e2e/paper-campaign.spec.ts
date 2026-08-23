@@ -25,6 +25,13 @@ test("paper campaign renders a real sealed decision through API and UI", async (
   await expect(panel).toContainText("eligibility.tier/tier_below_minimum (1)");
   await expect(panel.getByText("unhealthy")).toBeVisible();
 
+  const shadow = page.getByTestId("breadth-shadow");
+  await expect(shadow).toContainText("P0 is the frozen A/B control");
+  await expect(shadow).toContainText("1/2");
+  await expect(shadow).toContainText("2/2");
+  await expect(shadow).toContainText("100.0%");
+  await expect(shadow).toContainText("This shadow cannot create orders");
+
   const decisions = page.getByTestId("paper-campaign-decisions");
   await expect(decisions).toContainText("1");
   await expect(decisions).toContainText("REJECT");

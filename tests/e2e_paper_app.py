@@ -17,6 +17,8 @@ from trader_koo.backend.routers.paper_trades import router
 from trader_koo.llm.observability import observability_summary, record_llm_call
 from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator, require_admin
 from trader_koo.paper_trades import create_paper_trades_from_report, ensure_paper_trade_schema
+from trader_koo.paper_trades import _build_config
+from trader_koo.paper_trade.shadow import record_breadth_shadow
 from trader_koo.report.runs import complete_report_run, publish_report_run, sha256_file
 from trader_koo.report.serializer import write_reports
 
@@ -63,6 +65,25 @@ create_paper_trades_from_report(
     report_date="2026-08-21",
     generated_ts="2026-08-21T22:00:00Z",
     report_run_id=run_id,
+)
+record_breadth_shadow(
+    conn,
+    report_run_id="browser-shadow-report",
+    report_date="2026-08-23",
+    generated_ts="2026-08-23T01:00:00Z",
+    setup_rows=[
+        {
+            "ticker": "CONTROL", "setup_tier": "A", "score": 80.0,
+            "actionability": "higher-probability", "signal_bias": "bullish",
+            "setup_family": "Bullish Breakout", "close": 100.0,
+        },
+        {
+            "ticker": "BREADTH", "setup_tier": "C", "score": 75.0,
+            "actionability": "higher-probability", "signal_bias": "bullish",
+            "setup_family": "Bullish Breakout", "close": 100.0,
+        },
+    ],
+    base_config=_build_config(),
 )
 conn.commit()
 conn.close()

@@ -3,6 +3,7 @@ import { useMemo, useState, useCallback } from "react";
 import type {
   PaperTrade,
   PaperCampaignHealth,
+  BreadthShadowSummary,
   PaperTradeBenchmarks,
   PaperTradeDirectionStats,
   PaperTradeFeedbackItem,
@@ -468,6 +469,54 @@ export function PaperCampaignHealthPanel({
           {health.campaigns.map((campaign) => `${campaign.label}: ${campaign.trade_count} ${campaign.status === "frozen" ? "immutable " : ""}trade(s), ${campaign.status}`).join(" · ")}
         </div>
       )}
+    </section>
+  );
+}
+
+export function BreadthShadowPanel({ shadow }: { shadow?: BreadthShadowSummary }) {
+  if (!shadow || shadow.causal_state === "evidence_unavailable") return null;
+  const p0 = shadow.policy_counts.P0 ?? { candidate_count: 0, accepted_count: 0 };
+  const p1 = shadow.policy_counts.P1 ?? { candidate_count: 0, accepted_count: 0 };
+  const readable = (value: string) => value.replace(/_/g, " ");
+  return (
+    <section data-testid="breadth-shadow" className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Prospective breadth shadow</div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            P0 is the frozen A/B control. P1 changes only tier admission by adding Tier C.
+          </div>
+        </div>
+        <Badge variant={shadow.human_promotion_review_eligible ? "green" : "amber"}>
+          {shadow.human_promotion_review_eligible ? "human review eligible" : "research only"}
+        </Badge>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {[
+          ["P0 accepted", `${p0.accepted_count}/${p0.candidate_count}`],
+          ["P1 accepted", `${p1.accepted_count}/${p1.candidate_count}`],
+          ["Breadth increase", shadow.breadth_increase_pct == null ? "N/A" : `${shadow.breadth_increase_pct.toFixed(1)}%`],
+          ["Incremental resolved", `${shadow.incremental_cohort.resolved_count}/${shadow.incremental_cohort.accepted_count}`],
+          ["Independent blocks", `${shadow.coverage.effective_non_overlapping_block_count}/12`],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-0 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+            <div className="truncate text-[10px] uppercase tracking-wide text-[var(--muted)]" title={label}>{label}</div>
+            <div className="mt-1 truncate text-lg font-semibold tabular-nums" title={value}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-[var(--muted)] md:grid-cols-2">
+        <div>Matched-SPY active return: {shadow.incremental_cohort.mean_matched_active_return_pct == null ? "N/A" : `${shadow.incremental_cohort.mean_matched_active_return_pct.toFixed(2)}%`}</div>
+        <div>2x-cost return: {shadow.incremental_cohort.mean_2x_cost_return_pct == null ? "N/A" : `${shadow.incremental_cohort.mean_2x_cost_return_pct.toFixed(2)}%`}</div>
+        <div>Unresolved matured decisions: {shadow.coverage.unresolved_matured_count}</div>
+        <div>Still maturing: {shadow.coverage.immature_accepted_count}</div>
+        <div>Endpoint: {readable(shadow.primary_endpoint)}</div>
+        <div>Largest ticker concentration: {shadow.concentration.largest_ticker_pct == null ? "N/A" : `${shadow.concentration.largest_ticker_pct.toFixed(1)}%`}</div>
+        <div>Largest family concentration: {shadow.concentration.largest_family_pct == null ? "N/A" : `${shadow.concentration.largest_family_pct.toFixed(1)}%`}</div>
+      </div>
+      <div className="mt-3 text-xs text-[var(--muted)]">
+        This shadow cannot create orders. Promotion requires all preregistered gates and a separate human-approved issue.
+      </div>
     </section>
   );
 }

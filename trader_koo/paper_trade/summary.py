@@ -617,6 +617,20 @@ def _compute_unfiltered_baseline(
         return None
 
 
+def _safe_breadth_shadow_summary(conn: sqlite3.Connection) -> dict[str, Any]:
+    try:
+        from trader_koo.paper_trade.shadow import breadth_shadow_summary
+
+        return breadth_shadow_summary(conn)
+    except Exception as exc:
+        LOG.warning("Breadth shadow summary failed (non-fatal): %s", exc)
+        return {
+            "causal_state": "evidence_unavailable",
+            "human_promotion_review_eligible": False,
+            "automatic_promotion": False,
+        }
+
+
 def paper_trade_summary(
     conn: sqlite3.Connection,
     *,
@@ -697,6 +711,7 @@ def paper_trade_summary(
             "benchmarks": {},
             "strategy_evidence": evidence_state,
             "campaign_health": campaign,
+            "breadth_shadow": _safe_breadth_shadow_summary(conn),
         }
 
     pnls = [float(row[0]) for row in all_closed]
@@ -923,6 +938,7 @@ def paper_trade_summary(
         "benchmarks": benchmarks,
         "strategy_evidence": evidence_state,
         "campaign_health": campaign,
+        "breadth_shadow": _safe_breadth_shadow_summary(conn),
     }
 
 

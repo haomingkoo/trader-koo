@@ -1373,6 +1373,39 @@ export interface PaperTradeSummary {
   benchmarks?: PaperTradeBenchmarks;
   strategy_evidence?: StrategyEvidenceState;
   campaign_health?: PaperCampaignHealth;
+  breadth_shadow?: BreadthShadowSummary;
+}
+
+export interface BreadthShadowSummary {
+  schema_version: string;
+  primary_endpoint: string;
+  policy_counts: Record<string, { candidate_count: number; accepted_count: number }>;
+  incremental_cohort: {
+    accepted_count: number;
+    resolved_count: number;
+    mean_net_return_pct: number | null;
+    mean_matched_active_return_pct: number | null;
+    mean_2x_cost_return_pct: number | null;
+  };
+  coverage: {
+    report_count: number;
+    resolved_outcome_count: number;
+    unresolved_matured_count: number;
+    immature_accepted_count: number;
+    effective_non_overlapping_block_count: number;
+  };
+  concentration: {
+    largest_ticker_pct: number | null;
+    largest_family_pct: number | null;
+    by_ticker: Record<string, number>;
+    by_family: Record<string, number>;
+  };
+  breadth_increase_pct: number | null;
+  gates: Record<string, boolean>;
+  human_promotion_review_eligible: boolean;
+  causal_state: "prospectively_accumulating" | "promotion_review" | "evidence_unavailable";
+  automatic_promotion: false;
+  can_create_orders: false;
 }
 
 /* ── Crypto ── */

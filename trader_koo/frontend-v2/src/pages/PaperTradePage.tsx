@@ -6,6 +6,7 @@ import Badge from "../components/ui/Badge";
 import {
   PaperTradePortfolioHero,
   PaperCampaignHealthPanel,
+  BreadthShadowPanel,
   PaperTradeDecisionFlow,
   PaperTradeOpenPositions,
   PaperTradeEquityCurve,
@@ -97,6 +98,8 @@ export default function PaperTradePage() {
       <PaperTradeDecisionFlow overall={overall} policy={summary?.policy} />
 
       <PaperCampaignHealthPanel health={summary?.campaign_health} />
+
+      <BreadthShadowPanel shadow={summary?.breadth_shadow} />
 
       {/* How it works — collapsible explainer */}
       <details className="group rounded-xl border border-[var(--line)] bg-[var(--panel)]">
