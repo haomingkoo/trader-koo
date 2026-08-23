@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v7"
-CACHE_VERSION = "setup-rewrite-cache-v8"
+EVALUATOR_VERSION = "setup-grounding-v8"
+CACHE_VERSION = "setup-rewrite-cache-v9"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -46,11 +46,11 @@ def _normal(value: Any) -> str:
 
 
 def _contains(text: str, phrase: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
+    return re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text) is not None
 
 
 def _affirmed(text: str, phrase: str) -> bool:
-    for match in re.finditer(rf"(?<!\w){re.escape(phrase)}(?!\w)", text):
+    for match in re.finditer(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text):
         clause_prefix = re.split(r"[.;,]", text[:match.start()])[-1][-60:]
         if not re.search(
             r"\b(?:do\s+not|don't|never|avoid|not|no)\s+(?:\w+\s+){0,2}$",
@@ -147,7 +147,10 @@ def _action_side(text: str) -> str | None:
     long_side = False
     short_side = False
     exit_targets: set[str] = set()
-    for clause in re.split(r"[.;]|\b(?:and\s+then|then|and|but)\b", action):
+    for clause in re.split(r"[.;,]|\b(?:and\s+then|then|and|or|but)\b", action):
+        clause = clause.strip()
+        if not clause:
+            continue
         targets = {
             match.group(1) for match in re.finditer(
             r"\b(?:exit|close|cover)\s+(?:the\s+)?(long|short)(?:\s+position)?\b",
@@ -174,12 +177,23 @@ def _action_side(text: str) -> str | None:
         ))
         if protective_exit:
             continue
-        long_side = long_side or any(_affirmed(clause, term) for term in (
-            "buy", "long", "breakout", "above resistance",
+        negated_start = re.match(r"^(?:do\s+not|don't|never|avoid)\b", clause) is not None
+        long_entry = not negated_start and bool(re.search(
+            r"^(?:buy|go\s+long|long|enter(?:\s+a)?\s+long|open(?:\s+a)?\s+long)\b|"
+            r"\b(?:to|should|could|may|can|consider)\s+(?:buy|go\s+long|enter\s+long)\b|"
+            r"\b(?:consider|before|after)\s+buying\b|"
+            r"\b(?:breakout|above\s+resistance)\b",
+            clause,
         ))
-        short_side = short_side or any(_affirmed(clause, term) for term in (
-            "sell", "short", "breakdown", "below support",
+        short_entry = not negated_start and bool(re.search(
+            r"^(?:sell|go\s+short|short|enter(?:\s+a)?\s+short|open(?:\s+a)?\s+short)\b|"
+            r"\b(?:to|should|could|may|can|consider)\s+(?:sell|go\s+short|enter\s+short)\b|"
+            r"\b(?:consider|before|after)\s+selling\b|"
+            r"\b(?:breakdown|below\s+support)\b",
+            clause,
         ))
+        long_side = long_side or long_entry
+        short_side = short_side or short_entry
     if long_side and short_side or len(exit_targets) > 1 or exit_targets and (long_side or short_side):
         return "mixed"
     if long_side or short_side:
@@ -227,9 +241,9 @@ def _risk_posture(text: str) -> tuple[set[str], bool]:
         r"\brisk\b.{0,20}\b(?:is|may|can|should|must)\s+(?:not\s+bounded|unbounded)\b|"
         r"\brisk\b.{0,20}\b(?:should|must)\s+not\s+be\s+(?:bounded|required)\b|"
         r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:should|must)\s+not\s+be\s+(?:limited|bounded|constrained)\b|"
-        r"\bstops?\b.{0,20}\b(?:need\s+not|(?:do|does)n't\s+need\s+to)\s+be\s+(?:used|required)\b|"
-        r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:need\s+not|(?:do|does)n't\s+need\s+to)\s+be\s+(?:limited|bounded|constrained)\b|"
-        r"\brisk\b.{0,20}\b(?:need\s+not|(?:do|does)n't\s+need\s+to)\s+be\s+bounded\b|"
+        r"\bstops?\b.{0,20}\b(?:need\s+not|(?:do|does)(?:n't|\s+not)\s+need\s+to)\s+be\s+(?:used|required)\b|"
+        r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:need\s+not|(?:do|does)(?:n't|\s+not)\s+need\s+to)\s+be\s+(?:limited|bounded|constrained)\b|"
+        r"\brisk\b.{0,20}\b(?:need\s+not|(?:do|does)(?:n't|\s+not)\s+need\s+to)\s+be\s+bounded\b|"
         r"\bposition\s+siz(?:e|ing)\b.{0,20}\b(?:may|can|should)\s+be\s+increased\b",
         risk,
     )) or any(phrase in risk for phrase in (
