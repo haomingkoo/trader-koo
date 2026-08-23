@@ -190,6 +190,10 @@ def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
     next_date = (
         dt.date.fromisoformat(str(kwargs["report_date"])) + dt.timedelta(days=1)
     ).isoformat()
+    if conn.execute(
+        "SELECT 1 FROM price_daily WHERE ticker='SPY' AND date=?", (next_date,)
+    ).fetchone() is None:
+        _seed_price(conn, "SPY", 500.0, date=next_date)
     for row in kwargs.get("setup_rows") or []:
         if not isinstance(row, dict) or not row.get("ticker"):
             continue
@@ -753,6 +757,7 @@ class TestCreatePaperTrades:
             min_reward_r_multiple=2.0,
         )
         _seed_price(conn, "AAPL", 150.0, date="2026-03-15")
+        _seed_price(conn, "SPY", 500.0, date="2026-03-15")
 
         inserted = _create_paper_trades_from_report_impl(
             conn,
