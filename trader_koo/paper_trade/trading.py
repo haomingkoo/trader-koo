@@ -14,14 +14,7 @@ from trader_koo.paper_trade.chronology import (
     next_scheduled_session_after,
     publication_precedes_session_open,
 )
-
-
-class ReportLineageError(ValueError):
-    """Stable pre-admission failure for unverifiable report publication."""
-
-    def __init__(self, code: str, detail: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {detail}")
+from trader_koo.paper_trade.errors import ReportLineageError
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
     canonical_json,
@@ -145,16 +138,41 @@ def _require_published_canonical_report(
             "paper admission requires the authoritative report_runs registry",
         )
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(report_runs)")}
-    required = {"run_id", "artifact_path", "publication_verified"}
-    if not required.issubset(columns):
+    required = {
+        "run_id", "status", "started_ts", "completed_ts", "published_ts",
+        "generated_ts", "report_kind", "publication_verified",
+        "is_generation_canonical", "superseded_by_run_id", "generation_key",
+        "config_json", "config_hash", "code_version", "content_hash",
+        "markdown_hash", "artifact_path", "markdown_path",
+        "scanned_universe_json", "ranked_candidates_json", "decisions_json",
+        "inputs_json", "source_timestamps_json",
+    }
+    decision_columns = {
+        str(item[1])
+        for item in conn.execute("PRAGMA table_info(report_run_decisions)")
+    }
+    required_decision_columns = {
+        "run_id", "ticker", "selected_rank", "decision",
+        "reason_codes_json", "inputs_json",
+    }
+    if (
+        not required.issubset(columns)
+        or not required_decision_columns.issubset(decision_columns)
+    ):
         raise ReportLineageError(
             "report_publication_lineage_invalid",
             "report_runs registry does not expose verified publication lineage",
         )
-    row = conn.execute(
-        "SELECT artifact_path,published_ts FROM report_runs WHERE run_id=?",
-        (report_run_id,),
-    ).fetchone()
+    try:
+        row = conn.execute(
+            "SELECT artifact_path,published_ts,status,publication_verified "
+            "FROM report_runs WHERE run_id=?",
+            (report_run_id,),
+        ).fetchone()
+    except sqlite3.DatabaseError as exc:
+        raise ReportLineageError(
+            "report_publication_lineage_invalid", str(exc)
+        ) from exc
     if not row or not str(row[0] or "").strip():
         raise ReportLineageError(
             "report_not_verified_published",
@@ -170,13 +188,18 @@ def _require_published_canonical_report(
             run_id=report_run_id,
             require_current=require_current,
         )
-    except (ValueError, RuntimeError) as exc:
+    except (sqlite3.DatabaseError, ValueError, RuntimeError) as exc:
         raise ReportLineageError(
             "report_publication_lineage_invalid", str(exc)
         ) from exc
     if resolved is None:
+        code = (
+            "report_not_current_publication"
+            if row and str(row[2]) == "published" and int(row[3] or 0) == 1
+            else "report_not_verified_published"
+        )
         raise ReportLineageError(
-            "report_not_verified_published",
+            code,
             "paper admission requires the current verified publication",
         )
     return {

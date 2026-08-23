@@ -319,6 +319,7 @@ def test_sql_lifecycle_requires_terminal_evidence_and_freezes_failures(tmp_path:
     conn.execute(
         "UPDATE report_runs SET is_generation_canonical=1 WHERE run_id='forged'"
     )
+    conn.commit()
     with pytest.raises(ValueError, match="path|hash"):
         resolve_published_report(
             conn, report_dir=tmp_path / "reports", run_id="forged"

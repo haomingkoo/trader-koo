@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 from trader_koo.paper_trade.campaign import canonical_hash, decide_candidate, record_promotion_experiment
@@ -13,6 +14,7 @@ from trader_koo.paper_trade.chronology import (
 )
 from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.decision import direction_from_row
+from trader_koo.paper_trade.errors import ReportLineageError
 from trader_koo.research.next_open_baseline import (
     BaselineConfig, ExecutionDecision, SessionPrice, simulate_portfolio,
 )
@@ -336,7 +338,7 @@ def replay_and_seal_promotion(conn, *, experiment_id: str, preregistration_id: s
     }
     sealed_candidate_runs = []
     publication_rows = conn.execute(
-        f"""SELECT run_id,published_ts FROM report_runs
+        f"""SELECT run_id,published_ts,artifact_path FROM report_runs
             WHERE status='published' AND publication_verified=1
               AND run_id IN ({placeholders})""",
         tuple(run_ids),
@@ -345,7 +347,29 @@ def replay_and_seal_promotion(conn, *, experiment_id: str, preregistration_id: s
     if set(publication_by_run) != set(run_ids) or any(
         not value for value in publication_by_run.values()
     ):
-        raise ValueError("promotion parity requires verified publication timestamps")
+        raise ReportLineageError(
+            "report_not_verified_published",
+            "promotion parity requires verified publication timestamps",
+        )
+    from trader_koo.report.runs import resolve_published_report
+
+    for row in publication_rows:
+        try:
+            resolved = resolve_published_report(
+                conn,
+                report_dir=Path(str(row[2] or "")).parent,
+                run_id=str(row[0]),
+                require_current=False,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise ReportLineageError(
+                "report_publication_lineage_invalid", str(exc)
+            ) from exc
+        if resolved is None:
+            raise ReportLineageError(
+                "report_not_verified_published",
+                f"promotion parity could not resolve report run {row[0]}",
+            )
     for run in candidate_runs:
         run_id = str(run["report_run_id"])
         sealed_candidates = []

@@ -247,7 +247,12 @@ def main() -> None:
             )
         )
     except Exception as exc:
-        fail_report_run(lifecycle_conn, run_id=run_id, error=str(exc))
+        try:
+            fail_report_run(lifecycle_conn, run_id=run_id, error=str(exc))
+        except ValueError:
+            # Completed/published runs are immutable; never mask the original
+            # post-publication admission or delivery failure.
+            pass
         raise
     finally:
         lifecycle_conn.close()

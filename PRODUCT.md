@@ -69,7 +69,7 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 
 ### Chronology acceptance matrix
 
-| Input at the immediate next SPY session | Live result | Replay result |
+| Input at the immediate next SPY session | Live result | Promotion-parity replay result |
 | --- | --- | --- |
 | Valid publication strictly before 09:30 ET and ticker open present | Same admitted fill and canonical fields | Same admitted fill and canonical fields |
 | Publication exactly at 09:30 ET or later | `report_published_after_intended_open` | Same rejection, intended session, and sealed inputs |
@@ -91,9 +91,13 @@ or trades are written. Missing/unpublished lineage raises
 `ReportLineageError(code="report_not_verified_published")`; structurally invalid
 lineage raises `ReportLineageError(code="report_publication_lineage_invalid")`.
 Both are retryable only after the same run has valid verified-publication
-evidence. The nightly report run records the
-failure; there is no paper-admission HTTP endpoint that maps it to a transport
-status in v4.
+evidence. Every outer admission attempt appends a success or failure fact to the
+immutable `report_admission_attempts` ledger, including the stable error code;
+it never rewrites an immutable published run. The nightly process preserves the
+original exception for scheduler and log handling. There is no paper-admission
+HTTP endpoint that maps it to a transport status in v4. The lower-level
+`replay_campaign()` simulation accepts caller-supplied research fixtures; only
+`replay_and_seal_promotion()` is the lineage-verified promotion boundary.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,

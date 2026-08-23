@@ -33,7 +33,10 @@ from trader_koo.paper_trades import create_paper_trades_from_report as _create_p
 from trader_koo.paper_trades import fill_pending_paper_orders
 from trader_koo.paper_trades import paper_trade_summary
 from trader_koo.paper_trade.replay import replay_campaign
-from trader_koo.paper_trade.trading import ReportLineageError
+from trader_koo.paper_trade.trading import (
+    ReportLineageError,
+    _require_published_canonical_report,
+)
 from trader_koo.research.next_open_baseline import (
     BaselineConfig,
     ExecutionDecision,
@@ -42,6 +45,7 @@ from trader_koo.research.next_open_baseline import (
     simulate_portfolio,
 )
 from trader_koo.report.runs import (
+    admit_published_report,
     complete_report_run,
     publish_report_run,
     sha256_file,
@@ -857,6 +861,38 @@ def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload(mo
             conn, campaign_id="paper-v2", action="activate", actor="mallory",
             reason="changed reason", idempotency_key="payload-bound-001",
         )
+
+
+def test_malformed_report_registry_is_a_structural_lineage_error() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE report_runs(run_id TEXT PRIMARY KEY, artifact_path TEXT)")
+    conn.execute("INSERT INTO report_runs VALUES ('broken-run','/tmp/broken.json')")
+
+    with pytest.raises(ReportLineageError) as error:
+        _require_published_canonical_report(conn, "broken-run")
+
+    assert error.value.code == "report_publication_lineage_invalid"
+
+
+def test_outer_admission_persists_lineage_failure_without_candidate_writes(
+    tmp_path: Path,
+) -> None:
+    conn = _db()
+    run_id = start_report_run(
+        conn, report_kind="daily", configuration={}, code_version="a" * 40
+    )
+
+    with pytest.raises(ReportLineageError) as error:
+        admit_published_report(conn, run_id=run_id, report_dir=tmp_path)
+
+    assert error.value.code == "report_not_verified_published"
+    assert conn.execute(
+        "SELECT status,error_code FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("failed", "report_not_verified_published")
+    assert conn.execute("SELECT COUNT(*) FROM paper_decision_sets").fetchone()[0] == 0
+    with pytest.raises(sqlite3.IntegrityError, match="admission attempts are immutable"):
+        conn.execute("DELETE FROM report_admission_attempts")
 
 
 def test_chronological_replay_models_costs_overlap_exits_and_parity():

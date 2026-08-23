@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from trader_koo.paper_trade.errors import ReportLineageError
+
 LATEST_MANIFEST = "daily_report_latest.manifest.json"
 PUBLICATION_LOCK = ".daily_report_publication.lock"
 _GIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$", re.IGNORECASE)
@@ -172,6 +174,30 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
             inputs_json TEXT NOT NULL,
             PRIMARY KEY (run_id, ticker)
         )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS report_admission_attempts (
+            attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES report_runs(run_id),
+            status TEXT NOT NULL CHECK (status IN ('succeeded','failed')),
+            error_code TEXT,
+            error_message TEXT,
+            attempted_ts TEXT NOT NULL
+        )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_admission_attempts_run "
+        "ON report_admission_attempts(run_id,attempt_id)"
+    )
+    conn.execute(
+        """CREATE TRIGGER IF NOT EXISTS report_admission_attempts_no_update
+           BEFORE UPDATE ON report_admission_attempts
+           BEGIN SELECT RAISE(ABORT,'report admission attempts are immutable'); END"""
+    )
+    conn.execute(
+        """CREATE TRIGGER IF NOT EXISTS report_admission_attempts_no_delete
+           BEFORE DELETE ON report_admission_attempts
+           BEGIN SELECT RAISE(ABORT,'report admission attempts are immutable'); END"""
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_report_runs_published "
@@ -845,6 +871,27 @@ def publish_report_run(conn: sqlite3.Connection, *, run_id: str, report_dir: Pat
         return manifest if manifest.get("run_id") == run_id else _publication_meta(_row_dict(conn, run_id) or {})
 
 
+def _record_admission_attempt(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    status: str,
+    error: Exception | None = None,
+) -> None:
+    conn.execute(
+        """INSERT INTO report_admission_attempts
+           (run_id,status,error_code,error_message,attempted_ts)
+           VALUES (?,?,?,?,?)""",
+        (
+            run_id,
+            status,
+            getattr(error, "code", type(error).__name__) if error else None,
+            str(error)[:4000] if error else None,
+            _utc_now(),
+        ),
+    )
+
+
 def admit_published_report(
     conn: sqlite3.Connection,
     *,
@@ -852,37 +899,55 @@ def admit_published_report(
     report_dir: Path,
 ) -> dict[str, int]:
     """Admit only the current verified artifact's immutable accepted decisions."""
-    resolved = resolve_published_report(conn, report_dir=report_dir, run_id=run_id, require_current=True)
-    if resolved is None:
-        raise ValueError(f"report run {run_id} is not the current verified publication")
     from trader_koo.paper_trades import PAPER_TRADE_ENABLED, create_paper_trades_from_report
     from trader_koo.paper_trade.schema import ensure_paper_trade_schema
+    from trader_koo.paper_trade.trading import _require_published_canonical_report
     from trader_koo.report.setup_scoring import (
         SETUP_EVAL_ENABLED, _persist_setup_call_candidates, ensure_setup_call_eval_schema,
     )
 
-    row = conn.execute(
-        "SELECT generated_ts,report_kind,source_timestamps_json FROM report_runs WHERE run_id=?", (run_id,)
-    ).fetchone()
-    setups = [
-        json.loads(item[0]) for item in conn.execute(
-            "SELECT inputs_json FROM report_run_decisions WHERE run_id=? AND decision='accepted' ORDER BY selected_rank,ticker",
-            (run_id,),
-        )
-    ]
-    source_timestamps = json.loads(str(row[2] or "{}"))
-    asof_date = str(source_timestamps.get("price_date") or "").strip()
-    linked_payload = resolved[1]
-    linked_meta = linked_payload.get("meta") if isinstance(linked_payload.get("meta"), dict) else {}
-    price_basis = linked_meta.get("price_basis") if isinstance(linked_meta.get("price_basis"), dict) else None
-    expected_price_revision = (
-        str(price_basis.get("revision") or "").strip() if price_basis is not None else None
-    ) or None
+    ensure_report_run_schema(conn)
     ensure_setup_call_eval_schema(conn)
     ensure_paper_trade_schema(conn)
     calls = trades = 0
     try:
         conn.execute("BEGIN")
+        _require_published_canonical_report(conn, run_id)
+        resolved = resolve_published_report(
+            conn, report_dir=report_dir, run_id=run_id, require_current=True
+        )
+        if resolved is None:
+            raise ReportLineageError(
+                "report_not_current_publication",
+                f"report run {run_id} is not the current verified publication",
+            )
+        row = conn.execute(
+            "SELECT generated_ts,report_kind,source_timestamps_json "
+            "FROM report_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        setups = [
+            json.loads(item[0]) for item in conn.execute(
+                "SELECT inputs_json FROM report_run_decisions "
+                "WHERE run_id=? AND decision='accepted' "
+                "ORDER BY selected_rank,ticker",
+                (run_id,),
+            )
+        ]
+        source_timestamps = json.loads(str(row[2] or "{}"))
+        asof_date = str(source_timestamps.get("price_date") or "").strip()
+        linked_payload = resolved[1]
+        linked_meta = (
+            linked_payload.get("meta")
+            if isinstance(linked_payload.get("meta"), dict) else {}
+        )
+        price_basis = (
+            linked_meta.get("price_basis")
+            if isinstance(linked_meta.get("price_basis"), dict) else None
+        )
+        expected_price_revision = (
+            str(price_basis.get("revision") or "").strip()
+            if price_basis is not None else None
+        ) or None
         if SETUP_EVAL_ENABLED and asof_date and setups:
             calls = _persist_setup_call_candidates(
                 conn, generated_ts=str(row[0]), report_kind=str(row[1]), asof_date=asof_date,
@@ -895,8 +960,16 @@ def admit_published_report(
                 report_run_id=run_id, schema_ready=True,
                 expected_price_revision=expected_price_revision,
             )
+        _record_admission_attempt(conn, run_id=run_id, status="succeeded")
         conn.commit()
-    except Exception:
+    except Exception as exc:
         conn.rollback()
+        try:
+            _record_admission_attempt(
+                conn, run_id=run_id, status="failed", error=exc
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
         raise
     return {"setup_calls": int(calls), "paper_trades": int(trades)}
