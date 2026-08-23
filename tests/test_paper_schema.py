@@ -123,12 +123,13 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
                        '2026-08-22T00:00:00Z')""",
             (run_id, "\t"),
         )
-        conn.execute(
-            """INSERT INTO report_admission_attempts
-               (run_id,status,error_code,error_message,attempted_ts)
-               VALUES (?,'failed',NULL,'ValueError','2026-08-22T00:00:01Z')""",
-            (run_id,),
-        )
+        for second in range(1, 26):
+            conn.execute(
+                """INSERT INTO report_admission_attempts
+                   (run_id,status,error_code,error_message,attempted_ts)
+                   VALUES (?,'failed',NULL,'ValueError',?)""",
+                (run_id, f"2026-08-22T00:00:{second:02d}Z"),
+            )
         conn.execute(
             "DELETE FROM report_schema_migrations "
             "WHERE migration='admission-ledger-contract-v3'"
@@ -150,11 +151,11 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
     assert failure["report_admission_contract"] == {
         "passed": False,
         "violation": "legacy_rows_invalid",
-        "invalid_row_count": 1,
+        "invalid_row_count": 25,
         "affected_attempts": [{
-            "attempt_id": 2,
+            "attempt_id": attempt_id,
             "violations": ["failure_error_metadata_invalid"],
-        }],
+        } for attempt_id in range(2, 22)],
     }
     assert failure["migrated_copy_sha256"] == hashlib.sha256(
         (output_dir / "database-copy.db").read_bytes()

@@ -8,6 +8,7 @@ import json
 import shutil
 import sqlite3
 import subprocess
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -244,7 +245,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     _snapshot(source, copy_path)
     source_snapshot_hash = _sha256(copy_path)
     contract_failure: AdmissionLedgerContractError | None = None
-    with sqlite3.connect(copy_path) as conn:
+    with closing(sqlite3.connect(copy_path)) as conn:
         before_counts = dict(conn.execute(
             "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
         ).fetchall())
