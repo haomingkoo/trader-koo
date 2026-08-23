@@ -130,6 +130,17 @@
           },
           "additionalProperties": false
         }
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["integrity_check"]},
+          {"required": ["paper_trade_schema_version"]},
+          {"required": ["expected_paper_trade_schema_version"]},
+          {"required": ["accounting_invariants"]},
+          {"required": ["schema_contract"]},
+          {"required": ["sqlite_objects_before"]},
+          {"required": ["sqlite_objects_after"]}
+        ]
       }
     }
   ],

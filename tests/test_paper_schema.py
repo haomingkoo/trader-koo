@@ -167,6 +167,15 @@ def test_release_copy_rescans_current_v4_admission_ledger(
     Draft202012Validator(
         json.loads(Path("release-database-copy-v3.schema.json").read_text())
     ).validate(failure)
+    contradictory_admission_failure = deepcopy(failure)
+    contradictory_admission_failure["accounting_invariants"] = None
+    contradictory_admission_failure["schema_contract"] = {
+        "passed": True
+    }
+    with pytest.raises(ValidationError):
+        Draft202012Validator(
+            json.loads(Path("release-database-copy-v3.schema.json").read_text())
+        ).validate(contradictory_admission_failure)
     assert failure["schema"] == "release-database-copy-v3"
     assert failure["passed"] is False
     assert failure["report_admission_contract"] == {

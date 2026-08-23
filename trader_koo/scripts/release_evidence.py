@@ -13,6 +13,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from trader_koo.db.price_contract import ensure_price_series_revision_schema
 from trader_koo.db.price_repairs import ensure_price_repair_schema
 from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
@@ -64,6 +66,12 @@ def _validate_database_manifest(payload: dict[str, Any]) -> None:
             or bool(contract.get("truncated")) != (invalid_count > reported_count)
         ):
             raise RuntimeError("release database failure counts are inconsistent")
+
+
+def _validate_database_manifest_schema(payload: dict[str, Any]) -> None:
+    schema_path = Path(__file__).resolve().parents[2] / "release-database-copy-v3.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(payload)
 
 
 def _code_sha() -> str:
@@ -321,6 +329,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             "passed": False,
         }
         _validate_database_manifest(failure_manifest)
+        _validate_database_manifest_schema(failure_manifest)
         _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
         raise RuntimeError("database copy report-admission contract failed") from contract_failure
     manifest = {
@@ -357,6 +366,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         and schema_contract["passed"]
     )
     _validate_database_manifest(manifest)
+    _validate_database_manifest_schema(manifest)
     _write_json(output_dir / "database-migration-manifest.json", manifest)
     if not manifest["passed"]:
         raise RuntimeError("database copy migration or accounting invariant failed")
