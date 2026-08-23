@@ -42,6 +42,29 @@ from trader_koo.db.price_contract import (
 TEST_REPORT_RUN_ID = "paper-trade-test-run"
 
 
+def test_global_dark_release_gate_blocks_all_facade_mutations(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trader_koo.paper_trades as paper_facade
+
+    monkeypatch.setattr(paper_facade, "PAPER_TRADE_ENABLED", False)
+
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.create_paper_trades_from_report(
+            conn,
+            setup_rows=[],
+            report_date="2026-03-14",
+            generated_ts="disabled",
+            report_run_id=TEST_REPORT_RUN_ID,
+        )
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.mark_to_market(conn)
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.fill_pending_paper_orders(conn)
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.manually_close_trade(conn, trade_id=1)
+
+
 @pytest.fixture()
 def conn(tmp_path: Path):
     """In-memory SQLite connection with paper trade + price schema."""

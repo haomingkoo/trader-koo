@@ -72,12 +72,15 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 | Valid publication strictly before 09:30 ET and ticker open present | Same admitted fill and canonical fields | Same admitted fill and canonical fields |
 | Publication exactly at 09:30 ET or later | `report_published_after_intended_open` | Same rejection, intended session, and sealed inputs |
 | Publication missing or malformed | Fail closed with the matching publication reason | Same rejection and sealed inputs |
-| Scheduled-session SPY observation missing | `pending` with `awaiting_next_session_open` | Same pending disposition and reason; no later row is consulted |
-| Immediate ticker open missing | No roll-forward fill | No roll-forward fill |
+| Scheduled-session SPY observation missing | `pending` with `scheduled_spy_open_missing` | Same pending disposition and reason; no later row is consulted |
+| Scheduled-session ticker open missing | `pending` with `scheduled_ticker_open_missing` | Same pending disposition and reason; no later row is consulted |
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
 and the sealed-input hash. Later-session OHLCV is never an allowed substitute.
+Pending orders retry only the exact intended date when that observation is
+backfilled; they never advance to another date. They remain visibly pending
+until an audited operator resolves the data gap or rolls back the campaign.
 
 ### Release-state acceptance matrix
 

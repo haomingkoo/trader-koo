@@ -59,6 +59,17 @@ PAPER_TRADE_TRAIL_TIGHT_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_TRAIL_TIGHT_
 PAPER_TRADE_TRAIL_TIGHT_CUSHION_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_TRAIL_TIGHT_CUSHION_R", "0.5"))
 PAPER_TRADE_EXPIRY_USE_TRADING_DAYS = os.getenv("TRADER_KOO_PAPER_TRADE_EXPIRY_USE_TRADING_DAYS", "1") == "1"
 
+
+class PaperTradeWritesDisabled(ValueError):
+    """The dark-release write gate blocks paper-lifecycle mutations."""
+
+
+def require_paper_trade_writes() -> None:
+    if not PAPER_TRADE_ENABLED:
+        raise PaperTradeWritesDisabled(
+            "paper-trade writes are disabled during the dark-release rollback window"
+        )
+
 _QUALIFYING_TIERS = frozenset({"A", "B"})
 _QUALIFYING_ACTIONABILITY = frozenset({"higher-probability", "conditional"})
 _QUALIFYING_DIRECTIONS = frozenset({"long", "short"})
@@ -134,6 +145,7 @@ def create_paper_trades_from_report(
     schema_ready: bool = False,
     expected_price_revision: str | None = None,
 ) -> int:
+    require_paper_trade_writes()
     return _create_paper_trades_from_report_impl(
         conn,
         setup_rows=setup_rows,
@@ -147,12 +159,14 @@ def create_paper_trades_from_report(
 
 
 def mark_to_market(conn: sqlite3.Connection) -> dict[str, Any]:
+    require_paper_trade_writes()
     return _mark_to_market_impl(conn, config=_build_config())
 
 
 def fill_pending_paper_orders(
     conn: sqlite3.Connection, *, through_date: str | None = None
 ) -> dict[str, int]:
+    require_paper_trade_writes()
     return _fill_pending_paper_orders_impl(
         conn, config=_build_config(), through_date=through_date
     )
@@ -177,6 +191,7 @@ def manually_close_trade(
     exit_price: float | None = None,
     exit_reason: str = "manual_close",
 ) -> dict[str, Any]:
+    require_paper_trade_writes()
     return _manually_close_trade_impl(
         conn,
         trade_id=trade_id,

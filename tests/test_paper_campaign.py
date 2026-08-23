@@ -648,6 +648,10 @@ def test_missing_immediate_spy_observation_never_rolls_to_a_later_session() -> N
     assert inserted == 0
     assert resolved == {"filled": 0, "rejected": 0, "still_pending": 1}
     assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT reason_code FROM paper_candidate_decisions "
+        "WHERE report_run_id='no-spy-run'"
+    ).fetchone() == ("scheduled_spy_open_missing",)
 
 
 def test_report_published_after_intended_open_cannot_backdate_a_fill(
@@ -1042,6 +1046,7 @@ def test_replay_fails_closed_without_an_observed_spy_calendar():
     )
 
     assert replay["decisions"][0]["disposition"] == "pending"
+    assert replay["decisions"][0]["reason_code"] == "scheduled_spy_open_missing"
     assert replay["decisions"][0]["inputs"]["context"]["execution_ready"] is False
     assert replay["trades"] == []
 

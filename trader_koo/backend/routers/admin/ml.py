@@ -11,7 +11,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from trader_koo.backend.services.database import DB_PATH, get_conn
-from trader_koo.paper_trades import manually_close_trade, mark_to_market
+from trader_koo.paper_trades import (
+    PaperTradeWritesDisabled,
+    manually_close_trade,
+    mark_to_market,
+)
 
 from trader_koo.backend.routers.admin._shared import LOG
 
@@ -919,6 +923,8 @@ def admin_close_paper_trade(
             exit_reason=exit_reason,
         )
         return {"ok": True, **result}
+    except PaperTradeWritesDisabled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
@@ -930,7 +936,10 @@ def admin_trigger_mtm(request: Request) -> dict[str, Any]:
     """Trigger mark-to-market on all open paper trades."""
     conn = get_conn()
     try:
-        result = mark_to_market(conn)
+        try:
+            result = mark_to_market(conn)
+        except PaperTradeWritesDisabled as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         conn.commit()
         return {"ok": True, **result}
     finally:

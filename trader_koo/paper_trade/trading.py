@@ -1122,6 +1122,11 @@ def _create_paper_trades_from_report_in_transaction(
                 entry_price = round(raw_entry * (1 - slip_mult), 4)
             _decision_runtime_context["entry_price"] = entry_price
             _decision_runtime_context["execution_ready"] = execution_ready
+            _decision_runtime_context["execution_pending_reason"] = (
+                "scheduled_spy_open_missing"
+                if not spy_ready else "scheduled_ticker_open_missing"
+                if not execution_ready else None
+            )
             levels = compute_stop_and_target(
                 row, direction, config=config, entry_price=entry_price
             )
@@ -1391,8 +1396,11 @@ def _create_paper_trades_from_report_in_transaction(
             record_decision(
                 row=row, rank=rank, evaluation=evaluation, levels=levels, plan=plan,
                 critic=critic, final_gate="execution.next_open",
-                reason_code="awaiting_next_session_open",
-                reasons=["Order is pending until a valid later-session open is available."],
+                reason_code=str(
+                    _decision_runtime_context.get("execution_pending_reason")
+                    or "scheduled_ticker_open_missing"
+                ),
+                reasons=["The exact scheduled-session observation is not available yet."],
                 disposition="pending",
             )
             continue

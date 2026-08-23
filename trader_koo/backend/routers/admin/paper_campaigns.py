@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from trader_koo.backend.services.database import get_conn
 from trader_koo.paper_trade.campaign import record_human_approval, transition_campaign
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
+from trader_koo.paper_trades import require_paper_trade_writes
 
 router = APIRouter(tags=["admin", "admin-paper-campaigns"])
 
@@ -66,6 +67,11 @@ def admin_transition_paper_campaign(
     actor = str(identity.get("username") or identity.get("user_id") or "authenticated-admin")
     conn = get_conn()
     try:
+        if body.action == "activate":
+            try:
+                require_paper_trade_writes()
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         ensure_paper_trade_schema(conn)
         try:
             result = transition_campaign(

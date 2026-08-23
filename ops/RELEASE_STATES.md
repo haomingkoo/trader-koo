@@ -39,10 +39,10 @@ first introduced, the only exception is `absent` to inactive `draft`. Activation
 different, explicitly approved release transition; later code releases can
 preserve an active campaign without invoking activation.
 
-Schema v4 is the initial expand phase. It retains the legacy paper-trade and portfolio-snapshot
-uniqueness rules alongside the new campaign-aware keys. This deliberately makes
-the previous image writable against the forward-migrated volume during the
-rollback window. Destructive contract migration is a separate operation after
+Schema v4 is the initial expand phase. It retains legacy paper-trade and
+portfolio-snapshot key shapes alongside the new campaign-aware keys. It
+preserves legacy reads; automatic, API, and admin paper-lifecycle writes remain
+centrally disabled during the rollback window. Destructive contract migration is a separate operation after
 the old-image rollback window is retired and before multi-campaign activation;
 it requires a fresh named backup, integrity and foreign-key checks, free-space
 review, and explicit data-recovery approval.
@@ -54,8 +54,9 @@ review, and explicit data-recovery approval.
 | Previous image + expand-compatible schema | Read-compatible rollback target; paper writes remain disabled |
 | Any retired image + contracted schema | Unsupported; image rollback must be retired first |
 
-The copied-database gate verifies the v4 migration ID, required indexes and
-triggers, compatible campaign defaults, foreign keys, legacy read shapes,
+The copied-database gate verifies the v4 migration ID, required index uniqueness
+and ordered columns, normalized trigger definitions, required foreign-key
+declarations, compatible campaign defaults, foreign-key data, legacy read shapes,
 integrity, and accounting. It does not claim to execute the previous container;
 Campaign v2 and paper writes remain disabled throughout the image-rollback
 window.
@@ -80,6 +81,11 @@ destructive parent-table rebuild on the live volume.
 6. Let the exact commit pass CI, then approve the protected dark-deploy job.
 7. Verify the public SHA, preserved campaign state, API contracts, and Chromium
    journeys. Activation remains a later, separately audited human decision.
+8. After explicit rollback-retirement approval, run the contract migration,
+   remove compatibility keys, verify the contracted schema, enable the central
+   paper-write gate, and prove one first write on a disposable copy.
+9. Only then accept a separate human Campaign v2 activation request and verify
+   its first production write and audit event.
 
 Configure the `production-dark` GitHub environment with required reviewers,
 the non-secret target variables `TRADER_KOO_PRODUCTION_URL`,

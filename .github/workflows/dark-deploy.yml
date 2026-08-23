@@ -177,6 +177,10 @@ jobs:
               else
                 test "$release_status" = "404"
               fi
+              curl --fail --silent --show-error \
+                "${BASE_URL}/api/paper-trades/summary" \
+                > /tmp/rollback-paper-summary.json
+              jq -e '.ok == true' /tmp/rollback-paper-summary.json > /dev/null
               exit 0
             fi
             if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ]; then

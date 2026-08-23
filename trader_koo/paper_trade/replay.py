@@ -157,6 +157,11 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 "critic_outcome": candidate.get("critic_outcome") or {"approved": False, "error": "missing_replay_critic_evidence"},
                 "campaign_active": True, "duplicate": False,
                 "execution_ready": next_bar is not None,
+                "execution_pending_reason": (
+                    "scheduled_spy_open_missing"
+                    if not spy_ready else "scheduled_ticker_open_missing"
+                    if next_bar is None else None
+                ),
                 "market_context": candidate.get("market_context") or {},
                 "portfolio_context": {},
                 "source_context": {"report_run_id": run["report_run_id"],
@@ -168,6 +173,11 @@ def _campaign_inputs(candidate_runs: list[dict[str, Any]], price_rows: list[dict
                 context.update(
                     entry_price=entry,
                     execution_ready=next_bar is not None,
+                    execution_pending_reason=(
+                        "scheduled_spy_open_missing"
+                        if not spy_ready else "scheduled_ticker_open_missing"
+                        if next_bar is None else None
+                    ),
                 )
                 if not publication_ready:
                     context["portfolio_block"] = _publication_block(published_ts)

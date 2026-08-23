@@ -36,6 +36,7 @@ def _base_decision(*, row: dict[str, Any], rank: int, evaluation: dict[str, Any]
         "entry_price", "vix_level", "avg_daily_volume", "portfolio_block",
         "critic_outcome", "campaign_active", "duplicate", "market_context",
         "portfolio_context", "source_context", "execution_ready",
+        "execution_pending_reason",
     )}
     evidence = {"candidate": row, "candidate_rank": rank, "policy": config_snapshot(config), "context": effective_context}
     return {
@@ -132,11 +133,14 @@ def decide_candidate(*, row: Any, rank: int, config: PaperTradeConfig, context: 
         failed_check = str(critic.get("failed_check") or "infrastructure")
         return _finish(decision, f"critic.{failed_check}", f"critic_{failed_check}_rejected", list(critic.get("rejections") or ["Critic rejected candidate."]))
     if context.get("execution_ready") is False:
+        pending_reason = str(
+            context.get("execution_pending_reason") or "scheduled_ticker_open_missing"
+        )
         return _finish(
             decision,
             "execution.next_open",
-            "awaiting_next_session_open",
-            ["Order is pending until a valid later-session open is available."],
+            pending_reason,
+            ["Order is pending until the exact scheduled-session observation is backfilled."],
             "pending",
         )
     if context.get("campaign_active") is not True:

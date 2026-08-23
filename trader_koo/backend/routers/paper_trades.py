@@ -8,7 +8,12 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from trader_koo.backend.services.database import get_conn
-from trader_koo.paper_trades import ensure_paper_trade_schema, list_paper_trades, paper_trade_summary
+from trader_koo.paper_trades import (
+    ensure_paper_trade_schema,
+    list_paper_trades,
+    paper_trade_summary,
+    require_paper_trade_writes,
+)
 from trader_koo.research.strategy_evidence import evidence_snapshot_by_hash
 from trader_koo.research.next_open_baseline import artifact_state
 from trader_koo.research.experiment_results import (
@@ -273,6 +278,10 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
 @router.patch("/api/paper-trades/{trade_id}/notes")
 def api_update_trade_notes(trade_id: int, body: NotesUpdate) -> dict[str, Any]:
     """Update the notes field on a paper trade."""
+    try:
+        require_paper_trade_writes()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     conn = get_conn()
     try:
         ensure_paper_trade_schema(conn)
