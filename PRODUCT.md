@@ -90,17 +90,21 @@ A lineage refusal aborts the admission transaction before decision sets, orders,
 or trades are written. Missing/unpublished lineage raises
 `ReportLineageError(code="report_not_verified_published")`; structurally invalid
 lineage raises `ReportLineageError(code="report_publication_lineage_invalid")`;
-a valid superseded run raises
+a valid superseded run presented to live admission raises
 `ReportLineageError(code="report_not_current_publication")`. The first two are
 retryable only after the same run has valid verified-publication evidence. A
-superseded run is terminal and callers must use the current canonical run.
+superseded run is terminal for live admission, whose callers must use the
+current canonical run. Historical promotion replay may use a superseded run:
+it verifies immutable artifact lineage and compares the sealed live facts
+produced when that run was current, without admitting new work.
 
 After schema initialization, a known-run outer admission appends a success fact
 or attempts a separate durable failure fact in the immutable
 `report_admission_attempts` ledger. A process crash before the failure insert, an
 unknown run ID, or an audit-storage failure can leave no failure fact; that
 condition is logged and the original exception is preserved. Stored failures
-contain the stable code and exception class, never raw error text or file paths.
+contain the stable code and exception class in the compatibility-named
+`error_message` column, never raw error text or file paths.
 The API rejects caller-owned transactions, and the ledger does not rewrite an
 immutable published run. There is no paper-admission
 HTTP endpoint that maps it to a transport status in v4. The lower-level
@@ -110,7 +114,13 @@ Caller-owned transaction rejection and schema-initialization failures are
 precondition failures outside the admission-attempt ledger. Non-lineage failure
 codes are a closed phase set: `admission_setup_persistence_failed`,
 `admission_paper_trade_persistence_failed`, and `admission_finalize_failed`;
-the exception class is stored separately as diagnostic metadata.
+the exception class is stored separately as diagnostic metadata. Setup includes
+artifact-derived preparation after lineage verification. Existing malformed
+legacy ledger rows stop schema initialization with an operator-facing error;
+because the ledger is audit evidence, recovery is an explicit reviewed database
+migration or backup restore, never an automatic rewrite or quarantine. The
+legacy scan validates migration state; the insert trigger enforces all later
+rows.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,

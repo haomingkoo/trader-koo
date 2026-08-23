@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from trader_koo.paper_trade.errors import ReportLineageError
+from trader_koo.paper_trade.errors import ADMISSION_ERROR_CODES, ReportLineageError
 
 LOG = logging.getLogger(__name__)
 
@@ -109,6 +109,9 @@ def ensure_report_run_schema(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
+    allowed_admission_codes = ",".join(
+        f"'{code}'" for code in sorted(ADMISSION_ERROR_CODES)
+    )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS report_runs (
             run_id TEXT PRIMARY KEY,
@@ -191,34 +194,59 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                     AND attempted_ts NOT GLOB '*[^0-9TZ:-]*'
                     AND strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts) IS NOT NULL
                     AND strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts)=attempted_ts
+                    AND date(substr(attempted_ts,1,10),'+0 days')=substr(attempted_ts,1,10)
+                    AND substr(attempted_ts,12,2) BETWEEN '00' AND '23'
+                    AND substr(attempted_ts,15,2) BETWEEN '00' AND '59'
+                    AND substr(attempted_ts,18,2) BETWEEN '00' AND '59'
                 ),
             CHECK (
                 (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                 OR
-                (status='failed' AND TRIM(COALESCE(error_code,''))!=''
+                (status='failed' AND error_code IN ({allowed_admission_codes})
                  AND TRIM(COALESCE(error_message,''))!='')
             )
-        )"""
+        )""".format(allowed_admission_codes=allowed_admission_codes)
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_report_admission_attempts_run "
         "ON report_admission_attempts(run_id,attempt_id)"
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS report_schema_migrations (
+               migration TEXT PRIMARY KEY,
+               applied_ts TEXT NOT NULL
+           )"""
+    )
+    admission_contract_migration = "admission-ledger-contract-v2"
+    needs_admission_scan = conn.execute(
+        "SELECT 1 FROM report_schema_migrations WHERE migration=?",
+        (admission_contract_migration,),
+    ).fetchone() is None
     invalid_attempts = conn.execute(
         """SELECT COUNT(*) FROM report_admission_attempts
            WHERE attempted_ts NOT GLOB '????-??-??T??:??:??Z'
               OR attempted_ts GLOB '*[^0-9TZ:-]*'
               OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts) IS NULL
               OR strftime('%Y-%m-%dT%H:%M:%SZ',attempted_ts)!=attempted_ts
+              OR date(substr(attempted_ts,1,10),'+0 days')!=substr(attempted_ts,1,10)
+              OR substr(attempted_ts,12,2) NOT BETWEEN '00' AND '23'
+              OR substr(attempted_ts,15,2) NOT BETWEEN '00' AND '59'
+              OR substr(attempted_ts,18,2) NOT BETWEEN '00' AND '59'
+              OR NOT EXISTS (
+                  SELECT 1 FROM report_runs WHERE run_id=report_admission_attempts.run_id
+              )
               OR NOT (
                   (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                   OR
-                  (status='failed' AND TRIM(COALESCE(error_code,''))!=''
+                  (status='failed' AND error_code IN ({allowed_admission_codes})
                    AND TRIM(COALESCE(error_message,''))!='')
-              )"""
-    ).fetchone()[0]
+              )""".format(allowed_admission_codes=allowed_admission_codes)
+    ).fetchone()[0] if needs_admission_scan else 0
     if invalid_attempts:
         raise RuntimeError("legacy report admission attempts violate the audit contract")
+    # Reinstall the versioned validator once per ensure so a legacy trigger
+    # cannot retain weaker rules. The full ledger scan above runs only once.
+    conn.execute("DROP TRIGGER IF EXISTS report_admission_attempts_valid_insert")
     conn.execute(
         """CREATE TRIGGER IF NOT EXISTS report_admission_attempts_valid_insert
            BEFORE INSERT ON report_admission_attempts
@@ -226,14 +254,25 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
              OR NEW.attempted_ts GLOB '*[^0-9TZ:-]*'
              OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts) IS NULL
              OR strftime('%Y-%m-%dT%H:%M:%SZ',NEW.attempted_ts)!=NEW.attempted_ts
+             OR date(substr(NEW.attempted_ts,1,10),'+0 days')!=substr(NEW.attempted_ts,1,10)
+             OR substr(NEW.attempted_ts,12,2) NOT BETWEEN '00' AND '23'
+             OR substr(NEW.attempted_ts,15,2) NOT BETWEEN '00' AND '59'
+             OR substr(NEW.attempted_ts,18,2) NOT BETWEEN '00' AND '59'
+             OR NOT EXISTS (SELECT 1 FROM report_runs WHERE run_id=NEW.run_id)
              OR NOT (
                  (NEW.status='succeeded' AND NEW.error_code IS NULL
                   AND NEW.error_message IS NULL)
                  OR
-                 (NEW.status='failed' AND TRIM(COALESCE(NEW.error_code,''))!=''
+                 (NEW.status='failed' AND NEW.error_code IN ({allowed_admission_codes})
                   AND TRIM(COALESCE(NEW.error_message,''))!='')
              )
-           BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END"""
+           BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END""".format(
+               allowed_admission_codes=allowed_admission_codes
+           )
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) VALUES (?,?)",
+        (admission_contract_migration, _utc_now()),
     )
     conn.execute(
         """CREATE TRIGGER IF NOT EXISTS report_admission_attempts_no_update
@@ -925,6 +964,8 @@ def _record_admission_attempt(
     error: Exception | None = None,
     error_code: str | None = None,
 ) -> None:
+    if status == "failed" and error_code not in ADMISSION_ERROR_CODES:
+        raise ValueError("failed admission attempt requires a recognized error code")
     conn.execute(
         """INSERT INTO report_admission_attempts
            (run_id,status,error_code,error_message,attempted_ts)
@@ -932,8 +973,7 @@ def _record_admission_attempt(
         (
             run_id,
             status,
-            error_code or getattr(error, "code", type(error).__name__)
-            if error else None,
+            error_code if error else None,
             type(error).__name__ if error else None,
             _utc_now(),
         ),
@@ -961,10 +1001,13 @@ def admit_published_report(
     ensure_setup_call_eval_schema(conn)
     ensure_paper_trade_schema(conn)
     calls = trades = 0
-    failure_phase = "lineage"
+    failure_code = "admission_setup_persistence_failed"
     try:
         conn.execute("BEGIN")
         lineage = _require_published_canonical_report(conn, run_id)
+        # Artifact-derived preparation belongs to setup persistence. Once
+        # lineage is valid, every non-lineage failure has a documented phase.
+        failure_code = "admission_setup_persistence_failed"
         resolved = lineage["resolved"]
         row = conn.execute(
             "SELECT generated_ts,report_kind,source_timestamps_json "
@@ -993,21 +1036,20 @@ def admit_published_report(
             str(price_basis.get("revision") or "").strip()
             if price_basis is not None else None
         ) or None
-        failure_phase = "setup_persistence"
         if SETUP_EVAL_ENABLED and asof_date and setups:
             calls = _persist_setup_call_candidates(
                 conn, generated_ts=str(row[0]), report_kind=str(row[1]), asof_date=asof_date,
                 setup_rows=setups, report_run_id=run_id,
                 expected_price_revision=expected_price_revision,
             )
-        failure_phase = "paper_trade_persistence"
+        failure_code = "admission_paper_trade_persistence_failed"
         if PAPER_TRADE_ENABLED and asof_date and setups:
             trades = create_paper_trades_from_report(
                 conn, setup_rows=setups, report_date=asof_date, generated_ts=str(row[0]),
                 report_run_id=run_id, schema_ready=True,
                 expected_price_revision=expected_price_revision,
             )
-        failure_phase = "finalize"
+        failure_code = "admission_finalize_failed"
         _record_admission_attempt(conn, run_id=run_id, status="succeeded")
         conn.commit()
     except Exception as exc:
@@ -1018,10 +1060,7 @@ def admit_published_report(
                 run_id=run_id,
                 status="failed",
                 error=exc,
-                error_code=(
-                    getattr(exc, "code", None)
-                    or f"admission_{failure_phase}_failed"
-                ),
+                error_code=(exc.code if isinstance(exc, ReportLineageError) else failure_code),
             )
             conn.commit()
         except Exception:

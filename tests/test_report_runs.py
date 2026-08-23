@@ -361,9 +361,49 @@ def test_legacy_admission_ledger_receives_insert_validation(tmp_path: Path) -> N
         conn.execute(
             """INSERT INTO report_admission_attempts
                (run_id,status,error_code,error_message,attempted_ts)
-               VALUES (?,'succeeded','forged','forged','2026-99-99T00:00:00Z')""",
+               VALUES (?,'succeeded','forged','forged','2026-08-22T00:00:00Z')""",
             (run_id,),
         )
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'succeeded',NULL,NULL,'2026-99-99T00:00:00Z')""",
+            (run_id,),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'succeeded',NULL,NULL,'2026-08-22T24:00:00Z')""",
+            (run_id,),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES ('unknown-run','succeeded',NULL,NULL,'2026-08-22T00:00:00Z')"""
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'failed','admission_finalize_failed','','2026-08-22T00:00:00Z')""",
+            (run_id,),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="invalid report admission"):
+        conn.execute(
+            """INSERT INTO report_admission_attempts
+               (run_id,status,error_code,error_message,attempted_ts)
+               VALUES (?,'failed','forged','ValueError','2026-08-22T00:00:00Z')""",
+            (run_id,),
+        )
+    conn.execute(
+        """INSERT INTO report_admission_attempts
+           (run_id,status,error_code,error_message,attempted_ts)
+           VALUES (?,'failed','admission_finalize_failed','ValueError','2026-08-22T00:00:00Z')""",
+        (run_id,),
+    )
 
 
 def test_legacy_terminal_run_is_preserved_but_not_trusted_as_verified_lineage():
@@ -1122,6 +1162,68 @@ def test_admission_uses_immutable_inputs_and_rolls_back_as_one_transaction(
     ).fetchone() == (
         "failed", "admission_paper_trade_persistence_failed", "RuntimeError"
     )
+
+
+def test_admission_records_setup_persistence_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trader_koo.report.setup_scoring as setup_scoring
+
+    conn = sqlite3.connect(tmp_path / "setup-failure.db")
+    run_id = _complete_and_publish(conn, tmp_path / "reports", _report("SETUP"))
+    monkeypatch.setattr(setup_scoring, "SETUP_EVAL_ENABLED", True)
+    monkeypatch.setattr(
+        setup_scoring, "_persist_setup_call_candidates",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("setup failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="setup failed"):
+        admit_published_report(conn, run_id=run_id, report_dir=tmp_path / "reports")
+
+    assert conn.execute(
+        "SELECT error_code,error_message FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("admission_setup_persistence_failed", "RuntimeError")
+
+
+def test_admission_records_finalize_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trader_koo.report.runs as runs
+
+    conn = sqlite3.connect(tmp_path / "finalize-failure.db")
+    run_id = _complete_and_publish(conn, tmp_path / "reports", _report("FINAL"))
+    real_record = runs._record_admission_attempt
+
+    def fail_success_attempt(*args, **kwargs):
+        if kwargs["status"] == "succeeded":
+            raise RuntimeError("finalize failed")
+        return real_record(*args, **kwargs)
+
+    monkeypatch.setattr(runs, "_record_admission_attempt", fail_success_attempt)
+    with pytest.raises(RuntimeError, match="finalize failed"):
+        admit_published_report(conn, run_id=run_id, report_dir=tmp_path / "reports")
+
+    assert conn.execute(
+        "SELECT error_code,error_message FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("admission_finalize_failed", "RuntimeError")
+
+
+def test_admission_rejects_caller_transaction_before_audit(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "caller-transaction.db")
+    conn.execute("CREATE TABLE caller_work(value TEXT)")
+    conn.execute("INSERT INTO caller_work VALUES ('uncommitted')")
+
+    with pytest.raises(RuntimeError, match="clean transaction boundary"):
+        admit_published_report(conn, run_id="unknown", report_dir=tmp_path / "reports")
+
+    assert conn.execute("SELECT COUNT(*) FROM caller_work").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_admission_attempts'"
+    ).fetchone() is None
 
 
 def test_email_dispatch_happens_only_after_publication_and_admission(

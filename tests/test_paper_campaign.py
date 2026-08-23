@@ -966,9 +966,16 @@ def test_promotion_rejects_corrupted_published_artifact_before_candidate_evidenc
     assert conn.execute("SELECT COUNT(*) FROM paper_campaign_experiments").fetchone()[0] == 0
 
 
-def test_historical_promotion_accepts_superseded_verified_lineage() -> None:
+def test_historical_promotion_accepts_superseded_verified_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _db()
-    _publish(conn, "historical-run", [_candidate("HIST")])
+    candidate = _candidate("HIST")
+    create_paper_trades_from_report(
+        conn, setup_rows=[candidate], report_date="2026-08-21",
+        generated_ts="historical-ts", report_run_id="historical-run",
+    )
+    conn.commit()
     _publish(conn, "replacement-run", [_candidate("NEXT")])
 
     historical = _require_published_canonical_report(
@@ -980,6 +987,42 @@ def test_historical_promotion_accepts_superseded_verified_lineage() -> None:
             conn, "historical-run", require_current=True
         )
     assert error.value.code == "report_not_current_publication"
+
+    config = _build_config()
+    policy_hash = canonical_hash(config_snapshot(config))
+    dataset_hash = "b" * 64
+    record_experiment_preregistration(
+        conn, preregistration_id="historical-prereg", campaign_id="paper-v2",
+        policy_version=config.decision_version, policy_hash=policy_hash,
+        dataset_hash=dataset_hash,
+        gates={
+            "risk_gates": {"max_drawdown_pct": 10.0},
+            "active_return_gate": {"minimum_pct": 0.0},
+        },
+    )
+    metrics = _promotion_metrics()
+    monkeypatch.setattr(
+        "trader_koo.paper_trade.replay.replay_campaign",
+        lambda **kwargs: {
+            "policy_hash": policy_hash, "dataset_hash": dataset_hash,
+            "metrics": metrics, "engine_version": metrics["engine_version"],
+            "walk_forward": metrics["walk_forward"], "held_out": metrics["held_out"],
+            "replay_live_parity": "matched", "decisions": [], "trades": [],
+        },
+    )
+    result = replay_and_seal_promotion(
+        conn, experiment_id="historical-exp",
+        preregistration_id="historical-prereg", campaign_id="paper-v2",
+        candidate_runs=[{
+            "report_run_id": "historical-run", "report_date": "2026-08-21",
+            "candidates": [candidate],
+        }],
+        price_rows=[], spy_rows=[], config=config,
+    )
+    assert result["promotion_evidence"]["experiment_id"] == "historical-exp"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM paper_campaign_experiments WHERE experiment_id='historical-exp'"
+    ).fetchone()[0] == 1
 
 
 def test_chronological_replay_models_costs_overlap_exits_and_parity():
