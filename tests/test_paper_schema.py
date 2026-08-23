@@ -165,9 +165,9 @@ def test_release_copy_rescans_current_v4_admission_ledger(
         (output_dir / "database-migration-manifest.json").read_text()
     )
     Draft202012Validator(
-        json.loads(Path("release-database-copy-v2.schema.json").read_text())
+        json.loads(Path("release-database-copy-v3.schema.json").read_text())
     ).validate(failure)
-    assert failure["schema"] == "release-database-copy-v2"
+    assert failure["schema"] == "release-database-copy-v3"
     assert failure["passed"] is False
     assert failure["report_admission_contract"] == {
         "passed": False,
@@ -200,7 +200,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
 
     manifest = migrate_copy(source, output_dir)
     validator = Draft202012Validator(
-        json.loads(Path("release-database-copy-v2.schema.json").read_text())
+        json.loads(Path("release-database-copy-v3.schema.json").read_text())
     )
     validator.validate(manifest)
     unexplained_failure = deepcopy(manifest)
@@ -266,7 +266,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     with pytest.raises(ValidationError):
         validator.validate(contradictory_defaults)
 
-    assert manifest["schema"] == "release-database-copy-v2"
+    assert manifest["schema"] == "release-database-copy-v3"
     assert manifest["passed"] is True
     assert manifest["report_admission_contract"] == {
         "passed": True,
@@ -277,6 +277,40 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
             "SELECT 1 FROM report_schema_migrations WHERE migration=?",
             (manifest["report_admission_contract"]["migration"],),
         ).fetchone() == (1,)
+
+
+def test_release_copy_reports_real_schema_failure_before_accounting(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "missing-campaign-column.db"
+    with sqlite3.connect(source) as conn:
+        ensure_paper_trade_schema(conn)
+        conn.execute("DROP TABLE paper_trades")
+        conn.execute(
+            """CREATE TABLE paper_trades (
+                   id INTEGER PRIMARY KEY,
+                   report_date TEXT,
+                   ticker TEXT,
+                   direction TEXT,
+                   status TEXT
+               )"""
+        )
+        conn.commit()
+    output_dir = tmp_path / "schema-failure-evidence"
+    output_dir.mkdir()
+
+    with pytest.raises(RuntimeError, match="migration or accounting invariant"):
+        migrate_copy(source, output_dir)
+
+    failure = json.loads(
+        (output_dir / "database-migration-manifest.json").read_text()
+    )
+    Draft202012Validator(
+        json.loads(Path("release-database-copy-v3.schema.json").read_text())
+    ).validate(failure)
+    assert failure["passed"] is False
+    assert failure["schema_contract"]["passed"] is False
+    assert failure["accounting_invariants"] is None
 
 
 def test_v4_expand_contract_accepts_legacy_trade_table_without_lineage_fk() -> None:

@@ -129,7 +129,7 @@ database and run the release-evidence copied-database verifier; a refusal report
 the admission-ledger contract, and the backup remains the rollback source. No
 automatic mapping is attempted because the old code does not contain enough
 information to infer a truthful replacement phase.
-Release database evidence uses the versioned `release-database-copy-v2`
+Release database evidence uses the versioned `release-database-copy-v3`
 manifest. Failed contracts report the total count and an explicitly truncated,
 ascending sample of at most 20 numeric attempt IDs with invariant categories.
 Required root fields are `schema`, source/copy hashes,
@@ -150,9 +150,9 @@ sample to identify affected immutable rows, perform a separately reviewed repair
 or restore, and rerun copied-database verification before rollout.
 Failure variants identify the rejecting contract in `target_migration`. The
 normative field/type contract is
-`release-database-copy-v2.schema.json` at the repository root. Repository search
+`release-database-copy-v3.schema.json` at the repository root. Repository search
 found no runtime consumer of v1: CI and dark deploy only upload the artifact, so
-producer and schema move together in this release; historical v1 artifacts stay
+producer and schema move together in this release; historical v1/v2 artifacts stay
 immutable, rollback uses the prior producer, and dual emission is unnecessary.
 When a sample is truncated, operators must enumerate all invalid rows with a
 reviewed copy of the verifier predicate rather than repair only the sample.

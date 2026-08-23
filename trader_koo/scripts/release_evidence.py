@@ -288,17 +288,21 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             schema_version = int(conn.execute(
                 "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
             ).fetchone()[0])
-            account = reconcile_portfolio(
-                conn, campaign_id="paper-v2", starting_capital=_build_config().starting_capital,
+            schema_contract = _schema_contract(conn)
+            account = (
+                reconcile_portfolio(
+                    conn, campaign_id="paper-v2",
+                    starting_capital=_build_config().starting_capital,
+                )
+                if schema_contract["passed"] else None
             )
             after_counts = dict(conn.execute(
                 "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
             ).fetchall())
-            schema_contract = _schema_contract(conn)
             conn.commit()
     if contract_failure is not None:
         failure_manifest = {
-            "schema": "release-database-copy-v2",
+            "schema": "release-database-copy-v3",
             "source_artifact": source.name,
             "source_artifact_sha256": source_artifact_hash,
             "source_snapshot_sha256": source_snapshot_hash,
@@ -320,7 +324,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
         raise RuntimeError("database copy report-admission contract failed") from contract_failure
     manifest = {
-        "schema": "release-database-copy-v2",
+        "schema": "release-database-copy-v3",
         "source_artifact": source.name,
         "source_artifact_sha256": source_artifact_hash,
         "source_snapshot_sha256": source_snapshot_hash,
@@ -332,12 +336,15 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             "passed": True,
             "migration": ADMISSION_LEDGER_MIGRATION,
         },
-        "accounting_invariants": {
-            "breaks": account["accounting_breaks"],
-            "legacy_unreconciled_count": account["legacy_unreconciled_count"],
-            "equity": account["equity"],
-            "cash": account["cash"],
-        },
+        "accounting_invariants": (
+            {
+                "breaks": account["accounting_breaks"],
+                "legacy_unreconciled_count": account["legacy_unreconciled_count"],
+                "equity": account["equity"],
+                "cash": account["cash"],
+            }
+            if account is not None else None
+        ),
         "schema_contract": schema_contract,
         "sqlite_objects_before": before_counts,
         "sqlite_objects_after": after_counts,
@@ -345,6 +352,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     manifest["passed"] = (
         integrity == "ok"
         and schema_version == PAPER_TRADE_SCHEMA_VERSION
+        and account is not None
         and not account["accounting_breaks"]
         and schema_contract["passed"]
     )
