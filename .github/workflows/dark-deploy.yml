@@ -101,6 +101,14 @@ jobs:
           --environment "$RAILWAY_ENVIRONMENT"
           --message "dark release ${RELEASE_SHA}"
 
+      - name: Record dark deployment
+        id: deployed
+        run: |
+          deployment_id=$(railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" | jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty')
+          test -n "$deployment_id"
+          test "$deployment_id" != "${{ steps.previous.outputs.id }}"
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+
       - name: Verify API contracts and exact commit
         run: >-
           python -m trader_koo.scripts.verify_deployment
@@ -117,11 +125,39 @@ jobs:
         run: npx playwright test --config=playwright.production.config.ts
 
       - name: Roll back code and variables after any failed release check
+        id: rollback
         if: ${{ failure() && steps.previous.outputs.id != '' }}
-        run: >-
-          railway api
-          --file ops/railway-rollback.graphql
-          --raw-var "id=${{ steps.previous.outputs.id }}"
+        run: |
+          railway api --file ops/railway-rollback.graphql --raw-var "id=${{ steps.previous.outputs.id }}" --compact > /tmp/rollback.json
+          rollback_id=$(jq -r '.data.deploymentRollback.id // empty' /tmp/rollback.json)
+          test -n "$rollback_id"
+          echo "id=$rollback_id" >> "$GITHUB_OUTPUT"
+          for attempt in $(seq 1 30); do
+            status=$(railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" | jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .status')
+            if [ "$status" = "SUCCESS" ]; then
+              curl --fail --silent --show-error "${BASE_URL}/api/health" > /tmp/rollback-health.json
+              jq -e '.ok == true' /tmp/rollback-health.json > /dev/null
+              exit 0
+            fi
+            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Write deployment manifest
+        if: ${{ always() }}
+        run: |
+          jq -n \
+            --arg schema "dark-deploy-manifest-v1" \
+            --arg git_sha "$RELEASE_SHA" \
+            --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
+            --arg dark_deployment_id "${{ steps.deployed.outputs.id }}" \
+            --arg rollback_deployment_id "${{ steps.rollback.outputs.id }}" \
+            --arg job_status "${{ job.status }}" \
+            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, verification_status: $job_status, campaign_activation_invoked: false}' \
+            > release-evidence/deployment-manifest.json
 
       - name: Upload deployment evidence
         if: ${{ always() }}
