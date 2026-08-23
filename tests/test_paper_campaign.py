@@ -638,6 +638,36 @@ def test_report_published_after_intended_open_cannot_backdate_a_fill(
            WHERE event_type='rejected'"""
     ).fetchone()[0])
     assert payload["decision"]["reason_code"] == "report_published_after_intended_open"
+    sealed_inputs = json.loads(conn.execute(
+        """SELECT inputs_json FROM paper_candidate_decisions
+           WHERE report_run_id='stale-run'"""
+    ).fetchone()[0])
+    replay = replay_campaign(
+        candidate_runs=[{
+            "report_run_id": "stale-run",
+            "report_date": "2026-08-21",
+            "published_ts": "2026-08-23T12:02:00Z",
+            "candidates": [{
+                "__sealed_candidate": sealed_inputs["candidate"],
+                "__sealed_context": sealed_inputs["context"],
+            }],
+        }],
+        price_rows=[
+            {"ticker": "STALE", "date": "2026-08-22", "open": 150,
+             "high": 151, "low": 149, "close": 150, "volume": 1_000_000},
+            {"ticker": "SPY", "date": "2026-08-22", "open": 650,
+             "high": 651, "low": 649, "close": 650, "volume": 1_000_000},
+        ],
+        spy_rows=[], config=_build_config(), _include_splits=False,
+        expected_execution={
+            "stale-run:1": {
+                "disposition": payload["decision"]["disposition"],
+                "inputs_hash": payload["decision"]["inputs_hash"],
+            }
+        },
+    )
+    assert replay["replay_live_parity"] == "matched"
+    assert replay["decisions"][0]["inputs_hash"] == payload["decision"]["inputs_hash"]
 
 
 def test_pending_order_payload_is_immutable_and_hash_verified_before_fill():
