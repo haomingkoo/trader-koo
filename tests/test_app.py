@@ -41,6 +41,7 @@ class TestAppFactory:
         routes = [getattr(r, "path", "") for r in self.app.routes]
         expected_paths = [
             "/api/health",
+            "/api/release",
             "/api/tickers",
             "/api/daily-report",
             "/api/opportunities",

@@ -1,0 +1,34 @@
+# Release states
+
+Trader Koo deliberately separates these states:
+
+1. **Local pass**: checks passed in one developer worktree only.
+2. **CI pass**: the exact commit passed repository hygiene, full backend tests,
+   frontend lint/unit/build across three timezones, security contracts, canonical
+   replay evidence, and real Chromium journeys.
+3. **Merged**: the commit is present on `main`; this is not a deployment.
+4. **Dark deployed**: Railway built the exact commit after CI and the production
+   database backup passed copy-only migrations. Campaign v2 remains inactive.
+5. **Production verified**: exact SHA, API contracts, auth behavior, and the real
+   Report, Chart, Paper Trades, Agent Observability, and Experiment Results pages
+   passed against the public service.
+6. **Campaign activated**: a human separately used the authenticated, audited
+   campaign transition. CI/CD never calls activation or reset endpoints.
+
+## Evidence and rollback
+
+Each CI run stores hash-bound database migration, replay, and execution-ledger
+JSON artifacts. Dark deployment first downloads the latest production backup,
+runs additive migrations against a separate copy, and retains only manifests in
+GitHub Actions—not the database itself.
+
+Before upload, the workflow records the active Railway deployment. Any failed
+deploy or post-deploy check invokes Railway's `deploymentRollback` mutation for
+that exact previous deployment. Railway rollback restores its image and custom
+variables. The pre-deploy database backup remains available for a separately
+approved data recovery; CD never overwrites the live SQLite volume.
+
+Configure the `production-dark` GitHub environment with required reviewers,
+`TRADER_KOO_PRODUCTION_URL`, and the Railway/admin secrets referenced by
+`.github/workflows/dark-deploy.yml`. Required branch checks should be the CI jobs
+only after one green pull-request run proves their exact names.

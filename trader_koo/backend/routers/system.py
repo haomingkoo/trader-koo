@@ -220,6 +220,17 @@ def health() -> dict[str, Any]:
     return sanitize_public_response(payload)
 
 
+@router.get("/api/release")
+def release() -> dict[str, Any]:
+    """Return the non-secret release identity used by deployment verification."""
+    return {
+        "ok": bool(STATUS_GIT_SHA),
+        "service": "trader_koo-api",
+        "version": APP_VERSION,
+        "git_sha": STATUS_GIT_SHA,
+    }
+
+
 @router.get("/api/config", include_in_schema=False)
 def config() -> dict[str, Any]:
     """Public client config -- never expose secrets (Requirement 6.6)."""

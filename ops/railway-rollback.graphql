@@ -1,0 +1,6 @@
+mutation deploymentRollback($id: String!) {
+  deploymentRollback(id: $id) {
+    id
+    status
+  }
+}

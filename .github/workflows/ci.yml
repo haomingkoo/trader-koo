@@ -58,9 +58,113 @@ jobs:
       - name: Run backend tests
         run: make test
 
-  frontend-build:
+  frontend-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: trader_koo/frontend-v2
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: trader_koo/frontend-v2/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Audit all frontend dependencies
+        run: npm audit --audit-level=high
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Run frontend unit tests in supported timezones
+        run: npm test
+        env:
+          TZ: ${{ matrix.timezone }}
+
+      - name: Build frontend
+        run: npm run build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        timezone: [UTC, Asia/Singapore, America/Los_Angeles]
+
+  security-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install backend dependencies
+        run: make backend-install
+
+      - name: Run auth, audit, redaction, and property contracts
+        run: >-
+          python -m pytest -q
+          tests/test_admin_auth.py
+          tests/test_audit_integration.py
+          tests/test_audit_logging.py
+          tests/test_cors_property.py
+          tests/test_data_sync_security.py
+          tests/test_email_token_expiration_property.py
+          tests/test_llm_validator_property.py
+          tests/test_secret_redaction.py
+          tests/test_secret_redaction_property.py
+
+  release-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install backend dependencies
+        run: make backend-install
+
+      - name: Create migration fixture
+        run: sqlite3 /tmp/release-source.db 'CREATE TABLE release_seed(id INTEGER PRIMARY KEY);'
+
+      - name: Build migration, replay, and backtest evidence
+        run: >-
+          python -m trader_koo.scripts.release_evidence
+          --source-db /tmp/release-source.db
+          --output-dir release-evidence
+
+      - name: Upload immutable release evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-evidence-${{ github.sha }}
+          path: |
+            release-evidence/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  browser-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: trader_koo/frontend-v2
@@ -88,9 +192,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
-
-      - name: Build frontend
-        run: npm run build
 
       - name: Install Chromium for browser contract tests
         run: npx playwright install --with-deps chromium
