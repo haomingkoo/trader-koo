@@ -16,6 +16,7 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
