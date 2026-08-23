@@ -20,10 +20,7 @@ from trader_koo.llm_health import (
     llm_token_usage_summary,
 )
 from trader_koo.llm_narrative import llm_status
-from trader_koo.middleware.auth import (
-    get_admin_endpoint_registry,
-    require_admin_auth,
-)
+from trader_koo.middleware.auth import admin_route_inventory
 from trader_koo.streaming.service import get_equity_ws_health
 
 from trader_koo.backend.routers.admin._shared import (
@@ -47,26 +44,11 @@ router = APIRouter(tags=["admin", "admin-system"])
 
 
 @router.get("/api/admin/routes")
-@require_admin_auth
-def admin_routes() -> dict[str, Any]:
-    """List all admin endpoints with their authentication status."""
-    registry = get_admin_endpoint_registry()
-    routes = []
-    protected_count = 0
-    unprotected_count = 0
-    for key, info in sorted(registry.items()):
-        routes.append(
-            {
-                "method": info["method"],
-                "path": info["path"],
-                "has_auth": info["has_auth"],
-                "key": key,
-            }
-        )
-        if info["has_auth"]:
-            protected_count += 1
-        else:
-            unprotected_count += 1
+def admin_routes(request: Request) -> dict[str, Any]:
+    """List the resolved runtime admin surface and its native dependency state."""
+    routes = admin_route_inventory(request.app)
+    protected_count = sum(bool(row["has_auth"]) for row in routes)
+    unprotected_count = len(routes) - protected_count
     return {
         "total": len(routes),
         "protected": protected_count,
@@ -77,7 +59,6 @@ def admin_routes() -> dict[str, Any]:
 
 
 @router.get("/api/admin/llm-health")
-@require_admin_auth
 def admin_llm_health(
     recent_limit: int = Query(default=25, ge=1, le=200),
 ) -> dict[str, Any]:
@@ -105,7 +86,6 @@ def admin_llm_health(
 
 
 @router.get("/api/admin/llm-usage")
-@require_admin_auth
 def admin_llm_usage(
     days: int = Query(default=30, ge=1, le=3650),
     limit: int = Query(default=50, ge=1, le=500),
@@ -116,7 +96,6 @@ def admin_llm_usage(
 
 
 @router.get("/api/admin/data-source-health")
-@require_admin_auth
 def admin_data_source_health() -> dict[str, Any]:
     """Return data source success/failure rates and metrics."""
     manager = get_data_source_manager()
@@ -148,7 +127,6 @@ def admin_data_source_health() -> dict[str, Any]:
 
 
 @router.get("/api/admin/report-stability")
-@require_admin_auth
 def report_stability(
     limit: int = Query(default=60, ge=1, le=365),
 ) -> dict[str, Any]:
@@ -434,7 +412,6 @@ def report_stability(
 
 
 @router.get("/api/admin/usage-summary")
-@require_admin_auth
 def usage_summary_endpoint(
     days: int = Query(default=7, ge=1, le=365),
     limit: int = Query(default=10, ge=1, le=100),
@@ -455,7 +432,6 @@ def usage_summary_endpoint(
 
 
 @router.get("/api/admin/feedback-summary")
-@require_admin_auth
 def admin_feedback_summary(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=12, ge=1, le=100),
@@ -527,7 +503,6 @@ def admin_feedback_summary(
 
 
 @router.get("/api/admin/setup-eval-summary")
-@require_admin_auth
 def admin_setup_eval_summary(
     limit_families: int = Query(default=12, ge=1, le=100),
 ) -> dict[str, Any]:
@@ -668,7 +643,6 @@ def admin_setup_eval_summary(
 
 
 @router.get("/api/admin/setup-eval-calls")
-@require_admin_auth
 def admin_setup_eval_calls(
     status: str = Query(
         default="scored", pattern="^(open|scored|invalid|all)$"
@@ -735,7 +709,6 @@ def admin_setup_eval_calls(
 
 
 @router.get("/api/admin/ws-health")
-@require_admin_auth
 def admin_ws_health() -> dict[str, Any]:
     """Return health status for all WebSocket feed connections."""
     return {
@@ -745,7 +718,6 @@ def admin_ws_health() -> dict[str, Any]:
 
 
 @router.post("/api/admin/calibration/run-pulse")
-@require_admin_auth
 def admin_run_calibration_pulse() -> dict[str, Any]:
     """Manually trigger the calibration pulse.
 
@@ -770,7 +742,6 @@ def admin_run_calibration_pulse() -> dict[str, Any]:
 
 
 @router.get("/api/admin/calibration/state")
-@require_admin_auth
 def admin_calibration_state() -> dict[str, Any]:
     """Return the current calibration_state table — all family score adjustments and blocks."""
     conn = get_conn()

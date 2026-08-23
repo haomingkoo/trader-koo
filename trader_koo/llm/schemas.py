@@ -7,7 +7,7 @@ Implements Requirements 2.1, 7.1, 7.2, 7.4, 7.5.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -133,6 +133,14 @@ class RegimeAnalysis(BaseModel):
         return [float(level) for level in v if level > 0][:20]
 
 
+class SetupRewriteIntent(BaseModel):
+    """Caller-owned decision contract echoed by the narrative model."""
+
+    signal_bias: str = Field(..., min_length=1, max_length=32)
+    actionability: str = Field(..., min_length=1, max_length=32)
+    decision_delta: Literal["none"]
+
+
 class SetupRewrite(BaseModel):
     """Schema for setup copy rewrite responses.
 
@@ -157,6 +165,7 @@ class SetupRewrite(BaseModel):
         max_length=80,
         description="Rewritten risk note (max 80 chars)"
     )
+    intent: SetupRewriteIntent
 
     @field_validator("observation", "action", "risk_note")
     @classmethod

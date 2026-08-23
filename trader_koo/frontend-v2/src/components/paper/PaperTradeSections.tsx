@@ -2,6 +2,8 @@ import { Link } from "react-router-dom";
 import { useMemo, useState, useCallback } from "react";
 import type {
   PaperTrade,
+  PaperCampaignHealth,
+  BreadthShadowSummary,
   PaperTradeBenchmarks,
   PaperTradeDirectionStats,
   PaperTradeFeedbackItem,
@@ -9,6 +11,8 @@ import type {
   PaperTradeReflection,
   PaperTradeSummary,
   PaperTradeSummaryOverall,
+  StrategyEvidenceState,
+  NextOpenBaselineState,
 } from "../../api/types";
 import { useUpdateTradeNotes } from "../../api/hooks";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
@@ -43,6 +47,262 @@ const fmtDollars = (value: number | null | undefined, compact = false): string =
   }
   return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
+
+const evidenceAllowsAction = (evidence?: StrategyEvidenceState): boolean => {
+  if (!evidence) return false;
+  const causalReasons = evidence.causal_validity?.reasons;
+  return (
+    evidence.schema_version === "1.0" &&
+    evidence.readiness_status === "eligible_for_human_promotion_review" &&
+    evidence.lifecycle_stage === "promotion_review" &&
+    evidence.decision_eligible === true &&
+    Number.isFinite(evidence.observation_count) &&
+    evidence.observation_count >= 120 &&
+    Number.isFinite(evidence.traded_signal_date_count) &&
+    evidence.traded_signal_date_count >= 20 &&
+    Number.isFinite(evidence.effective_non_overlapping_block_count) &&
+    evidence.effective_non_overlapping_block_count >= 12 &&
+    Array.isArray(evidence.readiness_reasons) &&
+    evidence.readiness_reasons.length === 0 &&
+    evidence.causal_validity?.valid === true &&
+    Array.isArray(causalReasons) &&
+    causalReasons.length === 0 &&
+    evidence.consumed_window?.consumed === true &&
+    evidence.consumed_window?.reusable_for_policy_selection === true &&
+    evidence.return_basis === "split_adjusted_total_return_net_of_costs" &&
+    evidence.provenance?.verified === true &&
+    /^[0-9a-f]{64}$/.test(evidence.provenance.artifact_sha256 ?? "") &&
+    /^[0-9a-f]{64}$/.test(evidence.provenance.input_hash_sha256 ?? "")
+  );
+};
+
+const readableEvidenceText = (value: string): string =>
+  value.replace(/_/g, " ").replace(/\bspy\b/gi, "SPY");
+
+export function StrategyEvidenceStatePanel({
+  evidence,
+}: {
+  evidence?: StrategyEvidenceState;
+}) {
+  const actionable = evidenceAllowsAction(evidence);
+  const readiness = evidence?.readiness_status ?? "evidence_unavailable";
+  const provenance = evidence?.provenance;
+  const provenanceHref = provenance?.href ?? undefined;
+  const statusLabel = actionable
+    ? "Human promotion review eligible"
+    : readiness === "prospectively_accumulating"
+      ? "Research only / prospectively accumulating"
+      : readiness === "insufficient_history"
+        ? "Research only / insufficient history"
+        : "Research only / evidence unavailable";
+
+  return (
+    <section
+      data-testid="strategy-evidence-state"
+      className={`rounded-xl border p-4 ${
+        actionable
+          ? "border-[var(--green)]/30 bg-[var(--green)]/5"
+          : "border-[var(--amber)]/30 bg-[var(--amber)]/5"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Strategy evidence</div>
+          <div
+            data-testid="strategy-evidence-status"
+            className={`mt-1 text-sm font-bold ${actionable ? "text-[var(--green)]" : "text-[var(--amber)]"}`}
+          >
+            {statusLabel}
+          </div>
+          <p className="mt-1 max-w-3xl text-xs text-[var(--muted)]">
+            {actionable
+              ? "Evidence may be reviewed by a human. No allocation changes are automatic."
+              : "Results are descriptive. They cannot change admission, ranking, or allocation."}
+          </p>
+        </div>
+        {evidence?.snapshot_asof && (
+          <span className="text-[10px] text-[var(--muted)]">Snapshot {evidence.snapshot_asof}</span>
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Daily observations</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{evidence?.observation_count ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Traded signal dates</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{evidence?.traded_signal_date_count ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Effective blocks</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">
+            {(evidence?.effective_non_overlapping_block_count ?? 0).toFixed(1)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Causal validity</div>
+          <div className={`mt-1 text-sm font-semibold ${evidence?.causal_validity?.valid ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+            {evidence?.causal_validity?.valid ? "Valid" : "Invalid / unresolved"}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div className="text-xs text-[var(--muted)]">
+          <div className="font-semibold text-[var(--text)]">
+            {actionable ? "Evidence gates passed" : "Why it is not actionable"}
+          </div>
+          <ul className="mt-1 list-disc space-y-1 pl-4">
+            {(evidence?.readiness_reasons?.length
+              ? evidence.readiness_reasons
+              : [actionable ? "no_unresolved_readiness_gates" : "strategy_evidence_unavailable"]
+            ).map((reason) => (
+              <li key={reason}>{readableEvidenceText(reason)}</li>
+            ))}
+          </ul>
+        </div>
+        <dl className="space-y-2 text-xs text-[var(--muted)]">
+          <div>
+            <dt className="font-semibold text-[var(--text)]">Return basis</dt>
+            <dd>{readableEvidenceText(evidence?.return_basis ?? "unknown")}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold text-[var(--text)]">Selection window</dt>
+            <dd>{readableEvidenceText(evidence?.consumed_window?.status ?? "unknown fail closed")}</dd>
+          </div>
+        </dl>
+      </div>
+
+      {provenance?.artifact_sha256 && provenance.input_hash_sha256 && provenanceHref && (
+        <div className="mt-3 border-t border-[var(--line)] pt-3 text-[10px] text-[var(--muted)]">
+          <div className="font-semibold text-[var(--text)]">Exact audited provenance</div>
+          <a
+            data-testid="strategy-artifact-hash"
+            href={provenanceHref}
+            className="mt-1 block break-all font-mono text-[var(--accent)] hover:underline"
+          >
+            artifact sha256:{provenance.artifact_sha256}
+          </a>
+          <a
+            data-testid="strategy-input-hash"
+            href={provenanceHref}
+            className="mt-1 block break-all font-mono text-[var(--accent)] hover:underline"
+          >
+            input sha256:{provenance.input_hash_sha256}
+          </a>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function NextOpenBaselinePanel({
+  baseline,
+}: {
+  baseline?: NextOpenBaselineState;
+}) {
+  const summary = baseline?.summary;
+  const available = baseline?.available === true;
+  const spyReturn = summary?.full_investment_spy_net_return_pct;
+  const exclusionReasons = Object.entries(
+    (baseline?.exclusions ?? []).reduce<Record<string, number>>((counts, row) => {
+      counts[row.reason] = (counts[row.reason] ?? 0) + 1;
+      return counts;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
+  return (
+    <section
+      data-testid="next-open-baseline"
+      className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Locked next-open baseline</div>
+          <div className="mt-1 text-sm font-bold text-[var(--amber)]">
+            {available ? "Descriptive only / not promotion eligible" : "Evidence unavailable"}
+          </div>
+          <p className="mt-1 max-w-3xl text-xs text-[var(--muted)]">
+            Signal-close decisions enter only at the immediate next session open and exit at the exact tenth-session close. Missing bars are excluded, never delayed.
+          </p>
+        </div>
+        <div className="text-right">
+          <span className="rounded-full border border-[var(--amber)]/30 px-2 py-1 text-[10px] font-semibold text-[var(--amber)]">
+            causal valid: no
+          </span>
+          {baseline?.snapshot_asof && (
+            <div className="mt-2 text-[10px] text-[var(--muted)]">
+              Source through {baseline.snapshot_asof}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Closed trades</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.closed_trades ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Net return</div>
+          <div className={`mt-1 text-lg font-semibold tabular-nums ${pnlColor(summary?.net_return_pct)}`}>
+            {fmtPct(summary?.net_return_pct, "%", true)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Max name weight</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{fmtPct(summary?.max_name_weight_pct)}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Excluded calls</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{summary?.excluded_calls ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Matched SPY active P&amp;L</div>
+          <div className={`mt-1 text-lg font-semibold tabular-nums ${pnlColor(summary?.active_net_pnl)}`}>
+            {summary?.active_metrics_available ? fmtDollars(summary.active_net_pnl) : "Unpriced"}
+          </div>
+        </div>
+        <div className="rounded-lg border border-[var(--line)] px-3 py-2">
+          <div className="text-[10px] uppercase text-[var(--muted)]">Full-investment SPY</div>
+          <div className={`mt-1 text-lg font-semibold tabular-nums ${pnlColor(spyReturn)}`}>
+            {fmtPct(spyReturn, "%", true)}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-[var(--muted)] md:grid-cols-2">
+        <div><span className="font-semibold text-[var(--text)]">Return basis:</span> {readableEvidenceText(baseline?.return_basis ?? "unavailable")}</div>
+        <div><span className="font-semibold text-[var(--text)]">Benchmark basis:</span> {readableEvidenceText(baseline?.benchmark_basis ?? "unavailable")}</div>
+        <div><span className="font-semibold text-[var(--text)]">Max gross:</span> {fmtPct(summary?.max_gross_exposure_pct)}</div>
+        <div><span className="font-semibold text-[var(--text)]">Invalid marks:</span> {summary?.null_mark_count ?? 0}</div>
+        <div><span className="font-semibold text-[var(--text)]">Opportunity cost vs SPY:</span> {fmtPct(summary?.opportunity_cost_vs_full_spy_pct, "%", true)}</div>
+        <div>
+          <span className="font-semibold text-[var(--text)]">Matched SPY target / filled:</span>{" "}
+          {fmtDollars(summary?.matched_spy_target_notional)} / {fmtDollars(summary?.matched_spy_filled_notional)}
+        </div>
+      </div>
+      <div className="mt-3 text-xs text-[var(--muted)]">
+        <div className="font-semibold text-[var(--text)]">Why this cannot authorize a campaign</div>
+        <ul className="mt-1 list-disc space-y-1 pl-4">
+          {(baseline?.causal_limitations?.length
+            ? baseline.causal_limitations
+            : ["no hash-verified baseline artifact is configured"]
+          ).map((reason) => <li key={reason}>{readableEvidenceText(reason)}</li>)}
+        </ul>
+      </div>
+      {exclusionReasons.length > 0 && (
+        <div className="mt-3 text-xs text-[var(--muted)]">
+          <span className="font-semibold text-[var(--text)]">Top exclusions: </span>
+          {exclusionReasons.slice(0, 3).map(([reason, count]) => `${readableEvidenceText(reason)} (${count})`).join(" · ")}
+        </div>
+      )}
+      {baseline?.provenance?.artifact_sha256 && (
+        <div data-testid="next-open-artifact-hash" className="mt-3 break-all border-t border-[var(--line)] pt-3 font-mono text-[10px] text-[var(--muted)]">
+          artifact sha256:{baseline.provenance.artifact_sha256}
+        </div>
+      )}
+    </section>
+  );
+}
 
 const pnlColor = (value: number | null | undefined): string => {
   if (value == null) return "";
@@ -118,6 +378,150 @@ function TradeNotes({ trade }: { trade: PaperTrade }) {
   );
 }
 
+export function PaperCampaignHealthPanel({
+  health,
+}: {
+  health?: PaperCampaignHealth;
+}) {
+  if (!health?.available) return null;
+  const report = health.latest_report;
+  const healthy = health.healthy !== false;
+  return (
+    <section
+      data-testid="paper-campaign-health"
+      className={`rounded-xl border p-4 ${healthy ? "border-[var(--line)] bg-[var(--panel)]" : "border-[var(--red)]/35 bg-[var(--red)]/5"}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">{health.label}</div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            Campaign <span className="font-mono text-[var(--text)]">{health.campaign_id}</span>
+            {" · status "}<span className="font-mono text-[var(--text)]">{health.status}</span>
+            {" · writes "}<span className="font-mono text-[var(--text)]">{health.write_state ?? "unknown"}</span>
+            {" · policy "}<span className="font-mono text-[var(--text)]">{health.policy_version}</span>
+            {typeof health.starting_capital === "number" && ` · ${fmtDollars(health.starting_capital)} starting capital`}
+          </div>
+        </div>
+        <Badge variant={healthy ? "green" : "red"}>{healthy ? "healthy" : "unhealthy"}</Badge>
+      </div>
+      {report ? (
+        <>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {[
+              ["Ranked", report.ranked],
+              ["Eligible", report.eligible],
+              ["Rejected", report.rejected],
+              ["Admitted", report.admitted],
+              ["Exposure", `${report.exposure_pct.toFixed(1)}%`],
+              ["Conversion", `${report.conversion_rate_pct.toFixed(1)}%`],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</div>
+                <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 grid gap-3 text-xs text-[var(--muted)] md:grid-cols-2">
+            <div>
+              Consecutive eligible reports with zero admissions: {health.consecutive_eligible_zero_admission_reports ?? 0}/{health.zero_admission_streak_limit ?? 0}
+            </div>
+            <div>Replay/live parity: {String(health.replay_live_parity ?? "not measured").replace(/_/g, " ")}</div>
+          </div>
+          <div className="mt-2 text-xs text-[var(--muted)]">
+            SPY comparison is campaign health and promotion evidence only; it is not a candidate admission gate.
+          </div>
+          {!!report.rejections_by_gate?.length && (
+            <div className="mt-3 text-xs text-[var(--muted)]">
+              <span className="font-semibold text-[var(--text)]">Exact rejection gates: </span>
+              {report.rejections_by_gate.map((item) => `${item.gate}/${item.reason_code} (${item.count})`).join(" · ")}
+            </div>
+          )}
+          {!!report.candidates?.length && (
+            <div className="mt-4 overflow-x-auto" data-testid="paper-campaign-decisions">
+              <table className="w-full text-left text-xs">
+                <thead className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
+                  <tr><th className="py-1 pr-3">Rank</th><th className="pr-3">Ticker</th><th className="pr-3">Tradeability</th><th>Policy decision</th></tr>
+                </thead>
+                <tbody>
+                  {report.candidates.map((candidate) => (
+                    <tr key={`${report.report_run_id}-${candidate.rank}`} className="border-t border-[var(--line)]">
+                      <td className="py-1.5 pr-3 tabular-nums">{candidate.rank}</td>
+                      <td className="pr-3 font-mono font-semibold text-[var(--text)]">{candidate.ticker}</td>
+                      <td className="pr-3">{
+                        candidate.tradeability === "actionable" || candidate.disposition === "admitted"
+                          ? "actionable"
+                          : candidate.tradeability === "pending_next_open" || candidate.disposition === "pending"
+                            ? "pending next open"
+                            : "not actionable"
+                      }</td>
+                      <td className="text-[var(--muted)]">{candidate.final_gate}/{candidate.reason_code}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="mt-3 text-xs text-[var(--muted)]">Campaign is ready; no completed report decisions are recorded yet.</p>
+      )}
+      {!!health.campaigns?.length && (
+        <div className="mt-3 border-t border-[var(--line)] pt-3 text-[10px] text-[var(--muted)]">
+          {health.campaigns.map((campaign) => `${campaign.label}: ${campaign.trade_count} ${campaign.status === "frozen" ? "immutable " : ""}trade(s), ${campaign.status}`).join(" · ")}
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function BreadthShadowPanel({ shadow }: { shadow?: BreadthShadowSummary }) {
+  if (!shadow || shadow.causal_state === "evidence_unavailable") return null;
+  const p0 = shadow.policy_counts.P0 ?? { candidate_count: 0, accepted_count: 0 };
+  const p1 = shadow.policy_counts.P1 ?? { candidate_count: 0, accepted_count: 0 };
+  const readable = (value: string) => value.replace(/_/g, " ");
+  return (
+    <section data-testid="breadth-shadow" className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text)]">Prospective breadth shadow</div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            P0 is the frozen A/B control. P1 changes only tier admission by adding Tier C.
+          </div>
+        </div>
+        <Badge variant={shadow.human_promotion_review_eligible ? "green" : "amber"}>
+          {shadow.human_promotion_review_eligible ? "human review eligible" : "research only"}
+        </Badge>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {[
+          ["P0 accepted", `${p0.accepted_count}/${p0.candidate_count}`],
+          ["P1 accepted", `${p1.accepted_count}/${p1.candidate_count}`],
+          ["Breadth increase", shadow.breadth_increase_pct == null ? "N/A" : `${shadow.breadth_increase_pct.toFixed(1)}%`],
+          ["Incremental resolved", `${shadow.incremental_cohort.resolved_count}/${shadow.incremental_cohort.accepted_count}`],
+          ["Independent blocks", `${shadow.coverage.effective_non_overlapping_block_count}/12`],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-0 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+            <div className="truncate text-[10px] uppercase tracking-wide text-[var(--muted)]" title={label}>{label}</div>
+            <div className="mt-1 truncate text-lg font-semibold tabular-nums" title={value}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-[var(--muted)] md:grid-cols-2">
+        <div>Matched-SPY active return: {shadow.incremental_cohort.mean_matched_active_return_pct == null ? "N/A" : `${shadow.incremental_cohort.mean_matched_active_return_pct.toFixed(2)}%`}</div>
+        <div>2x-cost return: {shadow.incremental_cohort.mean_2x_cost_return_pct == null ? "N/A" : `${shadow.incremental_cohort.mean_2x_cost_return_pct.toFixed(2)}%`}</div>
+        <div>Unresolved matured decisions: {shadow.coverage.unresolved_matured_count}</div>
+        <div>Still maturing: {shadow.coverage.immature_accepted_count}</div>
+        <div>Endpoint: {readable(shadow.primary_endpoint)}</div>
+        <div>Largest ticker concentration: {shadow.concentration.largest_ticker_pct == null ? "N/A" : `${shadow.concentration.largest_ticker_pct.toFixed(1)}%`}</div>
+        <div>Largest family concentration: {shadow.concentration.largest_family_pct == null ? "N/A" : `${shadow.concentration.largest_family_pct.toFixed(1)}%`}</div>
+      </div>
+      <div className="mt-3 text-xs text-[var(--muted)]">
+        This shadow cannot create orders. Promotion requires all preregistered gates and a separate human-approved issue.
+      </div>
+    </section>
+  );
+}
+
 function TradeRationale({ trade }: { trade: PaperTrade }) {
   const evidence = trade.entry_evidence ?? [];
   const risks = trade.entry_risks ?? [];
@@ -174,6 +578,8 @@ export function PaperTradePortfolioHero({
   const totalReturn = overall.total_return_pct ?? 0;
   const realizedPnl = overall.realized_pnl ?? 0;
   const unrealizedPnl = overall.unrealized_pnl ?? 0;
+  const accountingBreaks = overall.accounting_breaks ?? [];
+  const legacyCount = overall.legacy_unreconciled_count ?? 0;
 
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-5">
@@ -190,9 +596,11 @@ export function PaperTradePortfolioHero({
             {totalReturn.toFixed(2)}% total return
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
+          <Stat label="Cash" value={fmtDollars(overall.cash ?? 0)} />
           <Stat label="Realized P&L" value={fmtDollars(realizedPnl, true)} tone={pnlColor(realizedPnl)} />
           <Stat label="Unrealized P&L" value={fmtDollars(unrealizedPnl, true)} tone={pnlColor(unrealizedPnl)} />
+          <Stat label="Gross exposure" value={fmtPct(overall.gross_exposure_pct)} />
           <Stat label="Open" value={String(overall.open_count ?? 0)} />
           <Stat label="Win Rate" value={fmtPct(overall.win_rate_pct)} />
           <Stat
@@ -201,6 +609,13 @@ export function PaperTradePortfolioHero({
           />
         </div>
       </div>
+      {(accountingBreaks.length > 0 || legacyCount > 0) && (
+        <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+          {accountingBreaks.length > 0
+            ? `Account reconciliation has ${accountingBreaks.length} unresolved break(s); new admissions fail closed.`
+            : `${legacyCount} legacy trade(s) are excluded from cash and equity because quantity or fill history is unavailable.`}
+        </div>
+      )}
     </div>
   );
 }
@@ -516,13 +931,16 @@ function BenchmarkColumn({
 export function PaperTradeBenchmarkComparison({
   overall,
   benchmarks,
+  evidence,
 }: {
   overall: PaperTradeSummaryOverall;
   benchmarks?: PaperTradeBenchmarks;
+  evidence?: StrategyEvidenceState;
 }) {
   const spy = benchmarks?.spy_buy_hold;
   const unfiltered = benchmarks?.unfiltered_setups;
   const coreSatellite = benchmarks?.core_satellite;
+  const actionable = evidenceAllowsAction(evidence);
 
   if (!spy && !unfiltered && !coreSatellite) {
     return null;
@@ -547,10 +965,10 @@ export function PaperTradeBenchmarkComparison({
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-[var(--text)]">
-          Benchmark Comparison
+          {actionable ? "Benchmark Comparison" : "Observed Benchmark Comparison"}
         </div>
         <span className="text-[10px] text-[var(--muted)]">
-          Does the pipeline add value?
+          {actionable ? "Does the pipeline add value?" : "Descriptive comparison only"}
         </span>
       </div>
       <p className="mt-1 text-[10px] text-[var(--muted)]">
@@ -618,8 +1036,8 @@ export function PaperTradeBenchmarkComparison({
       {spy && typeof pipelinePortfolioReturn === "number" && (
         <div className="mt-3 text-xs">
           {pipelinePortfolioReturn > spy.return_pct ? (
-            <span className="text-[var(--green)]">
-              Portfolio outperforms SPY by{" "}
+            <span className={actionable ? "text-[var(--green)]" : "text-[var(--muted)]"}>
+              {actionable ? "Portfolio outperforms SPY by " : "Observed portfolio return is above SPY by "}
               {(pipelinePortfolioReturn - spy.return_pct).toFixed(2)}pp over the same window
             </span>
           ) : pipelinePortfolioReturn < spy.return_pct ? (
@@ -635,8 +1053,8 @@ export function PaperTradeBenchmarkComparison({
       {unfiltered && typeof pipelineAvgReturn === "number" && typeof unfiltered.return_pct === "number" && (
         <div className="mt-1 text-xs">
           {pipelineAvgReturn > unfiltered.return_pct ? (
-            <span className="text-[var(--green)]">
-              Taken trades beat the setup baseline by{" "}
+            <span className={actionable ? "text-[var(--green)]" : "text-[var(--muted)]"}>
+              {actionable ? "Taken trades beat the setup baseline by " : "Observed taken-trade average is above the setup baseline by "}
               {(pipelineAvgReturn - unfiltered.return_pct).toFixed(2)}pp per trade on average
             </span>
           ) : pipelineAvgReturn < unfiltered.return_pct ? (
@@ -663,17 +1081,37 @@ const feedbackTone = (severity: string): string => {
 
 export function PaperTradeFeedbackPanel({
   feedback,
+  evidence,
 }: {
   feedback?: PaperTradeFeedbackItem[];
+  evidence?: StrategyEvidenceState;
 }) {
-  const items = (feedback ?? []).filter((item) => item.title || item.detail || item.action);
+  const actionable = evidenceAllowsAction(evidence);
+  const items = (feedback ?? [])
+    .filter((item) => item.title || item.detail || item.action)
+    .map((item) =>
+      actionable
+        ? item
+        : {
+            ...item,
+            severity: item.severity === "green" ? "amber" : item.severity,
+            title: item.title
+              .replace(/ shows edge/gi, ": descriptive result")
+              .replace(/ negative edge/gi, ": descriptive result")
+              .replace(/ is working/gi, ": descriptive result")
+              .replace(/best regime:/gi, "Highest observed regime average:"),
+            action: "Research only. Accumulate prospective evidence; do not change allocation or admission.",
+          },
+    );
   if (items.length === 0) return null;
 
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-[var(--text)]">Actionable Review</div>
-        <span className="text-[10px] text-[var(--muted)]">{items.length} signal(s)</span>
+        <div className="text-sm font-semibold text-[var(--text)]">
+          {actionable ? "Promotion Review" : "Descriptive Review"}
+        </div>
+        <span className="text-[10px] text-[var(--muted)]">{items.length} observation(s)</span>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         {items.map((item, index) => (
@@ -865,10 +1303,13 @@ export function PaperTradePerformanceAttribution({
 }: {
   summary: PaperTradeSummary;
 }) {
+  const byDirection = summary.by_direction ?? {};
+  const byFamily = summary.by_family ?? {};
+  const byExitReason = summary.by_exit_reason ?? {};
   const hasData =
-    Object.keys(summary.by_direction).length > 0 ||
-    Object.keys(summary.by_family).length > 0 ||
-    Object.keys(summary.by_exit_reason).length > 0;
+    Object.keys(byDirection).length > 0 ||
+    Object.keys(byFamily).length > 0 ||
+    Object.keys(byExitReason).length > 0;
 
   if (!hasData) return null;
 
@@ -883,14 +1324,14 @@ export function PaperTradePerformanceAttribution({
       <div className="grid gap-6 border-t border-[var(--line)] px-4 py-4 sm:grid-cols-2 lg:grid-cols-3">
         <AttributionTable
           title="By Direction"
-          data={summary.by_direction}
+          data={byDirection}
           showAvgR
         />
         <AttributionTable
           title="By Setup Family"
-          data={summary.by_family}
+          data={byFamily}
         />
-        <ExitReasonTable data={summary.by_exit_reason} />
+        <ExitReasonTable data={byExitReason} />
       </div>
     </details>
   );

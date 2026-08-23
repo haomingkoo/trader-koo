@@ -17,6 +17,7 @@ LOG = logging.getLogger(__name__)
 
 _DEFAULT_WINDOW_DAYS = 60
 _MIN_TRADES_FOR_EDGE = 5
+_MIN_TRADES_FOR_ACTIONABLE_FEEDBACK = 20
 
 
 def _value(row: Any, key: str, index: int) -> Any:
@@ -37,6 +38,7 @@ def compute_family_edges(
     window_days: int = _DEFAULT_WINDOW_DAYS,
     min_trades: int = _MIN_TRADES_FOR_EDGE,
     bot_version: str | None = None,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     """Compute rolling edge metrics per setup_family × direction.
 
@@ -67,7 +69,7 @@ def compute_family_edges(
     cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=window_days)).strftime("%Y-%m-%d")
 
     version_clause = ""
-    params: list[Any] = [cutoff]
+    params: list[Any] = [campaign_id, cutoff]
     if bot_version:
         version_clause = "AND bot_version = ?"
         params.append(bot_version)
@@ -88,7 +90,8 @@ def compute_family_edges(
             SUM(CASE WHEN exit_reason = 'target_hit' THEN 1 ELSE 0 END) AS target_hits,
             SUM(CASE WHEN exit_reason = 'stopped_out' THEN 1 ELSE 0 END) AS stopped_outs
         FROM paper_trades
-        WHERE status != 'open'
+        WHERE campaign_id = ?
+          AND status != 'open'
           AND pnl_pct IS NOT NULL
           AND entry_date >= ?
           AND setup_family IS NOT NULL
@@ -142,6 +145,7 @@ def compute_regime_edges(
     *,
     window_days: int = _DEFAULT_WINDOW_DAYS,
     min_trades: int = _MIN_TRADES_FOR_EDGE,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     """Compute edge metrics per regime state.
 
@@ -159,7 +163,8 @@ def compute_regime_edges(
             AVG(pnl_pct) AS avg_pnl_pct,
             AVG(r_multiple) AS avg_r_multiple
         FROM paper_trades
-        WHERE status != 'open'
+        WHERE campaign_id = ?
+          AND status != 'open'
           AND pnl_pct IS NOT NULL
           AND entry_date >= ?
           AND regime_state_at_entry IS NOT NULL
@@ -167,7 +172,7 @@ def compute_regime_edges(
         HAVING COUNT(*) >= ?
         ORDER BY AVG(pnl_pct) DESC
         """,
-        (cutoff, min_trades),
+        (campaign_id, cutoff, min_trades),
     ).fetchall()
 
     return [
@@ -189,6 +194,7 @@ def compute_vix_bucket_edges(
     *,
     window_days: int = _DEFAULT_WINDOW_DAYS,
     min_trades: int = 3,
+    campaign_id: str = "paper-v2",
 ) -> list[dict[str, Any]]:
     """Compute edge metrics per VIX bucket at entry.
 
@@ -211,7 +217,8 @@ def compute_vix_bucket_edges(
             AVG(pnl_pct) AS avg_pnl_pct,
             AVG(r_multiple) AS avg_r_multiple
         FROM paper_trades
-        WHERE status != 'open'
+        WHERE campaign_id = ?
+          AND status != 'open'
           AND pnl_pct IS NOT NULL
           AND entry_date >= ?
           AND vix_at_entry IS NOT NULL
@@ -219,7 +226,7 @@ def compute_vix_bucket_edges(
         HAVING COUNT(*) >= ?
         ORDER BY MIN(vix_at_entry)
         """,
-        (cutoff, min_trades),
+        (campaign_id, cutoff, min_trades),
     ).fetchall()
 
     return [
@@ -239,41 +246,63 @@ def compute_vix_bucket_edges(
 def generate_edge_feedback(
     family_edges: list[dict[str, Any]],
     regime_edges: list[dict[str, Any]] | None = None,
+    *,
+    actionable: bool = False,
 ) -> list[dict[str, Any]]:
-    """Generate actionable feedback items from edge data.
+    """Generate evidence-bounded feedback items from edge data.
 
-    Returns items like:
-    - "bullish_breakout long has -1.2% avg expectancy over 60 days → consider demotion"
-    - "bullish_engulfing long has +2.5% avg expectancy → benchmark family"
+    Allocation language is emitted only after the caller explicitly proves the
+    shared evidence state is eligible. The default is deliberately descriptive.
     """
     feedback: list[dict[str, Any]] = []
+    research_action = (
+        "Research only. Accumulate prospective evidence; do not change allocation or admission."
+    )
 
     # Top 3 strongest families
     positive = [e for e in family_edges if e["edge_label"] == "positive"]
     for e in positive[:3]:
+        item_actionable = actionable and e["trade_count"] >= _MIN_TRADES_FOR_ACTIONABLE_FEEDBACK
         feedback.append({
             "kind": "family_strength",
-            "severity": "green",
-            "title": f"{e['setup_family']} ({e['direction']}) shows edge",
+            "severity": "green" if item_actionable else "amber",
+            "title": (
+                f"{e['setup_family']} ({e['direction']}) shows edge"
+                if item_actionable
+                else f"{e['setup_family']} ({e['direction']}): descriptive result"
+            ),
             "detail": (
                 f"{e['win_rate_pct']}% win rate, {e['avg_pnl_pct']}% avg PnL, "
                 f"{e['avg_r_multiple']}R avg over {e['trade_count']} trades ({e['window_days']}d)"
             ),
-            "action": "Benchmark this family. Consider priority allocation.",
+            "action": (
+                "Benchmark this family. Consider priority allocation."
+                if item_actionable
+                else research_action
+            ),
         })
 
     # Bottom 3 weakest families
     negative = [e for e in family_edges if e["edge_label"] == "negative"]
     for e in negative[:3]:
+        item_actionable = actionable and e["trade_count"] >= _MIN_TRADES_FOR_ACTIONABLE_FEEDBACK
         feedback.append({
             "kind": "family_weakness",
             "severity": "red",
-            "title": f"{e['setup_family']} ({e['direction']}) negative edge",
+            "title": (
+                f"{e['setup_family']} ({e['direction']}) negative edge"
+                if item_actionable
+                else f"{e['setup_family']} ({e['direction']}): descriptive result"
+            ),
             "detail": (
                 f"{e['win_rate_pct']}% win rate, {e['avg_pnl_pct']}% avg PnL, "
                 f"{e['avg_r_multiple']}R avg over {e['trade_count']} trades ({e['window_days']}d)"
             ),
-            "action": "Consider demoting or watch-only for this family.",
+            "action": (
+                "Consider demoting or watch-only for this family."
+                if item_actionable
+                else research_action
+            ),
         })
 
     # Regime feedback
@@ -281,20 +310,30 @@ def generate_edge_feedback(
         best_regime = max(regime_edges, key=lambda r: r["avg_pnl_pct"]) if regime_edges else None
         worst_regime = min(regime_edges, key=lambda r: r["avg_pnl_pct"]) if regime_edges else None
         if best_regime and best_regime["avg_pnl_pct"] > 0:
+            item_actionable = actionable and best_regime["trade_count"] >= _MIN_TRADES_FOR_ACTIONABLE_FEEDBACK
             feedback.append({
                 "kind": "regime_strength",
-                "severity": "green",
-                "title": f"Best regime: {best_regime['regime']}",
+                "severity": "green" if item_actionable else "amber",
+                "title": (
+                    f"Best regime: {best_regime['regime']}"
+                    if item_actionable
+                    else f"Highest observed regime average: {best_regime['regime']}"
+                ),
                 "detail": f"{best_regime['avg_pnl_pct']}% avg PnL over {best_regime['trade_count']} trades",
-                "action": "Size up in this regime.",
+                "action": "Size up in this regime." if item_actionable else research_action,
             })
         if worst_regime and worst_regime["avg_pnl_pct"] < 0:
+            item_actionable = actionable and worst_regime["trade_count"] >= _MIN_TRADES_FOR_ACTIONABLE_FEEDBACK
             feedback.append({
                 "kind": "regime_weakness",
                 "severity": "amber",
-                "title": f"Worst regime: {worst_regime['regime']}",
+                "title": (
+                    f"Worst regime: {worst_regime['regime']}"
+                    if item_actionable
+                    else f"Lowest observed regime average: {worst_regime['regime']}"
+                ),
                 "detail": f"{worst_regime['avg_pnl_pct']}% avg PnL over {worst_regime['trade_count']} trades",
-                "action": "Reduce exposure or tighten stops in this regime.",
+                "action": "Reduce exposure or tighten stops in this regime." if item_actionable else research_action,
             })
 
     return feedback

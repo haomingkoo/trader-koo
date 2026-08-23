@@ -10,6 +10,49 @@ import pytest
 class TestDailyReportEndpoint:
     @patch(
         "trader_koo.backend.services.report_loader.latest_daily_report_json",
+        return_value=(
+            None,
+            {
+                "generated_ts": "2026-08-22T12:00:00Z",
+                "report_run": {
+                    "run_id": "run-230",
+                    "state": "published",
+                    "lineage": "linked",
+                    "content_hash": "abc123",
+                    "config_hash": "cfg123",
+                    "code_version": "sha123",
+                    "generation_key": "daily:2026-08-22T12:00:00Z",
+                    "canonical_generation": True,
+                },
+                "signals": {"regime_context": {"ma_matrix": [{}], "comparison": {"series": [{}]}}},
+            },
+        ),
+    )
+    @patch(
+        "trader_koo.backend.routers.report.pipeline_status_snapshot",
+        return_value={"active": False, "stage": "idle", "latest_run": None},
+    )
+    def test_daily_report_exposes_exact_canonical_provenance(
+        self,
+        _mock_pipeline,
+        _mock_latest,
+        test_app,
+    ):
+        response = test_app.get("/api/daily-report")
+        assert response.status_code == 200
+        assert response.json()["latest"]["report_run"] == {
+            "run_id": "run-230",
+            "state": "published",
+            "lineage": "linked",
+            "content_hash": "abc123",
+            "config_hash": "cfg123",
+            "code_version": "sha123",
+            "generation_key": "daily:2026-08-22T12:00:00Z",
+            "canonical_generation": True,
+        }
+
+    @patch(
+        "trader_koo.backend.services.report_loader.latest_daily_report_json",
         return_value=(None, None),
     )
     @patch(

@@ -1,0 +1,395 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "release-database-copy-v4.schema.json",
+  "title": "Trader Koo release database copy evidence v4",
+  "type": "object",
+  "required": [
+    "schema",
+    "source_artifact",
+    "source_artifact_sha256",
+    "source_snapshot_sha256",
+    "migrated_copy_sha256",
+    "report_admission_contract",
+    "passed"
+  ],
+  "properties": {
+    "schema": {"const": "release-database-copy-v4"},
+    "source_artifact": {"type": "string", "minLength": 1},
+    "source_artifact_sha256": {"$ref": "#/$defs/sha256"},
+    "source_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "migrated_copy_sha256": {"$ref": "#/$defs/sha256"},
+    "integrity_check": {"type": "string", "minLength": 1},
+    "paper_trade_schema_version": {"type": "integer", "minimum": 1},
+    "expected_paper_trade_schema_version": {"const": 4},
+    "accounting_invariants": {
+      "oneOf": [{"$ref": "#/$defs/accounting"}, {"type": "null"}]
+    },
+    "schema_contract": {"$ref": "#/$defs/schemaContract"},
+    "sqlite_objects_before": {"$ref": "#/$defs/sqliteCounts"},
+    "sqlite_objects_after": {"$ref": "#/$defs/sqliteCounts"},
+    "report_admission_contract": {"type": "object"},
+    "passed": {"type": "boolean"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "passed": {"type": "boolean"},
+        "report_admission_contract": {
+          "type": "object",
+          "required": ["passed", "migration"],
+          "properties": {
+            "passed": {"const": true},
+            "migration": {"type": "string", "pattern": "^admission-ledger-contract-v[0-9]+$"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "integrity_check",
+        "paper_trade_schema_version",
+        "expected_paper_trade_schema_version",
+        "accounting_invariants",
+        "schema_contract",
+        "sqlite_objects_before",
+        "sqlite_objects_after"
+      ],
+      "allOf": [
+        {
+          "if": {"properties": {"passed": {"const": false}}},
+          "then": {
+            "anyOf": [
+              {"properties": {"integrity_check": {"not": {"const": "ok"}}}},
+              {"properties": {"paper_trade_schema_version": {"not": {"const": 4}}}},
+              {
+                "properties": {
+                  "accounting_invariants": {
+                    "type": "object",
+                    "properties": {"breaks": {"minItems": 1}}
+                  }
+                }
+              },
+              {"properties": {"schema_contract": {"properties": {"passed": {"const": false}}}}}
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_contract": {"properties": {"passed": {"const": true}}}
+            }
+          },
+          "then": {
+            "properties": {
+              "accounting_invariants": {"$ref": "#/$defs/accounting"}
+            }
+          },
+          "else": {
+            "properties": {"accounting_invariants": {"type": "null"}}
+          }
+        }
+      ]
+    },
+    {
+      "properties": {
+        "passed": {"const": false},
+        "report_admission_contract": {
+          "type": "object",
+          "required": [
+            "passed",
+            "violation",
+            "target_migration",
+            "invalid_row_count",
+            "affected_attempt_sample",
+            "reported_attempt_count",
+            "diagnostic_limit",
+            "truncated",
+            "ordering"
+          ],
+          "properties": {
+            "passed": {"const": false},
+            "violation": {"const": "legacy_rows_invalid"},
+            "target_migration": {"type": "string", "pattern": "^admission-ledger-contract-v[0-9]+$"},
+            "invalid_row_count": {"type": "integer", "minimum": 1},
+            "affected_attempt_sample": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "required": ["attempt_id", "violations"],
+                "properties": {
+                  "attempt_id": {"type": "integer", "minimum": 1},
+                  "violations": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+                },
+                "additionalProperties": false
+              }
+            },
+            "reported_attempt_count": {"type": "integer", "minimum": 1, "maximum": 20},
+            "diagnostic_limit": {"const": 20},
+            "truncated": {"type": "boolean"},
+            "ordering": {"const": "attempt_id_ascending"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["integrity_check"]},
+          {"required": ["paper_trade_schema_version"]},
+          {"required": ["expected_paper_trade_schema_version"]},
+          {"required": ["accounting_invariants"]},
+          {"required": ["schema_contract"]},
+          {"required": ["sqlite_objects_before"]},
+          {"required": ["sqlite_objects_after"]}
+        ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {"properties": {"passed": {"const": true}}},
+      "then": {
+        "properties": {
+          "integrity_check": {"const": "ok"},
+          "paper_trade_schema_version": {"const": 4},
+          "expected_paper_trade_schema_version": {"const": 4},
+          "accounting_invariants": {
+            "$ref": "#/$defs/accounting",
+            "properties": {"breaks": {"maxItems": 0}}
+          },
+          "schema_contract": {
+            "properties": {
+              "malformed_indexes": {"maxItems": 0},
+              "malformed_triggers": {"maxItems": 0},
+              "missing_foreign_keys": {"maxItems": 0},
+              "malformed_optional_foreign_keys": {"maxItems": 0},
+              "campaign_defaults_compatible": {"const": true},
+              "foreign_key_breaks": {"maxItems": 0},
+              "legacy_read_probe": {"const": true},
+              "passed": {"const": true}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sqliteCounts": {
+      "type": "object",
+      "propertyNames": {"enum": ["index", "table", "trigger", "view"]},
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "accounting": {
+      "type": "object",
+      "required": ["breaks", "legacy_unreconciled_count", "equity", "cash"],
+      "properties": {
+        "breaks": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["reason", "delta_usd"],
+                "properties": {
+                  "reason": {"const": "equity_pnl_invariant"},
+                  "delta_usd": {"type": "number"}
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["reason", "trade_id"],
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "missing_entry_accounting",
+                      "missing_close_accounting",
+                      "missing_open_mark"
+                    ]
+                  },
+                  "trade_id": {"type": "integer", "minimum": 1}
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "legacy_unreconciled_count": {"type": "integer", "minimum": 0},
+        "equity": {"type": "number"},
+        "cash": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "schemaContract": {
+      "type": "object",
+      "required": [
+        "contract",
+        "malformed_indexes",
+        "malformed_triggers",
+        "missing_foreign_keys",
+        "malformed_optional_foreign_keys",
+        "campaign_defaults",
+        "campaign_defaults_compatible",
+        "foreign_key_breaks",
+        "legacy_read_probe",
+        "previous_image_paper_write_mode",
+        "passed"
+      ],
+      "properties": {
+        "contract": {"const": "paper-schema-expand-v4"},
+        "malformed_indexes": {"type": "array", "items": {"type": "string"}},
+        "malformed_triggers": {"type": "array", "items": {"type": "string"}},
+        "missing_foreign_keys": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/stringTuple4"}
+        },
+        "malformed_optional_foreign_keys": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/malformedOptionalForeignKey"}
+        },
+        "campaign_defaults": {
+          "type": "object",
+          "required": [
+            "paper_trades.campaign_id",
+            "paper_portfolio_snapshots.campaign_id"
+          ],
+          "properties": {
+            "paper_trades.campaign_id": {
+              "type": ["string", "null"]
+            },
+            "paper_portfolio_snapshots.campaign_id": {
+              "type": ["string", "null"]
+            }
+          },
+          "additionalProperties": false
+        },
+        "campaign_defaults_compatible": {"type": "boolean"},
+        "foreign_key_breaks": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {"type": "string"},
+              {"type": ["integer", "null"]},
+              {"type": "string"},
+              {"type": "integer"}
+            ],
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "legacy_read_probe": {"type": "boolean"},
+        "previous_image_paper_write_mode": {"const": "disabled_during_rollback_window"},
+        "passed": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"passed": {"const": true}}},
+          "then": {
+            "properties": {
+              "malformed_indexes": {"maxItems": 0},
+              "malformed_triggers": {"maxItems": 0},
+              "missing_foreign_keys": {"maxItems": 0},
+              "malformed_optional_foreign_keys": {"maxItems": 0},
+              "campaign_defaults_compatible": {"const": true},
+              "foreign_key_breaks": {"maxItems": 0},
+              "legacy_read_probe": {"const": true}
+            }
+          },
+          "else": {
+            "anyOf": [
+              {"properties": {"malformed_indexes": {"minItems": 1}}},
+              {"properties": {"malformed_triggers": {"minItems": 1}}},
+              {"properties": {"missing_foreign_keys": {"minItems": 1}}},
+              {"properties": {"malformed_optional_foreign_keys": {"minItems": 1}}},
+              {"properties": {"campaign_defaults_compatible": {"const": false}}},
+              {"properties": {"foreign_key_breaks": {"minItems": 1}}},
+              {"properties": {"legacy_read_probe": {"const": false}}}
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"campaign_defaults_compatible": {"const": true}}},
+          "then": {
+            "properties": {
+              "campaign_defaults": {
+                "properties": {
+                  "paper_trades.campaign_id": {
+                    "enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]
+                  },
+                  "paper_portfolio_snapshots.campaign_id": {
+                    "enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "campaign_defaults": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "paper_trades.campaign_id": {
+                        "not": {"enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]}
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "paper_portfolio_snapshots.campaign_id": {
+                        "not": {"enum": ["'paper-v1'", "\"paper-v1\"", "'paper-v2'", "\"paper-v2\""]}
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "stringTuple4": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "string"},
+        {"type": "string"},
+        {"type": "string"},
+        {"type": "string"}
+      ],
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "malformedOptionalForeignKey": {
+      "type": "object",
+      "required": ["table", "column", "constraints"],
+      "properties": {
+        "table": {"type": "string"},
+        "column": {"type": "string"},
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "mappings"],
+            "properties": {
+              "id": {"type": "integer", "minimum": 0},
+              "mappings": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "minItems": 6,
+                  "maxItems": 6
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

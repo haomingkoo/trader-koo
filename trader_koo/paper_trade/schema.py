@@ -12,6 +12,15 @@ from typing import Any
 # In-memory databases are never cached (each connection is a distinct DB).
 _ensured_db_paths: set[str] = set()
 _ensured_db_paths_lock = threading.Lock()
+PAPER_TRADE_SCHEMA_VERSION = 4
+
+
+def require_contracted_paper_schema(conn: sqlite3.Connection) -> None:
+    """Block activation until a later release implements the v5 verifier."""
+    del conn
+    raise ValueError(
+        "activation interlock: the contracted paper-schema verifier is not implemented"
+    )
 
 
 def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
@@ -20,6 +29,22 @@ def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
         if str(row[1]) == "main":
             return str(row[2] or "")
     return ""
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone() is not None
+
+
+def _schema_is_current(conn: sqlite3.Connection) -> bool:
+    if not _table_exists(conn, "paper_trade_schema_meta"):
+        return False
+    row = conn.execute(
+        "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
+    ).fetchone()
+    return bool(row and int(row[0]) == PAPER_TRADE_SCHEMA_VERSION)
 
 
 def _ensure_column(
@@ -37,6 +62,74 @@ def _ensure_column(
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
 
 
+def _rebuild_unique_key(conn: sqlite3.Connection, table: str, old: str, new: str) -> None:
+    """Replace one legacy table-level UNIQUE clause without rewriting its columns."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    sql = str(row[0] or "") if row else ""
+    if old not in sql:
+        return
+    if conn.in_transaction:
+        raise RuntimeError("unique-key migration requires an explicit transaction boundary")
+    # SQLite normally rewrites child foreign-key declarations when a parent is
+    # renamed.  This migration immediately drops the renamed legacy table, so
+    # that behaviour would strand children on ``<table>__campaign_migration``.
+    # Run the documented legacy-rename sequence with FK enforcement suspended,
+    # then prove the restored graph before returning.
+    foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    legacy_alter = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    if foreign_keys:
+        conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    legacy = f"{table}__campaign_migration"
+    columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({table})")]
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(f"ALTER TABLE {table} RENAME TO {legacy}")
+        create_sql = sql.replace(old, new, 1)
+        if table == "paper_trades":
+            create_sql = create_sql.replace(
+                "campaign_id TEXT", "campaign_id TEXT NOT NULL DEFAULT 'paper-v2'", 1
+            )
+        conn.execute(create_sql)
+        joined = ",".join(f'"{column}"' for column in columns)
+        conn.execute(f"INSERT INTO {table} ({joined}) SELECT {joined} FROM {legacy}")
+        conn.execute(f"DROP TABLE {legacy}")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                f"foreign-key violations after rebuilding {table}: {violations[:5]}"
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA legacy_alter_table={legacy_alter}")
+        if foreign_keys:
+            conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _widen_candidate_dispositions(conn: sqlite3.Connection) -> None:
+    """Migrate the legacy CHECK so a sealed signal may await its next open."""
+    table = "paper_candidate_decisions"
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    sql = str(row[0] or "") if row else ""
+    old = "disposition IN ('rejected', 'admitted', 'duplicate')"
+    if old not in sql:
+        return
+    legacy = f"{table}__pending_migration"
+    columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({table})")]
+    conn.execute(f"ALTER TABLE {table} RENAME TO {legacy}")
+    conn.execute(sql.replace(old, "disposition IN ('rejected', 'pending', 'admitted', 'duplicate')"))
+    joined = ",".join(f'"{column}"' for column in columns)
+    conn.execute(f"INSERT INTO {table} ({joined}) SELECT {joined} FROM {legacy}")
+    conn.execute(f"DROP TABLE {legacy}")
+
+
 def decode_json_list(raw: Any) -> list[str]:
     if raw is None:
         return []
@@ -52,21 +145,37 @@ def decode_json_list(raw: Any) -> list[str]:
 
 
 def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
-    """Create paper_trades and paper_portfolio_snapshots tables."""
+    """Own and commit schema migration phases on a clean connection boundary."""
+    from trader_koo.paper_trade.shadow import ensure_shadow_schema
+    from trader_koo.report.runs import ensure_report_run_schema
+
+    # Normal business operations may call the idempotent initializer from an
+    # owned transaction after startup. A current schema is a read-only no-op;
+    # only an actual migration requires the clean boundary below.
+    if _schema_is_current(conn):
+        return
+    if conn.in_transaction:
+        raise RuntimeError(
+            "paper schema initialization requires a clean transaction boundary"
+        )
+    ensure_report_run_schema(conn)
     db_path = _resolve_main_db_path(conn)
     # In-memory DBs (path '' or ':memory:') are never cached: each connection
     # is a distinct database, so the full ensure must always run.
     is_memory = db_path in ("", ":memory:")
     if not is_memory:
         with _ensured_db_paths_lock:
-            if db_path in _ensured_db_paths:
+            if db_path in _ensured_db_paths and _schema_is_current(conn):
                 return
+            _ensured_db_paths.discard(db_path)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             report_date TEXT NOT NULL,
             generated_ts TEXT,
+            report_run_id TEXT REFERENCES report_runs(run_id),
+            campaign_id TEXT NOT NULL DEFAULT 'paper-v2',
             ticker TEXT NOT NULL,
             direction TEXT NOT NULL CHECK (direction IN ('long', 'short')),
             entry_price REAL NOT NULL,
@@ -115,6 +224,18 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "ON paper_trades(setup_family, direction, status)"
     )
     _ensure_column(conn, "paper_trades", "decision_version", "decision_version TEXT")
+    _ensure_column(conn, "paper_trades", "quantity", "quantity REAL")
+    _ensure_column(conn, "paper_trades", "entry_notional", "entry_notional REAL")
+    _ensure_column(conn, "paper_trades", "entry_commission", "entry_commission REAL")
+    _ensure_column(conn, "paper_trades", "exit_commission", "exit_commission REAL")
+    _ensure_column(conn, "paper_trades", "borrow_cost", "borrow_cost REAL")
+    _ensure_column(conn, "paper_trades", "realized_pnl_usd", "realized_pnl_usd REAL")
+    _ensure_column(
+        conn,
+        "paper_trades",
+        "accounting_status",
+        "accounting_status TEXT NOT NULL DEFAULT 'legacy_unreconciled'",
+    )
     _ensure_column(conn, "paper_trades", "decision_state", "decision_state TEXT")
     _ensure_column(conn, "paper_trades", "analyst_stage", "analyst_stage TEXT")
     _ensure_column(conn, "paper_trades", "debate_stage", "debate_stage TEXT")
@@ -146,8 +267,488 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "paper_trades", "ml_confidence", "ml_confidence REAL")
     _ensure_column(conn, "paper_trades", "ml_signal", "ml_signal TEXT")
     _ensure_column(conn, "paper_trades", "notes", "notes TEXT DEFAULT ''")
+    _ensure_column(conn, "paper_trades", "report_run_id", "report_run_id TEXT")
     _ensure_column(conn, "paper_trades", "directional_regime_at_entry", "directional_regime_at_entry TEXT")
     _ensure_column(conn, "paper_trades", "directional_regime_confidence", "directional_regime_confidence REAL")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_trades_report_run ON paper_trades(report_run_id)"
+    )
+    # Legacy databases use paper-v1 as the default so a rolled-back image that
+    # does not know about campaign_id can still read the expanded schema. Fresh
+    # databases declare the paper-v2 default in CREATE TABLE above.
+    _ensure_column(
+        conn,
+        "paper_trades",
+        "campaign_id",
+        "campaign_id TEXT NOT NULL DEFAULT 'paper-v1'",
+    )
+    _ensure_column(conn, "paper_trades", "policy_version", "policy_version TEXT")
+
+    conn.execute(
+        "UPDATE paper_trades SET campaign_id='paper-v1' WHERE campaign_id IS NULL"
+    )
+    # Expand phase: retain the legacy global key so the previous production
+    # image can read the schema during the rollback window, and add the
+    # campaign-aware key used by this image. Its automatic lifecycle remains
+    # disabled by the release environment. The legacy key is contracted only in
+    # a separately verified activation migration.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_campaign_unique "
+        "ON paper_trades(campaign_id,report_date,ticker,direction)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_legacy_compat "
+        "ON paper_trades(report_date,ticker,direction)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(campaign_id, status, entry_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_ticker ON paper_trades(campaign_id, ticker, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_family ON paper_trades(campaign_id, setup_family, direction, status)")
+    # Install the authoritative lineage guards after both compatibility keys.
+    conn.execute("DROP TRIGGER IF EXISTS paper_trades_require_canonical_run")
+    conn.execute("DROP TRIGGER IF EXISTS paper_trades_immutable_lineage")
+    conn.execute("""
+        CREATE TRIGGER paper_trades_require_canonical_run
+        BEFORE INSERT ON paper_trades
+        WHEN NOT EXISTS (
+            SELECT 1 FROM report_runs r
+            JOIN report_run_decisions d ON d.run_id=r.run_id
+            WHERE r.run_id=NEW.report_run_id
+              AND r.status='published' AND r.publication_verified=1
+              AND r.is_generation_canonical=1
+              AND d.ticker=NEW.ticker AND d.decision='accepted'
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trades require a canonical published report run with an accepted decision');
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER paper_trades_immutable_lineage
+        BEFORE UPDATE OF report_run_id ON paper_trades
+        WHEN NEW.report_run_id IS NOT OLD.report_run_id
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trade report lineage is immutable');
+        END
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_campaigns (
+            campaign_id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            policy_hash TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL CHECK (status IN ('frozen', 'active', 'draft')),
+            starting_capital REAL NOT NULL,
+            zero_admission_streak_limit INTEGER NOT NULL DEFAULT 3,
+            replay_live_parity TEXT NOT NULL DEFAULT 'not_measured'
+                CHECK (replay_live_parity IN ('not_measured', 'matched', 'diverged')),
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _ensure_column(
+        conn,
+        "paper_campaigns",
+        "replay_live_parity",
+        "replay_live_parity TEXT NOT NULL DEFAULT 'not_measured'",
+    )
+    _ensure_column(conn, "paper_campaigns", "policy_hash", "policy_hash TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "paper_campaigns", "updated_ts", "updated_ts TEXT")
+    conn.execute("""
+        INSERT OR IGNORE INTO paper_campaigns (
+            campaign_id, label, policy_version, status, starting_capital,
+            zero_admission_streak_limit
+        ) VALUES ('paper-v1', 'Paper Campaign v1', 'paper-trade-eval-v1', 'frozen', 1000000.0, 3)
+    """)
+    conn.execute("""
+        INSERT OR IGNORE INTO paper_campaigns (
+            campaign_id, label, policy_version, status, starting_capital,
+            zero_admission_streak_limit
+        ) VALUES ('paper-v2', 'Paper Campaign v2', 'paper-campaign-v2.0', 'draft', 1000000.0, 3)
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_paper_campaign "
+        "ON paper_campaigns(status) WHERE status='active'"
+    )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_campaign_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
+            action TEXT NOT NULL CHECK (action IN ('activate', 'rollback')),
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            request_hash TEXT NOT NULL DEFAULT '',
+            from_status TEXT NOT NULL,
+            to_status TEXT NOT NULL,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _ensure_column(conn, "paper_campaign_audit", "request_hash", "request_hash TEXT NOT NULL DEFAULT ''")
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_campaign_audit_no_update
+        BEFORE UPDATE ON paper_campaign_audit
+        BEGIN SELECT RAISE(ABORT, 'paper campaign audit is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_campaign_audit_no_delete
+        BEFORE DELETE ON paper_campaign_audit
+        BEGIN SELECT RAISE(ABORT, 'paper campaign audit is immutable'); END
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            migration_id TEXT PRIMARY KEY,
+            applied_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    lifecycle_migration = "paper_campaign_v2_inactive_governed_20260823"
+    if not conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE migration_id=?", (lifecycle_migration,)
+    ).fetchone():
+        conn.execute("UPDATE paper_campaigns SET status='draft' WHERE campaign_id='paper-v2'")
+        conn.execute("INSERT INTO schema_migrations (migration_id) VALUES (?)", (lifecycle_migration,))
+    migration_id = "paper_campaign_v1_backfill_20260822"
+    migrated = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE migration_id = ?", (migration_id,)
+    ).fetchone()
+    if not migrated:
+        conn.execute(
+            """UPDATE paper_trades
+               SET campaign_id = 'paper-v1',
+                   policy_version = COALESCE(policy_version, decision_version, 'paper-trade-eval-v1')
+               WHERE campaign_id IS NULL"""
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (migration_id) VALUES (?)", (migration_id,)
+        )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_candidate_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_run_id TEXT NOT NULL,
+            report_date TEXT NOT NULL,
+            generated_ts TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            candidate_rank INTEGER NOT NULL,
+            rank_inputs_json TEXT NOT NULL,
+            eligibility_passed INTEGER NOT NULL CHECK (eligibility_passed IN (0, 1)),
+            final_gate TEXT NOT NULL,
+            reason_code TEXT NOT NULL,
+            reasons_json TEXT NOT NULL,
+            inputs_hash TEXT NOT NULL,
+            policy_hash TEXT NOT NULL,
+            context_hash TEXT NOT NULL,
+            disposition TEXT NOT NULL CHECK (
+                disposition IN ('rejected', 'pending', 'admitted', 'duplicate')
+            ),
+            tradeability TEXT NOT NULL DEFAULT 'not_actionable',
+            inputs_json TEXT NOT NULL DEFAULT '{}',
+            stop_loss REAL,
+            target_price REAL,
+            expected_r_multiple REAL,
+            critic_outcome_json TEXT,
+            sizing_json TEXT,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(report_run_id, campaign_id, candidate_rank)
+        )
+    """)
+    _ensure_column(conn, "paper_candidate_decisions", "policy_hash", "policy_hash TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "paper_candidate_decisions", "context_hash", "context_hash TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "paper_candidate_decisions", "tradeability", "tradeability TEXT NOT NULL DEFAULT 'not_actionable'")
+    _ensure_column(conn, "paper_candidate_decisions", "inputs_json", "inputs_json TEXT NOT NULL DEFAULT '{}'")
+    _widen_candidate_dispositions(conn)
+    conn.commit()
+    _rebuild_unique_key(
+        conn,
+        "paper_candidate_decisions",
+        "UNIQUE(report_run_id, campaign_id, ticker)",
+        "UNIQUE(report_run_id, campaign_id, candidate_rank)",
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_candidate_decisions_campaign_report "
+        "ON paper_candidate_decisions(campaign_id, report_date, report_run_id, candidate_rank)"
+    )
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_candidate_decisions_no_update
+        BEFORE UPDATE ON paper_candidate_decisions
+        BEGIN SELECT RAISE(ABORT, 'paper candidate decisions are immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_candidate_decisions_no_delete
+        BEFORE DELETE ON paper_candidate_decisions
+        BEGIN SELECT RAISE(ABORT, 'paper candidate decisions are immutable'); END
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_decision_sets (
+            report_run_id TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            report_date TEXT NOT NULL,
+            generated_ts TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            candidate_count INTEGER NOT NULL,
+            request_hash TEXT NOT NULL,
+            candidates_hash TEXT NOT NULL,
+            policy_hash TEXT NOT NULL,
+            context_hash TEXT NOT NULL,
+            report_complete INTEGER NOT NULL CHECK (report_complete IN (0,1)),
+            is_canonical INTEGER NOT NULL CHECK (is_canonical IN (0,1)),
+            status TEXT NOT NULL CHECK (status='sealed'),
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (report_run_id, campaign_id)
+        )
+    """)
+    _ensure_column(conn, "paper_decision_sets", "request_hash", "request_hash TEXT NOT NULL DEFAULT ''")
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_decision_sets_no_update
+        BEFORE UPDATE ON paper_decision_sets
+        BEGIN SELECT RAISE(ABORT, 'paper decision sets are immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_decision_sets_no_delete
+        BEFORE DELETE ON paper_decision_sets
+        BEGIN SELECT RAISE(ABORT, 'paper decision sets are immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_candidate_decisions_no_insert_after_seal
+        BEFORE INSERT ON paper_candidate_decisions
+        WHEN EXISTS (
+            SELECT 1 FROM paper_decision_sets
+            WHERE report_run_id=NEW.report_run_id
+              AND campaign_id=NEW.campaign_id
+              AND status='sealed'
+        )
+        BEGIN SELECT RAISE(ABORT, 'sealed paper decision set is not appendable'); END
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_pending_orders (
+            order_id TEXT PRIMARY KEY,
+            report_run_id TEXT NOT NULL,
+            report_date TEXT NOT NULL,
+            generated_ts TEXT NOT NULL,
+            campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
+            policy_version TEXT NOT NULL,
+            candidate_rank INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            direction TEXT NOT NULL CHECK (direction IN ('long','short')),
+            candidate_json TEXT NOT NULL,
+            critic_json TEXT NOT NULL,
+            market_context_json TEXT NOT NULL,
+            avg_daily_volume REAL,
+            order_hash TEXT NOT NULL CHECK (
+                length(order_hash)=64 AND lower(order_hash) NOT GLOB '*[^0-9a-f]*'
+            ),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','filled','rejected','cancelled')),
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            resolved_ts TEXT,
+            UNIQUE(report_run_id,campaign_id,candidate_rank)
+        )
+    """)
+    _ensure_column(conn, "paper_pending_orders", "order_hash", "order_hash TEXT")
+    # Pre-seal pending rows cannot be trusted after this migration. Preserve
+    # them as cancelled audit history; only newly hashed rows may execute.
+    conn.execute(
+        """UPDATE paper_pending_orders
+           SET status='cancelled',resolved_ts=COALESCE(resolved_ts,CURRENT_TIMESTAMP),
+               order_hash=COALESCE(order_hash,'legacy-unsealed')
+           WHERE order_hash IS NULL"""
+    )
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_valid_insert
+        BEFORE INSERT ON paper_pending_orders
+        WHEN NEW.status!='pending' OR NEW.resolved_ts IS NOT NULL
+          OR NEW.order_hash IS NULL
+          OR length(NEW.order_hash)!=64
+          OR lower(NEW.order_hash) GLOB '*[^0-9a-f]*'
+        BEGIN SELECT RAISE(ABORT, 'pending order requires a sealed immutable payload'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_immutable_payload
+        BEFORE UPDATE ON paper_pending_orders
+        WHEN NEW.order_id IS NOT OLD.order_id
+          OR NEW.report_run_id IS NOT OLD.report_run_id
+          OR NEW.report_date IS NOT OLD.report_date
+          OR NEW.generated_ts IS NOT OLD.generated_ts
+          OR NEW.campaign_id IS NOT OLD.campaign_id
+          OR NEW.policy_version IS NOT OLD.policy_version
+          OR NEW.candidate_rank IS NOT OLD.candidate_rank
+          OR NEW.ticker IS NOT OLD.ticker
+          OR NEW.direction IS NOT OLD.direction
+          OR NEW.candidate_json IS NOT OLD.candidate_json
+          OR NEW.critic_json IS NOT OLD.critic_json
+          OR NEW.market_context_json IS NOT OLD.market_context_json
+          OR NEW.avg_daily_volume IS NOT OLD.avg_daily_volume
+          OR NEW.order_hash IS NOT OLD.order_hash
+          OR NEW.created_ts IS NOT OLD.created_ts
+        BEGIN SELECT RAISE(ABORT, 'pending order payload is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_terminal_transition
+        BEFORE UPDATE OF status,resolved_ts ON paper_pending_orders
+        WHEN OLD.status!='pending' OR NEW.status NOT IN ('filled','rejected','cancelled')
+          OR NEW.resolved_ts IS NULL
+        BEGIN SELECT RAISE(ABORT, 'pending order has an invalid terminal transition'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_pending_orders_no_delete
+        BEFORE DELETE ON paper_pending_orders
+        BEGIN SELECT RAISE(ABORT, 'pending orders are immutable audit facts'); END
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_order_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id TEXT NOT NULL REFERENCES paper_pending_orders(order_id),
+            event_type TEXT NOT NULL CHECK (event_type IN ('created','filled','rejected','cancelled')),
+            event_date TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(order_id,event_type)
+        )
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_order_events_no_update
+        BEFORE UPDATE ON paper_order_events
+        BEGIN SELECT RAISE(ABORT, 'paper order events are immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_order_events_no_delete
+        BEFORE DELETE ON paper_order_events
+        BEGIN SELECT RAISE(ABORT, 'paper order events are immutable'); END
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trade_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER NOT NULL REFERENCES paper_trades(id),
+            event_type TEXT NOT NULL CHECK (
+                event_type IN ('fill','mark','management','close','corporate_action')
+            ),
+            event_date TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(trade_id,event_type,event_date,payload_hash)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_trade_events_timeline "
+        "ON paper_trade_events(trade_id,event_date,id)"
+    )
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_trade_events_no_update
+        BEFORE UPDATE ON paper_trade_events
+        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_trade_events_no_delete
+        BEFORE DELETE ON paper_trade_events
+        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_campaign_preregistrations (
+            preregistration_id TEXT PRIMARY KEY,
+            campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
+            policy_version TEXT NOT NULL,
+            policy_hash TEXT NOT NULL,
+            dataset_hash TEXT NOT NULL,
+            gates_json TEXT NOT NULL,
+            artifact_hash TEXT NOT NULL UNIQUE,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_campaign_experiments (
+            experiment_id TEXT PRIMARY KEY,
+            preregistration_id TEXT NOT NULL REFERENCES paper_campaign_preregistrations(preregistration_id),
+            campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
+            policy_version TEXT NOT NULL,
+            policy_hash TEXT NOT NULL,
+            dataset_hash TEXT NOT NULL,
+            preregistration_json TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            parity_status TEXT NOT NULL CHECK (parity_status IN ('matched','diverged')),
+            risk_gate_passed INTEGER NOT NULL CHECK (risk_gate_passed IN (0,1)),
+            active_return_gate_passed INTEGER NOT NULL CHECK (active_return_gate_passed IN (0,1)),
+            eligible INTEGER NOT NULL CHECK (eligible IN (0,1)),
+            evidence_hash TEXT NOT NULL UNIQUE,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _ensure_column(
+        conn, "paper_campaign_experiments", "preregistration_id",
+        "preregistration_id TEXT REFERENCES paper_campaign_preregistrations(preregistration_id)",
+    )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_campaign_approvals (
+            approval_id TEXT PRIMARY KEY,
+            experiment_id TEXT NOT NULL REFERENCES paper_campaign_experiments(experiment_id),
+            campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            experiment_evidence_hash TEXT NOT NULL,
+            artifact_json TEXT NOT NULL,
+            artifact_hash TEXT NOT NULL UNIQUE,
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _ensure_column(
+        conn, "paper_campaign_approvals", "experiment_evidence_hash",
+        "experiment_evidence_hash TEXT",
+    )
+    for table, label in (
+        ("paper_campaign_preregistrations", "paper campaign preregistrations"),
+        ("paper_campaign_experiments", "paper campaign experiments"),
+        ("paper_campaign_approvals", "paper campaign approvals"),
+    ):
+        conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS {table}_no_update
+            BEFORE UPDATE ON {table}
+            BEGIN SELECT RAISE(ABORT, '{label} are immutable'); END
+        """)
+        conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS {table}_no_delete
+            BEFORE DELETE ON {table}
+            BEGIN SELECT RAISE(ABORT, '{label} are immutable'); END
+        """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_v1_trades_no_insert
+        BEFORE INSERT ON paper_trades WHEN NEW.campaign_id = 'paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_v1_trades_no_update
+        BEFORE UPDATE ON paper_trades
+        WHEN OLD.campaign_id = 'paper-v1'
+          AND NEW.report_run_id IS OLD.report_run_id
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_v1_trades_no_delete
+        BEFORE DELETE ON paper_trades WHEN OLD.campaign_id = 'paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_v1_campaign_no_update
+        BEFORE UPDATE ON paper_campaigns WHEN OLD.campaign_id='paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 metadata is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS paper_v1_campaign_no_delete
+        BEFORE DELETE ON paper_campaigns WHEN OLD.campaign_id='paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 metadata is immutable'); END
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trade_annotations (
+            trade_id INTEGER PRIMARY KEY REFERENCES paper_trades(id),
+            notes TEXT NOT NULL DEFAULT '',
+            actor TEXT NOT NULL DEFAULT 'user',
+            updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bot_versions (
@@ -169,7 +770,8 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            snapshot_date TEXT NOT NULL UNIQUE,
+            snapshot_date TEXT NOT NULL,
+            campaign_id TEXT NOT NULL DEFAULT 'paper-v2',
             open_trades INTEGER NOT NULL DEFAULT 0,
             closed_trades_total INTEGER NOT NULL DEFAULT 0,
             wins INTEGER NOT NULL DEFAULT 0,
@@ -184,11 +786,50 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
             equity_index REAL NOT NULL DEFAULT 100.0,
             best_trade_pct REAL,
             worst_trade_pct REAL,
-            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(campaign_id, snapshot_date)
         )
     """)
-    _ensure_column(conn, "paper_portfolio_snapshots", "sortino_ratio", "sortino_ratio REAL")
-    _ensure_column(conn, "paper_portfolio_snapshots", "calmar_ratio", "calmar_ratio REAL")
+    _ensure_column(conn, "paper_portfolio_snapshots", "campaign_id", "campaign_id TEXT NOT NULL DEFAULT 'paper-v1'")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_portfolio_legacy_compat "
+        "ON paper_portfolio_snapshots(snapshot_date)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_portfolio_campaign_date "
+        "ON paper_portfolio_snapshots(campaign_id, snapshot_date)"
+    )
+    for column, ddl in (
+        ("open_trades", "open_trades INTEGER NOT NULL DEFAULT 0"),
+        ("closed_trades_total", "closed_trades_total INTEGER NOT NULL DEFAULT 0"),
+        ("wins", "wins INTEGER NOT NULL DEFAULT 0"),
+        ("losses", "losses INTEGER NOT NULL DEFAULT 0"),
+        ("win_rate_pct", "win_rate_pct REAL"),
+        ("avg_pnl_pct", "avg_pnl_pct REAL"),
+        ("avg_r_multiple", "avg_r_multiple REAL"),
+        ("total_pnl_pct", "total_pnl_pct REAL"),
+        ("max_drawdown_pct", "max_drawdown_pct REAL"),
+        ("sharpe_ratio", "sharpe_ratio REAL"),
+        ("sortino_ratio", "sortino_ratio REAL"),
+        ("calmar_ratio", "calmar_ratio REAL"),
+        ("profit_factor", "profit_factor REAL"),
+        ("equity_index", "equity_index REAL NOT NULL DEFAULT 100.0"),
+        ("best_trade_pct", "best_trade_pct REAL"),
+        ("worst_trade_pct", "worst_trade_pct REAL"),
+        ("starting_capital", "starting_capital REAL"),
+        ("cash", "cash REAL"),
+        ("equity", "equity REAL"),
+        ("realized_pnl_usd", "realized_pnl_usd REAL"),
+        ("unrealized_pnl_usd", "unrealized_pnl_usd REAL"),
+        ("gross_exposure_usd", "gross_exposure_usd REAL"),
+        ("gross_exposure_pct", "gross_exposure_pct REAL"),
+        ("high_water_equity", "high_water_equity REAL"),
+        ("drawdown_pct", "drawdown_pct REAL"),
+        ("session_pnl_usd", "session_pnl_usd REAL"),
+        ("legacy_unreconciled_count", "legacy_unreconciled_count INTEGER NOT NULL DEFAULT 0"),
+        ("accounting_breaks_json", "accounting_breaks_json TEXT NOT NULL DEFAULT '[]'"),
+    ):
+        _ensure_column(conn, "paper_portfolio_snapshots", column, ddl)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_paper_portfolio_date "
         "ON paper_portfolio_snapshots(snapshot_date)"
@@ -220,6 +861,19 @@ def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_paper_reflections_ticker "
         "ON paper_trade_reflections(ticker, exit_date)"
     )
+    ensure_shadow_schema(conn)
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS paper_trade_schema_meta (
+               id INTEGER PRIMARY KEY CHECK (id=1),
+               schema_version INTEGER NOT NULL
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO paper_trade_schema_meta (id,schema_version)
+           VALUES (1,?)
+           ON CONFLICT(id) DO UPDATE SET schema_version=excluded.schema_version""",
+        (PAPER_TRADE_SCHEMA_VERSION,),
+    )
     conn.commit()
 
     if not is_memory:
@@ -234,8 +888,10 @@ def register_bot_version(
     decision_version: str | None,
     config_json: str | None = None,
     notes: str | None = None,
+    schema_ready: bool = False,
 ) -> None:
-    ensure_paper_trade_schema(conn)
+    if not schema_ready:
+        ensure_paper_trade_schema(conn)
     if not bot_version:
         return
     conn.execute(

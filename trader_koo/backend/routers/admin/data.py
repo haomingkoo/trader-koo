@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import sqlite3
 import subprocess
@@ -9,7 +10,7 @@ import sys
 import threading
 from typing import Any
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from trader_koo.audit import apply_retention_policy, get_audit_stats
 from trader_koo.audit.api import (
@@ -19,7 +20,6 @@ from trader_koo.audit.api import (
 )
 from trader_koo.audit.export import get_exporter_from_env
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
-from trader_koo.middleware.auth import require_admin_auth
 
 from trader_koo.backend.routers.admin._shared import (
     LOG_DIR,
@@ -31,9 +31,129 @@ from trader_koo.scripts.cleanup_storage import run_cleanup
 
 router = APIRouter(tags=["admin", "admin-data"])
 
+_seed_history_lock = threading.Lock()
+_seed_history_thread: threading.Thread | None = None
+_seed_history_state: dict[str, Any] = {"status": "idle"}
+
+
+def _seed_history_command(tickers: list[str], start_date: str) -> list[str]:
+    return [
+        sys.executable,
+        str(PROJECT_DIR / "scripts" / "update_market_db.py"),
+        "--tickers",
+        ",".join(tickers),
+        "--price-start",
+        start_date,
+        "--price-lookback-days",
+        "0",
+        "--full-price-refresh",
+        "--require-full-dataset",
+        "--db-path",
+        str(DB_PATH),
+        "--log-file",
+        str(LOG_DIR / "seed_history.log"),
+    ]
+
+
+def _verify_seed_history_ingest(
+    started_at: str | None,
+    tickers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return the ingest run started by this job, failing closed if absent/partial."""
+    try:
+        job_start = dt.datetime.fromisoformat(str(started_at or "").replace("Z", "+00:00"))
+        if job_start.tzinfo is None:
+            job_start = job_start.replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return {"ok": False, "error": "invalid_job_start_time"}
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT run_id, started_ts, finished_ts, status,
+                   tickers_total, tickers_ok, tickers_failed, error_message,
+                   args_json
+            FROM ingest_runs ORDER BY started_ts DESC LIMIT 20
+            """
+        ).fetchall()
+    except Exception as exc:
+        return {"ok": False, "error": f"ingest_run_not_observable:{exc}"}
+    finally:
+        if "conn" in locals():
+            conn.close()
+    for row in rows:
+        try:
+            run_start = dt.datetime.fromisoformat(
+                str(row["started_ts"] or "").replace("Z", "+00:00")
+            )
+            if run_start.tzinfo is None:
+                run_start = run_start.replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            continue
+        if run_start < job_start:
+            continue
+        if tickers:
+            try:
+                args = json.loads(str(row["args_json"] or "{}"))
+            except (TypeError, ValueError):
+                continue
+            requested = {
+                item.strip().upper()
+                for item in str(args.get("tickers") or "").split(",")
+                if item.strip()
+            }
+            if requested != set(tickers):
+                continue
+        result = dict(row)
+        result.pop("args_json", None)
+        result["ok"] = (
+            str(row["status"] or "") == "ok"
+            and int(row["tickers_failed"] or 0) == 0
+        )
+        if not result["ok"]:
+            result["error"] = f"ingest_run_{row['status'] or 'unknown'}"
+        return result
+    return {"ok": False, "error": "ingest_run_not_observed"}
+
+
+def _run_seed_history(command: list[str]) -> None:
+    global _seed_history_state
+    try:
+        completed = subprocess.run(command, capture_output=False, check=False)
+        verification = (
+            _verify_seed_history_ingest(
+                _seed_history_state.get("started_at"),
+                _seed_history_state.get("tickers"),
+            )
+            if completed.returncode == 0
+            else None
+        )
+        succeeded = completed.returncode == 0 and bool(verification and verification.get("ok"))
+        status = "succeeded" if succeeded else "failed"
+        error = (
+            None
+            if succeeded
+            else f"process_exit_{completed.returncode}"
+            if completed.returncode != 0
+            else str((verification or {}).get("error") or "ingest_run_not_verified")
+        )
+    except Exception as exc:
+        status = "failed"
+        error = str(exc)
+        completed = None
+    with _seed_history_lock:
+        _seed_history_state = {
+            **_seed_history_state,
+            "status": status,
+            "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "returncode": completed.returncode if completed is not None else None,
+            "error": error,
+            "ingest_run": verification if completed is not None else None,
+        }
+
 
 @router.post("/api/admin/cleanup-storage")
-@require_admin_auth
 def cleanup_storage(
     dry_run: bool = Query(default=True),
 ) -> dict[str, Any]:
@@ -48,7 +168,6 @@ def cleanup_storage(
 
 
 @router.post("/api/admin/seed-ticker-history")
-@require_admin_auth
 def seed_ticker_history(
     request: Request,
     tickers: str = Query(
@@ -67,41 +186,44 @@ def seed_ticker_history(
     if not ticker_list:
         return {"ok": False, "error": "No tickers specified"}
 
-    def _run_seed() -> None:
-        script = str(PROJECT_DIR / "scripts" / "update_market_db.py")
-        cmd = [
-            sys.executable,
-            script,
-            "--tickers",
-            ",".join(ticker_list),
-            "--price-start",
-            start_date,
-            "--price-lookback-days",
-            "0",
-            "--full-price-refresh",
-            "--skip-price",
-            "false",
-            "--db-path",
-            str(DB_PATH),
-            "--log-file",
-            str(LOG_DIR / "seed_history.log"),
-        ]
-        subprocess.run(cmd, capture_output=False)
-
-    thread = threading.Thread(target=_run_seed, daemon=True)
-    thread.start()
+    global _seed_history_state, _seed_history_thread
+    with _seed_history_lock:
+        if _seed_history_thread is not None and _seed_history_thread.is_alive():
+            raise HTTPException(status_code=409, detail="Price-history backfill already running")
+        command = _seed_history_command(ticker_list, start_date)
+        _seed_history_state = {
+            "status": "running",
+            "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "finished_at": None,
+            "returncode": None,
+            "error": None,
+            "tickers": ticker_list,
+            "start_date": start_date,
+        }
+        _seed_history_thread = threading.Thread(
+            target=_run_seed_history,
+            args=(command,),
+            daemon=True,
+            name="admin-price-history-backfill",
+        )
+        _seed_history_thread.start()
     return {
         "ok": True,
-        "message": (
-            f"Seeding history for {len(ticker_list)} tickers "
-            f"from {start_date}"
-        ),
+        "status": "running",
+        "message": f"Price-history backfill accepted for {len(ticker_list)} tickers",
         "tickers": ticker_list,
+        "start_date": start_date,
     }
 
 
+@router.get("/api/admin/seed-ticker-history/status")
+def seed_ticker_history_status(request: Request) -> dict[str, Any]:
+    with _seed_history_lock:
+        state = dict(_seed_history_state)
+    return {"ok": state.get("status") != "failed", **state}
+
+
 @router.get("/api/admin/database-stats")
-@require_admin_auth
 def admin_database_stats() -> dict[str, Any]:
     """Return database statistics including record counts and date ranges."""
     if not DB_PATH.exists():
@@ -191,7 +313,6 @@ def admin_database_stats() -> dict[str, Any]:
 
 
 @router.get("/api/admin/audit-logs")
-@require_admin_auth
 def admin_audit_logs(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
@@ -222,7 +343,6 @@ def admin_audit_logs(
 
 
 @router.get("/api/admin/audit-logs/export")
-@require_admin_auth
 def admin_audit_logs_export(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
@@ -258,7 +378,6 @@ def admin_audit_logs_export(
 
 
 @router.get("/api/admin/audit-logs/summary")
-@require_admin_auth
 def admin_audit_logs_summary(
     days: int = Query(default=7, ge=1, le=365),
 ) -> dict[str, Any]:
@@ -272,7 +391,6 @@ def admin_audit_logs_summary(
 
 
 @router.get("/api/admin/audit-logs/stats")
-@require_admin_auth
 def admin_audit_logs_stats() -> dict[str, Any]:
     """Get audit log statistics and retention info."""
     conn = sqlite3.connect(str(DB_PATH))
@@ -284,7 +402,6 @@ def admin_audit_logs_stats() -> dict[str, Any]:
 
 
 @router.post("/api/admin/audit-logs/retention")
-@require_admin_auth
 def admin_audit_logs_retention(
     retention_days: int = Query(default=90, ge=30, le=3650),
     dry_run: bool = Query(default=True),
@@ -324,7 +441,6 @@ def admin_audit_logs_retention(
 
 
 @router.post("/api/admin/audit-logs/external-export")
-@require_admin_auth
 def admin_audit_logs_external_export(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),

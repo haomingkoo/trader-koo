@@ -15,7 +15,7 @@ import concurrent.futures
 import logging
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
@@ -26,6 +26,11 @@ LOG = logging.getLogger(__name__)
 
 # yfinance is the only price source by design (see module docstring).
 SOURCE_NAME = "yfinance"
+PRICE_ADJUSTMENT_VERSION = "yfinance-actions-v1"
+# 3-for-2 is the smallest common split whose unexplained discontinuity should
+# fail research closed. Smaller declared fractional actions are still handled
+# from vendor evidence below; they are never inferred from price movement.
+SCALE_BREAK_RATIO = 1.45
 
 # Hard timeout for any single yf.download call.  If the call does not
 # return within this many seconds, the thread is abandoned and the
@@ -41,6 +46,11 @@ class FetchResult:
     timestamp: datetime
     success: bool
     error: Optional[str] = None
+    adjustment_basis: str = "unknown"
+    adjustment_version: str = "unknown"
+    basis_status: str = "unverified"
+    corporate_actions: list[dict] = field(default_factory=list)
+    unresolved_discontinuities: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -149,7 +159,7 @@ class DataSourceManager:
                     error=f"Empty response from yfinance for {ticker}",
                 )
 
-            df = self._normalize_ohlcv(raw)
+            df = self._normalize_ohlcv(raw, auto_adjust=auto_adjust)
 
             metrics.successful_fetches += 1
             LOG.info(f"Successfully fetched {ticker} from yfinance ({len(df)} rows)")
@@ -159,6 +169,11 @@ class DataSourceManager:
                 source=SOURCE_NAME,
                 timestamp=datetime.now(),
                 success=True,
+                adjustment_basis=str(df.attrs["adjustment_basis"]),
+                adjustment_version=str(df.attrs["adjustment_version"]),
+                basis_status=str(df.attrs["basis_status"]),
+                corporate_actions=list(df.attrs["corporate_actions"]),
+                unresolved_discontinuities=list(df.attrs["unresolved_discontinuities"]),
             )
 
         except Exception as e:
@@ -171,6 +186,48 @@ class DataSourceManager:
                 success=False,
                 error=str(e),
             )
+
+    def fetch_ticker_actions(
+        self,
+        ticker: str,
+        *,
+        hard_timeout: float = _HARD_TIMEOUT_SEC,
+    ) -> list[dict]:
+        """Fetch Yahoo's full split ledger for late-action reconciliation."""
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(yf.Ticker(ticker).get_actions, period="max")
+        try:
+            raw = future.result(timeout=hard_timeout)
+        except concurrent.futures.TimeoutError as exc:
+            future.cancel()
+            raise TimeoutError(
+                f"yfinance action history hung for {ticker} (hard timeout {hard_timeout}s)"
+            ) from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        if raw is None or len(raw) == 0:
+            return []
+        frame = raw.to_frame() if isinstance(raw, pd.Series) else raw.copy()
+        if isinstance(frame.index, pd.MultiIndex):
+            frame.index = frame.index.get_level_values(0)
+        columns = {str(column).strip().lower(): column for column in frame.columns}
+        split_column = columns.get("stock splits")
+        if split_column is None:
+            return []
+        actions: list[dict] = []
+        splits = pd.to_numeric(frame[split_column], errors="coerce").fillna(0)
+        for index in splits[splits > 0].index:
+            factor = float(splits.loc[index])
+            if factor == 1.0:
+                continue
+            actions.append(
+                {
+                    "action_date": pd.Timestamp(index).date().isoformat(),
+                    "action_type": "split" if factor > 1 else "reverse_split",
+                    "value": factor,
+                }
+            )
+        return actions
 
     @staticmethod
     def _download_with_hard_timeout(
@@ -227,7 +284,7 @@ class DataSourceManager:
                 )
 
     @staticmethod
-    def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_ohlcv(df: pd.DataFrame, *, auto_adjust: bool = False) -> pd.DataFrame:
         """Normalize OHLCV DataFrame schema.
 
         Handles both old-style flat columns (yfinance <1.0) and
@@ -262,10 +319,28 @@ class DataSourceManager:
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
 
+        actions: list[dict] = []
+        if "dividends" in df_copy.columns:
+            dividends = pd.to_numeric(df_copy["dividends"], errors="coerce").fillna(0)
+            for index in dividends[dividends != 0].index:
+                actions.append(
+                    {
+                        "action_date": df_copy.loc[index, "date"].date().isoformat(),
+                        "action_type": "dividend",
+                        "value": float(dividends.loc[index]),
+                        "applied_to_prices": bool(auto_adjust),
+                    }
+                )
+
+        unresolved: list[dict] = []
+
         # Yahoo is inconsistent about split adjustment: some downloads contain
-        # raw pre-split prices while others are already rebased. Apply a declared
-        # split only when it makes the closes immediately around the event more
-        # continuous. This avoids both missed splits and double-adjustment.
+        # raw pre-split prices while others are already rebased. ``Adj Close``
+        # provides an independent provider basis signal: its ratio to ``Close``
+        # changes by the declared factor only when the raw OHLC needs rebasing.
+        # Price continuity is not evidence because a split can coincide with a
+        # genuine large move. If Yahoo omits or contradicts that basis signal,
+        # preserve the observations and fail research closed.
         if "stock splits" in df_copy.columns:
             split_factors = pd.to_numeric(df_copy["stock splits"], errors="coerce").fillna(0)
             for index in split_factors[split_factors > 0].index:
@@ -274,6 +349,13 @@ class DataSourceManager:
                     continue
 
                 split_date = df_copy.loc[index, "date"]
+                action = {
+                    "action_date": split_date.date().isoformat(),
+                    "action_type": "split" if factor > 1 else "reverse_split",
+                    "value": factor,
+                    "applied_to_prices": False,
+                }
+                actions.append(action)
                 before_split = df_copy["date"] < split_date
                 on_or_after_split = df_copy["date"] >= split_date
                 comparison_before = before_split
@@ -287,16 +369,72 @@ class DataSourceManager:
                     df_copy.loc[on_or_after_split, "close"], errors="coerce"
                 ).dropna()
                 if before_closes.empty or after_closes.empty:
+                    action["basis_evidence"] = "unresolved"
+                    unresolved.append(
+                        {
+                            "action_date": action["action_date"],
+                            "action_type": action["action_type"],
+                            "value": factor,
+                            "reason": "declared_action_missing_bracketing_closes",
+                        }
+                    )
                     continue
 
                 before_close = float(before_closes.iloc[-1])
                 after_close = float(after_closes.iloc[0])
                 if before_close <= 0 or after_close <= 0:
+                    action["basis_evidence"] = "unresolved"
+                    unresolved.append(
+                        {
+                            "action_date": action["action_date"],
+                            "action_type": action["action_type"],
+                            "value": factor,
+                            "reason": "declared_action_invalid_bracketing_closes",
+                        }
+                    )
                     continue
 
-                raw_gap = abs(math.log(before_close / after_close))
-                adjusted_gap = abs(math.log((before_close / factor) / after_close))
-                if adjusted_gap >= raw_gap:
+                needs_rebase = False
+                already_rebased = bool(auto_adjust)
+                if not auto_adjust and "adj close" in df_copy.columns:
+                    before_adjusted = pd.to_numeric(
+                        df_copy.loc[comparison_before, "adj close"], errors="coerce"
+                    ).dropna()
+                    after_adjusted = pd.to_numeric(
+                        df_copy.loc[on_or_after_split, "adj close"], errors="coerce"
+                    ).dropna()
+                    if not before_adjusted.empty and not after_adjusted.empty:
+                        before_adj_close = float(before_adjusted.iloc[-1])
+                        after_adj_close = float(after_adjusted.iloc[0])
+                        if before_adj_close > 0 and after_adj_close > 0:
+                            ratio_change = (
+                                (after_adj_close / after_close)
+                                / (before_adj_close / before_close)
+                            )
+                            matches_factor = math.isclose(
+                                ratio_change, factor, rel_tol=0.01, abs_tol=1e-6
+                            )
+                            matches_one = math.isclose(
+                                ratio_change, 1.0, rel_tol=0.01, abs_tol=1e-6
+                            )
+                            needs_rebase = matches_factor and not matches_one
+                            already_rebased = matches_one and not matches_factor
+
+                if not needs_rebase and not already_rebased:
+                    action["basis_evidence"] = "unresolved"
+                    unresolved.append(
+                        {
+                            "action_date": action["action_date"],
+                            "action_type": action["action_type"],
+                            "value": factor,
+                            "reason": "declared_action_basis_unresolved",
+                        }
+                    )
+                    continue
+                action["basis_evidence"] = (
+                    "provider_adjusted_close" if needs_rebase else "provider_already_adjusted"
+                )
+                if already_rebased:
                     continue
 
                 for column in ("open", "high", "low", "close"):
@@ -310,6 +448,7 @@ class DataSourceManager:
                 df_copy.loc[before_split, "volume"] = (
                     df_copy.loc[before_split, "volume"] * factor
                 )
+                action["applied_to_prices"] = True
 
         # A repaired row is yfinance's inferred value, not an exchange print.
         # Drop it when it remains an isolated >35% outlier after split
@@ -334,9 +473,38 @@ class DataSourceManager:
                 )
                 df_copy = df_copy.drop(index=drop_indexes)
 
-        df_copy["date"] = df_copy["date"].dt.strftime("%Y-%m-%d")
+        # A large remaining scale break is not evidence of a split. Preserve the
+        # observations, but fail the series closed until declared evidence exists.
+        ordered = df_copy.sort_values("date")
+        closes = pd.to_numeric(ordered["close"], errors="coerce")
+        dates = ordered["date"].tolist()
+        for position in range(1, len(ordered)):
+            previous, current = closes.iloc[position - 1], closes.iloc[position]
+            if pd.isna(previous) or pd.isna(current) or previous <= 0 or current <= 0:
+                continue
+            ratio = max(float(previous / current), float(current / previous))
+            if ratio >= SCALE_BREAK_RATIO:
+                unresolved.append(
+                    {
+                        "previous_date": dates[position - 1].date().isoformat(),
+                        "date": dates[position].date().isoformat(),
+                        "ratio": round(ratio, 6),
+                        "reason": "unexplained_adjacent_price_discontinuity",
+                    }
+                )
 
-        return df_copy[required]
+        df_copy["date"] = df_copy["date"].dt.strftime("%Y-%m-%d")
+        normalized = df_copy[required]
+        normalized.attrs.update(
+            {
+                "adjustment_basis": "total_return" if auto_adjust else "split_adjusted_price_only",
+                "adjustment_version": PRICE_ADJUSTMENT_VERSION,
+                "basis_status": "unresolved" if unresolved else "verified",
+                "corporate_actions": actions,
+                "unresolved_discontinuities": unresolved,
+            }
+        )
+        return normalized
 
     def _check_and_alert(self) -> None:
         """Log a CRITICAL alert when the failure rate exceeds threshold."""

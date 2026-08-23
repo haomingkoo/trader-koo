@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import { usePaperTradeSummary, usePaperTrades } from "../api/hooks";
+import { useNextOpenBaseline, usePaperTradeSummary, usePaperTrades } from "../api/hooks";
 import type { PaperTradeSummaryOverall } from "../api/types";
 import Spinner from "../components/ui/Spinner";
 import Badge from "../components/ui/Badge";
 import {
   PaperTradePortfolioHero,
+  PaperCampaignHealthPanel,
+  BreadthShadowPanel,
   PaperTradeDecisionFlow,
   PaperTradeOpenPositions,
   PaperTradeEquityCurve,
@@ -15,6 +17,8 @@ import {
   PaperTradeMLCalibration,
   PaperTradeFilters,
   PaperTradeLogTable,
+  StrategyEvidenceStatePanel,
+  NextOpenBaselinePanel,
 } from "../components/paper/PaperTradeSections";
 
 export default function PaperTradePage() {
@@ -24,14 +28,16 @@ export default function PaperTradePage() {
 
   const [statusFilter, setStatusFilter] = useState("all");
   const [dirFilter, setDirFilter] = useState("all");
+  const [campaignId, setCampaignId] = useState("paper-v2");
 
   const { data: summary, isLoading: summaryLoading } =
-    usePaperTradeSummary();
+    usePaperTradeSummary(campaignId);
+  const { data: baselineData } = useNextOpenBaseline();
   const {
     data: tradesData,
     isLoading: tradesLoading,
     error,
-  } = usePaperTrades(statusFilter, dirFilter);
+  } = usePaperTrades(statusFilter, dirFilter, campaignId);
 
   const isLoading = summaryLoading || tradesLoading;
   if (isLoading) return <Spinner className="mt-12" />;
@@ -60,9 +66,40 @@ export default function PaperTradePage() {
         <strong>Simulated trades only — not real money.</strong> Results may not reflect real-execution conditions.
       </div>
 
+      <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+        Campaign ledger
+        <select
+          data-testid="paper-campaign-selector"
+          value={campaignId}
+          onChange={(event) => setCampaignId(event.target.value)}
+          className="rounded border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[var(--text)]"
+        >
+          {(summary?.campaign_health?.campaigns ?? [{
+            campaign_id: campaignId,
+            label: campaignId,
+            policy_version: "",
+            status: "selected",
+            starting_capital: 0,
+            trade_count: 0,
+          }]).map((campaign) => (
+            <option key={campaign.campaign_id} value={campaign.campaign_id}>
+              {campaign.label} ({campaign.status ?? "selected"})
+            </option>
+          ))}
+        </select>
+      </label>
+
       <PaperTradePortfolioHero overall={overall} />
 
+      <StrategyEvidenceStatePanel evidence={summary?.strategy_evidence} />
+
+      <NextOpenBaselinePanel baseline={baselineData?.baseline} />
+
       <PaperTradeDecisionFlow overall={overall} policy={summary?.policy} />
+
+      <PaperCampaignHealthPanel health={summary?.campaign_health} />
+
+      <BreadthShadowPanel shadow={summary?.breadth_shadow} />
 
       {/* How it works — collapsible explainer */}
       <details className="group rounded-xl border border-[var(--line)] bg-[var(--panel)]">
@@ -109,9 +146,13 @@ export default function PaperTradePage() {
       <PaperTradeBenchmarkComparison
         overall={overall}
         benchmarks={summary?.benchmarks}
+        evidence={summary?.strategy_evidence}
       />
 
-      <PaperTradeFeedbackPanel feedback={summary?.feedback} />
+      <PaperTradeFeedbackPanel
+        feedback={summary?.feedback}
+        evidence={summary?.strategy_evidence}
+      />
 
       <PaperTradeDecisionMemory reflections={summary?.recent_reflections} />
 

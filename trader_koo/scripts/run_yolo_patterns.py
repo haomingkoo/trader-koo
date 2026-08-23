@@ -33,6 +33,8 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 import pandas as pd
 
+from trader_koo.db.price_contract import research_price_contract
+
 LOG = logging.getLogger("yolo_patterns")
 if not LOG.handlers:
     logging.basicConfig(
@@ -161,13 +163,18 @@ def record_yolo_run_event(
 
 def get_tickers_to_process(
     conn: sqlite3.Connection, only_new: bool, timeframe: str
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, str]]:
     """Return list of (ticker, latest_price_date) to process for the given timeframe."""
     rows = conn.execute(
         "SELECT ticker, MAX(date) as latest FROM price_daily GROUP BY ticker ORDER BY ticker"
     ).fetchall()
+    eligible_rows = []
+    for row in rows:
+        contract = research_price_contract(conn, [str(row[0])])
+        if contract["eligible"]:
+            eligible_rows.append((str(row[0]), str(row[1]), str(contract["revision"])))
     if not only_new:
-        return [(r[0], r[1]) for r in rows]
+        return eligible_rows
 
     # --only-new: skip tickers whose yolo as_of_date (for this timeframe) is up-to-date
     existing = {
@@ -178,9 +185,9 @@ def get_tickers_to_process(
         ).fetchall()
     }
     result = []
-    for ticker, latest_date in rows:
+    for ticker, latest_date, revision in eligible_rows:
         if existing.get(ticker) != latest_date:
-            result.append((ticker, latest_date))
+            result.append((ticker, latest_date, revision))
     return result
 
 
@@ -228,22 +235,39 @@ def save_detections(
     detections: list[dict],
     lookback_days: int,
     as_of_date: str,
+    expected_revision: str | None = None,
 ) -> None:
-    # Preserve historical snapshots. Only replace rows for the same ticker/timeframe/as_of_date.
-    conn.execute(
-        "DELETE FROM yolo_patterns WHERE ticker = ? AND timeframe = ? AND as_of_date = ?",
-        (ticker, timeframe, as_of_date),
-    )
-    for d in detections:
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        contract = research_price_contract(conn, [ticker])
+        if not contract["eligible"]:
+            raise ValueError(
+                f"Price basis is not research eligible for {ticker}: {contract['reason']}"
+            )
+        if expected_revision is not None and contract.get("revision") != expected_revision:
+            raise ValueError(f"Price revision changed while detecting {ticker}")
+        # Preserve historical snapshots. Only replace rows for the same ticker/timeframe/as_of_date.
         conn.execute(
-            """INSERT INTO yolo_patterns
-               (ticker, timeframe, pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ticker, timeframe, d["pattern"], d["confidence"],
-             d["x0_date"], d["x1_date"], d["y0"], d["y1"],
-             lookback_days, as_of_date),
+            "DELETE FROM yolo_patterns WHERE ticker = ? AND timeframe = ? AND as_of_date = ?",
+            (ticker, timeframe, as_of_date),
         )
-    conn.commit()
+        for d in detections:
+            conn.execute(
+                """INSERT INTO yolo_patterns
+                   (ticker, timeframe, pattern, confidence, x0_date, x1_date, y0, y1, lookback_days, as_of_date)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ticker, timeframe, d["pattern"], d["confidence"],
+                 d["x0_date"], d["x1_date"], d["y0"], d["y1"],
+                 lookback_days, as_of_date),
+            )
+        if owns_transaction:
+            conn.commit()
+    except Exception:
+        if owns_transaction and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def prune_yolo_snapshot_history(conn: sqlite3.Connection, *, timeframe: str, keep_asofs: int) -> dict[str, int]:
@@ -449,7 +473,7 @@ def _run_pass(
     total_render_s = 0.0
     total_infer_s = 0.0
     total_bars = 0
-    for i, (ticker, latest_date) in enumerate(ticker_dates, 1):
+    for i, (ticker, latest_date, price_revision) in enumerate(ticker_dates, 1):
         t_start = time.perf_counter()
         render_s = 0.0
         infer_s = 0.0
@@ -515,7 +539,15 @@ def _run_pass(
                 t_infer0 = time.perf_counter()
                 detections = run_inference(model, img_arr, ai, dates)
                 infer_s = time.perf_counter() - t_infer0
-                save_detections(conn, ticker, timeframe, detections, lookback_days, latest_date)
+                save_detections(
+                    conn,
+                    ticker,
+                    timeframe,
+                    detections,
+                    lookback_days,
+                    latest_date,
+                    expected_revision=price_revision,
+                )
 
                 elapsed_s = time.perf_counter() - t_start
                 total_elapsed_s += elapsed_s

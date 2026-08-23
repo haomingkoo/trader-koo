@@ -9,12 +9,19 @@ import datetime as dt
 import json
 import logging
 import os
+import sqlite3
 import threading
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from trader_koo.backend.services.market_data import parse_iso_utc
+from trader_koo.config import DEFAULT_DB_PATH
+from trader_koo.report.runs import (
+    LATEST_MANIFEST,
+    reconcile_report_publication,
+    resolve_published_report,
+)
 
 LOG = logging.getLogger("trader_koo.services.report_loader")
 
@@ -80,19 +87,26 @@ def _tail_text_file(
         return []
 
 
-# ---------------------------------------------------------------------------
-# Report discovery
-# ---------------------------------------------------------------------------
-
-# Memoizes the parsed latest report keyed by (resolved path str, mtime_ns).
-# The latest report file changes only nightly, so this avoids re-parsing the
-# ~256KB JSON on every dashboard/report request. mtime invalidates on any
-# new report write.
 _latest_report_cache: dict[tuple[str, int], dict[str, Any]] = {}
 _latest_report_cache_lock = threading.Lock()
 
 
-def _resolve_latest_report_file(report_dir: Path) -> Path | None:
+def _configured_registry_connection(report_dir: Path) -> sqlite3.Connection | None:
+    """Open the production registry only for the configured report directory."""
+    configured_report_dir = Path(
+        os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports")
+    ).resolve()
+    if report_dir.resolve() != configured_report_dir:
+        return None
+    db_path = Path(os.getenv("TRADER_KOO_DB_PATH", str(DEFAULT_DB_PATH))).resolve()
+    if not db_path.is_file():
+        return None
+    return sqlite3.connect(str(db_path), timeout=30)
+
+
+def _resolve_latest_report_file(
+    report_dir: Path,
+) -> Path | None:
     """Resolve the latest readable report file without parsing it.
 
     Prefers ``daily_report_latest.json``, then the newest dated report file
@@ -102,7 +116,11 @@ def _resolve_latest_report_file(report_dir: Path) -> Path | None:
     if _load_json_file(latest) is not None:
         return latest
     candidates = sorted(
-        [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
+        [
+            p for p in report_dir.glob("daily_report_*.json")
+            if p.name not in {"daily_report_latest.json", LATEST_MANIFEST}
+            and not p.name.endswith(".published.json")
+        ],
         key=lambda p: p.name,
         reverse=True,
     )
@@ -114,14 +132,45 @@ def _resolve_latest_report_file(report_dir: Path) -> Path | None:
 
 def latest_daily_report_json(
     report_dir: Path,
+    *,
+    registry_conn: Any | None = None,
 ) -> tuple[Path | None, dict[str, Any] | None]:
-    """Find and parse the latest daily report JSON.
+    """Find and parse the canonical daily report JSON.
 
-    Checks ``daily_report_latest.json`` first, then falls back to
-    the newest dated report file. The parsed payload is memoized by
-    ``(path, st_mtime_ns)`` so the latest file is parsed at most once per
-    nightly write.
+    Deterministic rule: when a run manifest exists, serve only its hash-verified
+    published artifact.  Before the run registry existed, fall back to the
+    legacy latest/newest-file rule and label that payload ``unlinked legacy``;
+    no run identity is fabricated.
     """
+    owned_registry_conn: sqlite3.Connection | None = None
+    if registry_conn is None:
+        owned_registry_conn = _configured_registry_connection(report_dir)
+        registry_conn = owned_registry_conn
+    legacy_allowed = registry_conn is None
+    if registry_conn is not None:
+        try:
+            reconcile_report_publication(registry_conn, report_dir=report_dir)
+            resolved = resolve_published_report(
+                registry_conn, report_dir=report_dir, require_current=True
+            )
+            if resolved is not None:
+                return resolved
+            registered = registry_conn.execute(
+                "SELECT COUNT(*) FROM report_runs"
+            ).fetchone()[0]
+            legacy_allowed = int(registered or 0) == 0
+            if not legacy_allowed:
+                return None, None
+        except Exception as exc:
+            LOG.error("Canonical report publication reconciliation failed: %s", exc)
+            return None, None
+        finally:
+            if owned_registry_conn is not None:
+                owned_registry_conn.close()
+    # A manifest without its DB registry is not evidence. Only pre-registry
+    # directories may use the explicitly labelled legacy fallback.
+    if not legacy_allowed or (report_dir / LATEST_MANIFEST).exists():
+        return None, None
     path = _resolve_latest_report_file(report_dir)
     if path is None:
         return None, None
@@ -136,7 +185,13 @@ def latest_daily_report_json(
     with _latest_report_cache_lock:
         cached = _latest_report_cache.get(cache_key)
     if cached is not None:
-        return path, cached
+        legacy = dict(cached)
+        legacy["report_run"] = {
+            "run_id": None,
+            "state": "unlinked_legacy",
+            "lineage": "unlinked legacy",
+        }
+        return path, legacy
 
     payload = _load_json_file(path)
     if payload is None:
@@ -146,53 +201,63 @@ def latest_daily_report_json(
         for key in [k for k in _latest_report_cache if k[0] == cache_key[0]]:
             del _latest_report_cache[key]
         _latest_report_cache[cache_key] = payload
-    return path, payload
+    legacy = dict(payload)
+    legacy["report_run"] = {
+        "run_id": None,
+        "state": "unlinked_legacy",
+        "lineage": "unlinked legacy",
+    }
+    return path, legacy
 
 
 def report_json_for_generated_ts(
     report_dir: Path,
     generated_ts: str | None,
+    *,
+    registry_conn: sqlite3.Connection | None = None,
 ) -> tuple[Path | None, dict[str, Any] | None]:
-    """Locate a report matching *generated_ts*, falling back to the latest."""
+    """Resolve an exact report timestamp; a miss never substitutes latest."""
+    if generated_ts is None:
+        return latest_daily_report_json(report_dir, registry_conn=registry_conn)
     target = parse_iso_utc(generated_ts)
     if target is None:
-        return latest_daily_report_json(report_dir)
-    target = target.replace(microsecond=0)
-    target_iso = target.isoformat().replace("+00:00", "Z")
-
-    candidate_path = report_dir / f"daily_report_{target.strftime('%Y%m%dT%H%M%SZ')}.json"
-    payload = _load_json_file(candidate_path)
-    if payload is not None:
-        return candidate_path, payload
-
-    latest_path, latest_payload = latest_daily_report_json(report_dir)
-    latest_generated = (
-        parse_iso_utc((latest_payload or {}).get("generated_ts"))
-        if isinstance(latest_payload, dict)
-        else None
-    )
-    if (
-        latest_payload is not None
-        and latest_generated is not None
-        and latest_generated.replace(microsecond=0) == target
-    ):
-        return latest_path, latest_payload
-
-    candidates = sorted(
-        [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
-        key=lambda p: p.name,
-        reverse=True,
-    )
-    for p in candidates[:120]:
-        payload = _load_json_file(p)
-        if not isinstance(payload, dict):
+        return None, None
+    target_iso = target.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    owned = None
+    if registry_conn is None:
+        owned = _configured_registry_connection(report_dir)
+        registry_conn = owned
+    if registry_conn is not None:
+        try:
+            resolved = resolve_published_report(
+                registry_conn,
+                report_dir=report_dir,
+                generated_ts=target_iso,
+            )
+            return resolved if resolved is not None else (None, None)
+        except Exception as exc:
+            LOG.error("Exact report publication verification failed: %s", exc)
+            return None, None
+        finally:
+            if owned is not None:
+                owned.close()
+    if (report_dir / LATEST_MANIFEST).exists():
+        return None, None
+    for path in sorted(report_dir.glob("daily_report_*.json"), reverse=True):
+        if path.name == LATEST_MANIFEST or path.name.endswith(".published.json"):
             continue
-        row_ts = parse_iso_utc(payload.get("generated_ts"))
-        if row_ts is None:
+        payload = _load_json_file(path)
+        row_ts = parse_iso_utc((payload or {}).get("generated_ts"))
+        if row_ts is None or row_ts.replace(microsecond=0).isoformat().replace("+00:00", "Z") != target_iso:
             continue
-        if row_ts.replace(microsecond=0).isoformat().replace("+00:00", "Z") == target_iso:
-            return p, payload
-    return latest_daily_report_json(report_dir)
+        linked = dict(payload or {})
+        linked["report_run"] = {
+            "run_id": None,
+            "state": "unlinked_legacy",
+            "lineage": "unlinked legacy",
+        }
+        return path, linked
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -302,14 +367,52 @@ def latest_report_hmm_for_ticker(
 def daily_report_history(
     report_dir: Path,
     limit: int = 20,
+    *,
+    registry_conn: sqlite3.Connection | None = None,
 ) -> list[dict[str, Any]]:
-    """Return metadata for the most recent *limit* report files."""
+    """Return only DB-owned, artifact-verified history when a registry exists."""
+    owned = None
+    if registry_conn is None:
+        owned = _configured_registry_connection(report_dir)
+        registry_conn = owned
+    files: list[Path] = []
+    try:
+        if registry_conn is not None:
+            candidates = [
+                str(row[0])
+                for row in registry_conn.execute(
+                    """SELECT run_id FROM report_runs
+                       WHERE status='published' AND publication_verified=1
+                       ORDER BY published_ts DESC,run_id DESC"""
+                )
+            ]
+            from trader_koo.report.runs import verified_report_run_ids
+
+            verified = verified_report_run_ids(registry_conn, candidates)
+            run_ids = [run_id for run_id in candidates if run_id in verified][
+                : max(1, int(limit))
+            ]
+            for run_id in run_ids:
+                resolved = resolve_published_report(
+                    registry_conn, report_dir=report_dir, run_id=run_id
+                )
+                if resolved is None:
+                    raise ValueError(f"published report {run_id} cannot be resolved")
+                files.append(resolved[0])
+        elif not (report_dir / LATEST_MANIFEST).exists():
+            files = sorted(
+                [p for p in report_dir.glob("daily_report_*.json")
+                 if p.name not in {"daily_report_latest.json", LATEST_MANIFEST}
+                 and not p.name.endswith(".published.json")],
+                reverse=True,
+            )[: max(1, int(limit))]
+    except Exception as exc:
+        LOG.error("Report history verification failed: %s", exc)
+        return []
+    finally:
+        if owned is not None:
+            owned.close()
     out: list[dict[str, Any]] = []
-    files = sorted(
-        [p for p in report_dir.glob("daily_report_*.json") if p.name != "daily_report_latest.json"],
-        key=lambda p: p.name,
-        reverse=True,
-    )[: max(1, limit)]
     for p in files:
         try:
             st = p.stat()
@@ -364,7 +467,16 @@ def daily_report_response(
     include_admin_log_hints:
         Whether to suggest admin log endpoints in diagnostics.
     """
-    latest_path, latest_payload = latest_daily_report_json(report_dir)
+    registry_conn = None
+    try:
+        registry_conn = get_conn_fn()
+        latest_path, latest_payload = latest_daily_report_json(
+            report_dir,
+            registry_conn=registry_conn,
+        )
+    finally:
+        if registry_conn is not None:
+            registry_conn.close()
     if isinstance(latest_payload, dict):
         signals = latest_payload.get("signals")
         if isinstance(signals, dict):
@@ -454,7 +566,8 @@ def daily_report_response(
         if detail is None and isinstance(email_block, dict):
             attempted = bool(email_block.get("attempted"))
             sent = bool(email_block.get("sent"))
-            if attempted and not sent:
+            state = str(email_block.get("state") or "")
+            if attempted and not sent and state not in {"pending_after_publication", "pending"}:
                 error_msg = str(email_block.get("error") or "unknown SMTP error")
                 detail = f"Report generated, but email delivery failed: {error_msg}"
                 detail_code = "email_delivery_failed"

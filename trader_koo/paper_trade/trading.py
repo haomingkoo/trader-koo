@@ -10,15 +10,237 @@ from typing import Any
 
 from trader_koo.paper_trade.config import PaperTradeConfig
 from trader_koo.paper_trade.config import config_snapshot
+from trader_koo.paper_trade.chronology import (
+    next_scheduled_session_after,
+    publication_precedes_session_open,
+)
+from trader_koo.paper_trade.errors import ReportLineageError
+from trader_koo.paper_trade.campaign import (
+    canonical_hash,
+    canonical_json,
+    decide_candidate,
+    DivergentDecisionSetError,
+    persist_decision_set,
+)
 from trader_koo.paper_trade.decision import (
     compute_position_plan,
     compute_stop_and_target,
     evaluate_setup_for_paper_trade,
 )
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema, register_bot_version
+from trader_koo.paper_trade.shadow import (
+    record_breadth_shadow,
+    resolve_breadth_shadow_outcomes,
+)
 from trader_koo.paper_trade.summary import update_portfolio_snapshot
+from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
+from trader_koo.db.price_contract import research_price_contract
+from trader_koo.research.next_open_baseline import (
+    adverse_fill_price,
+    resolve_barrier_exit,
+)
 
 LOG = logging.getLogger(__name__)
+
+
+def _pending_order_hash(
+    *, order_id: str, report_run_id: str, report_date: str, generated_ts: str,
+    campaign_id: str, policy_version: str, candidate_rank: int, ticker: str,
+    direction: str, candidate_json: str, critic_json: str,
+    market_context_json: str, avg_daily_volume: float | None,
+) -> str:
+    return canonical_hash({
+        "order_id": order_id, "report_run_id": report_run_id,
+        "report_date": report_date, "generated_ts": generated_ts,
+        "campaign_id": campaign_id, "policy_version": policy_version,
+        "candidate_rank": candidate_rank, "ticker": ticker,
+        "direction": direction, "candidate_json": candidate_json,
+        "critic_json": critic_json, "market_context_json": market_context_json,
+        "avg_daily_volume": avg_daily_volume,
+    })
+
+
+def _record_trade_event(
+    conn: sqlite3.Connection,
+    *,
+    trade_id: int,
+    event_type: str,
+    event_date: str,
+    payload: dict[str, Any],
+) -> None:
+    payload_json = canonical_json(payload)
+    conn.execute(
+        """INSERT OR IGNORE INTO paper_trade_events
+               (trade_id,event_type,event_date,payload_json,payload_hash)
+           VALUES (?,?,?,?,?)""",
+        (trade_id, event_type, event_date, payload_json, canonical_hash(payload)),
+    )
+
+
+def _entry_accounting(
+    conn: sqlite3.Connection,
+    *,
+    campaign_id: str,
+    entry_price: float,
+    position_size_pct: float,
+    config: PaperTradeConfig,
+) -> dict[str, float] | None:
+    account = reconcile_portfolio(
+        conn,
+        campaign_id=campaign_id,
+        starting_capital=config.starting_capital,
+    )
+    target_notional = float(account["equity"]) * position_size_pct / 100
+    quantity = int(target_notional / entry_price) if entry_price > 0 else 0
+    commission = float(config.commission_per_trade)
+    while quantity > 0 and quantity * entry_price + commission > float(account["cash"]):
+        quantity -= 1
+    if quantity < 1:
+        return None
+    return {
+        "quantity": float(quantity),
+        "entry_notional": quantity * entry_price,
+        "entry_commission": commission,
+        "equity_before": float(account["equity"]),
+        "cash_before": float(account["cash"]),
+    }
+
+
+def _run_owned_transaction(conn: sqlite3.Connection, operation: Any) -> Any:
+    """Run a mutation in one snapshot without committing caller-owned work."""
+    owned = not conn.in_transaction
+    if owned:
+        conn.execute("BEGIN")
+    try:
+        result = operation()
+        if owned:
+            conn.commit()
+        return result
+    except Exception:
+        if owned:
+            conn.rollback()
+        raise
+
+
+def _require_published_canonical_report(
+    conn: sqlite3.Connection,
+    report_run_id: str,
+    *,
+    require_current: bool = True,
+) -> dict[str, Any]:
+    """Resolve lineage only from #230's authoritative registry."""
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_runs'"
+    ).fetchone()
+    if not table:
+        raise ReportLineageError(
+            "report_publication_lineage_invalid",
+            "paper admission requires the authoritative report_runs registry",
+        )
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(report_runs)")}
+    required = {
+        "run_id", "status", "started_ts", "completed_ts", "published_ts",
+        "generated_ts", "report_kind", "publication_verified",
+        "is_generation_canonical", "superseded_by_run_id", "generation_key",
+        "config_json", "config_hash", "code_version", "content_hash",
+        "markdown_hash", "artifact_path", "markdown_path",
+        "scanned_universe_json", "ranked_candidates_json", "decisions_json",
+        "inputs_json", "source_timestamps_json",
+    }
+    decision_columns = {
+        str(item[1])
+        for item in conn.execute("PRAGMA table_info(report_run_decisions)")
+    }
+    required_decision_columns = {
+        "run_id", "ticker", "selected_rank", "decision",
+        "reason_codes_json", "inputs_json",
+    }
+    if (
+        not required.issubset(columns)
+        or not required_decision_columns.issubset(decision_columns)
+    ):
+        raise ReportLineageError(
+            "report_publication_lineage_invalid",
+            "report_runs registry does not expose verified publication lineage",
+        )
+    try:
+        row = conn.execute(
+            "SELECT artifact_path,published_ts,status,publication_verified,"
+            "is_generation_canonical "
+            "FROM report_runs WHERE run_id=?",
+            (report_run_id,),
+        ).fetchone()
+    except sqlite3.DatabaseError as exc:
+        raise ReportLineageError(
+            "report_publication_lineage_invalid", str(exc)
+        ) from exc
+    if not row or not str(row[0] or "").strip():
+        raise ReportLineageError(
+            "report_not_verified_published",
+            "paper admission requires a verified report artifact",
+        )
+    from pathlib import Path
+    from trader_koo.report.runs import resolve_published_report
+
+    try:
+        resolved = resolve_published_report(
+            conn,
+            report_dir=Path(str(row[0])).parent,
+            run_id=report_run_id,
+            require_current=require_current,
+        )
+    except (sqlite3.DatabaseError, ValueError, RuntimeError) as exc:
+        raise ReportLineageError(
+            "report_publication_lineage_invalid", str(exc)
+        ) from exc
+    if resolved is None:
+        code = (
+            "report_not_current_publication"
+            if row and str(row[2]) == "published" and int(row[3] or 0) == 1
+            else "report_not_verified_published"
+        )
+        raise ReportLineageError(
+            code,
+            "paper admission requires the current verified publication",
+        )
+    return {
+        "report_complete": True,
+        "is_canonical": bool(row[4]),
+        "published_ts": str(row[1] or ""),
+        "resolved": resolved,
+    }
+
+
+def _advance_paper_book(
+    conn: sqlite3.Connection,
+    *,
+    config: PaperTradeConfig,
+    through_date: str,
+) -> None:
+    """Apply each session's opens before its barriers and closing marks."""
+    earliest = conn.execute(
+        "SELECT MIN(report_date) FROM paper_pending_orders WHERE status='pending'"
+    ).fetchone()[0]
+    if not earliest:
+        _mark_to_market(conn, config=config, through_date=through_date)
+        return
+    sessions = [
+        str(row[0])
+        for row in conn.execute(
+            """SELECT date FROM price_daily
+               WHERE ticker='SPY' AND date>? AND date<=? AND open IS NOT NULL
+               ORDER BY date""",
+            (str(earliest), through_date),
+        )
+    ]
+    if not sessions:
+        _mark_to_market(conn, config=config, through_date=through_date)
+        return
+    for session_date in sessions:
+        fill_pending_paper_orders(
+            conn, config=config, through_date=session_date,
+        )
+        _mark_to_market(conn, config=config, through_date=session_date)
 
 
 def _build_review(
@@ -426,11 +648,25 @@ def _close_trade(
     # Deduct trading costs from P&L
     # 1. Commission: entry + exit as % of entry price
     position_row = conn.execute(
-        "SELECT position_size_pct FROM paper_trades WHERE id = ?", (trade_id,),
+        """SELECT position_size_pct,quantity,entry_notional,entry_commission,
+                  accounting_status
+           FROM paper_trades WHERE id=?""",
+        (trade_id,),
     ).fetchone()
     pos_pct = float(position_row[0] or 8.0) if position_row and position_row[0] is not None else 8.0
-    notional = config.starting_capital * (pos_pct / 100)
-    commission_cost_pct = (config.commission_per_trade * 2 / notional) * 100 if notional > 0 else 0
+    reconciled = bool(position_row and str(position_row[4]) == "reconciled")
+    notional = (
+        float(position_row[2]) if reconciled and position_row[2] is not None
+        else config.starting_capital * (pos_pct / 100)
+    )
+    entry_commission = (
+        float(position_row[3]) if reconciled and position_row[3] is not None
+        else float(config.commission_per_trade)
+    )
+    exit_commission = float(config.commission_per_trade)
+    commission_cost_pct = (
+        (entry_commission + exit_commission) / notional * 100 if notional > 0 else 0
+    )
 
     # 2. Short borrow cost (annualized, pro-rated to TRADING days held)
     borrow_cost_pct = 0.0
@@ -459,6 +695,18 @@ def _close_trade(
 
     total_cost_pct = commission_cost_pct + borrow_cost_pct
     pnl = round(raw_pnl - total_cost_pct, 2)
+    quantity = float(position_row[1]) if reconciled and position_row[1] is not None else None
+    borrow_cost = notional * borrow_cost_pct / 100 if reconciled else None
+    realized_pnl_usd = (
+        (
+            (exit_price - entry_price) * quantity
+            if direction == "long"
+            else (entry_price - exit_price) * quantity
+        ) - entry_commission - exit_commission - float(borrow_cost or 0.0)
+        if quantity is not None else None
+    )
+    if realized_pnl_usd is not None and notional > 0:
+        pnl = round(realized_pnl_usd / notional * 100, 2)
     # R-multiple net of costs: adjust exit price by total cost drag
     if direction == "long":
         cost_adjusted_exit = exit_price * (1 - total_cost_pct / 100)
@@ -495,8 +743,12 @@ def _close_trade(
             r_multiple = ?,
             current_price = ?,
             unrealized_pnl_pct = NULL,
+            last_mtm_date = ?,
             review_status = ?,
             review_summary = ?,
+            exit_commission = ?,
+            borrow_cost = ?,
+            realized_pnl_usd = ?,
             updated_ts = ?
         WHERE id = ?
         """,
@@ -508,8 +760,12 @@ def _close_trade(
             pnl,
             r_mult,
             exit_price,
+            exit_date,
             review_status,
             review_summary,
+            exit_commission if reconciled else None,
+            borrow_cost,
+            realized_pnl_usd,
             now,
             trade_id,
         ),
@@ -522,76 +778,262 @@ def _close_trade(
         pnl_pct=pnl,
         r_multiple=r_mult,
     )
+    _record_trade_event(
+        conn,
+        trade_id=trade_id,
+        event_type="close",
+        event_date=exit_date,
+        payload={
+            "exit_price": exit_price,
+            "exit_reason": exit_reason,
+            "status": status,
+            "pnl_pct": pnl,
+            "r_multiple": r_mult,
+            "commission_cost_pct": commission_cost_pct,
+            "borrow_cost_pct": borrow_cost_pct,
+        },
+    )
 
 
-def create_paper_trades_from_report(
+def _create_paper_trades_from_report(
     conn: sqlite3.Connection,
     *,
     setup_rows: list[dict[str, Any]],
     report_date: str,
     generated_ts: str,
     config: PaperTradeConfig,
+    report_run_id: str | None = None,
+    schema_ready: bool = False,
+    expected_price_revision: str | None = None,
 ) -> int:
-    """Create paper trades from qualifying daily report setups."""
-    if not report_date or not setup_rows:
+    """Atomically persist one report's trades and sealed decision ledger."""
+    if not report_date:
         return 0
 
-    ensure_paper_trade_schema(conn)
+    if not schema_ready:
+        ensure_paper_trade_schema(conn)
+    if not str(report_run_id or "").strip():
+        raise ValueError("paper-trade creation requires canonical report-run lineage")
+    lineage = _require_published_canonical_report(conn, str(report_run_id))
+    if expected_price_revision is not None:
+        current_price_contract = research_price_contract(conn)
+        if (
+            not current_price_contract.get("eligible")
+            or current_price_contract.get("revision") != expected_price_revision
+        ):
+            return 0
+    _advance_paper_book(conn, config=config, through_date=report_date)
+    resolve_breadth_shadow_outcomes(
+        conn, through_date=report_date, base_config=config
+    )
     register_bot_version(
         conn,
         bot_version=config.bot_version,
         decision_version=config.decision_version,
         config_json=json.dumps(config_snapshot(config)),
         notes="Current champion paper-trade policy snapshot.",
+        schema_ready=True,
     )
+    conn.execute("SAVEPOINT paper_report_admission")
+    try:
+        inserted = _create_paper_trades_from_report_in_transaction(
+            conn,
+            setup_rows=setup_rows,
+            report_date=report_date,
+            generated_ts=generated_ts,
+            config=config,
+            report_run_id=report_run_id,
+            expected_price_revision=expected_price_revision,
+        )
+    except Exception:
+        conn.execute("ROLLBACK TO paper_report_admission")
+        conn.execute("RELEASE paper_report_admission")
+        raise
+    conn.execute("RELEASE paper_report_admission")
+    return inserted
 
+
+def _create_paper_trades_from_report_in_transaction(
+    conn: sqlite3.Connection,
+    *,
+    setup_rows: list[dict[str, Any]],
+    report_date: str,
+    generated_ts: str,
+    config: PaperTradeConfig,
+    report_run_id: str | None = None,
+    expected_price_revision: str | None = None,
+) -> int:
+    """Create paper trades from qualifying daily report setups."""
+    if not report_date:
+        return 0
+    if not report_run_id:
+        raise ValueError("paper campaign admission requires report_run_id")
+    lineage = _require_published_canonical_report(conn, report_run_id)
+    report_complete = bool(lineage["report_complete"])
+    is_canonical = bool(lineage["is_canonical"])
+
+    campaign_row = conn.execute(
+        "SELECT status, policy_version, starting_capital, policy_hash FROM paper_campaigns WHERE campaign_id=?",
+        (config.campaign_id,),
+    ).fetchone()
+    if not campaign_row:
+        raise ValueError(f"paper campaign {config.campaign_id} is not registered")
+    runtime_policy_hash = canonical_hash(config_snapshot(config))
+    if str(campaign_row[1]) != config.decision_version or float(campaign_row[2]) != config.starting_capital:
+        raise ValueError("runtime policy does not match immutable campaign registration")
+    if str(campaign_row[3] or "") and str(campaign_row[3]) != runtime_policy_hash:
+        raise ValueError("runtime policy hash does not match sealed campaign registration")
+    if not str(campaign_row[3] or ""):
+        conn.execute(
+            "UPDATE paper_campaigns SET policy_hash=? WHERE campaign_id=?",
+            (runtime_policy_hash, config.campaign_id),
+        )
+    campaign_active = str(campaign_row[0]) == "active"
+    request_hash = canonical_hash({
+        "report_run_id": report_run_id,
+        "report_date": report_date,
+        "generated_ts": generated_ts,
+        "campaign_id": config.campaign_id,
+        "report_complete": report_complete,
+        "is_canonical": is_canonical,
+        "policy": config_snapshot(config),
+        "candidates": setup_rows,
+    })
+    existing_set = conn.execute(
+        "SELECT request_hash FROM paper_decision_sets WHERE report_run_id=? AND campaign_id=?",
+        (report_run_id, config.campaign_id),
+    ).fetchone()
+    if existing_set:
+        if str(existing_set[0]) == request_hash:
+            return 0
+        raise DivergentDecisionSetError(
+            f"divergent retry for report_run_id={report_run_id} campaign_id={config.campaign_id}"
+        )
+    record_breadth_shadow(
+        conn,
+        report_run_id=report_run_id,
+        report_date=report_date,
+        generated_ts=generated_ts,
+        setup_rows=setup_rows,
+        base_config=config,
+    )
     open_count = conn.execute(
-        "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"
+        "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
+        (config.campaign_id,),
     ).fetchone()[0]
 
-    if open_count >= config.max_open:
+    global_block: tuple[str, str, str] | None = None
+    if not report_complete or not is_canonical:
+        global_block = (
+            "report_integrity",
+            "report_not_complete_canonical",
+            "Only complete canonical reports may admit paper trades.",
+        )
+    elif not campaign_active:
+        global_block = (
+            "campaign_lifecycle",
+            "campaign_not_active",
+            "Campaign is not active; candidate is recorded in shadow mode.",
+        )
+    if global_block is None and open_count >= config.max_open:
         LOG.info(
             "Paper trades: %d open trades already at max (%d), skipping creation",
             open_count, config.max_open,
         )
-        return 0
+        global_block = (
+            "portfolio_capacity",
+            "max_open_positions",
+            f"Open positions {open_count} reached policy maximum {config.max_open}.",
+        )
 
-    # Portfolio drawdown circuit breaker — halt new entries if drawdown exceeds limit
+    # All admission risk gates consume the one reconciled account snapshot.
     try:
         snapshot_row = conn.execute(
-            "SELECT equity_index FROM paper_portfolio_snapshots ORDER BY snapshot_date DESC LIMIT 1"
+            """SELECT drawdown_pct,equity,session_pnl_usd,accounting_breaks_json
+               FROM paper_portfolio_snapshots WHERE campaign_id=?
+               ORDER BY snapshot_date DESC LIMIT 1""",
+            (config.campaign_id,),
         ).fetchone()
-        if snapshot_row and snapshot_row[0] is not None:
-            equity_index = float(snapshot_row[0])
-            drawdown_pct = (100.0 - equity_index)  # equity starts at 100
-            if drawdown_pct >= config.max_drawdown_pct:
+        if snapshot_row:
+            accounting_breaks = json.loads(str(snapshot_row[3] or "[]"))
+            if global_block is None and accounting_breaks:
+                global_block = (
+                    "portfolio_accounting",
+                    "portfolio_reconciliation_failed",
+                    "New entries are blocked until account reconciliation succeeds.",
+                )
+            drawdown_pct = float(snapshot_row[0] or 0.0)
+            if global_block is None and drawdown_pct >= config.max_drawdown_pct:
                 LOG.warning(
                     "CIRCUIT BREAKER: portfolio drawdown %.1f%% exceeds %.1f%% limit, blocking new entries",
                     drawdown_pct, config.max_drawdown_pct,
                 )
-                return 0
-    except Exception as exc:
-        LOG.debug("Drawdown check skipped: %s", exc)
-
-    # Daily loss circuit breaker — halt if today's realized losses exceed limit
-    try:
-        daily_loss_row = conn.execute(
-            "SELECT SUM(pnl_pct) FROM paper_trades "
-            "WHERE exit_date = ? AND status != 'open' AND pnl_pct IS NOT NULL",
-            (report_date,),
-        ).fetchone()
-        daily_loss = float(daily_loss_row[0]) if daily_loss_row and daily_loss_row[0] else 0.0
-        if daily_loss < 0 and abs(daily_loss) >= config.max_daily_loss_pct:
+                global_block = (
+                    "portfolio_risk",
+                    "max_drawdown_circuit_breaker",
+                    f"Portfolio drawdown {drawdown_pct:.1f}% reached {config.max_drawdown_pct:.1f}% limit.",
+                )
+            equity = float(snapshot_row[1] or config.starting_capital)
+            session_pnl = float(snapshot_row[2] or 0.0)
+            session_start = equity - session_pnl
+            daily_loss_pct = (
+                -session_pnl / session_start * 100
+                if session_pnl < 0 and session_start > 0 else 0.0
+            )
+        else:
+            daily_loss_pct = 0.0
+        if global_block is None and daily_loss_pct >= config.max_daily_loss_pct:
             LOG.warning(
                 "CIRCUIT BREAKER: daily loss %.1f%% exceeds %.1f%% limit, blocking new entries",
-                abs(daily_loss), config.max_daily_loss_pct,
+                daily_loss_pct, config.max_daily_loss_pct,
             )
-            return 0
+            global_block = (
+                "portfolio_risk",
+                "max_daily_loss_circuit_breaker",
+                f"Session account loss {daily_loss_pct:.1f}% reached {config.max_daily_loss_pct:.1f}% limit.",
+            )
     except Exception as exc:
-        LOG.debug("Daily loss check skipped: %s", exc)
+        LOG.warning("Reconciled portfolio risk check failed: %s", exc)
+        if global_block is None:
+            global_block = (
+                "portfolio_accounting",
+                "portfolio_snapshot_unavailable",
+                "New entries are blocked because the account snapshot is unavailable.",
+            )
 
-    remaining_slots = config.max_open - open_count
+    remaining_slots = max(0, config.max_open - open_count)
     inserted = 0
+    decisions: list[dict[str, Any]] = []
+    _decision_runtime_context: dict[str, Any] = {}
+
+    def record_decision(
+        *,
+        row: dict[str, Any],
+        rank: int,
+        evaluation: dict[str, Any],
+        final_gate: str,
+        reason_code: str,
+        reasons: list[str],
+        disposition: str = "rejected",
+        levels: dict[str, Any] | None = None,
+        plan: dict[str, Any] | None = None,
+        critic: dict[str, Any] | None = None,
+    ) -> None:
+        if critic is not None:
+            _decision_runtime_context["critic_outcome"] = critic
+        policy_decision = decide_candidate(
+            row=row, rank=rank, config=config, context=_decision_runtime_context,
+        )
+        expected = (final_gate, reason_code, disposition)
+        actual = (
+            policy_decision["final_gate"], policy_decision["reason_code"],
+            policy_decision["disposition"],
+        )
+        if actual != expected:
+            raise RuntimeError(
+                f"live policy branch drift at rank {rank}: expected {expected}, got {actual}"
+            )
+        decisions.append(policy_decision)
 
     # Pre-fetch VIX level once for position sizing (used by all trades this batch)
     _vix_level: float | None = None
@@ -607,73 +1049,221 @@ def create_paper_trades_from_report(
     except Exception:
         pass
 
-    # Current portfolio equity for position sizing (adapts as equity changes)
-    _current_equity = config.starting_capital
-    try:
-        _eq_row = conn.execute(
-            "SELECT equity_index FROM paper_portfolio_snapshots "
-            "ORDER BY snapshot_date DESC LIMIT 1"
-        ).fetchone()
-        if _eq_row and _eq_row[0] is not None:
-            _current_equity = config.starting_capital * (float(_eq_row[0]) / 100.0)
-    except Exception:
-        pass
-
-    for row in setup_rows:
-        if inserted >= remaining_slots:
-            break
+    for rank, row in enumerate(setup_rows, start=1):
+        _decision_runtime_context = {
+            "vix_level": _vix_level,
+            "campaign_active": campaign_active,
+            "portfolio_block": (
+                {"gate": global_block[0], "reason_code": global_block[1], "detail": global_block[2]}
+                if global_block else None
+            ),
+            "portfolio_context": {"open_count": open_count, "remaining_slots": remaining_slots, "inserted_this_report": inserted},
+            "source_context": {"report_date": report_date, "generated_ts": generated_ts, "report_run_id": report_run_id},
+        }
         if not isinstance(row, dict):
+            decisions.append(decide_candidate(
+                row=row, rank=rank, config=config, context=_decision_runtime_context,
+            ))
             continue
         evaluation = evaluate_setup_for_paper_trade(row, config=config)
         if not evaluation["approved"]:
+            failures = list(evaluation.get("gate_failures") or [])
+            first_failure = failures[0] if failures else {
+                "gate": "eligibility", "reason_code": "eligibility_rejected"
+            }
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate=str(first_failure["gate"]),
+                reason_code=str(first_failure["reason_code"]),
+                reasons=list(evaluation.get("decision_reasons") or []),
+            )
             continue
 
         ticker = str(row.get("ticker") or "").upper().strip()
         if not ticker:
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate="candidate_identity",
+                reason_code="missing_ticker",
+                reasons=["Candidate ticker is missing."],
+            )
             continue
 
+        if global_block is not None:
+            gate, code, detail = global_block
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate=gate,
+                reason_code=code,
+                reasons=[detail],
+            )
+            continue
+
+        if inserted >= remaining_slots:
+            _decision_runtime_context["portfolio_block"] = {
+                "gate": "portfolio_capacity",
+                "reason_code": "report_slots_exhausted",
+                "detail": "Higher-ranked candidates filled all remaining policy slots.",
+            }
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate="portfolio_capacity",
+                reason_code="report_slots_exhausted",
+                reasons=["Higher-ranked candidates filled all remaining policy slots."],
+            )
+            continue
+        member = conn.execute(
+            """SELECT 1 FROM report_run_decisions
+               WHERE run_id=? AND ticker=? AND decision='accepted'""",
+            (report_run_id, ticker),
+        ).fetchone()
+        if member is None:
+            raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
         direction = str(evaluation["direction"])
 
-        # Entry price = NEXT DAY OPEN (signal generates after close,
-        # earliest possible entry is next trading day's open).
-        # Fall back to today's close if next-day open not yet available.
-        next_open_row = conn.execute(
-            "SELECT CAST(open AS REAL), date FROM price_daily "
-            "WHERE ticker = ? AND date > ? ORDER BY date ASC LIMIT 1",
-            (ticker, report_date),
-        ).fetchone()
-        if next_open_row and next_open_row[0] is not None:
-            raw_entry = float(next_open_row[0])
-            entry_date_actual = next_open_row[1]
-        else:
-            # Next day data not available yet (live trading edge);
-            # use today's close as best estimate
-            raw_entry = float(row["close"])
-            entry_date_actual = report_date
+        # Entry price is strictly the ticker open on the immediate next SPY
+        # session. A missing ticker bar cannot silently roll the fill forward.
+        try:
+            intended_session = next_scheduled_session_after(report_date)
+            spy_ready = bool(
+                intended_session
+                and conn.execute(
+                    "SELECT 1 FROM price_daily "
+                    "WHERE ticker='SPY' AND date=? AND open IS NOT NULL",
+                    (intended_session,),
+                ).fetchone()
+            )
+            next_open_row = (
+                conn.execute(
+                    "SELECT CAST(open AS REAL),date FROM price_daily "
+                    "WHERE ticker=? AND date=? AND open IS NOT NULL",
+                    (ticker, intended_session),
+                ).fetchone()
+                if spy_ready
+                else None
+            )
+            publication_ready = bool(
+                intended_session
+                and publication_precedes_session_open(
+                    str(lineage.get("published_ts") or ""), intended_session
+                )
+            )
+            if next_open_row and next_open_row[0] is not None:
+                raw_entry = float(next_open_row[0])
+                entry_date_actual = next_open_row[1]
+                execution_ready = True
+            else:
+                raw_entry = float(row["close"])
+                entry_date_actual = None
+                execution_ready = False
 
-        # Apply entry slippage on top of open price.
-        # Entry price must be computed FIRST — stops and targets are anchored
-        # to this actual fill price so stop distance reflects real trade risk.
-        slip_mult = config.entry_slippage_bps / 10_000
-        if direction == "long":
-            entry_price = round(raw_entry * (1 + slip_mult), 4)
-        else:
-            entry_price = round(raw_entry * (1 - slip_mult), 4)
-        levels = compute_stop_and_target(row, direction, config=config, entry_price=entry_price)
-        plan = compute_position_plan(row, evaluation, levels, config=config, vix_level=_vix_level, entry_price=entry_price)
+            slip_mult = config.entry_slippage_bps / 10_000
+            if direction == "long":
+                entry_price = round(raw_entry * (1 + slip_mult), 4)
+            else:
+                entry_price = round(raw_entry * (1 - slip_mult), 4)
+            _decision_runtime_context["entry_price"] = entry_price
+            _decision_runtime_context["execution_ready"] = execution_ready
+            _decision_runtime_context["execution_pending_reason"] = (
+                "scheduled_spy_open_missing"
+                if not spy_ready else "scheduled_ticker_open_missing"
+                if not execution_ready else None
+            )
+            _decision_runtime_context["source_context"] = {
+                "report_run_id": report_run_id,
+                "intended_session": intended_session,
+                "price_date": str(next_open_row[1]) if next_open_row else None,
+            }
+            levels = compute_stop_and_target(
+                row, direction, config=config, entry_price=entry_price
+            )
+            plan = compute_position_plan(
+                row,
+                evaluation,
+                levels,
+                config=config,
+                vix_level=_vix_level,
+                entry_price=entry_price,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                final_gate="trade_plan",
+                reason_code="invalid_stop_target_or_fill",
+                reasons=[f"Trade plan could not be computed: {type(exc).__name__}."],
+            )
+            continue
+
+        if not publication_ready:
+            reason_code = (
+                "report_published_after_intended_open"
+                if str(lineage.get("published_ts") or "")
+                else "report_publication_timestamp_unavailable"
+            )
+            detail = (
+                "Verified report publication did not precede the intended session open."
+                if str(lineage.get("published_ts") or "")
+                else "Verified report publication chronology is unavailable."
+            )
+            _decision_runtime_context["portfolio_block"] = {
+                "gate": "execution.next_open",
+                "reason_code": reason_code,
+                "detail": detail,
+            }
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                final_gate="execution.next_open",
+                reason_code=reason_code,
+                reasons=[detail],
+            )
+            continue
+
+        if execution_ready and not research_price_contract(conn, [ticker]).get("eligible"):
+            LOG.warning("Paper trade skipped: %s price series is unresolved", ticker)
+            _decision_runtime_context["portfolio_block"] = {
+                "gate": "price_basis",
+                "reason_code": "price_series_revision_unavailable",
+                "detail": "The executable next-open price series is not revision verified.",
+            }
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                final_gate="price_basis",
+                reason_code="price_series_revision_unavailable",
+                reasons=["The executable next-open price series is not revision verified."],
+            )
+            continue
 
         # ADV liquidity check: reject if position > max_adv_pct of daily volume
         try:
             vol_row = conn.execute(
                 "SELECT AVG(vol) FROM ("
                 "  SELECT CAST(volume AS REAL) AS vol FROM price_daily"
-                "  WHERE ticker = ? AND volume IS NOT NULL"
+                "  WHERE ticker = ? AND volume IS NOT NULL AND date <= ?"
                 "  ORDER BY date DESC LIMIT 20"
                 ")",
-                (ticker,),
+                (ticker, report_date),
             ).fetchone()
             if vol_row and vol_row[0] and vol_row[0] > 0:
                 avg_daily_volume = float(vol_row[0])
+                _decision_runtime_context["avg_daily_volume"] = avg_daily_volume
                 position_pct = float(plan.get("position_size_pct") or 8.0)
                 position_dollars = config.starting_capital * (position_pct / 100)
                 position_shares = position_dollars / entry_price if entry_price > 0 else 0
@@ -683,21 +1273,44 @@ def create_paper_trades_from_report(
                         "Paper trade skipped: %s %s position is %.1f%% of ADV (> %.1f%% max)",
                         direction.upper(), ticker, adv_pct, config.max_adv_pct,
                     )
+                    record_decision(
+                        row=row,
+                        rank=rank,
+                        evaluation=evaluation,
+                        levels=levels,
+                        plan=plan,
+                        final_gate="liquidity",
+                        reason_code="position_exceeds_adv_limit",
+                        reasons=[
+                            f"Planned position is {adv_pct:.1f}% of ADV; policy maximum is {config.max_adv_pct:.1f}%."
+                        ],
+                    )
                     continue
         except Exception as exc:
             LOG.debug("ADV check skipped: %s", exc)
 
         expected_r_multiple = plan.get("expected_r_multiple")
-        if (
-            isinstance(expected_r_multiple, (int, float))
-            and expected_r_multiple < config.min_reward_r_multiple
+        if not isinstance(expected_r_multiple, (int, float)) or (
+            expected_r_multiple < config.min_reward_r_multiple
         ):
             LOG.info(
                 "Paper trade skipped: %s %s only offers %.2fR (< %.2fR minimum)",
                 direction.upper(),
                 ticker,
-                float(expected_r_multiple),
+                float(expected_r_multiple or 0),
                 config.min_reward_r_multiple,
+            )
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                final_gate="reward_risk",
+                reason_code="minimum_reward_r_not_met",
+                reasons=[
+                    f"Expected {float(expected_r_multiple or 0):.2f}R is below policy minimum {config.min_reward_r_multiple:.2f}R."
+                ],
             )
             continue
 
@@ -741,6 +1354,7 @@ def create_paper_trades_from_report(
 
         market_ctx = capture_market_context(conn, as_of_date=report_date)
         market_ctx["bot_version"] = config.bot_version
+        _decision_runtime_context["market_context"] = market_ctx
 
         # Critic review — devil's advocate that kills low-conviction trades
         critic: dict[str, Any] = {}
@@ -754,13 +1368,34 @@ def create_paper_trades_from_report(
                 plan=plan,
                 market_ctx=market_ctx,
                 max_open=config.max_open,
+                campaign_id=config.campaign_id,
             )
+            failed_check = None
+            for raw_reason in critic.get("critic_reasons") or []:
+                text = str(raw_reason)
+                if text.startswith("FAIL [") and "]:" in text:
+                    failed_check = text.split("FAIL [", 1)[1].split("]:", 1)[0]
+                    break
+            critic["failed_check"] = failed_check
+            _decision_runtime_context["critic_outcome"] = critic
             if not critic["approved"]:
+                failed_check = failed_check or "unknown"
                 LOG.info(
                     "Critic REJECTED: %s %s — %s",
                     direction.upper(),
                     ticker,
                     critic["rejections"][0] if critic["rejections"] else "failed critic review",
+                )
+                record_decision(
+                    row=row,
+                    rank=rank,
+                    evaluation=evaluation,
+                    levels=levels,
+                    plan=plan,
+                    critic=critic,
+                    final_gate=f"critic.{failed_check}",
+                    reason_code=f"critic_{failed_check}_rejected",
+                    reasons=list(critic.get("rejections") or ["Critic rejected candidate."]),
                 )
                 continue
             LOG.info(
@@ -774,9 +1409,105 @@ def create_paper_trades_from_report(
         except Exception as exc:
             if config.critic_fail_open:
                 LOG.warning("Critic check failed (allowing trade by explicit config): %s", exc)
+                critic = {
+                    "approved": True,
+                    "fail_open": True,
+                    "error": type(exc).__name__,
+                }
+                _decision_runtime_context["critic_outcome"] = critic
             else:
                 LOG.warning("Critic check failed (rejecting trade): %s", exc)
+                record_decision(
+                    row=row,
+                    rank=rank,
+                    evaluation=evaluation,
+                    levels=levels,
+                    plan=plan,
+                    critic={"approved": False, "error": type(exc).__name__},
+                    final_gate="critic",
+                    reason_code="critic_infrastructure_error",
+                    reasons=["Critic infrastructure failed; policy rejects by default."],
+                )
                 continue
+
+        if not execution_ready:
+            order_id = canonical_hash({
+                "report_run_id": report_run_id,
+                "campaign_id": config.campaign_id,
+                "candidate_rank": rank,
+                "ticker": ticker,
+                "direction": direction,
+            })
+            order_payload = {
+                "order_id": order_id, "report_run_id": report_run_id,
+                "report_date": report_date, "ticker": ticker,
+                "direction": direction, "candidate_rank": rank,
+            }
+            candidate_json = canonical_json(row)
+            critic_json = canonical_json(critic)
+            market_context_json = canonical_json(market_ctx)
+            avg_daily_volume = _decision_runtime_context.get("avg_daily_volume")
+            order_hash = _pending_order_hash(
+                order_id=order_id, report_run_id=report_run_id,
+                report_date=report_date, generated_ts=generated_ts,
+                campaign_id=config.campaign_id,
+                policy_version=config.decision_version, candidate_rank=rank,
+                ticker=ticker, direction=direction,
+                candidate_json=candidate_json, critic_json=critic_json,
+                market_context_json=market_context_json,
+                avg_daily_volume=avg_daily_volume,
+            )
+            conn.execute(
+                """INSERT INTO paper_pending_orders
+                   (order_id,report_run_id,report_date,generated_ts,campaign_id,
+                    policy_version,candidate_rank,ticker,direction,candidate_json,
+                    critic_json,market_context_json,avg_daily_volume,order_hash,status)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')
+                   ON CONFLICT(order_id) DO NOTHING""",
+                (order_id,report_run_id,report_date,generated_ts,config.campaign_id,
+                 config.decision_version,rank,ticker,direction,candidate_json,
+                 critic_json,market_context_json,avg_daily_volume,order_hash),
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO paper_order_events
+                   (order_id,event_type,event_date,payload_json,payload_hash)
+                   VALUES (?,'created',?,?,?)""",
+                (order_id,report_date,
+                 canonical_json({**order_payload, "order_hash": order_hash}),
+                 canonical_hash({**order_payload, "order_hash": order_hash})),
+            )
+            record_decision(
+                row=row, rank=rank, evaluation=evaluation, levels=levels, plan=plan,
+                critic=critic, final_gate="execution.next_open",
+                reason_code=str(
+                    _decision_runtime_context.get("execution_pending_reason")
+                    or "scheduled_ticker_open_missing"
+                ),
+                reasons=["The exact scheduled-session observation is not available yet."],
+                disposition="pending",
+            )
+            continue
+
+        accounting = _entry_accounting(
+            conn,
+            campaign_id=config.campaign_id,
+            entry_price=entry_price,
+            position_size_pct=float(plan["position_size_pct"]),
+            config=config,
+        )
+        if accounting is None:
+            record_decision(
+                row=row,
+                rank=rank,
+                evaluation=evaluation,
+                levels=levels,
+                plan=plan,
+                critic=critic,
+                final_gate="portfolio.cash",
+                reason_code="insufficient_reconciled_cash",
+                reasons=["Reconciled cash cannot fund one share plus commission."],
+            )
+            continue
 
         rationale = _build_entry_rationale(
             ticker=ticker,
@@ -790,10 +1521,10 @@ def create_paper_trades_from_report(
         )
 
         before_changes = conn.total_changes
-        conn.execute(
+        insert_cursor = conn.execute(
             """
             INSERT INTO paper_trades (
-                report_date, generated_ts, ticker, direction,
+                report_date, generated_ts, report_run_id, ticker, direction,
                 entry_price, entry_date, target_price, stop_loss, atr_at_entry,
                 status, current_price, unrealized_pnl_pct,
                 high_water_mark, low_water_mark,
@@ -811,9 +1542,10 @@ def create_paper_trades_from_report(
                 bot_version, vix_at_entry, vix_percentile_at_entry,
                 regime_state_at_entry, hmm_regime_at_entry, hmm_confidence_at_entry,
                 directional_regime_at_entry, directional_regime_confidence,
-                ml_predicted_win_prob, ml_confidence, ml_signal
+                ml_predicted_win_prob, ml_confidence, ml_signal,
+                campaign_id, policy_version
             ) VALUES (
-                ?, ?, ?, ?,
+                ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 'open', ?, 0.0,
                 ?, ?,
@@ -831,13 +1563,15 @@ def create_paper_trades_from_report(
                 ?, ?, ?,
                 ?, ?, ?,
                 ?, ?,
-                ?, ?, ?
+                ?, ?, ?,
+                ?, ?
             )
-            ON CONFLICT(report_date, ticker, direction) DO NOTHING
+            ON CONFLICT(campaign_id, report_date, ticker, direction) DO NOTHING
             """,
             (
                 report_date,
                 generated_ts,
+                report_run_id,
                 ticker,
                 direction,
                 entry_price,
@@ -892,17 +1626,557 @@ def create_paper_trades_from_report(
                 ml_prediction.get("predicted_win_prob"),
                 ml_prediction.get("confidence"),
                 ml_prediction.get("signal"),
+                config.campaign_id,
+                config.decision_version,
             ),
         )
         if conn.total_changes > before_changes:
             inserted += 1
+            trade_id = int(insert_cursor.lastrowid)
+            conn.execute(
+                """UPDATE paper_trades SET
+                       quantity=?,entry_notional=?,entry_commission=?,accounting_status='reconciled'
+                   WHERE id=?""",
+                (
+                    accounting["quantity"],
+                    accounting["entry_notional"],
+                    accounting["entry_commission"],
+                    trade_id,
+                ),
+            )
+            _record_trade_event(
+                conn,
+                trade_id=trade_id,
+                event_type="fill",
+                event_date=entry_date_actual,
+                payload={
+                    "report_run_id": report_run_id,
+                    "ticker": ticker,
+                    "direction": direction,
+                    "raw_open": raw_entry,
+                    "fill_price": entry_price,
+                    "fill_source": "immediate_next_session_open",
+                    "policy_version": config.decision_version,
+                    **accounting,
+                },
+            )
             LOG.info(
                 "Paper trade created: %s %s @ %.2f (stop=%.2f target=%.2f) — %s",
                 direction.upper(), ticker, entry_price,
                 levels["stop_loss"], levels["target_price"], rationale["entry_reason"],
             )
+            disposition = "admitted"
+            reason_code = "admitted"
+            reasons = ["Candidate passed the versioned paper campaign policy."]
+        else:
+            disposition = "duplicate"
+            reason_code = "duplicate_candidate"
+            reasons = ["A paper trade already exists for this report date, ticker, and direction."]
+        _decision_runtime_context["duplicate"] = disposition == "duplicate"
+        record_decision(
+            row=row,
+            rank=rank,
+            evaluation=evaluation,
+            levels=levels,
+            plan=plan,
+            critic=critic,
+            final_gate="admission",
+            reason_code=reason_code,
+            reasons=reasons,
+            disposition=disposition,
+        )
 
+    persist_decision_set(
+        conn,
+        report_run_id=report_run_id,
+        report_date=report_date,
+        generated_ts=generated_ts,
+        campaign_id=config.campaign_id,
+        policy_version=config.decision_version,
+        request_hash=request_hash,
+        policy_hash=canonical_hash(config_snapshot(config)),
+        context_hash=canonical_hash({
+            "report_date": report_date,
+            "generated_ts": generated_ts,
+            "report_complete": report_complete,
+            "is_canonical": is_canonical,
+            "campaign_active": campaign_active,
+            "portfolio_block": global_block,
+            "open_count": open_count,
+            "candidate_context_hashes": [
+                decision["context_hash"] for decision in decisions
+            ],
+        }),
+        decisions=decisions,
+        report_complete=report_complete,
+        is_canonical=is_canonical,
+    )
+    update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
     return inserted
+
+
+def create_paper_trades_from_report(
+    conn: sqlite3.Connection,
+    *,
+    setup_rows: list[dict[str, Any]],
+    report_date: str,
+    generated_ts: str,
+    config: PaperTradeConfig,
+    report_run_id: str | None = None,
+    schema_ready: bool = False,
+    expected_price_revision: str | None = None,
+) -> int:
+    return _run_owned_transaction(
+        conn,
+        lambda: _create_paper_trades_from_report(
+            conn,
+            setup_rows=setup_rows,
+            report_date=report_date,
+            generated_ts=generated_ts,
+            config=config,
+            report_run_id=report_run_id,
+            schema_ready=schema_ready,
+            expected_price_revision=expected_price_revision,
+        ),
+    )
+
+
+def fill_pending_paper_orders(
+    conn: sqlite3.Connection,
+    *,
+    config: PaperTradeConfig,
+    through_date: str | None = None,
+) -> dict[str, int]:
+    """Resolve pending signals only from a real later-session open."""
+    ensure_paper_trade_schema(conn)
+    resolved = {"filled": 0, "rejected": 0, "still_pending": 0}
+    rows = conn.execute(
+        """SELECT order_id,report_run_id,report_date,generated_ts,campaign_id,
+                  policy_version,candidate_rank,ticker,direction,candidate_json,
+                  critic_json,market_context_json,avg_daily_volume,order_hash
+           FROM paper_pending_orders WHERE status='pending'
+           ORDER BY report_date,candidate_rank,order_id"""
+    ).fetchall()
+    for raw in rows:
+        (order_id,report_run_id,report_date,generated_ts,campaign_id,
+         policy_version,rank,ticker,direction,candidate_json,critic_json,
+         market_json,avg_volume,order_hash) = raw
+        expected_order_hash = _pending_order_hash(
+            order_id=str(order_id), report_run_id=str(report_run_id),
+            report_date=str(report_date), generated_ts=str(generated_ts),
+            campaign_id=str(campaign_id), policy_version=str(policy_version),
+            candidate_rank=int(rank), ticker=str(ticker), direction=str(direction),
+            candidate_json=str(candidate_json), critic_json=str(critic_json),
+            market_context_json=str(market_json),
+            avg_daily_volume=float(avg_volume) if avg_volume is not None else None,
+        )
+        if str(order_hash) != expected_order_hash:
+            raise ValueError(f"pending order {order_id} failed immutable hash verification")
+        lineage = _require_published_canonical_report(
+            conn, str(report_run_id), require_current=False
+        )
+        intended_session = next_scheduled_session_after(str(report_date))
+        if (
+            not intended_session
+            or (through_date is not None and intended_session > through_date)
+        ):
+            resolved["still_pending"] += 1
+            continue
+        spy_ready = conn.execute(
+            "SELECT 1 FROM price_daily "
+            "WHERE ticker='SPY' AND date=? AND open IS NOT NULL",
+            (intended_session,),
+        ).fetchone()
+        if not spy_ready:
+            resolved["still_pending"] += 1
+            continue
+        open_row = conn.execute(
+            "SELECT CAST(open AS REAL),date FROM price_daily "
+            "WHERE ticker=? AND date=? AND open IS NOT NULL",
+            (ticker, intended_session),
+        ).fetchone()
+        if not open_row:
+            resolved["still_pending"] += 1
+            continue
+        campaign = conn.execute(
+            "SELECT status,policy_version FROM paper_campaigns WHERE campaign_id=?",
+            (campaign_id,),
+        ).fetchone()
+        open_count = int(conn.execute(
+            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? AND status='open'",
+            (campaign_id,),
+        ).fetchone()[0])
+        block = None
+        if not publication_precedes_session_open(
+            str(lineage.get("published_ts") or ""), intended_session
+        ):
+            block = {
+                "gate": "execution.next_open",
+                "reason_code": "report_published_after_intended_open",
+                "detail": "Verified report publication did not precede the intended session open.",
+            }
+        elif not campaign or str(campaign[0]) != "active":
+            block = {"gate": "campaign_lifecycle", "reason_code": "campaign_not_active", "detail": "Campaign is not active at execution."}
+        elif str(campaign[1]) != str(policy_version):
+            block = {"gate": "campaign_lifecycle", "reason_code": "policy_version_changed", "detail": "Pending order policy no longer matches campaign."}
+        elif open_count >= config.max_open:
+            block = {"gate": "portfolio_capacity", "reason_code": "max_open_positions", "detail": "No portfolio slot remained at execution."}
+        elif not research_price_contract(conn, [str(ticker)]).get("eligible"):
+            block = {"gate": "price_basis", "reason_code": "price_series_revision_unavailable", "detail": "The executable next-open price series is not revision verified."}
+        raw_open = float(open_row[0])
+        slip = config.entry_slippage_bps / 10_000
+        entry_price = round(raw_open * (1 + slip if direction == "long" else 1 - slip), 4)
+        row = json.loads(str(candidate_json))
+        context = {
+            "entry_price": entry_price, "avg_daily_volume": avg_volume,
+            "portfolio_block": block, "critic_outcome": json.loads(str(critic_json)),
+            "campaign_active": bool(campaign and str(campaign[0]) == "active"),
+            "duplicate": False, "execution_ready": True,
+            "market_context": json.loads(str(market_json)),
+            "portfolio_context": {"open_count": open_count},
+            "source_context": {"report_run_id": report_run_id,
+                               "intended_session": intended_session,
+                               "price_date": open_row[1]},
+        }
+        decision = decide_candidate(row=row, rank=int(rank), config=config, context=context)
+        accounting = None
+        if decision["disposition"] == "admitted":
+            accounting = _entry_accounting(
+                conn,
+                campaign_id=str(campaign_id),
+                entry_price=entry_price,
+                position_size_pct=float(decision["plan"]["position_size_pct"]),
+                config=config,
+            )
+            if accounting is None:
+                context["portfolio_block"] = {
+                    "gate": "portfolio.cash",
+                    "reason_code": "insufficient_reconciled_cash",
+                    "detail": "Reconciled cash cannot fund one share plus commission.",
+                }
+                decision = decide_candidate(
+                    row=row, rank=int(rank), config=config, context=context,
+                )
+        event_payload = {
+            "decision": decision, "raw_open": raw_open,
+            "entry_price": entry_price, "entry_date": open_row[1],
+        }
+        if decision["disposition"] == "admitted":
+            levels = decision["levels"]
+            plan = decision["plan"]
+            insert_cursor = conn.execute(
+                """INSERT INTO paper_trades
+                   (report_date,generated_ts,ticker,direction,entry_price,entry_date,
+                    target_price,stop_loss,atr_at_entry,status,current_price,
+                    high_water_mark,low_water_mark,setup_family,setup_tier,score,
+                    signal_bias,actionability,position_size_pct,risk_budget_pct,
+                    stop_distance_pct,expected_reward_pct,expected_r_multiple,
+                    entry_plan,exit_plan,sizing_summary,campaign_id,report_run_id,
+                    policy_version,decision_version,decision_state)
+                   VALUES (?,?,?,?,?,?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(campaign_id,report_date,ticker,direction) DO NOTHING""",
+                (report_date,generated_ts,ticker,direction,entry_price,open_row[1],
+                 levels.get("target_price"),levels.get("stop_loss"),levels.get("atr_at_entry"),
+                 entry_price,entry_price,entry_price,row.get("setup_family"),row.get("setup_tier"),
+                 row.get("score"),row.get("signal_bias"),row.get("actionability"),
+                 plan.get("position_size_pct"),plan.get("risk_budget_pct"),
+                 plan.get("stop_distance_pct"),plan.get("expected_reward_pct"),
+                 plan.get("expected_r_multiple"),plan.get("entry_plan"),plan.get("exit_plan"),
+                 plan.get("sizing_summary"),campaign_id,report_run_id,policy_version,
+                 policy_version,"admitted"),
+            )
+            if insert_cursor.rowcount == 1:
+                trade_id = int(insert_cursor.lastrowid)
+                conn.execute(
+                    """UPDATE paper_trades SET
+                           quantity=?,entry_notional=?,entry_commission=?,accounting_status='reconciled'
+                       WHERE id=?""",
+                    (
+                        accounting["quantity"], accounting["entry_notional"],
+                        accounting["entry_commission"], trade_id,
+                    ),
+                )
+                _record_trade_event(
+                    conn,
+                    trade_id=trade_id,
+                    event_type="fill",
+                    event_date=str(open_row[1]),
+                    payload={
+                        "order_id": order_id,
+                        "report_run_id": report_run_id,
+                        "ticker": ticker,
+                        "direction": direction,
+                        "raw_open": raw_open,
+                        "fill_price": entry_price,
+                        "fill_source": "pending_immediate_next_session_open",
+                        "policy_version": policy_version,
+                        **accounting,
+                    },
+                )
+            status = "filled"
+            resolved["filled"] += 1
+        else:
+            status = "rejected"
+            resolved["rejected"] += 1
+        conn.execute(
+            "UPDATE paper_pending_orders SET status=?,resolved_ts=CURRENT_TIMESTAMP WHERE order_id=? AND status='pending'",
+            (status, order_id),
+        )
+        conn.execute(
+            """INSERT INTO paper_order_events
+               (order_id,event_type,event_date,payload_json,payload_hash)
+               VALUES (?,?,?,?,?)""",
+            (order_id,status,str(open_row[1]),canonical_json(event_payload),canonical_hash(event_payload)),
+        )
+    return resolved
+
+
+def _trade_expired(
+    conn: sqlite3.Connection,
+    *,
+    entry_date: str,
+    price_date: str,
+    config: PaperTradeConfig,
+) -> bool:
+    try:
+        if config.expiry_use_trading_days:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM price_daily "
+                "WHERE ticker='SPY' AND date>? AND date<=?",
+                (entry_date, price_date),
+            ).fetchone()
+            sessions = int(row[0]) if row and row[0] else 0
+            if sessions:
+                return sessions >= config.expiry_days
+        entry = dt.date.fromisoformat(entry_date)
+        current = dt.date.fromisoformat(price_date)
+        return (current - entry).days >= config.expiry_days
+    except (TypeError, ValueError):
+        return False
+
+
+def _apply_trade_bar(
+    conn: sqlite3.Connection,
+    *,
+    trade: dict[str, Any],
+    price_row: sqlite3.Row | tuple[Any, ...],
+    config: PaperTradeConfig,
+) -> bool:
+    """Apply one chronological OHLC bar; return whether it closed the trade."""
+    current_price = float(price_row[0])
+    price_date = str(price_row[1])
+    day_high = float(price_row[2]) if price_row[2] is not None else current_price
+    day_low = float(price_row[3]) if price_row[3] is not None else current_price
+    day_open = float(price_row[4]) if price_row[4] is not None else current_price
+    new_hwm = max(trade["high_water_mark"] or day_high, day_high)
+    new_lwm = min(trade["low_water_mark"] or day_low, day_low)
+    _record_trade_event(
+        conn,
+        trade_id=trade["trade_id"],
+        event_type="mark",
+        event_date=price_date,
+        payload={
+            "ticker": trade["ticker"],
+            "open": day_open,
+            "high": day_high,
+            "low": day_low,
+            "close": current_price,
+            "stop_before": trade["stop_loss"],
+            "target": trade["target_price"],
+        },
+    )
+    barrier = resolve_barrier_exit(
+        direction=trade["direction"],
+        open_price=day_open,
+        high=day_high,
+        low=day_low,
+        close=current_price,
+        stop_loss=trade["stop_loss"],
+        target_price=trade["target_price"],
+        expired=_trade_expired(
+            conn,
+            entry_date=trade["entry_date"],
+            price_date=price_date,
+            config=config,
+        ),
+    )
+    if barrier is not None:
+        exit_price = (
+            adverse_fill_price(
+                barrier.raw_price,
+                trade["direction"],
+                config.exit_slippage_bps,
+                entry=False,
+            )
+            if barrier.apply_slippage else barrier.raw_price
+        )
+        reason = (
+            _stop_exit_reason(trade["direction"], trade["entry_price"], exit_price)
+            if barrier.reason == "stopped_out" else barrier.reason
+        )
+        _close_trade(
+            conn,
+            trade["trade_id"],
+            exit_price,
+            price_date,
+            reason,
+            trade["direction"],
+            trade["entry_price"],
+            trade["stop_loss"],
+            config=config,
+        )
+        return True
+
+    original_risk = _resolve_original_risk(
+        entry_price=trade["entry_price"],
+        current_stop=trade["stop_loss"],
+        stop_distance_pct=trade["stop_distance_pct"],
+        atr_at_entry=trade["atr_at_entry"],
+        config=config,
+    )
+    new_stop = compute_trailing_stop(
+        direction=trade["direction"],
+        entry_price=trade["entry_price"],
+        original_risk=original_risk,
+        current_hwm=new_hwm,
+        current_lwm=new_lwm,
+        current_stop=trade["stop_loss"],
+        config=config,
+    )
+    if new_stop != trade["stop_loss"]:
+        _record_trade_event(
+            conn,
+            trade_id=trade["trade_id"],
+            event_type="management",
+            event_date=price_date,
+            payload={
+                "action": "tighten_stop",
+                "stop_before": trade["stop_loss"],
+                "stop_after": new_stop,
+                "high_water_mark": new_hwm,
+                "low_water_mark": new_lwm,
+            },
+        )
+    conn.execute(
+        """UPDATE paper_trades SET
+               current_price=?, unrealized_pnl_pct=?, last_mtm_date=?,
+               high_water_mark=?, low_water_mark=?, stop_loss=?, updated_ts=?
+           WHERE id=?""",
+        (
+            current_price,
+            round(compute_pnl(trade["direction"], trade["entry_price"], current_price), 2),
+            price_date,
+            new_hwm,
+            new_lwm,
+            new_stop,
+            dt.datetime.now(dt.timezone.utc).isoformat(),
+            trade["trade_id"],
+        ),
+    )
+    trade.update(
+        high_water_mark=new_hwm,
+        low_water_mark=new_lwm,
+        stop_loss=new_stop,
+        last_mtm_date=price_date,
+    )
+    return False
+
+
+def _mark_to_market(
+    conn: sqlite3.Connection,
+    *,
+    config: PaperTradeConfig,
+    through_date: str | None = None,
+) -> dict[str, Any]:
+    """Update all open paper trades with latest prices."""
+    ensure_paper_trade_schema(conn)
+
+    from trader_koo.report.runs import verified_report_run_ids
+
+    linked_ids = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT report_run_id FROM paper_trades WHERE report_run_id IS NOT NULL"
+        )
+    }
+    verified_ids = verified_report_run_ids(conn, linked_ids)
+    if verified_ids:
+        placeholders = ",".join("?" for _ in verified_ids)
+        open_rows = conn.execute(
+            f"""
+        SELECT id, ticker, direction, entry_price, entry_date,
+               target_price, stop_loss, high_water_mark, low_water_mark,
+               stop_distance_pct, atr_at_entry, last_mtm_date
+        FROM paper_trades
+        WHERE campaign_id=? AND status = 'open'
+          AND report_run_id IN ({placeholders})
+        """,
+            (config.campaign_id, *tuple(sorted(verified_ids))),
+        ).fetchall()
+    else:
+        open_rows = []
+
+    if not open_rows:
+        update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
+        return {"open_trades": 0, "updated": 0, "closed": 0}
+
+    updated = 0
+    closed = 0
+    blocked: list[dict[str, Any]] = []
+
+    for row in open_rows:
+        trade = {
+            "trade_id": int(row[0]),
+            "ticker": str(row[1]),
+            "direction": str(row[2]),
+            "entry_price": float(row[3]),
+            "entry_date": str(row[4]),
+            "target_price": float(row[5]) if row[5] is not None else None,
+            "stop_loss": float(row[6]) if row[6] is not None else None,
+            "high_water_mark": float(row[7]) if row[7] is not None else None,
+            "low_water_mark": float(row[8]) if row[8] is not None else None,
+            "stop_distance_pct": float(row[9]) if row[9] is not None else None,
+            "atr_at_entry": float(row[10]) if row[10] is not None else None,
+            "last_mtm_date": str(row[11]) if row[11] is not None else None,
+        }
+
+        contract = research_price_contract(conn, [trade["ticker"]])
+        if not contract.get("eligible"):
+            blocked.append({
+                "trade_id": trade["trade_id"],
+                "ticker": trade["ticker"],
+                "reason": str(contract.get("reason") or "price_series_unresolved"),
+            })
+            continue
+
+        query = (
+            "SELECT CAST(close AS REAL),date,CAST(high AS REAL),CAST(low AS REAL),"
+            "CAST(open AS REAL) FROM price_daily "
+            "WHERE ticker=? AND date>? AND close IS NOT NULL"
+        )
+        params: list[Any] = [
+            trade["ticker"], trade["last_mtm_date"] or trade["entry_date"],
+        ]
+        if through_date is not None:
+            query += " AND date<=?"
+            params.append(through_date)
+        query += " ORDER BY date ASC"
+        price_rows = conn.execute(query, params).fetchall()
+        if not price_rows:
+            continue
+        updated += 1
+        for price_row in price_rows:
+            if _apply_trade_bar(conn, trade=trade, price_row=price_row, config=config):
+                closed += 1
+                break
+
+    update_portfolio_snapshot(conn, campaign_id=config.campaign_id)
+    return {
+        "open_trades": len(open_rows) - closed,
+        "updated": updated,
+        "closed": closed,
+        "blocked": blocked,
+    }
 
 
 def mark_to_market(
@@ -910,205 +2184,10 @@ def mark_to_market(
     *,
     config: PaperTradeConfig,
 ) -> dict[str, Any]:
-    """Update all open paper trades with latest prices."""
-    ensure_paper_trade_schema(conn)
-
-    open_rows = conn.execute(
-        """
-        SELECT id, ticker, direction, entry_price, entry_date,
-               target_price, stop_loss, high_water_mark, low_water_mark,
-               stop_distance_pct, atr_at_entry
-        FROM paper_trades WHERE status = 'open'
-        """
-    ).fetchall()
-
-    if not open_rows:
-        update_portfolio_snapshot(conn)
-        return {"open_trades": 0, "updated": 0, "closed": 0}
-
-    today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    updated = 0
-    closed = 0
-
-    for row in open_rows:
-        trade_id, ticker, direction, entry_price, entry_date = row[:5]
-        target_price, stop_loss, high_water_mark, low_water_mark = row[5:9]
-        stop_distance_pct, atr_at_entry = row[9:]
-
-        price_row = conn.execute(
-            "SELECT CAST(close AS REAL), date, "
-            "CAST(high AS REAL), CAST(low AS REAL), CAST(open AS REAL) "
-            "FROM price_daily "
-            "WHERE ticker = ? ORDER BY date DESC LIMIT 1",
-            (ticker,),
-        ).fetchone()
-
-        if not price_row or price_row[0] is None:
-            continue
-
-        current_price = float(price_row[0])
-        price_date = price_row[1]
-        day_high = float(price_row[2]) if price_row[2] is not None else current_price
-        day_low = float(price_row[3]) if price_row[3] is not None else current_price
-        day_open = float(price_row[4]) if price_row[4] is not None else current_price
-        unrealized = round(compute_pnl(direction, entry_price, current_price), 2)
-        # Track HWM/LWM using intraday extremes for realistic trailing stops
-        new_hwm = max(high_water_mark or day_high, day_high)
-        new_lwm = min(low_water_mark or day_low, day_low)
-
-        # --- Stop / target detection using OHLC ---
-        # Priority 1: Check if OPEN itself breaches stop or target (no ambiguity)
-        # Priority 2: Check intraday high/low
-        # Priority 3: If both stop AND target hit intraday, assume stop first (conservative)
-        hit_stop = False
-        hit_target = False
-
-        if direction == "long":
-            open_hits_stop = stop_loss is not None and day_open <= stop_loss
-            open_hits_target = target_price is not None and day_open >= target_price
-            intraday_hits_stop = stop_loss is not None and day_low <= stop_loss
-            intraday_hits_target = target_price is not None and day_high >= target_price
-        else:  # short
-            open_hits_stop = stop_loss is not None and day_open >= stop_loss
-            open_hits_target = target_price is not None and day_open <= target_price
-            intraday_hits_stop = stop_loss is not None and day_high >= stop_loss
-            intraday_hits_target = target_price is not None and day_low <= target_price
-
-        # Apply exit slippage multiplier
-        exit_slip = config.exit_slippage_bps / 10_000
-
-        if open_hits_stop:
-            # Open gapped past stop - fill at OPEN (realistic gap loss)
-            hit_stop = True
-            current_price = day_open
-        elif open_hits_target:
-            # Open gapped past target - fill at target (limit order fills at limit)
-            hit_target = True
-            current_price = target_price
-        elif intraday_hits_stop and intraday_hits_target:
-            # Both hit intraday - conservative: assume stop hit first
-            hit_stop = True
-            if direction == "long":
-                current_price = round(stop_loss * (1 - exit_slip), 4)
-            else:
-                current_price = round(stop_loss * (1 + exit_slip), 4)
-        elif intraday_hits_stop:
-            hit_stop = True
-            # Stop is a market order - apply slippage against you
-            if direction == "long":
-                current_price = round(stop_loss * (1 - exit_slip), 4)
-            else:
-                current_price = round(stop_loss * (1 + exit_slip), 4)
-        elif intraday_hits_target:
-            # Target is a limit order - fills at exact level (no slippage)
-            hit_target = True
-            current_price = target_price
-
-        expired = False
-        try:
-            if config.expiry_use_trading_days:
-                # Count actual trading days using SPY price rows
-                td_row = conn.execute(
-                    "SELECT COUNT(*) FROM price_daily "
-                    "WHERE ticker = 'SPY' AND date > ? AND date <= ?",
-                    (entry_date, today),
-                ).fetchone()
-                days_held = int(td_row[0]) if td_row and td_row[0] else 0
-                if days_held >= config.expiry_days:
-                    expired = True
-                elif days_held == 0:
-                    # Fallback: no SPY data → use calendar days
-                    entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")
-                    today_dt = dt.datetime.strptime(today, "%Y-%m-%d")
-                    if (today_dt - entry_dt).days >= config.expiry_days:
-                        expired = True
-            else:
-                # Legacy calendar-day fallback
-                entry_dt = dt.datetime.strptime(entry_date, "%Y-%m-%d")
-                today_dt = dt.datetime.strptime(today, "%Y-%m-%d")
-                if (today_dt - entry_dt).days >= config.expiry_days:
-                    expired = True
-        except (ValueError, TypeError):
-            pass
-
-        original_risk = _resolve_original_risk(
-            entry_price=float(entry_price or 0.0),
-            current_stop=float(stop_loss) if isinstance(stop_loss, (int, float)) else None,
-            stop_distance_pct=float(stop_distance_pct) if isinstance(stop_distance_pct, (int, float)) else None,
-            atr_at_entry=float(atr_at_entry) if isinstance(atr_at_entry, (int, float)) else None,
-            config=config,
-        )
-
-        if hit_stop:
-            exit_reason = _stop_exit_reason(direction, float(entry_price), current_price)
-            _close_trade(
-                conn,
-                trade_id,
-                current_price,
-                today,
-                exit_reason,
-                direction,
-                entry_price,
-                stop_loss,
-                config=config,
-            )
-            closed += 1
-        elif hit_target:
-            _close_trade(
-                conn,
-                trade_id,
-                current_price,
-                today,
-                "target_hit",
-                direction,
-                entry_price,
-                stop_loss,
-                config=config,
-            )
-            closed += 1
-        elif expired:
-            _close_trade(
-                conn,
-                trade_id,
-                current_price,
-                today,
-                "expired",
-                direction,
-                entry_price,
-                stop_loss,
-                config=config,
-            )
-            closed += 1
-        else:
-            # Graduated trailing stop (uses original_risk from ATR at entry)
-            new_stop = compute_trailing_stop(
-                direction=direction,
-                entry_price=entry_price,
-                original_risk=original_risk,
-                current_hwm=new_hwm,
-                current_lwm=new_lwm,
-                current_stop=stop_loss,
-                config=config,
-            )
-
-            now = dt.datetime.now(dt.timezone.utc).isoformat()
-            conn.execute(
-                """
-                UPDATE paper_trades SET
-                    current_price = ?, unrealized_pnl_pct = ?,
-                    last_mtm_date = ?, high_water_mark = ?, low_water_mark = ?,
-                    stop_loss = ?, updated_ts = ?
-                WHERE id = ?
-                """,
-                (current_price, unrealized, price_date, new_hwm, new_lwm, new_stop, now, trade_id),
-            )
-        updated += 1
-
-    update_portfolio_snapshot(conn)
-    return {"open_trades": len(open_rows) - closed, "updated": updated, "closed": closed}
+    return _run_owned_transaction(conn, lambda: _mark_to_market(conn, config=config))
 
 
-def manually_close_trade(
+def _manually_close_trade(
     conn: sqlite3.Connection,
     *,
     trade_id: int,
@@ -1126,6 +2205,11 @@ def manually_close_trade(
     ticker, direction, entry_price, stop_loss, status = row
     if status != "open":
         raise ValueError(f"Paper trade {trade_id} is already {status}")
+    contract = research_price_contract(conn, [str(ticker)])
+    if not contract.get("eligible"):
+        raise ValueError(
+            f"Price series for {ticker} is unresolved; trade remains open"
+        )
 
     if exit_price is None:
         price_row = conn.execute(
@@ -1148,8 +2232,6 @@ def manually_close_trade(
         stop_loss,
         config=config,
     )
-    conn.commit()
-
     pnl = round(compute_pnl(direction, entry_price, exit_price), 2)
     return {
         "trade_id": trade_id,
@@ -1159,3 +2241,23 @@ def manually_close_trade(
         "pnl_pct": pnl,
         "status": "closed",
     }
+
+
+def manually_close_trade(
+    conn: sqlite3.Connection,
+    *,
+    trade_id: int,
+    exit_price: float | None = None,
+    exit_reason: str = "manual_close",
+    config: PaperTradeConfig,
+) -> dict[str, Any]:
+    return _run_owned_transaction(
+        conn,
+        lambda: _manually_close_trade(
+            conn,
+            trade_id=trade_id,
+            exit_price=exit_price,
+            exit_reason=exit_reason,
+            config=config,
+        ),
+    )

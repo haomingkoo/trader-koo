@@ -291,6 +291,11 @@ class TestProperty2LlmOutputValidation:
             "observation": observation,
             "action": action,
             "risk_note": risk_note,
+            "intent": {
+                "signal_bias": "bullish",
+                "actionability": "conditional",
+                "decision_delta": "none",
+            },
         }
 
         result = validate_llm_output(output, SetupRewrite)

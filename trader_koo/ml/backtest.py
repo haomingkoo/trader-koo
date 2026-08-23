@@ -28,6 +28,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
+from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.features import (
     FEATURE_COLUMNS,
     extract_features_for_universe,
@@ -220,6 +221,17 @@ def run_backtest(
                 f"short_threshold ({short_threshold}) must be < "
                 f"min_win_prob ({min_win_prob})"
             ),
+        }
+
+    price_contract = research_price_contract(
+        conn,
+        [*(tickers or []), "SPY"] if tickers else None,
+    )
+    if not price_contract["eligible"]:
+        return {
+            "ok": False,
+            "error": f"Price basis is not research eligible: {price_contract['reason']}",
+            "price_contract": price_contract,
         }
 
     if end_date is None:
@@ -591,6 +603,10 @@ def run_backtest(
     return {
         "ok": True,
         "summary": {
+            "return_basis": price_contract["basis"],
+            "benchmark_return_basis": price_contract["basis"],
+            "adjustment_version": price_contract["version"],
+            "distributions_included": price_contract["distributions_included"],
             "total_return_pct": round(total_return_pct, 2),
             "spy_return_pct": round(spy_return_pct, 2),
             "alpha_pct": round(total_return_pct - spy_return_pct, 2),

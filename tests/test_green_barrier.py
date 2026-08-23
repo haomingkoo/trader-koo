@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 import pandas as pd
 import pytest
@@ -14,6 +14,8 @@ from trader_koo.analysis.green_barrier import (
     scan_green_barrier_snapshot,
     scan_green_barriers,
 )
+from trader_koo.backend.services import chart_builder
+from trader_koo.db.price_contract import record_price_series_revision
 from trader_koo.notifications.morning_summary import (
     _select_green_barrier_attachments,
     send_morning_summary,
@@ -31,7 +33,13 @@ def _make_price_db(path: Path) -> sqlite3.Connection:
             high REAL,
             low REAL,
             close REAL,
-            volume REAL
+            volume REAL,
+            data_source TEXT DEFAULT 'yfinance',
+            fetch_timestamp TEXT DEFAULT '2026-08-22T00:00:00Z',
+            adjustment_basis TEXT NOT NULL DEFAULT 'split_adjusted_price_only',
+            adjustment_version TEXT NOT NULL DEFAULT 'test-v1',
+            basis_status TEXT NOT NULL DEFAULT 'verified',
+            unresolved_reason TEXT
         )
         """
     )
@@ -40,7 +48,18 @@ def _make_price_db(path: Path) -> sqlite3.Connection:
     for idx, date in enumerate(dates):
         rows.append(("HIT", date.date().isoformat(), 110, 120, 80, 80 if idx == 17 else 110, 1000))
         rows.append(("CLEAR", date.date().isoformat(), 110, 120, 80, 120, 1000))
-    conn.executemany("INSERT INTO price_daily VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany(
+        """INSERT INTO price_daily
+        (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    for ticker in ("HIT", "CLEAR"):
+        record_price_series_revision(
+            conn,
+            ticker,
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-22T00:00:00Z",
+        )
     conn.commit()
     return conn
 
@@ -184,19 +203,35 @@ def test_scan_snapshot_reports_incomplete_coverage(tmp_path: Path) -> None:
         "stale_skipped_tickers": ["CLEAR", "HIT"],
         "invalid_date_skipped_count": 0,
         "insufficient_history_skipped_count": 0,
+        "basis_unresolved_skipped_count": 0,
+        "basis_unresolved_skipped_tickers": [],
     }
 
 
 def test_scan_snapshot_counts_insufficient_timeframe_history(tmp_path: Path) -> None:
     conn = sqlite3.connect(tmp_path / "short.db")
     conn.execute(
-        "CREATE TABLE price_daily (ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)"
+        """CREATE TABLE price_daily (
+        ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
+        adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+        adjustment_version TEXT DEFAULT 'test-v1', basis_status TEXT DEFAULT 'verified',
+        unresolved_reason TEXT)"""
     )
     rows = [
         ("SHORT", date.date().isoformat(), 10, 11, 9, 10, 100)
         for date in pd.date_range("2026-08-01", periods=10, freq="D")
     ]
-    conn.executemany("INSERT INTO price_daily VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany(
+        """INSERT INTO price_daily
+        (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    record_price_series_revision(
+        conn,
+        "SHORT",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+        fetch_timestamp="2026-08-22T00:00:00Z",
+    )
     conn.commit()
     try:
         snapshot = scan_green_barrier_snapshot(
@@ -211,12 +246,120 @@ def test_scan_snapshot_counts_insufficient_timeframe_history(tmp_path: Path) -> 
     assert snapshot["coverage"]["insufficient_history_skipped_count"] == 2
 
 
+def test_scan_fails_closed_for_unresolved_price_basis(tmp_path: Path) -> None:
+    conn = _make_price_db(tmp_path / "unresolved.db")
+    conn.execute("UPDATE price_daily SET basis_status = 'unresolved' WHERE ticker = 'HIT'")
+    conn.commit()
+    try:
+        snapshot = scan_green_barrier_snapshot(
+            conn,
+            timeframes=("monthly",),
+            as_of=pd.Timestamp("2025-06-30").date(),
+        )
+    finally:
+        conn.close()
+
+    assert snapshot["hits"] == []
+    assert snapshot["coverage"]["basis_unresolved_skipped_tickers"] == ["HIT"]
+
+
+def test_chart_renderer_fails_closed_for_unresolved_price_basis(tmp_path: Path) -> None:
+    conn = _make_price_db(tmp_path / "unresolved-chart.db")
+    conn.execute("UPDATE price_daily SET basis_status = 'unresolved' WHERE ticker = 'HIT'")
+    conn.commit()
+    try:
+        with pytest.raises(ValueError, match="not research eligible"):
+            build_green_barrier_chart_png(conn, ticker="HIT", timeframe="monthly")
+    finally:
+        conn.close()
+
+
+def test_dashboard_and_commentary_do_not_compute_unresolved_series(
+    tmp_path: Path,
+) -> None:
+    conn = _make_price_db(tmp_path / "unresolved-dashboard.db")
+    conn.execute("UPDATE price_daily SET basis_status = 'unresolved' WHERE ticker = 'HIT'")
+    conn.commit()
+    with patch.object(
+        chart_builder,
+        "_prepare_model_and_features",
+        side_effect=AssertionError("indicator computation must not run"),
+    ):
+        quick = chart_builder.build_dashboard_quick_payload(conn, "HIT", 12)
+        full = chart_builder.build_dashboard_payload(
+            conn,
+            "HIT",
+            12,
+            report_dir=tmp_path,
+        )
+        commentary = chart_builder.build_commentary_payload(
+            conn,
+            "HIT",
+            12,
+            report_dir=tmp_path,
+        )
+    conn.close()
+
+    assert quick["chart"] == []
+    assert full["chart_commentary"] is None
+    assert commentary["hmm_regime"] is None
+    assert quick["data_sources"]["research_eligible"] is False
+
+
+def test_quick_dashboard_uses_one_sqlite_snapshot(tmp_path: Path) -> None:
+    db_path = tmp_path / "snapshot.db"
+    conn = _make_price_db(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    writer = sqlite3.connect(db_path)
+    original_prepare = chart_builder._prepare_model_and_features
+
+    def repair_after_admission(*args, **kwargs):
+        writer.execute(
+            "UPDATE price_daily SET close=999, basis_status='unresolved' WHERE ticker='HIT'"
+        )
+        writer.commit()
+        return original_prepare(*args, **kwargs)
+
+    try:
+        with patch.multiple(
+            chart_builder,
+            _prepare_model_and_features=DEFAULT,
+            get_latest_fundamentals=DEFAULT,
+            get_ticker_earnings_markers=DEFAULT,
+            get_yolo_patterns=DEFAULT,
+            get_yolo_audit=DEFAULT,
+            get_latest_options_summary=DEFAULT,
+        ) as mocked:
+            mocked["_prepare_model_and_features"].side_effect = repair_after_admission
+            mocked["get_latest_fundamentals"].return_value = None
+            mocked["get_ticker_earnings_markers"].return_value = []
+            mocked["get_yolo_patterns"].return_value = []
+            mocked["get_yolo_audit"].return_value = []
+            mocked["get_latest_options_summary"].return_value = {}
+            payload = chart_builder.build_dashboard_quick_payload(conn, "HIT", 24)
+        assert payload["chart"][-1]["close"] == 80
+        assert payload["data_sources"]["research_eligible"] is True
+        assert writer.execute(
+            "SELECT close FROM price_daily WHERE ticker='HIT' ORDER BY date DESC LIMIT 1"
+        ).fetchone()[0] == 999
+    finally:
+        writer.close()
+        conn.close()
+
+
 def test_chart_is_bound_to_report_asof_and_value(tmp_path: Path) -> None:
     conn = _make_price_db(tmp_path / "prices.db")
     try:
         conn.execute(
-            "INSERT INTO price_daily VALUES (?, ?, ?, ?, ?, ?, ?)",
+            """INSERT INTO price_daily
+            (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
             ("HIT", "2025-07-31", 110, 120, 80, 120, 1000),
+        )
+        record_price_series_revision(
+            conn,
+            "HIT",
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-22T00:00:00Z",
         )
         conn.commit()
 

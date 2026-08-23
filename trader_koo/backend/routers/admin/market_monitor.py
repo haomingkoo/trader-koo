@@ -6,7 +6,6 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from trader_koo.middleware.auth import require_admin_auth
 
 from trader_koo.backend.routers.admin._shared import DB_PATH, LOG
 
@@ -14,7 +13,6 @@ router = APIRouter(tags=["admin", "admin-market-monitor"])
 
 
 @router.get("/api/admin/market-spikes")
-@require_admin_auth
 def market_spikes(
     hours: int = Query(default=24, ge=1, le=168),
 ) -> dict[str, Any]:
@@ -34,7 +32,6 @@ def market_spikes(
 
 
 @router.post("/api/admin/market-snapshot")
-@require_admin_auth
 def trigger_market_snapshot() -> dict[str, Any]:
     """Manually trigger a Polymarket snapshot."""
     try:
@@ -52,7 +49,6 @@ def trigger_market_snapshot() -> dict[str, Any]:
 
 
 @router.post("/api/admin/test-spike-alerts")
-@require_admin_auth
 def test_spike_alerts() -> dict[str, Any]:
     """Manually run spike detection and send alerts via Telegram."""
     try:

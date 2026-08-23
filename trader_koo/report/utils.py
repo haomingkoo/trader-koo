@@ -155,6 +155,80 @@ def nyse_early_closes_for_year(year: int) -> dict[dt.date, str]:
     return out
 
 
+def is_nyse_session(day: dt.date) -> bool:
+    return day.weekday() < 5 and day not in nyse_holidays_for_year(day.year)
+
+
+def previous_nyse_session(day: dt.date) -> dt.date:
+    candidate = day
+    while not is_nyse_session(candidate):
+        candidate -= dt.timedelta(days=1)
+    return candidate
+
+
+def last_completed_nyse_session(
+    as_of: dt.date | dt.datetime | None = None,
+) -> dt.date:
+    """Return the latest session whose New York close has passed.
+
+    A date-only input means end of that date, which keeps deterministic
+    historical callers independent of the wall clock.
+    """
+    if isinstance(as_of, dt.datetime):
+        value = as_of
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=dt.timezone.utc)
+        market_now = value.astimezone(MARKET_TZ)
+    elif isinstance(as_of, dt.date):
+        market_now = dt.datetime.combine(
+            as_of, dt.time(23, 59, 59), tzinfo=MARKET_TZ
+        )
+    else:
+        market_now = dt.datetime.now(dt.timezone.utc).astimezone(MARKET_TZ)
+
+    candidate = market_now.date()
+    if is_nyse_session(candidate):
+        close_hour = 13 if candidate in nyse_early_closes_for_year(candidate.year) else MARKET_CLOSE_HOUR
+        if market_now.time() < dt.time(hour=close_hour):
+            candidate -= dt.timedelta(days=1)
+    return previous_nyse_session(candidate)
+
+
+def completed_nyse_period_through(
+    timeframe: str,
+    as_of: dt.date | dt.datetime | None = None,
+) -> dt.date:
+    """Return the final session of the latest completed week or month."""
+    completed = last_completed_nyse_session(as_of)
+    tf = str(timeframe).lower()
+    if tf == "weekly":
+        period_end = completed + dt.timedelta(days=4 - completed.weekday())
+    elif tf == "monthly":
+        period_end = dt.date(
+            completed.year,
+            completed.month,
+            calendar.monthrange(completed.year, completed.month)[1],
+        )
+    else:
+        raise ValueError(f"Unsupported NYSE period: {timeframe}")
+    final_session = previous_nyse_session(period_end)
+    if completed >= final_session:
+        return final_session
+    prior_day = (
+        completed - dt.timedelta(days=completed.weekday() + 1)
+        if tf == "weekly"
+        else dt.date(completed.year, completed.month, 1) - dt.timedelta(days=1)
+    )
+    if tf == "weekly":
+        return previous_nyse_session(prior_day)
+    prior_end = dt.date(
+        prior_day.year,
+        prior_day.month,
+        calendar.monthrange(prior_day.year, prior_day.month)[1],
+    )
+    return previous_nyse_session(prior_end)
+
+
 def market_calendar_context(now_utc: dt.datetime) -> dict[str, Any]:
     now_et = now_utc.astimezone(MARKET_TZ)
     today = now_et.date()

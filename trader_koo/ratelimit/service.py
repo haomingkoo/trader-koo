@@ -194,11 +194,11 @@ class RateLimiter:
         Returns:
             Dictionary with status information, or None if key not found
         """
-        if key not in self._storage:
+        if key not in self._storage and key not in self._overrides:
             return None
 
         now = time.time()
-        timestamps = self._storage[key]
+        timestamps = self._storage.get(key, [])
 
         # Check for override
         override = self._overrides.get(key)

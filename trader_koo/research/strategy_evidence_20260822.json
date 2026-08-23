@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "artifact_file": "strategy_evidence_artifact_20260822.json",
+  "artifact_sha256": "0a7d97cde7ca6205c717a1b20c7c237a658dcd55c68fad48a21b72d956684d5d",
+  "input_manifest_file": "strategy_evidence_inputs_20260822.json",
+  "input_manifest_sha256": "8907f46daa141d977d433dd03d55c0783e9d949e56d09e3c1746fa899083c263",
+  "upstream_audit": {
+    "artifact_name": "setup_event_baseline_causal_fail_closed_v9_20260822.json",
+    "artifact_sha256": "0df5af7b0ed562308edd38a9b8a1d96db228d302c2619e08f7153a1c77e32477",
+    "input_hash_sha256": "dae1ec9466f82b5d1f2ccc25b757c4612ca121904db46607b2075ecfe291dedc",
+    "artifact_spec_hash_sha256": "3ad63a02feadf4be3da6cbb4154cf53854bb413e58cd3f4e226a34aec13b144e"
+  }
+}

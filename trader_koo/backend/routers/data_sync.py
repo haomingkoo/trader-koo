@@ -21,7 +21,6 @@ from fastapi.responses import StreamingResponse
 
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
 from trader_koo.backend.utils import resolve_child_filename
-from trader_koo.middleware.auth import require_admin_auth
 
 router = APIRouter()
 LOG = logging.getLogger("trader_koo.routers.data_sync")
@@ -56,7 +55,6 @@ def _model_dir() -> Path:
 # ---------------------------------------------------------------------------
 
 @router.get("/api/admin/export/csv/{table_name}")
-@require_admin_auth
 def export_table_csv(
     request: Request,
     table_name: str,
@@ -131,7 +129,6 @@ def export_table_csv(
 # ---------------------------------------------------------------------------
 
 @router.get("/api/admin/export/sqlite")
-@require_admin_auth
 def export_sqlite_dump(
     request: Request,
     tables: str = Query(
@@ -226,7 +223,6 @@ def export_sqlite_dump(
 # ---------------------------------------------------------------------------
 
 @router.get("/api/admin/export/info")
-@require_admin_auth
 def export_info(request: Request) -> dict[str, Any]:
     """Return metadata about exportable tables: row counts and column names."""
     conn = get_conn()
@@ -250,7 +246,6 @@ def export_info(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.post("/api/admin/upload/model")
-@require_admin_auth
 async def upload_model(
     request: Request,
     file: UploadFile = File(...),
@@ -300,7 +295,6 @@ async def upload_model(
 
 
 @router.get("/api/admin/models/list")
-@require_admin_auth
 def list_models(request: Request) -> dict[str, Any]:
     """List all model files on the persistent volume."""
     dest_dir = _model_dir()

@@ -83,6 +83,7 @@ def evaluate_setup_for_paper_trade(
     tier = str(row.get("setup_tier") or "").strip().upper()
     reasons: list[str] = []
     risk_flags: list[str] = []
+    gate_failures: list[dict[str, str]] = []
     analyst_stage = "pass"
     debate_stage = "pass"
     risk_stage = "pass"
@@ -94,6 +95,7 @@ def evaluate_setup_for_paper_trade(
             reasons.append(
                 f"Tier {tier or 'unknown'} is below paper-trade minimum {config.min_tier}."
             )
+            gate_failures.append({"gate": "eligibility.tier", "reason_code": "tier_below_minimum"})
 
     score = row.get("score")
     if not isinstance(score, (int, float)) or float(score) < config.min_score:
@@ -101,6 +103,7 @@ def evaluate_setup_for_paper_trade(
         reasons.append(
             f"Score {float(score):.1f}" if isinstance(score, (int, float)) else "Missing score"
         )
+        gate_failures.append({"gate": "eligibility.score", "reason_code": "score_below_minimum" if isinstance(score, (int, float)) else "score_missing"})
 
     actionability = str(row.get("actionability") or "").strip().lower()
     if actionability not in config.qualifying_actionability:
@@ -108,6 +111,7 @@ def evaluate_setup_for_paper_trade(
         reasons.append(
             f"Actionability '{actionability or 'unknown'}' is not eligible for paper trading."
         )
+        gate_failures.append({"gate": "eligibility.actionability", "reason_code": "actionability_not_eligible"})
     elif actionability == "conditional":
         debate_stage = "caution"
         reasons.append("Setup is conditional rather than fully ready.")
@@ -121,11 +125,13 @@ def evaluate_setup_for_paper_trade(
     if direction not in config.qualifying_directions:
         analyst_stage = "reject"
         reasons.append("Signal direction is neutral or unsupported.")
+        gate_failures.append({"gate": "eligibility.direction", "reason_code": "direction_not_supported"})
 
     close = row.get("close")
     if not isinstance(close, (int, float)) or float(close) <= 0:
         analyst_stage = "reject"
         reasons.append("Entry price is missing or non-positive.")
+        gate_failures.append({"gate": "eligibility.price", "reason_code": "entry_price_invalid"})
 
     atr_pct = row.get("atr_pct_14")
     if isinstance(atr_pct, (int, float)) and float(atr_pct) >= config.high_vol_atr_pct:
@@ -175,6 +181,7 @@ def evaluate_setup_for_paper_trade(
         "decision_summary": decision_summary,
         "decision_reasons": reasons,
         "risk_flags": risk_flags,
+        "gate_failures": gate_failures,
         "direction": direction,
     }
 
@@ -411,6 +418,7 @@ def compute_position_plan(
         "expected_r_multiple": round(expected_r_multiple, 2)
         if isinstance(expected_r_multiple, (int, float))
         else None,
+        "minimum_reward_r_multiple": config.min_reward_r_multiple,
         "entry_plan": entry_plan,
         "exit_plan": exit_plan,
         "sizing_summary": "; ".join(sizing_notes + [sizing_summary]),

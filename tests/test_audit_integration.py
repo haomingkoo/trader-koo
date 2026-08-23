@@ -11,22 +11,20 @@ importing the monolithic main.py (which triggers the full startup chain).
 """
 
 import os
-import secrets
 import sqlite3
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from trader_koo.audit import ensure_audit_schema
 from trader_koo.audit.logger import AuditLogger
 from trader_koo.audit.middleware import AuditMiddleware, log_auth_attempt
 from trader_koo.backend.routers.admin import router as admin_router
+from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
 
 
 def _create_audit_test_db(db_path: Path) -> None:
@@ -67,75 +65,9 @@ def temp_db_path():
     db_path.unlink()
 
 
-class _TestAdminAuthMiddleware(BaseHTTPMiddleware):
-    """Lightweight auth middleware that mirrors the real admin auth logic in main.py.
-
-    Checks for X-API-Key on /api/admin/* routes, sets ``request.state.admin_identity``,
-    and logs auth events to the audit_logs table so integration tests can verify them.
-    """
-
-    def __init__(self, app: FastAPI, *, db_path: Path, api_key: str):
-        super().__init__(app)
-        self.db_path = db_path
-        self.api_key = api_key
-
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        path = request.url.path
-        if path.startswith("/api/admin"):
-            provided = request.headers.get("X-API-Key", "")
-            client_ip = request.client.host if request.client else "127.0.0.1"
-            user_agent = request.headers.get("user-agent", "")
-
-            if not secrets.compare_digest(provided, self.api_key):
-                # Log auth failure
-                try:
-                    conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-                    ensure_audit_schema(conn)
-                    logger = AuditLogger(conn)
-                    log_auth_attempt(
-                        logger,
-                        success=False,
-                        username=None,
-                        ip_address=client_ip,
-                        user_agent=user_agent,
-                        auth_method="api_key",
-                        reason="invalid_api_key",
-                    )
-                    conn.close()
-                except Exception:
-                    pass
-                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-
-            # Valid key — set admin identity
-            request.state.admin_identity = {
-                "username": "admin",
-                "mode": "api_key",
-                "user_id": "admin",
-            }
-
-            # Log auth success
-            try:
-                conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-                ensure_audit_schema(conn)
-                logger = AuditLogger(conn)
-                log_auth_attempt(
-                    logger,
-                    success=True,
-                    username="admin",
-                    ip_address=client_ip,
-                    user_agent=user_agent,
-                    auth_method="api_key",
-                )
-                conn.close()
-            except Exception:
-                pass
-
-        return await call_next(request)
-
-
 @pytest.fixture
 def test_app(temp_db_path, monkeypatch):
-    """Create a lightweight test FastAPI app with auth + audit middleware + admin router.
+    """Create a lightweight app with native admin auth and audit logging.
 
     This avoids importing trader_koo.backend.main (which triggers the full
     startup chain with scheduler, crypto feeds, etc.).
@@ -151,10 +83,21 @@ def test_app(temp_db_path, monkeypatch):
 
     app = FastAPI(title="audit-test")
 
+    def _record_auth(**payload):
+        conn = sqlite3.connect(str(temp_db_path), check_same_thread=False)
+        try:
+            ensure_audit_schema(conn)
+            log_auth_attempt(AuditLogger(conn), **payload)
+        finally:
+            conn.close()
+
+    app.state.admin_authenticator = AdminAuthenticator(
+        AdminAuthConfig(api_key=api_key),
+        audit_recorder=_record_auth,
+    )
+
     # Wire up audit middleware (for correlation IDs + request logging)
     app.add_middleware(AuditMiddleware, db_path=temp_db_path)
-    # Wire up auth middleware (for API key checking + auth event logging)
-    app.add_middleware(_TestAdminAuthMiddleware, db_path=temp_db_path, api_key=api_key)
 
     # Include only the admin router (all audit endpoints live here)
     app.include_router(admin_router)

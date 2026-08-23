@@ -243,6 +243,7 @@ class TestLLMSanitizeBeforeValidation:
             "observation": "A" * 300,  # exceeds 260-char schema limit
             "action": "Watch for entry above resistance.",
             "risk_note": "Use stop losses.",
+            "intent": {"signal_bias": "bullish", "actionability": "conditional", "decision_delta": "none"},
         }
 
         # This is what the fixed code does: sanitize first, then validate
@@ -263,6 +264,7 @@ class TestLLMSanitizeBeforeValidation:
         raw = {
             "observation": "Market is bullish.",
             "action": "B" * 200,  # exceeds 180-char schema limit
+            "intent": {"signal_bias": "bullish", "actionability": "conditional", "decision_delta": "none"},
         }
 
         sanitized = sanitize_llm_output(
@@ -283,6 +285,7 @@ class TestLLMSanitizeBeforeValidation:
             "observation": "Market is bullish.",
             "action": "Watch for entry.",
             "risk_note": "R" * 100,  # exceeds 80-char schema limit
+            "intent": {"signal_bias": "bullish", "actionability": "conditional", "decision_delta": "none"},
         }
 
         sanitized = sanitize_llm_output(
@@ -304,9 +307,15 @@ class TestLLMSanitizeBeforeValidation:
         raw = {
             "observation": "A" * 300,
             "action": "Watch for entry.",
+            "intent": {
+                "signal_bias": "bullish",
+                "actionability": "conditional",
+                "decision_delta": "none",
+            },
         }
         result = validate_llm_output(raw, SetupRewrite)
         assert not result.is_valid
+        assert any(error.startswith("observation:") for error in result.errors)
 
     def test_maybe_rewrite_no_schema_failure_on_long_llm_reply(self):
         """maybe_rewrite_setup_copy: oversized LLM reply is trimmed, not fallen back."""
@@ -314,8 +323,9 @@ class TestLLMSanitizeBeforeValidation:
 
         oversized_llm_response = {
             "observation": "O" * 300,  # too long for SetupRewrite (max 260)
-            "action": "Watch for entry.",
+            "action": "Buy on dip.",
             "risk_note": "Use stops.",
+            "intent": {"signal_bias": "unspecified", "actionability": "unspecified", "decision_delta": "none"},
         }
 
         row = {

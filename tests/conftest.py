@@ -24,6 +24,7 @@ from trader_koo.backend.routers.paper_trades import router as paper_trades_route
 from trader_koo.backend.routers.email import router as email_router
 from trader_koo.backend.routers.usage import router as usage_router
 from trader_koo.backend.routers.admin import router as admin_router
+from trader_koo.db.price_contract import record_price_series_revision
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,10 @@ def _create_test_db() -> sqlite3.Connection:
             volume INTEGER,
             data_source TEXT,
             fetch_timestamp TEXT,
+            adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+            adjustment_version TEXT DEFAULT 'test-v1',
+            basis_status TEXT DEFAULT 'verified',
+            unresolved_reason TEXT,
             UNIQUE(ticker, date)
         );
 
@@ -90,6 +95,12 @@ def _create_test_db() -> sqlite3.Connection:
             ticker TEXT,
             status TEXT,
             UNIQUE(run_id, ticker)
+        );
+
+        CREATE TABLE report_runs (
+            run_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            is_generation_canonical INTEGER NOT NULL
         );
 
         CREATE TABLE pipeline_runs (
@@ -216,6 +227,12 @@ def _seed_price_data(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO price_daily (ticker, date, open, high, low, close, volume, data_source, fetch_timestamp) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
+    )
+    record_price_series_revision(
+        conn,
+        "SPY",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+        fetch_timestamp="2026-03-10T00:00:00Z",
     )
     conn.commit()
 

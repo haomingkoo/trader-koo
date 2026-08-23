@@ -8,6 +8,8 @@ import type {
   DashboardCommentaryPayload,
   PaperTradeSummary,
   PaperTradeList,
+  NextOpenBaselinePayload,
+  ExperimentResultsPayload,
   OpportunitiesPayload,
   OptionsPremiumPayload,
   EarningsPayload,
@@ -60,22 +62,44 @@ export function useChartCommentary(ticker: string, enabled: boolean = true) {
   });
 }
 
-export function usePaperTradeSummary() {
+export function usePaperTradeSummary(campaignId: string = "paper-v2") {
   return useQuery({
-    queryKey: ["paper-trades-summary"],
-    queryFn: () => apiFetch<PaperTradeSummary>("/api/paper-trades/summary"),
+    queryKey: ["paper-trades-summary", campaignId],
+    queryFn: () => apiFetch<PaperTradeSummary>(
+      `/api/paper-trades/summary?campaign_id=${encodeURIComponent(campaignId)}`,
+    ),
     staleTime: 2 * 60 * 1000,
   });
 }
 
-export function usePaperTrades(status: string = "all", direction: string = "all") {
+export function useNextOpenBaseline() {
+  return useQuery({
+    queryKey: ["next-open-baseline"],
+    queryFn: () => apiFetch<NextOpenBaselinePayload>("/api/research/next-open-baseline"),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useExperimentResults() {
+  return useQuery({
+    queryKey: ["experiment-results"],
+    queryFn: () => apiFetch<ExperimentResultsPayload>("/api/research/experiments"),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function usePaperTrades(
+  status: string = "all",
+  direction: string = "all",
+  campaignId: string = "paper-v2",
+) {
   // Backend rejects direction=all — only send direction if it's long or short
   const dirParam = direction === "long" || direction === "short" ? `&direction=${direction}` : "";
   return useQuery({
-    queryKey: ["paper-trades", status, direction],
+    queryKey: ["paper-trades", status, direction, campaignId],
     queryFn: () =>
       apiFetch<PaperTradeList>(
-        `/api/paper-trades?status=${status}${dirParam}&limit=500`,
+        `/api/paper-trades?status=${status}${dirParam}&campaign_id=${encodeURIComponent(campaignId)}&limit=500`,
       ),
     staleTime: 2 * 60 * 1000,
   });

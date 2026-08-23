@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
-import { useReport } from "../api/hooks";
+import { usePaperTradeSummary, useReport } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
 import Spinner from "../components/ui/Spinner";
 import FearGreedGauge from "../components/FearGreedGauge";
@@ -16,6 +16,7 @@ import SectorHeatmap from "../components/report/SectorHeatmap";
 import SetupEvaluationPanel from "../components/report/SetupEvaluationPanel";
 import SetupQualitySection from "../components/report/SetupQualitySection";
 import SuggestionSection from "../components/report/SuggestionSection";
+import { StrategyEvidenceStatePanel } from "../components/paper/PaperTradeSections";
 
 /* ── Main Page ── */
 
@@ -25,6 +26,7 @@ export default function ReportPage() {
   }, []);
 
   const { data, isLoading, error } = useReport();
+  const { data: paperSummary } = usePaperTradeSummary();
   const activeTicker = useChartStore((s) => s.ticker);
 
   if (isLoading) return <Spinner className="mt-12" />;
@@ -100,6 +102,8 @@ export default function ReportPage() {
 
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
 
+      <StrategyEvidenceStatePanel evidence={paperSummary?.strategy_evidence} />
+
       <SummaryKpiRow
         generatedTs={latest.generated_ts}
         priceDate={latest.latest_data?.price_date ?? null}
@@ -107,6 +111,7 @@ export default function ReportPage() {
 
       <EvidenceSourceStrip
         generatedTs={latest.generated_ts}
+        reportRun={latest.report_run}
         latestData={latest.latest_data}
         freshness={latest.freshness}
         warnings={latest.warnings ?? []}

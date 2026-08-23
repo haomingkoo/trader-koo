@@ -1,62 +1,14 @@
-import { useMemo, useState, type ComponentProps } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { ChartCommentary, SetupRow } from "../../api/types";
+import type { SetupRow } from "../../api/types";
 import Badge from "../ui/Badge";
 import { tierVariant } from "../ui/badgeUtils";
-import { biasVariant, formatReportNumber as fmt } from "./reportShared";
-
-type DebateData = NonNullable<ChartCommentary["debate_v1"]>;
-
-function normalizeDebate(
-  raw: SetupRow["debate_v1"] | DebateData | null | undefined,
-): DebateData | undefined {
-  const debate = raw as DebateData | null | undefined;
-  if (!debate || typeof debate !== "object" || !debate.consensus) return undefined;
-  return {
-    version: String(debate.version ?? "v1"),
-    consensus: {
-      consensus_state: String(debate.consensus.consensus_state ?? "unknown"),
-      consensus_bias: String(debate.consensus.consensus_bias ?? "neutral"),
-      agreement_score: Number(debate.consensus.agreement_score ?? 0),
-      disagreement_count: Number(debate.consensus.disagreement_count ?? 0),
-    },
-    roles: Array.isArray(debate.roles)
-      ? debate.roles.map((role: DebateData["roles"][number]) => ({
-          role: String(role.role ?? "unknown"),
-          stance: String(role.stance ?? "neutral"),
-          confidence: Number(role.confidence ?? 0),
-          evidence: Array.isArray(role.evidence)
-            ? role.evidence.map((item: string) => String(item))
-            : [],
-        }))
-      : [],
-  };
-}
-
-function asNumber(value: unknown): number | null {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function optionSignalLabel(signal: unknown): string {
-  return String(signal ?? "neutral").replace(/_/g, " ");
-}
-
-function optionSignalVariant(signal: unknown): ComponentProps<typeof Badge>["variant"] {
-  const value = String(signal ?? "");
-  if (value === "underpriced_positioning" || value === "subdued_iv") return "green";
-  if (value === "elevated_iv_event_risk" || value === "crowded_open_interest") return "amber";
-  return "muted";
-}
-
-function probabilityVariant(probability: unknown): ComponentProps<typeof Badge>["variant"] {
-  const value = asNumber(probability);
-  if (value == null) return "muted";
-  if (value >= 0.62) return "green";
-  if (value <= 0.45) return "red";
-  if (value >= 0.53) return "blue";
-  return "muted";
-}
+import { biasVariant } from "./reportShared";
+import {
+  buildSetupQualityView,
+  type DebateData,
+  type SetupQualityItem,
+} from "./setupQualityView";
 
 function DebateVisualization({ debate }: { debate: DebateData }) {
   const consensus = debate.consensus;
@@ -164,32 +116,31 @@ function DebateVisualization({ debate }: { debate: DebateData }) {
           })}
         </div>
       ) : (
-        <p className="text-xs text-[var(--muted)]">No debate roles available.</p>
+        <p className="text-xs text-[var(--muted)]">No rule perspectives available.</p>
       )}
     </div>
   );
 }
 
 function SetupTableRow({
-  row,
+  item,
   columns,
-  debate,
   isExpanded,
   isHighlighted,
   onToggle,
 }: {
-  row: SetupRow;
+  item: SetupQualityItem;
   columns: Array<{
     key: string;
     label: string;
-    render?: (row: SetupRow) => React.ReactNode;
+    className?: string;
+    render: (item: SetupQualityItem) => React.ReactNode;
   }>;
-  debate?: DebateData;
   isExpanded: boolean;
   isHighlighted: boolean;
   onToggle: () => void;
 }) {
-  const agreementScore = debate?.consensus?.agreement_score;
+  const { row, debate } = item;
 
   return (
     <>
@@ -201,22 +152,21 @@ function SetupTableRow({
         }`}
       >
         {columns.map((column) => (
-          <td key={column.key} className="px-3 py-2 text-[var(--text)]">
-            {column.render
-              ? column.render(row)
-              : String(row[column.key as keyof SetupRow] ?? "\u2014")}
+          <td
+            key={column.key}
+            className={`px-3 py-3 align-top text-[var(--text)] ${column.className ?? ""}`}
+          >
+            {column.render(item)}
           </td>
         ))}
-        <td className="px-3 py-2">
+        <td className="px-3 py-3 align-top">
           <button
+            type="button"
             onClick={onToggle}
+            aria-expanded={isExpanded}
             className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
           >
-            {agreementScore != null ? (
-              <span className="tabular-nums">{agreementScore.toFixed(0)}%</span>
-            ) : (
-              <span>View</span>
-            )}
+            <span className="whitespace-nowrap tabular-nums">{item.ruleReviewLabel}</span>
             <span>{isExpanded ? "\u25B2" : "\u25BC"}</span>
           </button>
         </td>
@@ -289,7 +239,7 @@ function SetupTableRow({
                 <DebateVisualization debate={debate} />
               ) : (
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
-                  Debate detail is not available for this setup snapshot.
+                  Deterministic rule-review detail is not available for this setup snapshot.
                 </div>
               )}
             </div>
@@ -316,24 +266,14 @@ export default function SetupQualitySection({
   const [showAll, setShowAll] = useState(false);
   const DEFAULT_VISIBLE = 10;
 
-  const filtered = useMemo(() => {
-    let result = [...rows];
-    if (filterTier !== "all") {
-      result = result.filter(
-        (row) => (row.setup_tier ?? "").toUpperCase() === filterTier,
-      );
-    }
-    const direction = sortAsc ? 1 : -1;
-    result.sort((a, b) => {
-      const av = a[sortCol as keyof SetupRow];
-      const bv = b[sortCol as keyof SetupRow];
-      const an = Number(av);
-      const bn = Number(bv);
-      if (Number.isFinite(an) && Number.isFinite(bn)) return (an - bn) * direction;
-      return String(av ?? "").localeCompare(String(bv ?? "")) * direction;
-    });
-    return result;
-  }, [rows, filterTier, sortCol, sortAsc]);
+  const items = useMemo(
+    () => buildSetupQualityView(rows, debateMap, {
+      tier: filterTier,
+      sortKey: sortCol,
+      ascending: sortAsc,
+    }),
+    [rows, debateMap, filterTier, sortCol, sortAsc],
+  );
 
   const handleSort = (column: string) => {
     if (sortCol === column) {
@@ -347,18 +287,20 @@ export default function SetupQualitySection({
   const columns: Array<{
     key: string;
     label: string;
-    render?: (row: SetupRow) => React.ReactNode;
+    className?: string;
+    render: (item: SetupQualityItem) => React.ReactNode;
   }> = [
     {
       key: "ticker",
       label: "Ticker",
-      render: (row) => (
+      className: "w-[92px]",
+      render: ({ row, ticker }) => (
         <span className="flex items-center gap-1.5">
           <Link
-            to={`/chart?t=${row.ticker}`}
+            to={`/chart?t=${ticker}`}
             className="font-mono font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
           >
-            {row.ticker}
+            {ticker}
           </Link>
           {row.earnings_within_5d && (
             <Badge variant="amber" className="text-[9px] px-1.5 py-0">
@@ -371,20 +313,23 @@ export default function SetupQualitySection({
     {
       key: "score",
       label: "Score",
-      render: (row) => <span className="tabular-nums">{fmt(row.score, 1)}</span>,
+      className: "w-[72px]",
+      render: (item) => <span className="tabular-nums">{item.scoreText}</span>,
     },
     {
       key: "calibrated_hit_prob",
       label: "Prob",
-      render: (row) => {
-        const prob = asNumber(row.calibrated_hit_prob);
-        if (prob == null) return "\u2014";
+      className: "w-[88px]",
+      render: (item) => {
+        if (!item.probability) return "\u2014";
         return (
           <div className="flex flex-col gap-1">
-            <Badge variant={probabilityVariant(prob)}>{(prob * 100).toFixed(0)}%</Badge>
-            <span className="text-[10px] text-[var(--muted)]">
-              n={asNumber(row.probability_sample_size)?.toFixed(0) ?? "0"}
-            </span>
+            <Badge variant={item.probability.tone}>{item.probability.pctText}</Badge>
+            {item.probability.sampleText && (
+              <span className="text-[10px] text-[var(--muted)]">
+                {item.probability.sampleText}
+              </span>
+            )}
           </div>
         );
       },
@@ -392,7 +337,8 @@ export default function SetupQualitySection({
     {
       key: "setup_tier",
       label: "Tier",
-      render: (row) =>
+      className: "w-[64px]",
+      render: ({ row }) =>
         row.setup_tier ? (
           <Badge variant={tierVariant(row.setup_tier)}>{row.setup_tier}</Badge>
         ) : (
@@ -402,7 +348,8 @@ export default function SetupQualitySection({
     {
       key: "signal_bias",
       label: "Bias",
-      render: (row) =>
+      className: "w-[96px]",
+      render: ({ row }) =>
         row.signal_bias ? (
           <Badge variant={biasVariant(row.signal_bias)}>{row.signal_bias}</Badge>
         ) : (
@@ -412,20 +359,22 @@ export default function SetupQualitySection({
     {
       key: "options_underpriced_score",
       label: "Options",
-      render: (row) => {
-        const signal = row.options_positioning_signal;
-        const ivRank = asNumber(row.options_iv_rank_pct);
-        const oiRank = asNumber(row.options_oi_rank_pct);
-        if (!signal && ivRank == null && oiRank == null) return "\u2014";
+      className: "w-[178px]",
+      render: (item) => {
+        if (!item.options) return "\u2014";
         return (
           <div className="flex flex-col gap-1">
-            <Badge variant={optionSignalVariant(signal)} className="w-fit max-w-[130px] truncate">
-              {optionSignalLabel(signal)}
+            <Badge
+              variant={item.options.tone}
+              className="h-auto w-fit max-w-[160px] whitespace-normal py-1 text-left leading-4"
+            >
+              {item.options.label}
             </Badge>
-            <span className="text-[10px] tabular-nums text-[var(--muted)]">
-              IV {ivRank != null ? `${ivRank.toFixed(0)}%` : "\u2014"} / OI{" "}
-              {oiRank != null ? `${oiRank.toFixed(0)}%` : "\u2014"}
-            </span>
+            {item.options.ranksText && (
+              <span className="text-[10px] tabular-nums text-[var(--muted)]">
+                {item.options.ranksText}
+              </span>
+            )}
           </div>
         );
       },
@@ -433,16 +382,15 @@ export default function SetupQualitySection({
     {
       key: "news_sentiment_score",
       label: "News",
-      render: (row) => {
-        const score = asNumber(row.news_sentiment_score);
-        if (score == null) return "\u2014";
-        const variant = score >= 60 ? "green" : score <= 40 ? "red" : "muted";
+      className: "w-[92px]",
+      render: (item) => {
+        if (!item.news) return "\u2014";
         return (
           <div className="flex flex-col gap-1">
-            <Badge variant={variant}>{score.toFixed(0)}</Badge>
-            {asNumber(row.macro_news_score) != null ? (
+            <Badge variant={item.news.tone}>{item.news.scoreText}</Badge>
+            {item.news.macroText ? (
               <span className="text-[10px] tabular-nums text-[var(--muted)]">
-                Macro {asNumber(row.macro_news_score)?.toFixed(0)}
+                {item.news.macroText}
               </span>
             ) : null}
           </div>
@@ -451,13 +399,11 @@ export default function SetupQualitySection({
     },
     {
       key: "setup",
-      label: "Setup",
-      render: (row) => (
-        <span
-          className="block max-w-[260px] truncate text-xs text-[var(--muted)]"
-          title={row.action ?? row.observation ?? ""}
-        >
-          {row.action ?? row.observation ?? "\u2014"}
+      label: "Decision note",
+      className: "w-[42%] min-w-[360px]",
+      render: (item) => (
+        <span className="block max-w-[68ch] whitespace-normal text-xs leading-5 text-[var(--text)]">
+          {item.decisionNote}
         </span>
       ),
     },
@@ -467,13 +413,15 @@ export default function SetupQualitySection({
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <h3 className="text-sm font-semibold text-[var(--muted)]">
-          Setup Quality ({filtered.length} setups)
+          Setup Quality ({items.length} setups)
         </h3>
         <div className="flex gap-1">
           {["all", "A", "B", "C"].map((tier) => (
             <button
+              type="button"
               key={tier}
               onClick={() => setFilterTier(tier)}
+              aria-pressed={filterTier === tier}
               className={`rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${
                 filterTier === tier
                   ? "bg-[var(--accent)] text-white"
@@ -486,31 +434,31 @@ export default function SetupQualitySection({
         </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {items.length === 0 ? (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
           No setups match the current filter.
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="space-y-3 md:hidden">
-            {(showAll ? filtered : filtered.slice(0, DEFAULT_VISIBLE)).map((row) => {
-              const debate = debateMap.get(row.ticker) ?? normalizeDebate(row.debate_v1);
-              const isExpanded = expandedTicker === row.ticker;
+          <div className="space-y-3 2xl:hidden">
+            {(showAll ? items : items.slice(0, DEFAULT_VISIBLE)).map((item) => {
+              const { row, ticker, debate } = item;
+              const isExpanded = expandedTicker === ticker;
               return (
                 <div
-                  key={row.ticker}
+                  key={ticker}
                   className={`rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 ${
-                    row.ticker === activeTicker ? "ring-1 ring-[var(--accent)]/40" : ""
+                    ticker === activeTicker ? "ring-1 ring-[var(--accent)]/40" : ""
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <span className="flex items-center gap-2">
                         <Link
-                          to={`/chart?t=${row.ticker}`}
+                          to={`/chart?t=${ticker}`}
                           className="font-mono text-lg font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
                         >
-                          {row.ticker}
+                          {ticker}
                         </Link>
                         {row.earnings_within_5d && (
                           <Badge variant="amber" className="text-[9px] px-1.5 py-0">
@@ -519,7 +467,7 @@ export default function SetupQualitySection({
                         )}
                       </span>
                       <div className="mt-1 text-xs text-[var(--muted)]">
-                        Score {fmt(row.score, 1)}
+                        Score {item.scoreText}
                       </div>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
@@ -531,24 +479,65 @@ export default function SetupQualitySection({
                       ) : null}
                       {debate?.consensus?.agreement_score != null ? (
                         <Badge variant="muted">
-                          Debate {debate.consensus.agreement_score.toFixed(0)}%
+                          {item.ruleReviewLabel}
                         </Badge>
                       ) : null}
-                      {asNumber(row.calibrated_hit_prob) != null ? (
-                        <Badge variant={probabilityVariant(row.calibrated_hit_prob)}>
-                          P {(Number(row.calibrated_hit_prob) * 100).toFixed(0)}%
+                      {item.probability ? (
+                        <Badge variant={item.probability.tone}>
+                          P {item.probability.pctText}
                         </Badge>
                       ) : null}
                     </div>
                   </div>
 
                   <p className="mt-3 text-sm text-[var(--text)]">
-                    {row.action ?? row.observation ?? "No setup note available."}
+                    {item.decisionNote}
                   </p>
+
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--line)] pt-3 sm:grid-cols-4">
+                    <div>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                        Probability
+                      </dt>
+                      <dd className="mt-1 text-xs tabular-nums text-[var(--text)]">
+                        {item.probability?.compactText ?? "Unavailable"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                        Options
+                      </dt>
+                      <dd className="mt-1 text-xs text-[var(--text)]">
+                        {item.options?.label ?? "Unavailable"}
+                      </dd>
+                      {item.options?.ranksText && (
+                        <dd className="mt-0.5 text-[10px] tabular-nums text-[var(--muted)]">
+                          {item.options.ranksText}
+                        </dd>
+                      )}
+                    </div>
+                    <div>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                        News
+                      </dt>
+                      <dd className="mt-1 text-xs tabular-nums text-[var(--text)]">
+                        {item.news?.scoreText ?? "Unavailable"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                        Macro
+                      </dt>
+                      <dd className="mt-1 text-xs tabular-nums text-[var(--text)]">
+                        {item.news?.macroText?.replace(/^Macro /, "") ?? "Unavailable"}
+                      </dd>
+                    </div>
+                  </dl>
 
                   <button
                     type="button"
-                    onClick={() => setExpandedTicker(isExpanded ? null : row.ticker)}
+                    onClick={() => setExpandedTicker(isExpanded ? null : ticker)}
+                    aria-expanded={isExpanded}
                     className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
                   >
                     {isExpanded ? "Hide details" : "Show details"}
@@ -572,7 +561,7 @@ export default function SetupQualitySection({
                         <DebateVisualization debate={debate} />
                       ) : (
                         <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs text-[var(--muted)]">
-                          Debate detail is not available for this setup snapshot.
+                          Deterministic rule-review detail is not available for this setup snapshot.
                         </div>
                       )}
                     </div>
@@ -582,40 +571,44 @@ export default function SetupQualitySection({
             })}
           </div>
 
-          <div className="hidden overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] md:block">
-            <table className="w-full border-collapse text-left text-sm">
+          <div className="hidden overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] 2xl:block">
+            <table className="w-full min-w-[1220px] table-fixed border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--line)]">
                   {columns.map((column) => (
                     <th
                       key={column.key}
-                      className="cursor-pointer select-none px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] hover:text-[var(--text)]"
-                      onClick={() => handleSort(column.key)}
+                      className={`px-3 py-2 ${column.className ?? ""}`}
                     >
-                      {column.label}
-                      {sortCol === column.key && (
-                        <span className="ml-1">{sortAsc ? "\u25B2" : "\u25BC"}</span>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleSort(column.key)}
+                        aria-label={`Sort by ${column.label}`}
+                        className="select-none text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] hover:text-[var(--text)]"
+                      >
+                        {column.label}
+                        {sortCol === column.key && (
+                          <span className="ml-1">{sortAsc ? "\u25B2" : "\u25BC"}</span>
+                        )}
+                      </button>
                     </th>
                   ))}
-                  <th className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                    Details
+                  <th className="w-[110px] px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                    Rule review
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {(showAll ? filtered : filtered.slice(0, DEFAULT_VISIBLE)).map((row) => {
-                  const debate = debateMap.get(row.ticker) ?? normalizeDebate(row.debate_v1);
-                  const isExpanded = expandedTicker === row.ticker;
+                {(showAll ? items : items.slice(0, DEFAULT_VISIBLE)).map((item) => {
+                  const isExpanded = expandedTicker === item.ticker;
                   return (
                     <SetupTableRow
-                      key={row.ticker}
-                      row={row}
+                      key={item.ticker}
+                      item={item}
                       columns={columns}
-                      debate={debate}
                       isExpanded={isExpanded}
-                      isHighlighted={row.ticker === activeTicker}
-                      onToggle={() => setExpandedTicker(isExpanded ? null : row.ticker)}
+                      isHighlighted={item.ticker === activeTicker}
+                      onToggle={() => setExpandedTicker(isExpanded ? null : item.ticker)}
                     />
                   );
                 })}
@@ -623,15 +616,16 @@ export default function SetupQualitySection({
             </table>
           </div>
 
-          {filtered.length > DEFAULT_VISIBLE && (
+          {items.length > DEFAULT_VISIBLE && (
             <div className="flex justify-center pt-1">
               <button
+                type="button"
                 onClick={() => setShowAll((prev) => !prev)}
                 className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-4 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:bg-[var(--panel-hover)] hover:text-[var(--blue)]"
               >
                 {showAll
                   ? `Show Top ${DEFAULT_VISIBLE}`
-                  : `Show All ${filtered.length} Setups`}
+                  : `Show All ${items.length} Setups`}
               </button>
             </div>
           )}

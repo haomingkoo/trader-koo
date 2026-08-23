@@ -63,6 +63,8 @@ class PaperTradeConfig:
     # This prevents hidden fail-open behavior from creating paper trades when
     # risk checks are unavailable.
     critic_fail_open: bool = False
+    campaign_id: str = "paper-v2"
+    zero_admission_streak_limit: int = 3
 
 
 def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
@@ -70,14 +72,24 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
     return {
         "bot_version": config.bot_version,
         "decision_version": config.decision_version,
+        "campaign_id": config.campaign_id,
+        "zero_admission_streak_limit": config.zero_admission_streak_limit,
         "min_tier": config.min_tier,
         "min_score": config.min_score,
         "max_open": config.max_open,
         "expiry_days": config.expiry_days,
+        "stop_atr_mult": config.stop_atr_mult,
+        "default_stop_pct": config.default_stop_pct,
         "min_reward_r_multiple": config.min_reward_r_multiple,
         "high_vol_atr_pct": config.high_vol_atr_pct,
         "qualifying_tiers": sorted(config.qualifying_tiers),
         "qualifying_actionability": sorted(config.qualifying_actionability),
+        "qualifying_directions": sorted(config.qualifying_directions),
+        "tier_rank": dict(sorted(config.tier_rank.items())),
+        "debate_caution_agreement": config.debate_caution_agreement,
+        "min_position_pct": config.min_position_pct,
+        "max_position_pct": config.max_position_pct,
+        "risk_per_trade_pct": config.risk_per_trade_pct,
         "position_size_pct": {
             "A": config.tier_a_position_pct,
             "B": config.tier_b_position_pct,
@@ -86,6 +98,22 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
         "caution_position_scale": config.caution_position_scale,
         "high_vol_position_scale": config.high_vol_position_scale,
         "earnings_position_scale": config.earnings_position_scale,
+        "ml": {
+            "enabled": config.ml_enabled,
+            "min_win_prob": config.ml_min_win_prob,
+        },
+        "portfolio_risk": {
+            "max_drawdown_pct": config.max_drawdown_pct,
+            "max_daily_loss_pct": config.max_daily_loss_pct,
+            "starting_capital": config.starting_capital,
+        },
+        "execution": {
+            "entry_slippage_bps": config.entry_slippage_bps,
+            "exit_slippage_bps": config.exit_slippage_bps,
+            "commission_per_trade": config.commission_per_trade,
+            "short_borrow_annual_pct": config.short_borrow_annual_pct,
+            "max_adv_pct": config.max_adv_pct,
+        },
         "trailing_stop": {
             "breakeven_r": config.trail_breakeven_r,
             "mid_r": config.trail_mid_r,

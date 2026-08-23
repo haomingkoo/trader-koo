@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from pathlib import Path
 
 import pandas as pd
 
 from trader_koo.ml import trainer as trainer_mod
-from trader_koo.ml.trainer import _apply_target_mode, build_dataset
+from trader_koo.ml.trainer import _apply_target_mode, _save_model, build_dataset
+from trader_koo.db.price_contract import record_price_series_revision
+
+
+def _seal_spy(conn: sqlite3.Connection) -> None:
+    record_price_series_revision(
+        conn,
+        "SPY",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+        fetch_timestamp="2025-01-05T00:00:00Z",
+    )
 
 
 def test_apply_target_mode_return_sign_keeps_time_expired_samples():
@@ -35,11 +47,17 @@ def test_apply_target_mode_barrier_treats_time_expiry_as_no_target_hit():
 
 def test_build_dataset_keeps_time_expired_labels_by_default(monkeypatch):
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, close REAL)")
+    conn.execute("""CREATE TABLE price_daily (
+        ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
+        adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+        adjustment_version TEXT DEFAULT 'test-v1',
+        basis_status TEXT DEFAULT 'verified', unresolved_reason TEXT
+    )""")
     conn.executemany(
-        "INSERT INTO price_daily VALUES (?, ?, ?)",
-        [("SPY", f"2025-01-{day:02d}", 100.0 + day) for day in range(1, 6)],
+        "INSERT INTO price_daily (ticker, date, close, open, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [("SPY", f"2025-01-{day:02d}", 100.0 + day, 100.0 + day, 100.0 + day, 100.0 + day, 1) for day in range(1, 6)],
     )
+    _seal_spy(conn)
 
     def fake_features(*_args, **_kwargs):
         return pd.DataFrame({"ret_1d": [0.01]}, index=pd.Index(["AAPL"], name="ticker"))
@@ -68,15 +86,24 @@ def test_build_dataset_keeps_time_expired_labels_by_default(monkeypatch):
     assert len(out) == 1
     assert out.loc[0, "exit_reason"] == "time_expired"
     assert int(out.loc[0, "target"]) == 1
+    assert out.attrs["return_basis"] == "split_adjusted_price_only"
+    assert out.attrs["adjustment_version"] == "test-v1"
+    assert out.attrs["distributions_included"] is False
 
 
 def test_build_dataset_can_drop_time_expired_labels(monkeypatch):
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, close REAL)")
+    conn.execute("""CREATE TABLE price_daily (
+        ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL,
+        adjustment_basis TEXT DEFAULT 'split_adjusted_price_only',
+        adjustment_version TEXT DEFAULT 'test-v1',
+        basis_status TEXT DEFAULT 'verified', unresolved_reason TEXT
+    )""")
     conn.executemany(
-        "INSERT INTO price_daily VALUES (?, ?, ?)",
-        [("SPY", f"2025-01-{day:02d}", 100.0 + day) for day in range(1, 6)],
+        "INSERT INTO price_daily (ticker, date, close, open, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [("SPY", f"2025-01-{day:02d}", 100.0 + day, 100.0 + day, 100.0 + day, 100.0 + day, 1) for day in range(1, 6)],
     )
+    _seal_spy(conn)
 
     def fake_features(*_args, **_kwargs):
         return pd.DataFrame({"ret_1d": [0.01]}, index=pd.Index(["AAPL"], name="ticker"))
@@ -104,3 +131,32 @@ def test_build_dataset_can_drop_time_expired_labels(monkeypatch):
     )
 
     assert out.empty
+    assert out.attrs["return_basis"] == "split_adjusted_price_only"
+
+
+def test_saved_model_metadata_carries_price_estimand(monkeypatch, tmp_path: Path):
+    class Booster:
+        def save_model(self, path: str) -> None:
+            Path(path).write_text("model", encoding="utf-8")
+
+    class Model:
+        booster_ = Booster()
+
+    monkeypatch.setattr(trainer_mod, "_model_dir", lambda: tmp_path)
+    _save_model(
+        Model(),
+        ["ret_1d"],
+        [],
+        price_contract={
+            "basis": "split_adjusted_price_only",
+            "version": "test-v1",
+            "distributions_included": False,
+        },
+    )
+
+    metadata = json.loads(
+        (tmp_path / "swing_lgbm_latest_meta.json").read_text(encoding="utf-8")
+    )
+    assert metadata["return_basis"] == "split_adjusted_price_only"
+    assert metadata["adjustment_version"] == "test-v1"
+    assert metadata["distributions_included"] is False

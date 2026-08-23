@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
+from trader_koo.db.price_contract import research_eligible_tickers
+from trader_koo.report.utils import completed_nyse_period_through
 
 GREEN_BARRIER_PERIOD = 14
 LOG = logging.getLogger(__name__)
@@ -51,7 +53,13 @@ def compute_williams_percent_r(
     return -100.0 * (highest - closes) / span
 
 
-def resample_ohlcv(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+def resample_ohlcv(
+    frame: pd.DataFrame,
+    timeframe: str,
+    *,
+    completed_only: bool = False,
+    as_of: dt.date | dt.datetime | None = None,
+) -> pd.DataFrame:
     """Aggregate daily OHLCV rows to weekly or monthly bars."""
     if frame.empty:
         return frame.copy()
@@ -77,6 +85,16 @@ def resample_ohlcv(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
         .dropna(subset=["open", "high", "low", "close"])
         .reset_index(drop=True)
     )
+    if completed_only and not aggregated.empty:
+        completed_through = completed_nyse_period_through(tf, as_of)
+        source_dates = pd.to_datetime(aggregated["date"], errors="coerce")
+        if tf == "weekly":
+            completed_period = pd.Timestamp(completed_through).to_period("W-FRI")
+            row_period = source_dates.dt.to_period("W-FRI")
+        else:
+            completed_period = pd.Timestamp(completed_through).to_period("M")
+            row_period = source_dates.dt.to_period("M")
+        aggregated = aggregated.loc[row_period <= completed_period].reset_index(drop=True)
     return aggregated
 
 
@@ -129,13 +147,20 @@ def scan_green_barrier_snapshot(
         "stale_skipped_tickers": [],
         "invalid_date_skipped_count": 0,
         "insufficient_history_skipped_count": 0,
+        "basis_unresolved_skipped_count": 0,
+        "basis_unresolved_skipped_tickers": [],
     }
     if daily.empty:
         return {"hits": [], "coverage": coverage}
 
     hits: list[dict[str, Any]] = []
     stale_tickers: list[str] = []
+    eligible_tickers = research_eligible_tickers(conn)
+    basis_skipped: list[str] = []
     for ticker, ticker_daily in daily.groupby("ticker", sort=True):
+        if str(ticker) not in eligible_tickers:
+            basis_skipped.append(str(ticker))
+            continue
         latest_source_date = pd.to_datetime(ticker_daily["date"], errors="coerce").max()
         if pd.isna(latest_source_date):
             coverage["invalid_date_skipped_count"] += 1
@@ -146,7 +171,12 @@ def scan_green_barrier_snapshot(
             continue
         coverage["scanned_ticker_count"] += 1
         for timeframe in timeframes:
-            bars = resample_ohlcv(ticker_daily, timeframe)
+            bars = resample_ohlcv(
+                ticker_daily,
+                timeframe,
+                completed_only=True,
+                as_of=reference_date,
+            )
             if len(bars) < GREEN_BARRIER_PERIOD:
                 coverage["insufficient_history_skipped_count"] += 1
                 continue
@@ -174,6 +204,8 @@ def scan_green_barrier_snapshot(
         )
     coverage["stale_skipped_count"] = len(stale_tickers)
     coverage["stale_skipped_tickers"] = stale_tickers
+    coverage["basis_unresolved_skipped_count"] = len(basis_skipped)
+    coverage["basis_unresolved_skipped_tickers"] = basis_skipped
     return {
         "hits": sorted(
             hits,
@@ -194,6 +226,8 @@ def build_green_barrier_chart_png(
 ) -> bytes:
     """Render a Telegram-sized price + Williams %R chart as PNG bytes."""
     symbol = str(ticker or "").strip().upper()
+    if symbol not in research_eligible_tickers(conn):
+        raise ValueError(f"Price basis is not research eligible for {symbol}")
     query = """
         SELECT date, open, high, low, close, COALESCE(volume, 0) AS volume
         FROM price_daily WHERE ticker = ?
@@ -205,7 +239,13 @@ def build_green_barrier_chart_png(
         params = (symbol, cutoff)
     query += " ORDER BY date"
     daily = pd.read_sql_query(query, conn, params=params)
-    bars = resample_ohlcv(daily, timeframe)
+    reference_date = pd.Timestamp(as_of).date() if as_of is not None else dt.date.today()
+    bars = resample_ohlcv(
+        daily,
+        timeframe,
+        completed_only=True,
+        as_of=reference_date,
+    )
     if len(bars) < GREEN_BARRIER_PERIOD:
         raise ValueError(f"Not enough {timeframe} bars for {symbol}")
     bars["williams_r"] = compute_williams_percent_r(bars)

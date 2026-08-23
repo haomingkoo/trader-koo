@@ -394,6 +394,26 @@ function StatusSection({ data, state }: { data: PipelineStatus; state: PipelineS
           </div>
         </div>
       )}
+
+      <div className="rounded-md border border-[var(--border)] px-3 py-2 text-xs">
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          <span>
+            Price basis verified: <strong>{data.price_basis.verified_tickers}</strong>
+          </span>
+          <span className={data.price_basis.unresolved_tickers > 0 ? "text-[var(--red)]" : "text-[var(--green)]"}>
+            Unresolved: <strong>{data.price_basis.unresolved_tickers}</strong>
+          </span>
+        </div>
+        {data.price_basis.bases.map((basis, index) => (
+          <div
+            key={`${basis.adjustment_basis}-${basis.adjustment_version}-${basis.basis_status}-${index}`}
+            className="mt-1 text-[var(--muted)]"
+          >
+            {basis.adjustment_basis ?? "unknown"} · {basis.adjustment_version ?? "unknown"} ·{" "}
+            {basis.basis_status ?? "unverified"} · {basis.ticker_count} ticker(s)
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

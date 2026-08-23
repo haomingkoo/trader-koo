@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "snapshot_asof": "2026-08-22",
+  "lifecycle_stage": "descriptive",
+  "readiness_status": "insufficient_history",
+  "readiness_reasons": [
+    "fewer_than_120_daily_observations",
+    "fewer_than_20_traded_signal_dates",
+    "fewer_than_12_expected_10_session_blocks",
+    "post_signal_corporate_action_rebasing_can_bias_close_basis_exclusions",
+    "persisted_calls_are_not_linked_to_an_immutable_completed_report_run",
+    "current_universe_has_survivorship_bias"
+  ],
+  "observation_count": 20,
+  "traded_signal_date_count": 4,
+  "effective_non_overlapping_block_count": 2.0,
+  "closed_trade_count": 27,
+  "expected_block_length_sessions": 10,
+  "consumed_window": {
+    "consumed": true,
+    "reusable_for_policy_selection": false,
+    "status": "revealed_for_preexisting_baseline_audit_not_reusable_for_policy_selection"
+  },
+  "causal_validity": {
+    "valid": false,
+    "reasons": [
+      "post_signal_corporate_action_rebasing_can_bias_close_basis_exclusions",
+      "persisted_calls_are_not_linked_to_an_immutable_completed_report_run",
+      "current_universe_has_survivorship_bias"
+    ]
+  },
+  "return_basis": "split_adjusted_price_return_only_dividends_omitted",
+  "decision_eligible": false
+}

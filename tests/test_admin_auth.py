@@ -1,261 +1,251 @@
-"""Unit tests for admin endpoint authentication.
+"""Tests for the framework-native admin authentication seam."""
 
-Requirements:
-- 5.5: Include automated test coverage for authentication on every admin endpoint
-"""
+from __future__ import annotations
 
-import importlib
-import pytest
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
-from unittest.mock import Mock
 
+from trader_koo.backend.routers.admin import router as production_admin_router
 from trader_koo.middleware.auth import (
-    require_admin_auth,
-    register_admin_endpoint,
-    get_admin_endpoint_registry,
-    verify_all_admin_endpoints_protected,
-    auto_register_admin_endpoints,
-    _ADMIN_ENDPOINT_REGISTRY,
+    AdminAuthConfig,
+    AdminAuthenticator,
+    admin_route_inventory,
+    require_admin,
+    route_uses_admin_dependency,
 )
+from trader_koo.ratelimit.integration import initialize_rate_limiting
+from trader_koo.ratelimit.middleware import RateLimitMiddleware
 
 
-@pytest.fixture(autouse=True)
-def clear_registry():
-    """Clear the admin endpoint registry before each test."""
-    _ADMIN_ENDPOINT_REGISTRY.clear()
-    yield
-    _ADMIN_ENDPOINT_REGISTRY.clear()
-
-
-class TestAdminEndpointRegistry:
-    """Test admin endpoint registration and verification."""
-
-    def test_register_admin_endpoint(self):
-        """Test registering an admin endpoint."""
-        register_admin_endpoint("/api/admin/test", "GET", has_auth=True)
-
-        registry = get_admin_endpoint_registry()
-        assert "GET:/api/admin/test" in registry
-        assert registry["GET:/api/admin/test"]["path"] == "/api/admin/test"
-        assert registry["GET:/api/admin/test"]["method"] == "GET"
-        assert registry["GET:/api/admin/test"]["has_auth"] is True
-
-    def test_verify_all_protected(self):
-        """Test verification when all endpoints are protected."""
-        register_admin_endpoint("/api/admin/test1", "GET", has_auth=True)
-        register_admin_endpoint("/api/admin/test2", "POST", has_auth=True)
-
-        all_protected, unprotected = verify_all_admin_endpoints_protected()
-        assert all_protected is True
-        assert len(unprotected) == 0
-
-    def test_verify_with_unprotected(self):
-        """Test verification when some endpoints are unprotected."""
-        register_admin_endpoint("/api/admin/test1", "GET", has_auth=True)
-        register_admin_endpoint("/api/admin/test2", "POST", has_auth=False)
-        register_admin_endpoint("/api/admin/test3", "PUT", has_auth=False)
-
-        all_protected, unprotected = verify_all_admin_endpoints_protected()
-        assert all_protected is False
-        assert len(unprotected) == 2
-        assert "POST:/api/admin/test2" in unprotected
-        assert "PUT:/api/admin/test3" in unprotected
-
-    def test_auto_register_from_app(self):
-        """Test automatic registration from FastAPI app routes."""
-        app = FastAPI()
-
-        @app.get("/api/admin/test1")
-        @require_admin_auth
-        def test1():
-            return {"status": "ok"}
-
-        @app.post("/api/admin/test2")
-        def test2():
-            return {"status": "ok"}
-
-        @app.get("/api/public/test3")
-        def test3():
-            return {"status": "ok"}
-
-        auto_register_admin_endpoints(app)
-
-        registry = get_admin_endpoint_registry()
-
-        # Should register admin endpoints
-        assert "GET:/api/admin/test1" in registry
-        assert "POST:/api/admin/test2" in registry
-
-        # Should not register non-admin endpoints
-        assert "GET:/api/public/test3" not in registry
-
-        # Should detect authentication decorator
-        assert registry["GET:/api/admin/test1"]["has_auth"] is True
-        assert registry["POST:/api/admin/test2"]["has_auth"] is False
-
-
-class TestRequireAdminAuthDecorator:
-    """Test the @require_admin_auth decorator."""
-
-    def test_decorator_marks_function(self):
-        """Test that decorator marks function with _requires_admin_auth attribute."""
-        @require_admin_auth
-        def test_func():
-            return {"status": "ok"}
-
-        assert hasattr(test_func, "_requires_admin_auth")
-        assert test_func._requires_admin_auth is True
-
-    def test_decorator_with_admin_identity(self):
-        """Test that decorated endpoint works with admin identity."""
-        app = FastAPI()
-
-        @app.get("/api/admin/test")
-        @require_admin_auth
-        def test_endpoint(request: Request):
-            return {"status": "ok", "user": request.state.admin_identity}
-
-        client = TestClient(app)
-
-        # Mock the middleware by setting admin_identity
-        def mock_middleware(request: Request, call_next):
-            request.state.admin_identity = {"username": "admin", "mode": "api_key"}
-            return call_next(request)
-
-        # This test verifies the decorator doesn't break when admin_identity is present
-        # In real usage, the middleware sets this
-        response = client.get("/api/admin/test")
-        # Without middleware, this will fail with 401
-        # This is expected behavior - the decorator requires middleware
-        assert response.status_code == 401
-
-    def test_decorator_without_admin_identity(self):
-        """Test that decorated endpoint rejects requests without admin identity."""
-        app = FastAPI()
-
-        @app.get("/api/admin/test")
-        @require_admin_auth
-        def test_endpoint(request: Request):
-            return {"status": "ok"}
-
-        client = TestClient(app)
-
-        # Request without admin_identity should be rejected
-        response = client.get("/api/admin/test")
-        assert response.status_code == 401
-        assert "Unauthorized" in response.json()["detail"]
-
-
-class TestAdminEndpointAuthentication:
-    """Integration tests for admin endpoint authentication.
-
-    Requirements:
-    - 5.5: Include automated test coverage for authentication on every admin endpoint
-    """
-
-    @pytest.mark.skipif(
-        not __import__("pathlib").Path("/data").exists(),
-        reason="Requires writable /data directory (Railway only)",
+def _app(
+    config: AdminAuthConfig,
+    *,
+    audit_recorder=None,
+) -> FastAPI:
+    app = FastAPI()
+    app.state.admin_authenticator = AdminAuthenticator(
+        config,
+        audit_recorder=audit_recorder,
     )
-    def test_all_admin_endpoints_require_auth(self, monkeypatch):
-        """Test that all /api/admin/* endpoints require authentication.
-
-        This test verifies that:
-        1. All admin endpoints are registered
-        2. All admin endpoints have authentication applied
-        3. Unauthenticated requests are rejected with 401
-        """
-        monkeypatch.setenv("ADMIN_STRICT_API_KEY", "1")
-        monkeypatch.setenv("TRADER_KOO_API_KEY", "t" * 32)
-
-        import trader_koo.backend.main as main_module
-
-        try:
-            importlib.reload(main_module)
-            app = main_module.app
-        except OSError:
-            pytest.skip("Requires writable /data directory (Railway only)")
-
-        # Get all admin routes
-        admin_routes = []
-        for route in app.routes:
-            if hasattr(route, "path") and route.path.startswith("/api/admin/"):
-                if hasattr(route, "methods"):
-                    for method in route.methods:
-                        admin_routes.append((method, route.path))
-
-        # Verify we found admin routes
-        assert len(admin_routes) > 0, "No admin routes found"
-
-        # Test each admin endpoint without authentication
-        with TestClient(app) as client:
-            for method, path in admin_routes:
-                # Skip the /api/admin/routes endpoint itself (it's being tested)
-                if path == "/api/admin/routes":
-                    continue
-
-                # Make request without X-API-Key header
-                if method == "GET":
-                    response = client.get(path)
-                elif method == "POST":
-                    response = client.post(path, json={})
-                elif method == "PUT":
-                    response = client.put(path, json={})
-                elif method == "DELETE":
-                    response = client.delete(path)
-                elif method == "PATCH":
-                    response = client.patch(path, json={})
-                else:
-                    continue
-
-                assert response.status_code in [401, 429], (
-                    f"{method} {path} should require authentication, "
-                    f"but returned {response.status_code}"
-                )
-
-    @pytest.mark.skipif(
-        not __import__("pathlib").Path("/data").exists(),
-        reason="Requires writable /data directory (Railway only)",
+    router = APIRouter(
+        prefix="/api/admin",
+        dependencies=[Depends(require_admin)],
     )
-    def test_admin_routes_endpoint(self, monkeypatch):
-        """Test the /api/admin/routes endpoint returns route information."""
-        monkeypatch.setenv("ADMIN_STRICT_API_KEY", "1")
-        monkeypatch.setenv("TRADER_KOO_API_KEY", "r" * 32)
 
-        import trader_koo.backend.main as main_module
+    @router.get("/ping")
+    def ping(request: Request):
+        return {"identity": request.state.admin_identity}
 
-        try:
-            importlib.reload(main_module)
-            app = main_module.app
-            api_key = main_module.API_KEY
-        except OSError:
-            pytest.skip("Requires writable /data directory (Railway only)")
+    app.include_router(router)
 
-        with TestClient(app) as client:
-            response = client.get(
-                "/api/admin/routes",
-                headers={"X-API-Key": api_key},
-            )
+    @app.get("/api/public/ping")
+    def public_ping():
+        return {"ok": True}
 
+    return app
+
+
+def test_missing_and_invalid_keys_are_rejected_and_valid_key_is_accepted():
+    app = _app(AdminAuthConfig(api_key="x" * 32, username="operator"))
+    with TestClient(app) as client:
+        assert client.get("/api/admin/ping").status_code == 401
+        assert client.get(
+            "/api/admin/ping", headers={"X-API-Key": "wrong"}
+        ).status_code == 401
+        response = client.get(
+            "/api/admin/ping", headers={"X-API-Key": "x" * 32}
+        )
         assert response.status_code == 200
-        data = response.json()
+        assert response.json()["identity"] == {
+            "username": "operator",
+            "mode": "api_key",
+            "user_id": "operator",
+        }
 
-        # Verify response structure
-        assert "total" in data
-        assert "protected" in data
-        assert "unprotected" in data
-        assert "all_protected" in data
-        assert "routes" in data
 
-        # Verify routes list
-        assert isinstance(data["routes"], list)
-        assert data["total"] == len(data["routes"])
+def test_missing_server_key_fails_closed_outside_explicit_development_mode():
+    strict = _app(AdminAuthConfig(api_key="", strict_api_key=True))
+    non_strict_production = _app(
+        AdminAuthConfig(
+            api_key="",
+            strict_api_key=False,
+            development_mode=False,
+        )
+    )
+    assert TestClient(strict).get("/api/admin/ping").status_code == 503
+    assert TestClient(non_strict_production).get("/api/admin/ping").status_code == 503
 
-        # Each route should have required fields
-        for route in data["routes"]:
-            assert "method" in route
-            assert "path" in route
-            assert "has_auth" in route
-            assert "key" in route
-            assert route["path"].startswith("/api/admin/")
+
+def test_explicit_development_mode_sets_a_visible_identity():
+    app = _app(
+        AdminAuthConfig(
+            api_key="",
+            strict_api_key=False,
+            development_mode=True,
+        )
+    )
+    response = TestClient(app).get("/api/admin/ping")
+    assert response.status_code == 200
+    assert response.json()["identity"] == {
+        "username": "local-dev",
+        "mode": "open-admin",
+    }
+
+
+def test_failed_attempts_are_throttled_and_valid_auth_clears_failure_state():
+    app = _app(
+        AdminAuthConfig(
+            api_key="x" * 32,
+            max_failures=3,
+            failure_window_sec=300,
+            block_sec=600,
+        )
+    )
+    with TestClient(app) as client:
+        assert client.get("/api/admin/ping").status_code == 401
+        assert client.get(
+            "/api/admin/ping", headers={"X-API-Key": "x" * 32}
+        ).status_code == 200
+        assert client.get("/api/admin/ping").status_code == 401
+        assert client.get("/api/admin/ping").status_code == 401
+        blocked = client.get("/api/admin/ping")
+        assert blocked.status_code == 429
+        assert int(blocked.headers["Retry-After"]) > 0
+
+
+def test_authentication_attempts_use_the_injected_audit_recorder():
+    events: list[dict] = []
+    app = _app(
+        AdminAuthConfig(api_key="x" * 32),
+        audit_recorder=lambda **payload: events.append(payload),
+    )
+    with TestClient(app) as client:
+        client.get("/api/admin/ping")
+        client.get("/api/admin/ping", headers={"X-API-Key": "x" * 32})
+    assert [event["success"] for event in events] == [False, True]
+    assert events[0]["reason"] == "invalid_api_key"
+
+
+def test_runtime_inventory_reads_resolved_fastapi_dependencies():
+    app = _app(AdminAuthConfig(api_key="x" * 32))
+
+    @app.get("/api/admin/unsafe")
+    def unsafe():
+        return {"unsafe": True}
+
+    inventory = admin_route_inventory(app)
+    assert inventory == [
+        {
+            "method": "GET",
+            "path": "/api/admin/ping",
+            "has_auth": True,
+            "key": "GET:/api/admin/ping",
+        },
+        {
+            "method": "GET",
+            "path": "/api/admin/unsafe",
+            "has_auth": False,
+            "key": "GET:/api/admin/unsafe",
+        },
+    ]
+
+
+def test_every_production_admin_route_has_the_native_dependency():
+    app = FastAPI()
+    app.state.admin_authenticator = AdminAuthenticator(
+        AdminAuthConfig(api_key="x" * 32)
+    )
+    app.add_middleware(RateLimitMiddleware)
+    app.include_router(production_admin_router)
+    initialize_rate_limiting(app)
+    admin_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/api/admin/")
+    ]
+    assert admin_routes
+    assert all(route_uses_admin_dependency(route) for route in admin_routes)
+    assert all(row["has_auth"] for row in admin_route_inventory(app))
+    schema = app.openapi()
+    operations = [
+        operation
+        for path, path_item in schema["paths"].items()
+        if path.startswith("/api/admin/")
+        for method, operation in path_item.items()
+        if method.lower() in {"get", "post", "put", "patch", "delete"}
+    ]
+    assert operations
+    assert all(operation["security"] == [{"APIKeyHeader": []}] for operation in operations)
+
+    with TestClient(app) as client:
+        assert client.get("/api/admin/routes").status_code == 401
+        assert client.get("/api/admin/ratelimit/status").status_code == 401
+        assert client.post(
+            "/api/admin/ratelimit/override",
+            json={
+                "key": "ip:victim",
+                "limit": 999999,
+                "window_seconds": 60,
+                "duration_seconds": 3600,
+            },
+        ).status_code == 401
+        assert client.get(
+            "/api/admin/routes", headers={"X-API-Key": "x" * 32}
+        ).status_code == 200
+        assert client.get(
+            "/api/admin/ratelimit/status",
+            headers={"X-API-Key": "x" * 32},
+        ).status_code == 200
+        override = client.post(
+            "/api/admin/ratelimit/override",
+            headers={"X-API-Key": "x" * 32},
+            json={
+                "key": "ip:victim",
+                "limit": 999999,
+                "window_seconds": 60,
+                "duration_seconds": 3600,
+            },
+        )
+        assert override.status_code == 200
+        assert override.json()["success"] is True
+
+
+def test_authenticated_override_controls_the_enforcement_middleware():
+    app = FastAPI()
+    app.state.admin_authenticator = AdminAuthenticator(
+        AdminAuthConfig(api_key="x" * 32)
+    )
+    app.add_middleware(RateLimitMiddleware)
+    app.include_router(production_admin_router)
+    limiter = initialize_rate_limiting(app)
+
+    @app.get("/api/probe")
+    def probe():
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/admin/ratelimit/override",
+            headers={"X-API-Key": "x" * 32},
+            json={
+                "key": "ip:testclient",
+                "limit": 1,
+                "window_seconds": 3600,
+                "duration_seconds": 3600,
+            },
+        )
+        assert response.status_code == 200
+        status = limiter.get_status("ip:testclient")
+        assert status is not None and status["has_override"] is True
+        # The authenticated admin call belongs to user:admin, not the public
+        # client-IP bucket. The override therefore permits one public request.
+        assert client.get("/api/probe").status_code == 200
+        assert client.get("/api/probe").status_code == 429
+
+
+def test_openapi_marks_the_admin_surface_with_the_api_key_scheme():
+    app = _app(AdminAuthConfig(api_key="x" * 32))
+    schema = app.openapi()
+    operation = schema["paths"]["/api/admin/ping"]["get"]
+    assert operation["security"] == [{"APIKeyHeader": []}]
+    assert schema["paths"]["/api/public/ping"]["get"].get("security") is None

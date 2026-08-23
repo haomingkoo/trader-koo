@@ -75,11 +75,13 @@ function EvidenceChip({
 
 export function EvidenceSourceStrip({
   generatedTs,
+  reportRun,
   latestData,
   freshness,
   warnings = [],
 }: {
   generatedTs: string | null;
+  reportRun: ReportLatest["report_run"];
   latestData: ReportLatest["latest_data"];
   freshness: ReportLatest["freshness"];
   warnings?: string[];
@@ -139,6 +141,24 @@ export function EvidenceSourceStrip({
           detail={yoloAge}
           stale={Boolean(freshness?.yolo_age_hours != null && freshness.yolo_age_hours > 72)}
         />
+      </div>
+      <div data-testid="report-run-provenance" className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--bg)]/40 px-3 py-2 text-[10px] text-[var(--muted)]">
+        {reportRun?.lineage === "linked" ? (
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <span><strong className="text-[var(--text)]">Run</strong> {reportRun.run_id}</span>
+            <span><strong className="text-[var(--text)]">State</strong> {reportRun.state}</span>
+            <span><strong className="text-[var(--text)]">Generation</strong> {reportRun.generation_key || "Unavailable"}</span>
+            <span><strong className="text-[var(--text)]">Canonical retry</strong> {reportRun.canonical_generation === false ? "No" : "Yes"}</span>
+            <span><strong className="text-[var(--text)]">Started</strong> {reportRun.started_ts || "Unavailable"}</span>
+            <span><strong className="text-[var(--text)]">Completed</strong> {reportRun.completed_ts || "Unavailable"}</span>
+            <span><strong className="text-[var(--text)]">Published</strong> {reportRun.published_ts || "Unavailable"}</span>
+            <span title={reportRun.content_hash || undefined}><strong className="text-[var(--text)]">Artifact SHA-256</strong> {reportRun.content_hash?.slice(0, 12) || "Unavailable"}</span>
+            <span title={reportRun.config_hash || undefined}><strong className="text-[var(--text)]">Config</strong> {reportRun.config_hash?.slice(0, 12) || "Unavailable"}</span>
+            <span title={reportRun.code_version || undefined}><strong className="text-[var(--text)]">Code</strong> {reportRun.code_version?.slice(0, 12) || "Unavailable"}</span>
+          </div>
+        ) : (
+          <span><strong className="text-[var(--amber)]">Unlinked legacy</strong> — this report predates immutable publication lineage; no run identity was inferred.</span>
+        )}
       </div>
       {warnings.length > 0 && (
         <ul className="mt-3 space-y-1 border-t border-[var(--line)] pt-3">

@@ -11,6 +11,7 @@ from trader_koo.ml.rule_baseline import (
     run_rule_baseline,
     score_rule_candidates,
 )
+from trader_koo.db.price_contract import record_price_series_revision
 
 
 def _conn() -> sqlite3.Connection:
@@ -25,7 +26,11 @@ def _conn() -> sqlite3.Connection:
             high REAL,
             low REAL,
             close REAL,
-            volume REAL
+            volume REAL,
+            adjustment_basis TEXT NOT NULL DEFAULT 'split_adjusted_price_only',
+            adjustment_version TEXT NOT NULL DEFAULT 'test-v1',
+            basis_status TEXT NOT NULL DEFAULT 'verified',
+            unresolved_reason TEXT
         )
         """
     )
@@ -107,6 +112,13 @@ def test_run_rule_baseline_produces_registry_ready_summary(monkeypatch):
     dates = _insert_prices(conn, "SPY", [100 + i * 0.08 for i in range(70)])
     _insert_prices(conn, "AAA", [50 + i * 0.35 + math.sin(i) * 0.8 for i in range(70)])
     _insert_prices(conn, "BBB", [90 - i * 0.28 + math.sin(i) * 0.9 for i in range(70)])
+    for ticker in ("SPY", "AAA", "BBB"):
+        record_price_series_revision(
+            conn,
+            ticker,
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2025-03-11T00:00:00Z",
+        )
 
     def fake_extract_features(*args, **kwargs):
         return _features_frame()
@@ -131,3 +143,6 @@ def test_run_rule_baseline_produces_registry_ready_summary(monkeypatch):
     assert result["summary"]["method"] == "current_rule_technical_proxy"
     assert result["summary"]["total_trades"] > 0
     assert "spy_return_pct" in result["summary"]
+    assert result["summary"]["return_basis"] == "split_adjusted_price_only"
+    assert result["summary"]["benchmark_return_basis"] == "split_adjusted_price_only"
+    assert result["summary"]["distributions_included"] is False

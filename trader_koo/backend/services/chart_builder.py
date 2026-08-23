@@ -56,8 +56,39 @@ from trader_koo.backend.services.report_loader import latest_report_hmm_for_tick
 from trader_koo.structure.hmm_regime import predict_regimes as hmm_predict_regimes
 from trader_koo.backend.services.market_data import get_data_sources
 from trader_koo.backend.services.report_loader import latest_report_setup_for_ticker
+from trader_koo.db.price_contract import research_price_contract
 
 LOG = logging.getLogger("trader_koo.services.chart_builder")
+
+
+def _excluded_chart_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Return provenance without computing indicators on an ineligible series."""
+    return {
+        "ticker": ticker,
+        "asof": None,
+        "fundamentals": {},
+        "options_summary": {},
+        "chart": [],
+        "levels": [],
+        "gaps": [],
+        "trendlines": [],
+        "patterns": [],
+        "candlestick_patterns": [],
+        "hybrid_patterns": [],
+        "cv_proxy_patterns": [],
+        "hybrid_cv_compare": [],
+        "pattern_overlays": [],
+        "yolo_patterns": [],
+        "yolo_audit": [],
+        "earnings_markers": [],
+        "data_sources": contract,
+        "data_freshness": _compute_data_freshness(conn, ticker),
+        "meta": {"excluded_reason": "price_basis_not_research_eligible"},
+    }
 
 # Feature/pattern configuration singletons
 FEATURE_CFG = FeatureConfig()
@@ -963,6 +994,9 @@ def _prepare_model_and_features(
     Returns all intermediate artifacts needed by both the quick and
     full dashboard builders so the heavy DataFrame work runs once.
     """
+    price_contract = research_price_contract(conn, [ticker])
+    if not price_contract.get("eligible"):
+        raise HTTPException(status_code=409, detail="Price series is not research eligible")
     prices = get_price_df(conn, ticker)
     if prices.empty:
         raise HTTPException(
@@ -971,7 +1005,9 @@ def _prepare_model_and_features(
 
     max_date = prices["date"].max()
     db_path = _conn_db_path(conn)
-    cache_key = (db_path, ticker, int(months), str(max_date)) if db_path else None
+    cache_key = (
+        db_path, ticker, int(months), str(max_date), price_contract.get("revision")
+    ) if db_path else None
     if cache_key is not None:
         cached = _get_prepared_features(cache_key)
         if cached is not None:
@@ -1075,7 +1111,19 @@ def _prepare_model_and_features(
 # Quick dashboard builder (fast path — no LLM / HMM)
 # ---------------------------------------------------------------------------
 
-def build_dashboard_quick_payload(
+def _run_read_snapshot(conn: sqlite3.Connection, build: Any) -> dict[str, Any]:
+    """Materialize one payload from one SQLite snapshot without owning caller state."""
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        return build()
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
+
+
+def _build_dashboard_quick_payload(
     conn: sqlite3.Connection,
     ticker: str,
     months: int,
@@ -1086,6 +1134,9 @@ def build_dashboard_quick_payload(
     frontend can render the chart immediately.
     """
     ticker = ticker.upper().strip()
+    price_contract = get_data_sources(conn, ticker)
+    if not price_contract["research_eligible"]:
+        return _excluded_chart_payload(conn, ticker, price_contract)
     (
         _prices,
         _model,
@@ -1132,7 +1183,7 @@ def build_dashboard_quick_payload(
         "yolo_patterns": yolo_pats,
         "yolo_audit": yolo_aud,
         "earnings_markers": earnings_markers,
-        "data_sources": get_data_sources(conn, ticker),
+        "data_sources": price_contract,
         "data_freshness": data_freshness,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
@@ -1154,7 +1205,7 @@ def build_dashboard_quick_payload(
 # Commentary-only builder (slow path — LLM + debate + HMM)
 # ---------------------------------------------------------------------------
 
-def build_commentary_payload(
+def _build_commentary_payload(
     conn: sqlite3.Connection,
     ticker: str,
     months: int,
@@ -1171,6 +1222,16 @@ def build_commentary_payload(
     expensive feature engineering entirely (~200ms saved per call).
     """
     ticker = ticker.upper().strip()
+    price_contract = get_data_sources(conn, ticker)
+    if not price_contract["research_eligible"]:
+        return {
+            "ticker": ticker,
+            "chart_commentary": None,
+            "hmm_regime": None,
+            "report_generated_ts": report_generated_ts,
+            "price_contract": price_contract,
+            "excluded_reason": "price_basis_not_research_eligible",
+        }
 
     # Try the fast path first: report snapshot + cached HMM
     setup_override = latest_report_setup_for_ticker(
@@ -1253,7 +1314,7 @@ def build_commentary_payload(
 # Main dashboard builder (backward-compatible full payload)
 # ---------------------------------------------------------------------------
 
-def build_dashboard_payload(
+def _build_dashboard_payload(
     conn: sqlite3.Connection,
     ticker: str,
     months: int,
@@ -1277,6 +1338,17 @@ def build_dashboard_payload(
         Optional pinned report timestamp for snapshot override.
     """
     ticker = ticker.upper().strip()
+    price_contract = get_data_sources(conn, ticker)
+    if not price_contract["research_eligible"]:
+        payload = _excluded_chart_payload(conn, ticker, price_contract)
+        payload.update(
+            {
+                "chart_commentary": None,
+                "hmm_regime": None,
+                "report_generated_ts": report_generated_ts,
+            }
+        )
+        return payload
     (
         prices,
         model,
@@ -1351,7 +1423,7 @@ def build_dashboard_payload(
         "hmm_regime": hmm_regime,
         "earnings_markers": earnings_markers,
         "report_generated_ts": report_generated_ts,
-        "data_sources": get_data_sources(conn, ticker),
+        "data_sources": price_contract,
         "data_freshness": data_freshness,
         "meta": {
             "schema": ["date", "open", "high", "low", "close", "volume"],
@@ -1367,3 +1439,53 @@ def build_dashboard_payload(
             },
         },
     }
+
+
+def build_dashboard_quick_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+) -> dict[str, Any]:
+    return _run_read_snapshot(
+        conn, lambda: _build_dashboard_quick_payload(conn, ticker, months)
+    )
+
+
+def build_commentary_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+    *,
+    report_dir: Path,
+    report_generated_ts: str | None = None,
+) -> dict[str, Any]:
+    return _run_read_snapshot(
+        conn,
+        lambda: _build_commentary_payload(
+            conn,
+            ticker,
+            months,
+            report_dir=report_dir,
+            report_generated_ts=report_generated_ts,
+        ),
+    )
+
+
+def build_dashboard_payload(
+    conn: sqlite3.Connection,
+    ticker: str,
+    months: int,
+    *,
+    report_dir: Path,
+    report_generated_ts: str | None = None,
+) -> dict[str, Any]:
+    return _run_read_snapshot(
+        conn,
+        lambda: _build_dashboard_payload(
+            conn,
+            ticker,
+            months,
+            report_dir=report_dir,
+            report_generated_ts=report_generated_ts,
+        ),
+    )

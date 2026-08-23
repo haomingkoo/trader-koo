@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import logging
 import os
@@ -20,11 +19,20 @@ from trader_koo.llm_health import (
 )
 from trader_koo.llm.schemas import SetupRewrite
 from trader_koo.llm.sanitizer import sanitize_llm_output
-from trader_koo.llm.validator import generate_fallback_narrative, validate_llm_output
+from trader_koo.llm.validator import validate_llm_output
+from trader_koo.llm.evaluation import (
+    EVALUATOR_VERSION,
+    PROMPT_TEMPLATE_VERSION,
+    baseline_candidate,
+    cache_identity,
+    evaluate_setup_rewrite,
+    intent_contract,
+)
+from trader_koo.llm.observability import record_llm_call
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _CACHE_LOCK = threading.Lock()
-_PROMPT_CACHE: dict[str, dict[str, str]] = {}
+_PROMPT_CACHE: dict[str, dict[str, Any]] = {}
 _RUNTIME_DISABLED_UNTIL: dt.datetime | None = None
 LOG = logging.getLogger("trader_koo.llm")
 
@@ -281,10 +289,12 @@ def _gemini_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any]
         f":generateContent?key={cfg['api_key']}"
     )
     system_prompt = (
-        "You rewrite stock setup copy for a dashboard. "
+        "You analyze and rewrite the observation for a stock setup dashboard. "
         "Use ONLY facts from INPUT. Do not fabricate indicators, events, or prices. "
-        "Keep text concise, risk-first, and confirmation-first. "
-        "Return STRICT JSON only with keys: observation, action, risk_note."
+        "Copy baseline.action and baseline.risk_note exactly; they are deterministic decisions. "
+        "Copy intent_contract exactly; decision_delta must remain none. "
+        "Keep the observation concise and evidence-first. Return STRICT JSON only with keys: "
+        "observation, action, risk_note, intent."
     )
     user_prompt = json.dumps(prompt_payload, ensure_ascii=True, separators=(",", ":"))
     body = {
@@ -300,8 +310,17 @@ def _gemini_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any]
                     "observation": {"type": "STRING"},
                     "action": {"type": "STRING"},
                     "risk_note": {"type": "STRING"},
+                    "intent": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "signal_bias": {"type": "STRING"},
+                            "actionability": {"type": "STRING"},
+                            "decision_delta": {"type": "STRING", "enum": ["none"]},
+                        },
+                        "required": ["signal_bias", "actionability", "decision_delta"],
+                    },
                 },
-                "required": ["observation", "action", "risk_note"],
+                "required": ["observation", "action", "risk_note", "intent"],
             },
         },
     }
@@ -344,10 +363,12 @@ def _azure_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any],
         f"/chat/completions?api-version={cfg['api_version']}"
     )
     system_prompt = (
-        "You rewrite stock setup copy for a dashboard. "
+        "You analyze and rewrite the observation for a stock setup dashboard. "
         "Use ONLY facts from INPUT. Do not fabricate indicators, events, or prices. "
-        "Keep text concise, risk-first, and confirmation-first. "
-        "Return STRICT JSON only with keys: observation, action, risk_note."
+        "Copy baseline.action and baseline.risk_note exactly; they are deterministic decisions. "
+        "Copy intent_contract exactly; decision_delta must remain none. "
+        "Keep the observation concise and evidence-first. Return STRICT JSON only with keys: "
+        "observation, action, risk_note, intent."
     )
     user_prompt = json.dumps(prompt_payload, ensure_ascii=True, separators=(",", ":"))
     body = {
@@ -409,9 +430,9 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     if not llm_ready():
         return {}
 
-    base_observation = _compact_text(row.get("observation"), max_chars=320)
-    base_action = _compact_text(row.get("action"), max_chars=260)
-    base_risk = _compact_text(row.get("risk_note"), max_chars=120)
+    base_observation = _compact_text(row.get("observation"), max_chars=260)
+    base_action = _compact_text(row.get("action"), max_chars=180)
+    base_risk = _compact_text(row.get("risk_note"), max_chars=80)
     if not (base_observation or base_action):
         return {}
 
@@ -423,6 +444,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         "setup_tier": row.get("setup_tier"),
         "setup_family": row.get("setup_family"),
         "signal_bias": row.get("signal_bias"),
+        "actionability": row.get("actionability"),
         "trend_state": row.get("trend_state"),
         "level_context": row.get("level_context"),
         "level_event": row.get("level_event"),
@@ -438,6 +460,10 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         "resistance_level": row.get("resistance_level"),
         "pct_vs_ma20": row.get("pct_vs_ma20"),
         "pct_change": row.get("pct_change"),
+        "report_run_id": row.get("report_run_id"),
+        "evidence_hash": row.get("content_hash") or row.get("evidence_hash"),
+        "evidence_revision": row.get("adjustment_version") or row.get("evidence_revision"),
+        "evidence_status": row.get("evidence_status"),
         "baseline": {
             "observation": base_observation,
             "action": base_action,
@@ -450,14 +476,94 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             "style": "plain text, no markdown",
         },
     }
+    context["intent_contract"] = intent_contract(context)
 
-    prompt_hash = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    provider = _llm_provider()
+    configured = _gemini_cfg() if provider == "gemini" else _azure_cfg()
+    runtime_identity = {
+        "provider": provider,
+        "model": configured.get("model"),
+        "deployment": configured.get("deployment"),
+        "api_version": configured.get("api_version"),
+        "temperature": _llm_temperature(),
+        "max_tokens": _llm_max_tokens(),
+    }
+    prompt_hash = cache_identity(context, runtime_identity)
+    _rewrite_fn = _gemini_chat_rewrite if provider == "gemini" else _azure_chat_rewrite
+    trace_started = dt.datetime.now(dt.timezone.utc)
+
+    def record_trace(
+        *,
+        proposed: dict[str, Any] | None,
+        final: dict[str, Any],
+        usage: dict[str, Any] | None,
+        validator: str,
+        fallback_reason: str | None,
+        status: str,
+        evaluation: dict[str, Any],
+    ) -> None:
+        usage = usage if isinstance(usage, dict) else {}
+        try:
+            record_llm_call(
+                db_path,
+                source=source,
+                role="narrative_rewriter",
+                stage="setup_copy_rewrite",
+                provider=provider,
+                model=str(usage.get("model") or configured.get("model") or "") or None,
+                deployment=str(
+                    usage.get("deployment") or configured.get("deployment") or ""
+                ) or None,
+                prompt_template_version=PROMPT_TEMPLATE_VERSION,
+                input_payload=context,
+                proposed_output=proposed,
+                deterministic_pre=context["baseline"],
+                final_adjudicated=final,
+                started_at=trace_started,
+                usage=usage,
+                validator_result=validator,
+                fallback_reason=fallback_reason,
+                terminal_status=status,
+                ticker=context.get("ticker"),
+                report_run_id=str(context.get("report_run_id") or "") or None,
+                decision_scope="observation_narrative_only",
+                evaluation_result=evaluation,
+                cache_identity_sha256=prompt_hash,
+            )
+        except Exception:
+            LOG.warning("Failed to persist append-only LLM trace", exc_info=True)
+
+    def baseline_fallback() -> tuple[dict[str, str], dict[str, Any]]:
+        candidate = sanitize_llm_output(
+            baseline_candidate(context),
+            field_limits={"observation": 260, "action": 180, "risk_note": 80},
+        )
+        out = {key: str(candidate.get(key) or "") for key in (
+            "observation", "action", "risk_note",
+        )}
+        return out, evaluate_setup_rewrite(candidate, context)
+
+    baseline, preflight = baseline_fallback()
+    preflight_errors = set(preflight["errors"])
+    if preflight_errors.intersection({"prompt_injection_in_evidence", "evidence_unavailable"}):
+        return {}
+
     with _CACHE_LOCK:
         cached = _PROMPT_CACHE.get(prompt_hash)
     if cached is not None:
-        return dict(cached)
+        output = dict(cached["output"])
+        evaluation = dict(cached["evaluation"])
+        cached_usage = {
+            key: cached.get("usage", {}).get(key)
+            for key in ("model", "deployment", "api_version", "response_id")
+        }
+        record_trace(
+            proposed=output, final=output, usage=cached_usage,
+            validator="passed", fallback_reason=None, status="cache_hit",
+            evaluation=evaluation,
+        )
+        return output
 
-    _rewrite_fn = _gemini_chat_rewrite if _llm_provider() == "gemini" else _azure_chat_rewrite
     try:
         rewritten, usage_meta = _rewrite_fn(context)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
@@ -472,8 +578,13 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         )
         _set_runtime_disable()
         LOG.warning("LLM rewrite failed (%s); using fallback narrative", error_class)
-        fallback = generate_fallback_narrative(context)
-        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        out, evaluation = baseline_fallback()
+        record_trace(
+            proposed=None, final=out, usage=None, validator="not_run",
+            fallback_reason="request_failed", status="fallback",
+            evaluation={**evaluation, "fallback_applied": True},
+        )
+        return out
     except Exception as exc:
         _safe_note_failure(
             db_path,
@@ -485,8 +596,13 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         )
         _set_runtime_disable()
         LOG.warning("LLM rewrite failed (%s); using fallback narrative", type(exc).__name__)
-        fallback = generate_fallback_narrative(context)
-        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        out, evaluation = baseline_fallback()
+        record_trace(
+            proposed=None, final=out, usage=None, validator="not_run",
+            fallback_reason="unexpected_exception", status="fallback",
+            evaluation={**evaluation, "fallback_applied": True},
+        )
+        return out
 
     _safe_note_token_usage(
         db_path,
@@ -507,8 +623,14 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         )
         _set_runtime_disable()
         LOG.warning("LLM returned empty response; cooldown activated, using fallback")
-        fallback = generate_fallback_narrative(context)
-        return sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        out, evaluation = baseline_fallback()
+        record_trace(
+            proposed=None, final=out, usage=usage_meta,
+            validator="not_run", fallback_reason="empty_llm_response",
+            status="fallback",
+            evaluation={**evaluation, "fallback_applied": True},
+        )
+        return out
 
     # Sanitize raw LLM output (strip HTML, trim to schema field limits) before
     # validation so that slightly-over-length strings don't trigger fallback.
@@ -520,25 +642,57 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     validation_ctx = {"source": source, "ticker": context.get("ticker")}
     validation_result = validate_llm_output(rewritten, SetupRewrite, context=validation_ctx)
 
-    if not validation_result.is_valid:
+    evaluation = (
+        evaluate_setup_rewrite(rewritten, context)
+        if validation_result.is_valid else {
+            "version": EVALUATOR_VERSION, "passed": False,
+            "contract_passed": False,
+            "errors": ["schema_validation_failed"],
+            "text_outcome": "rejected",
+            "evaluation_scope": "fact_and_decision_contract",
+            "semantic_consistency_scored": False,
+            "prose_quality_scored": False,
+            "decision_scope": "observation_narrative_only",
+        }
+    )
+    accepted = validation_result.is_valid and bool(evaluation["passed"])
+    failure_reason = (
+        None if accepted else
+        "schema_validation_failed" if not validation_result.is_valid
+        else "semantic_grounding_failed"
+    )
+
+    if not accepted:
         _safe_note_failure(
             db_path,
             source=source,
             ticker=context.get("ticker"),
-            reason="schema_validation_failed",
+            reason=str(failure_reason),
             error_class="validation_error",
-            details=f"Validation errors: {'; '.join(validation_result.errors)}",
+            details="Validation errors: " + "; ".join(
+                validation_result.errors or list(evaluation["errors"])
+            ),
         )
         _set_runtime_disable()
-        LOG.warning(
-            "LLM output validation failed; cooldown activated, using fallback. Errors: %s",
-            "; ".join(validation_result.errors)
-        )
-        fallback = generate_fallback_narrative(context)
-        out = sanitize_llm_output(fallback, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        LOG.warning("LLM output rejected; using deterministic baseline. Errors: %s", "; ".join(
+            validation_result.errors or list(evaluation["errors"])
+        ))
+        out, fallback_evaluation = baseline_fallback()
+        evaluation = {
+            **evaluation, "fallback_applied": True,
+            "final_text_outcome": fallback_evaluation["text_outcome"],
+        }
     else:
         validated_dict = validation_result.data.model_dump()
-        out = sanitize_llm_output(validated_dict, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        sanitized = sanitize_llm_output(
+            validated_dict,
+            field_limits={"observation": 260, "action": 180, "risk_note": 80},
+        )
+        out = {
+            "observation": str(sanitized.get("observation") or ""),
+            "action": baseline["action"],
+            "risk_note": baseline["risk_note"],
+        }
         # Only record success when validation actually passes
         _safe_note_success(
             db_path,
@@ -546,6 +700,20 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             ticker=context.get("ticker"),
         )
 
-    with _CACHE_LOCK:
-        _PROMPT_CACHE[prompt_hash] = dict(out)
+    record_trace(
+        proposed=rewritten,
+        final=out,
+        usage=usage_meta,
+        validator="passed" if accepted else "failed",
+        fallback_reason=failure_reason,
+        status="success" if accepted else "fallback",
+        evaluation=evaluation,
+    )
+
+    if accepted:
+        with _CACHE_LOCK:
+            _PROMPT_CACHE[prompt_hash] = {
+                "output": dict(out), "evaluation": dict(evaluation),
+                "usage": dict(usage_meta or {}),
+            }
     return out

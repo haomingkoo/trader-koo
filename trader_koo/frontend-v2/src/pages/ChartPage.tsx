@@ -23,6 +23,7 @@ import {
   formatChartNumber,
   resampleToMonthly,
   resampleToWeekly,
+  isResearchChartEligible,
   type ChartOverlayKey,
   type ChartOverlayState,
 } from "../lib/chart/buildEquityChartData";
@@ -188,6 +189,8 @@ export default function ChartPage() {
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
   const commentary = commentaryData?.chart_commentary ?? null;
   const freshness = quickData?.data_freshness ?? undefined;
+  const priceContract = quickData?.data_sources;
+  const researchChartEligible = isResearchChartEligible(priceContract);
   // Throttled copy for the chart rebuild only; toolbar/fundamentals stay instant.
   const chartLivePrice = useThrottledValue(livePrice, CHART_LIVE_PRICE_THROTTLE_MS);
   const livePayload = useMemo(
@@ -227,7 +230,12 @@ export default function ChartPage() {
   }, [data, chartLivePrice]);
 
   const chartResult = useMemo(() => {
-    if (!livePayload || !livePayload.chart || livePayload.chart.length === 0) {
+    if (
+      !researchChartEligible ||
+      !livePayload ||
+      !livePayload.chart ||
+      livePayload.chart.length === 0
+    ) {
       return null;
     }
     return buildChartData(
@@ -245,13 +253,24 @@ export default function ChartPage() {
     effectiveLiveCandle,
     compactChart,
     greenBarrierThreshold,
+    researchChartEligible,
   ]);
 
   const chartBarCount = (
     timeframe === "monthly"
-      ? resampleToMonthly(livePayload?.chart ?? [])
+      ? resampleToMonthly(
+          livePayload?.chart ?? [],
+          true,
+          new Date(),
+          livePayload?.data_sources?.session_completion?.completed_month_through,
+        )
       : timeframe === "weekly"
-        ? resampleToWeekly(livePayload?.chart ?? [])
+        ? resampleToWeekly(
+            livePayload?.chart ?? [],
+            true,
+            new Date(),
+            livePayload?.data_sources?.session_completion?.completed_week_through,
+          )
         : livePayload?.chart ?? []
   ).length;
   const reportSnapshotMatches = reportGreenBarrierSnapshot && chartResult
@@ -283,6 +302,21 @@ export default function ChartPage() {
           Price data as of <strong>{freshness.latest_price_date}</strong>
           {freshness.age_hours != null && ` (${freshness.age_hours < 24 ? `${freshness.age_hours.toFixed(0)}h ago` : `${(freshness.age_hours / 24).toFixed(1)}d ago`})`}
           {freshness.is_stale && " — STALE"}
+        </div>
+      )}
+
+      {priceContract && (
+        <div
+          role="status"
+          className={`rounded-lg border px-3 py-2 text-xs ${
+            priceContract.research_eligible
+              ? "border-[var(--green)]/30 bg-[var(--green)]/5 text-[var(--muted)]"
+              : "border-[var(--red)]/40 bg-[var(--red)]/5 text-[var(--red)]"
+          }`}
+        >
+          Price basis: <strong>{priceContract.adjustment_basis}</strong> · {priceContract.price} ·{" "}
+          {priceContract.adjustment_version} · {priceContract.basis_status}
+          {!priceContract.research_eligible && " — excluded from research until resolved"}
         </div>
       )}
 
@@ -329,7 +363,16 @@ export default function ChartPage() {
         </div>
       )}
 
-      {data && !isLoading && (
+      {data && !isLoading && !researchChartEligible && (
+        <div
+          role="alert"
+          className="rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/5 px-4 py-6 text-sm text-[var(--red)]"
+        >
+          Research chart and indicators are unavailable until this ticker's price basis is resolved.
+        </div>
+      )}
+
+      {data && !isLoading && researchChartEligible && (
         <>
           {/* Fundamental cards */}
           <ChartFundamentals

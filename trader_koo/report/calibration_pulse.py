@@ -101,6 +101,24 @@ def ensure_calibration_schema(conn: sqlite3.Connection) -> None:
 # Data collection
 # ---------------------------------------------------------------------------
 
+def _published_lineage_clause(conn: sqlite3.Connection, table_name: str) -> str:
+    columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})")}
+    if "report_run_id" not in columns or not table_exists(conn, "report_runs"):
+        return " AND 0"
+    from trader_koo.report.runs import verified_report_run_ids
+
+    run_ids = {
+        str(row[0])
+        for row in conn.execute(
+            f"SELECT DISTINCT report_run_id FROM {table_name} WHERE report_run_id IS NOT NULL"
+        )
+    }
+    verified = verified_report_run_ids(conn, run_ids)
+    if not verified:
+        return " AND 0"
+    quoted = ",".join(str(conn.execute("SELECT quote(?)", (run_id,)).fetchone()[0]) for run_id in sorted(verified))
+    return f" AND report_run_id IN ({quoted})"
+
 def _eval_stats(
     conn: sqlite3.Connection,
     *,
@@ -112,14 +130,16 @@ def _eval_stats(
     cutoff = (
         dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=window_days)
     ).isoformat()
+    lineage_clause = _published_lineage_clause(conn, "setup_call_evaluations")
     rows = conn.execute(
-        """
+        f"""
         SELECT setup_family, call_direction, direction_hit, signed_return_pct
         FROM setup_call_evaluations
         WHERE status = 'scored'
           AND asof_date >= ?
           AND setup_family IS NOT NULL
           AND call_direction IN ('long', 'short')
+          {lineage_clause}
         """,
         (cutoff,),
     ).fetchall()
@@ -154,8 +174,9 @@ def _paper_stats(
     """
     if not table_exists(conn, "paper_trades"):
         return {}
+    lineage_clause = _published_lineage_clause(conn, "paper_trades")
     rows = conn.execute(
-        """
+        f"""
         WITH ranked AS (
             SELECT setup_family, direction, pnl_pct,
                    ROW_NUMBER() OVER (
@@ -167,6 +188,7 @@ def _paper_stats(
               AND pnl_pct IS NOT NULL
               AND setup_family IS NOT NULL
               AND direction IN ('long', 'short')
+              {lineage_clause}
         )
         SELECT setup_family, direction, pnl_pct
         FROM ranked

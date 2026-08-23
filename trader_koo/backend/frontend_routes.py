@@ -14,5 +14,7 @@ SPA_ROUTE_PATHS = frozenset(
         "hyperliquid",
         "methodology",
         "alerts",
+        "experiments",
+        "agent-observability",
     }
 )

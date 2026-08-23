@@ -15,6 +15,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
+from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.features import (
     FEATURE_COLUMNS,
     extract_features_for_universe,
@@ -30,6 +31,53 @@ _MODEL_DIRS = [
 # Cached model
 _cached_model: lgb.Booster | None = None
 _cached_meta: dict[str, Any] | None = None
+
+_PRICE_CONTRACT_KEYS = (
+    "return_basis",
+    "adjustment_version",
+    "distributions_included",
+)
+
+
+def model_price_contract(meta: dict[str, Any] | None) -> dict[str, Any]:
+    """Extract the immutable price contract recorded with a trained model."""
+    if not isinstance(meta, dict):
+        return {
+            key: "unknown" if key != "distributions_included" else None
+            for key in _PRICE_CONTRACT_KEYS
+        }
+    return {
+        "return_basis": meta.get("return_basis", "unknown"),
+        "adjustment_version": meta.get("adjustment_version", "unknown"),
+        "distributions_included": meta.get("distributions_included"),
+    }
+
+
+def require_model_price_contract(
+    meta: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    """Require exact train/serve price semantics; legacy metadata fails closed."""
+    saved = model_price_contract(meta)
+    expected = {
+        "return_basis": current.get("basis", "unknown"),
+        "adjustment_version": current.get("version", "unknown"),
+        "distributions_included": current.get("distributions_included"),
+    }
+    unknown = [
+        key
+        for key in ("return_basis", "adjustment_version")
+        if not str(saved.get(key) or "").strip() or saved.get(key) == "unknown"
+    ]
+    if not isinstance(saved.get("distributions_included"), bool):
+        unknown.append("distributions_included")
+    mismatches = [
+        key for key in _PRICE_CONTRACT_KEYS if saved.get(key) != expected.get(key)
+    ]
+    if unknown or mismatches:
+        details = ",".join(sorted(set(unknown + mismatches)))
+        raise ValueError(f"Model price contract is incompatible with current inputs: {details}")
+    return saved
 
 
 def _target_mode(meta: dict[str, Any] | None) -> str:
@@ -131,9 +179,18 @@ def score_universe(
     ``predicted_win_prob`` is kept as the storage/API field for compatibility.
     Use ``prediction_label`` to interpret what the probability means.
     """
+    price_contract = research_price_contract(
+        conn,
+        [*(tickers or []), "SPY"] if tickers else None,
+    )
+    if not price_contract["eligible"]:
+        raise ValueError(
+            f"Price basis is not research eligible: {price_contract['reason']}"
+        )
     model, meta = load_model()
     if model is None:
         return []
+    model_contract = require_model_price_contract(meta, price_contract)
 
     target_mode = _target_mode(meta)
     prediction_label = _prediction_label(target_mode)
@@ -164,6 +221,7 @@ def score_universe(
             "target_mode": target_mode,
             "prediction_label": prediction_label,
             "as_of_date": as_of_date,
+            **model_contract,
         })
 
     # Sort by probability descending, return top N
@@ -178,6 +236,11 @@ def score_single_ticker(
     as_of_date: str,
 ) -> dict[str, Any]:
     """Score a single ticker.  Returns prediction + confidence."""
+    price_contract = research_price_contract(conn, [ticker, "SPY"])
+    if not price_contract["eligible"]:
+        raise ValueError(
+            f"Price basis is not research eligible: {price_contract['reason']}"
+        )
     model, meta = load_model()
     if model is None:
         return {
@@ -188,6 +251,7 @@ def score_single_ticker(
             "prediction_label": None,
             "confidence": None,
         }
+    model_contract = require_model_price_contract(meta, price_contract)
 
     target_mode = _target_mode(meta)
     prediction_label = _prediction_label(target_mode)
@@ -207,6 +271,7 @@ def score_single_ticker(
             "prediction_label": prediction_label,
             "confidence": None,
             "note": "Insufficient data for feature extraction",
+            **model_contract,
         }
 
     X = features.loc[[ticker]].reindex(columns=feature_cols)
@@ -228,6 +293,7 @@ def score_single_ticker(
             "prediction_label": prediction_label,
             "confidence": None,
             "note": f"Prediction error: {exc}",
+            **model_contract,
         }
 
     # Confidence: distance from 0.5 (random)
@@ -241,10 +307,11 @@ def score_single_ticker(
         "prediction_label": prediction_label,
         "confidence": round(confidence, 4),
         "signal": _signal_from_probability(prob, target_mode),
+        **model_contract,
     }
 
 
-def model_status() -> dict[str, Any]:
+def model_status(conn: sqlite3.Connection | None = None) -> dict[str, Any]:
     """Return model status for the API / UI."""
     model, meta = load_model()
     if model is None:
@@ -256,6 +323,21 @@ def model_status() -> dict[str, Any]:
             "fold_count": 0,
         }
 
+    saved_contract = model_price_contract(meta)
+    current_contract = research_price_contract(conn) if conn is not None else None
+    compatible: bool | None = None
+    compatibility_error: str | None = None
+    if current_contract is not None:
+        try:
+            if not current_contract["eligible"]:
+                raise ValueError(
+                    f"Price basis is not research eligible: {current_contract['reason']}"
+                )
+            require_model_price_contract(meta, current_contract)
+            compatible = True
+        except ValueError as exc:
+            compatible = False
+            compatibility_error = str(exc)
     return {
         "loaded": True,
         "trained_at": meta.get("trained_at") if meta else None,
@@ -267,4 +349,8 @@ def model_status() -> dict[str, Any]:
         "fold_count": len(meta.get("folds", [])) if meta else 0,
         "model_type": meta.get("model_type", "lightgbm") if meta else "lightgbm",
         "aggregate_metrics": meta.get("folds", [{}])[-1] if meta and meta.get("folds") else {},
+        "model_price_contract": saved_contract,
+        "current_price_contract": current_contract,
+        "basis_compatible": compatible,
+        "basis_error": compatibility_error,
     }

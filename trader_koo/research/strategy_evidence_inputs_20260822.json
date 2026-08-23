@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "snapshot_asof": "2026-08-22",
+  "baseline": "setup_event_baseline_causal_fail_closed_v9",
+  "evaluation": {
+    "active_observation_count": 20,
+    "traded_signal_date_count": 4,
+    "effective_non_overlapping_block_count": 2.0,
+    "expected_block_length_sessions": 10,
+    "return_basis": "split_adjusted_price_return_only_dividends_omitted"
+  },
+  "upstream_artifact_sha256": "0df5af7b0ed562308edd38a9b8a1d96db228d302c2619e08f7153a1c77e32477",
+  "upstream_input_selection_sha256": "dae1ec9466f82b5d1f2ccc25b757c4612ca121904db46607b2075ecfe291dedc",
+  "upstream_artifact_spec_sha256": "3ad63a02feadf4be3da6cbb4154cf53854bb413e58cd3f4e226a34aec13b144e",
+  "limitations": [
+    "post_signal_corporate_action_rebasing_can_bias_close_basis_exclusions",
+    "persisted_calls_are_not_linked_to_an_immutable_completed_report_run",
+    "current_universe_has_survivorship_bias"
+  ]
+}

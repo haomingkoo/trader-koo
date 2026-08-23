@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
+from trader_koo.paper_trade import summary as paper_summary_module
 from trader_koo.paper_trade.config import PaperTradeConfig
+from trader_koo.paper_trade.chronology import next_scheduled_session_after
 from trader_koo.paper_trade.decision import (
     compute_stop_and_target as _compute_stop_and_target_decision,
     compute_position_plan as _compute_position_plan_decision,
@@ -20,7 +25,7 @@ from trader_koo.paper_trade.trading import (
 from trader_koo.paper_trades import (
     compute_stop_and_target,
     compute_trailing_stop,
-    create_paper_trades_from_report,
+    create_paper_trades_from_report as _create_paper_trades_from_report,
     evaluate_setup_for_paper_trade,
     ensure_paper_trade_schema,
     list_paper_trades,
@@ -29,23 +34,235 @@ from trader_koo.paper_trades import (
     paper_trade_summary,
     qualify_setup_for_paper_trade,
 )
+from trader_koo.db.price_contract import (
+    ensure_price_series_revision_schema,
+    record_price_series_revision,
+)
+
+TEST_REPORT_RUN_ID = "paper-trade-test-run"
+
+
+def test_global_dark_release_gate_blocks_all_facade_mutations(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trader_koo.paper_trades as paper_facade
+
+    monkeypatch.setattr(paper_facade, "PAPER_TRADE_ENABLED", False)
+
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.create_paper_trades_from_report(
+            conn,
+            setup_rows=[],
+            report_date="2026-03-14",
+            generated_ts="disabled",
+            report_run_id=TEST_REPORT_RUN_ID,
+        )
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.mark_to_market(conn)
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.fill_pending_paper_orders(conn)
+    with pytest.raises(paper_facade.PaperTradeWritesDisabled):
+        paper_facade.manually_close_trade(conn, trade_id=1)
+    assert paper_facade.paper_trade_summary(conn)["campaign_health"]["write_state"] == "paused"
 
 
 @pytest.fixture()
-def conn():
+def conn(tmp_path: Path):
     """In-memory SQLite connection with paper trade + price schema."""
     db = sqlite3.connect(":memory:")
     ensure_paper_trade_schema(db)
+    config_hash = hashlib.sha256(b"{}").hexdigest()
+    artifact = tmp_path / f"daily_report_20260314T211500Z_{TEST_REPORT_RUN_ID}.json"
+    markdown = tmp_path / f"daily_report_20260314T211500Z_{TEST_REPORT_RUN_ID}.md"
+    decisions = [
+        {
+            "ticker": ticker,
+            "selected_rank": rank,
+            "decision": "accepted",
+            "reason_codes": ["selected_report_cohort"],
+            "inputs": {},
+        }
+        for rank, ticker in enumerate(
+            ("AAPL", "MSFT", "GOOG", "PIPE", "AAA", "BBB", "T0", "T1", "T2", "T3", "T4", "T5"),
+            start=1,
+        )
+    ]
+    payload = {
+        "generated_ts": "2026-03-14T21:15:00Z",
+        "meta": {
+            "report_kind": "daily",
+            "report_run": {"run_id": TEST_REPORT_RUN_ID},
+        },
+        "latest_data": {},
+        "signals": {
+            "report_decisions": decisions,
+            "scanned_universe": [item["ticker"] for item in decisions],
+        },
+        "counts": {},
+        "risk_filters": {},
+        "warnings": [],
+        "ok": True,
+    }
+    artifact.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    markdown.write_text("fixture\n", encoding="utf-8")
+    content_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    markdown_hash = hashlib.sha256(markdown.read_bytes()).hexdigest()
+    db.execute(
+        """
+        INSERT INTO report_runs (
+            run_id, report_kind, status, started_ts, config_json, config_hash,
+            code_version
+        ) VALUES (?, 'daily', 'started', '2026-03-14T21:00:00Z', '{}', ?, ?)
+        """,
+        (TEST_REPORT_RUN_ID, config_hash, "a" * 40),
+    )
+    db.executemany(
+        """INSERT INTO report_run_decisions
+           (run_id,ticker,selected_rank,decision,reason_codes_json,inputs_json)
+           VALUES (?,?,?,?,?,?)""",
+        [
+            (TEST_REPORT_RUN_ID, item["ticker"], item["selected_rank"], "accepted",
+             '["selected_report_cohort"]', '{}')
+            for item in decisions
+        ],
+    )
+    db.execute(
+        """UPDATE report_runs
+           SET status='completed', completed_ts='2026-03-14T21:30:00Z',
+               generated_ts='2026-03-14T21:15:00Z',
+               generation_key='daily:2026-03-14T21:15:00Z',
+               scanned_universe_json=?, ranked_candidates_json=?,
+               decisions_json=?,
+               inputs_json='{"report_kind":"daily","market_session":{},"counts":{},"risk_filters":{},"price_basis":null}',
+               source_timestamps_json='{}',
+               content_hash=?, markdown_hash=?, artifact_path=?, markdown_path=?
+           WHERE run_id=?""",
+        (
+            json.dumps([item["ticker"] for item in decisions], separators=(",", ":")),
+            json.dumps(
+                [{"ticker": item["ticker"], "selected_rank": item["selected_rank"]} for item in decisions],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            json.dumps(decisions, sort_keys=True, separators=(",", ":")),
+            content_hash, markdown_hash, str(artifact), str(markdown), TEST_REPORT_RUN_ID,
+        ),
+    )
+    db.execute(
+        """UPDATE report_runs
+           SET status='published', published_ts='2026-03-14T22:00:00Z',
+               publication_verified=1
+           WHERE run_id=?""",
+        (TEST_REPORT_RUN_ID,),
+    )
+    db.execute(
+        "UPDATE report_runs SET is_generation_canonical=1 WHERE run_id=?",
+        (TEST_REPORT_RUN_ID,),
+    )
+    db.execute("UPDATE paper_campaigns SET status='active' WHERE campaign_id='paper-v2'")
     db.execute("""
         CREATE TABLE IF NOT EXISTS price_daily (
             ticker TEXT NOT NULL,
             date TEXT NOT NULL,
-            open REAL, high REAL, low REAL, close REAL, volume INTEGER,
+            open REAL, high REAL, low REAL, close REAL, volume REAL,
+            data_source TEXT, fetch_timestamp TEXT,
+            adjustment_basis TEXT, adjustment_version TEXT,
+            basis_status TEXT, unresolved_reason TEXT,
             UNIQUE(ticker, date)
         )
     """)
+    ensure_price_series_revision_schema(db)
+    for ticker, close in (("AAPL", 150.0), ("MSFT", 300.0)):
+        _seed_price(db, ticker, close)
     db.commit()
     return db
+
+
+def test_same_day_snapshot_replacement_preserves_intraday_high_water(
+    conn: sqlite3.Connection, monkeypatch,
+) -> None:
+    equities = iter((1_100_000.0, 900_000.0))
+
+    def account_projection(*_args, **_kwargs):
+        equity = next(equities)
+        return {
+            "as_of_date": "2026-08-23",
+            "open_positions": 0,
+            "cash": equity,
+            "equity": equity,
+            "realized_pnl_usd": equity - 1_000_000,
+            "unrealized_pnl_usd": 0.0,
+            "gross_exposure_usd": 0.0,
+            "gross_exposure_pct": 0.0,
+            "legacy_unreconciled_count": 0,
+            "accounting_breaks": [],
+        }
+
+    monkeypatch.setattr(paper_summary_module, "reconcile_portfolio", account_projection)
+    paper_summary_module.update_portfolio_snapshot(conn, campaign_id="paper-v2")
+    paper_summary_module.update_portfolio_snapshot(conn, campaign_id="paper-v2")
+
+    high_water, drawdown = conn.execute(
+        """SELECT high_water_equity,drawdown_pct FROM paper_portfolio_snapshots
+           WHERE campaign_id='paper-v2' AND snapshot_date='2026-08-23'"""
+    ).fetchone()
+    assert high_water == pytest.approx(1_100_000)
+    assert drawdown == pytest.approx(18.18181818)
+
+
+def test_v2_snapshot_never_replaces_frozen_v1_snapshot_during_expand_window(
+    conn: sqlite3.Connection, monkeypatch,
+) -> None:
+    conn.execute(
+        "INSERT INTO paper_portfolio_snapshots (snapshot_date,campaign_id,equity_index) "
+        "VALUES ('2026-08-23','paper-v1',123.0)"
+    )
+    monkeypatch.setattr(
+        paper_summary_module,
+        "reconcile_portfolio",
+        lambda *_args, **_kwargs: {
+            "as_of_date": "2026-08-23",
+            "open_positions": 0,
+            "cash": 1_000_000.0,
+            "equity": 1_000_000.0,
+            "realized_pnl_usd": 0.0,
+            "unrealized_pnl_usd": 0.0,
+            "gross_exposure_usd": 0.0,
+            "gross_exposure_pct": 0.0,
+            "legacy_unreconciled_count": 0,
+            "accounting_breaks": [],
+        },
+    )
+
+    written = paper_summary_module.update_portfolio_snapshot(
+        conn, campaign_id="paper-v2"
+    )
+
+    assert written is False
+    assert conn.execute(
+        "SELECT campaign_id,equity_index FROM paper_portfolio_snapshots "
+        "WHERE snapshot_date='2026-08-23'"
+    ).fetchall() == [("paper-v1", 123.0)]
+
+
+def create_paper_trades_from_report(conn: sqlite3.Connection, **kwargs):
+    kwargs["report_run_id"] = TEST_REPORT_RUN_ID
+    next_date = next_scheduled_session_after(str(kwargs["report_date"]))
+    assert next_date is not None
+    if conn.execute(
+        "SELECT 1 FROM price_daily WHERE ticker='SPY' AND date=?", (next_date,)
+    ).fetchone() is None:
+        _seed_price(conn, "SPY", 500.0, date=next_date)
+    for row in kwargs.get("setup_rows") or []:
+        if not isinstance(row, dict) or not row.get("ticker"):
+            continue
+        ticker = str(row["ticker"]).upper()
+        if conn.execute(
+            "SELECT 1 FROM price_daily WHERE ticker=? AND date=?", (ticker, next_date)
+        ).fetchone() is None:
+            close = float(row.get("close") or 100.0)
+            _seed_price(conn, ticker, close, date=next_date)
+    return _create_paper_trades_from_report(conn, **kwargs)
 
 
 def _seed_price(
@@ -58,13 +275,23 @@ def _seed_price(
     open_: float | None = None,
 ) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO price_daily (ticker, date, close, high, low, open) VALUES (?, ?, ?, ?, ?, ?)",
+        """INSERT OR REPLACE INTO price_daily (
+               ticker,date,close,high,low,open,volume,data_source,fetch_timestamp,
+               adjustment_basis,adjustment_version,basis_status,unresolved_reason
+           ) VALUES (?,?,?,?,?,?,100000,'fixture','2026-03-14T00:00:00Z',
+                     'split_adjusted_price_only','fixture-v1','verified',NULL)""",
         (
             ticker, date, close,
             high if high is not None else close,
             low if low is not None else close,
             open_ if open_ is not None else close,
         ),
+    )
+    record_price_series_revision(
+        conn,
+        ticker,
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True, "vendor_action_ledger": []},
+        fetch_timestamp="2026-03-14T00:00:00Z",
     )
     conn.commit()
 
@@ -371,7 +598,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row()]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-basic",
         )
 
         assert inserted == 1
@@ -379,12 +606,53 @@ class TestCreatePaperTrades:
             "SELECT ticker, direction, status, decision_state, portfolio_decision FROM paper_trades",
         ).fetchone()
         assert trade == ("AAPL", "long", "open", "approved", "approved")
+        event = conn.execute(
+            "SELECT event_type,event_date,payload_json,payload_hash FROM paper_trade_events"
+        ).fetchone()
+        assert event[0:2] == ("fill", "2026-03-16")
+        assert json.loads(event[2])["fill_source"] == "immediate_next_session_open"
+        assert len(event[3]) == 64
+        accounting = conn.execute(
+            """SELECT quantity,entry_notional,entry_commission,accounting_status
+               FROM paper_trades WHERE ticker='AAPL'"""
+        ).fetchone()
+        assert accounting[0] > 0
+        assert accounting[1] == pytest.approx(accounting[0] * 150.15)
+        assert accounting[2:] == (5.0, "reconciled")
+        snapshot = conn.execute(
+            """SELECT starting_capital,cash,equity,unrealized_pnl_usd,
+                      accounting_breaks_json
+               FROM paper_portfolio_snapshots WHERE campaign_id='paper-v2'"""
+        ).fetchone()
+        assert snapshot[2] == pytest.approx(snapshot[0] + snapshot[3])
+        assert json.loads(snapshot[4]) == []
+
+    def test_unresolved_price_cannot_create_trade(self, conn):
+        _seed_price(conn, "AAPL", 150.0, date="2026-03-15")
+        conn.execute("""UPDATE price_daily SET basis_status='unresolved',
+                     unresolved_reason='fixture_unresolved'
+                     WHERE ticker='AAPL' AND date='2026-03-15'""")
+        record_price_series_revision(
+            conn, "AAPL",
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                      "vendor_action_ledger": []},
+            fetch_timestamp="2026-03-15T00:00:00Z",
+        )
+        conn.commit()
+        inserted = create_paper_trades_from_report(
+            conn,
+            setup_rows=[_make_setup_row()],
+            report_date="2026-03-14",
+            generated_ts="2026-03-14T22:00:00Z",
+        )
+        assert inserted == 0
+        assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
 
     def test_stores_decision_metadata_for_flagged_trade(self, conn):
         rows = [_make_setup_row(actionability="conditional", risk_note="Watch earnings date")]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-flagged",
         )
 
         assert inserted == 1
@@ -402,7 +670,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row()]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-plan",
         )
 
         assert inserted == 1
@@ -421,7 +689,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row()]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-rationale",
         )
 
         assert inserted == 1
@@ -450,6 +718,7 @@ class TestCreatePaperTrades:
             setup_rows=[_make_setup_row()],
             report_date="2026-03-14",
             generated_ts="2026-03-14T22:00:00Z",
+            report_run_id="create-context",
         )
 
         assert inserted == 1
@@ -464,13 +733,13 @@ class TestCreatePaperTrades:
         version_row = conn.execute(
             "SELECT bot_version, decision_version FROM bot_versions WHERE bot_version = 'v1.0.0'",
         ).fetchone()
-        assert version_row == ("v1.0.0", "paper-trade-eval-v1")
+        assert version_row == ("v1.0.0", "paper-campaign-v2.0")
 
     def test_skips_trade_with_poor_reward_to_risk(self, conn):
         rows = [_make_setup_row(resistance_level=151.0)]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-poor-r",
         )
 
         assert inserted == 0
@@ -479,7 +748,7 @@ class TestCreatePaperTrades:
         rows = [_make_setup_row(score=10.0)]
 
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z",
+            conn, setup_rows=rows, report_date="2026-03-14", generated_ts="2026-03-14T22:00:00Z", report_run_id="create-rejected",
         )
 
         assert inserted == 0
@@ -487,9 +756,9 @@ class TestCreatePaperTrades:
     def test_deduplicates_on_same_report_date_ticker_direction(self, conn):
         rows = [_make_setup_row()]
 
-        create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts1")
+        create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts1", report_run_id="dedupe-1")
         conn.commit()
-        inserted2 = create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts2")
+        inserted2 = create_paper_trades_from_report(conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts1", report_run_id="dedupe-2")
 
         assert inserted2 == 0
         assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
@@ -505,7 +774,7 @@ class TestCreatePaperTrades:
             ]
 
             inserted = create_paper_trades_from_report(
-                conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts",
+                conn, setup_rows=rows, report_date="2026-03-14", generated_ts="ts", report_run_id="capacity",
             )
 
             assert inserted == 1
@@ -514,7 +783,7 @@ class TestCreatePaperTrades:
 
     def test_empty_rows_returns_zero(self, conn):
         inserted = create_paper_trades_from_report(
-            conn, setup_rows=[], report_date="2026-03-14", generated_ts="ts",
+            conn, setup_rows=[], report_date="2026-03-14", generated_ts="ts", report_run_id="empty-set",
         )
 
         assert inserted == 0
@@ -530,6 +799,7 @@ class TestCreatePaperTrades:
             setup_rows=[_make_setup_row()],
             report_date="2026-03-14",
             generated_ts="ts",
+            report_run_id="critic-error",
         )
 
         assert inserted == 0
@@ -540,13 +810,20 @@ class TestCreatePaperTrades:
             raise RuntimeError("critic infra down")
 
         monkeypatch.setattr("trader_koo.paper_trade.critic.critic_review", _boom)
-        cfg = _default_trail_config(critic_fail_open=True)
+        cfg = _default_trail_config(
+            critic_fail_open=True,
+            decision_version="paper-campaign-v2.0",
+            min_reward_r_multiple=2.0,
+        )
+        _seed_price(conn, "AAPL", 150.0, date="2026-03-16")
+        _seed_price(conn, "SPY", 500.0, date="2026-03-16")
 
         inserted = _create_paper_trades_from_report_impl(
             conn,
             setup_rows=[_make_setup_row()],
             report_date="2026-03-14",
             generated_ts="ts",
+            report_run_id=TEST_REPORT_RUN_ID,
             config=cfg,
         )
 
@@ -559,14 +836,15 @@ class TestMarkToMarket:
     def _insert_open_trade(self, conn, ticker="AAPL", entry_price=100.0, direction="long",
                            stop_loss=95.0, target_price=110.0, entry_date=None):
         if entry_date is None:
-            entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+            entry_date = "2026-03-13"
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, status, current_price, unrealized_pnl_pct,
-               high_water_mark, low_water_mark, generated_ts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?)""",
+               high_water_mark, low_water_mark, generated_ts, report_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?, ?)""",
             (entry_date, ticker, direction, entry_price, entry_date,
-             target_price, stop_loss, entry_price, entry_price, entry_price, "ts"),
+             target_price, stop_loss, entry_price, entry_price, entry_price, "ts",
+             TEST_REPORT_RUN_ID),
         )
         conn.commit()
 
@@ -582,6 +860,71 @@ class TestMarkToMarket:
         trade = conn.execute("SELECT current_price, unrealized_pnl_pct FROM paper_trades WHERE ticker='AAPL'").fetchone()
         assert trade[0] == 105.0
         assert trade[1] == 5.0
+
+    def test_ignores_legacy_open_trade_linked_to_started_run(self, conn):
+        conn.execute(
+            """INSERT INTO report_runs (
+                   run_id, report_kind, status, started_ts, config_json,
+                   config_hash, code_version
+               ) VALUES ('started-run', 'daily', 'started',
+                         '2026-03-14T21:00:00Z', '{}', ?, ?)""",
+            (hashlib.sha256(b"{}").hexdigest(), "b" * 40),
+        )
+        # Simulate a bad row that predates the insertion guard. Schema setup
+        # reinstalls the guard, while MTM must still exclude the preserved row.
+        conn.execute("DROP TRIGGER paper_trades_require_canonical_run")
+        conn.execute(
+            """INSERT INTO paper_trades (
+                   report_date, generated_ts, report_run_id, ticker, direction,
+                   entry_price, entry_date, target_price, stop_loss, status,
+                   current_price, unrealized_pnl_pct, high_water_mark, low_water_mark
+               ) VALUES ('2026-03-14', 'ts', 'started-run', 'LEGACY', 'long',
+                         100, '2026-03-14', 110, 95, 'open', 100, 0, 100, 100)"""
+        )
+        conn.commit()
+        _seed_price(conn, "LEGACY", 105.0)
+
+        result = mark_to_market(conn)
+
+        assert result == {"open_trades": 0, "updated": 0, "closed": 0}
+        assert conn.execute(
+            "SELECT current_price, unrealized_pnl_pct, last_mtm_date "
+            "FROM paper_trades WHERE ticker='LEGACY'"
+        ).fetchone() == (100.0, 0.0, None)
+
+    def test_ignores_open_trade_when_its_sealed_artifact_is_missing(self, conn):
+        self._insert_open_trade(conn, "AAPL", 100.0)
+        _seed_price(conn, "AAPL", 105.0)
+        artifact = Path(conn.execute(
+            "SELECT artifact_path FROM report_runs WHERE run_id=?",
+            (TEST_REPORT_RUN_ID,),
+        ).fetchone()[0])
+        artifact.unlink()
+
+        result = mark_to_market(conn)
+
+        assert result == {"open_trades": 0, "updated": 0, "closed": 0}
+        assert conn.execute(
+            "SELECT current_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone() == (100.0,)
+
+    def test_unresolved_price_cannot_mutate_or_close_trade(self, conn):
+        self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=90.0)
+        _seed_price(conn, "AAPL", 5.0, high=5.0, low=5.0, open_=5.0)
+        conn.execute(
+            """UPDATE price_daily SET basis_status='unresolved',
+               unresolved_reason='split contradiction' WHERE ticker='AAPL'"""
+        )
+        conn.commit()
+
+        result = mark_to_market(conn)
+
+        trade = conn.execute(
+            "SELECT status,exit_price,pnl_pct FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade == ("open", None, None)
+        assert result["updated"] == 0
+        assert result["blocked"][0]["ticker"] == "AAPL"
 
     def test_triggers_stop_loss(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0)
@@ -698,7 +1041,7 @@ class TestMarkToMarket:
             "SELECT status, exit_price FROM paper_trades WHERE ticker='AAPL'"
         ).fetchone()
         assert trade[0] == "stopped_out"
-        assert trade[1] == 93.0  # gap fill: at open, NOT at stop level
+        assert trade[1] == pytest.approx(92.907)  # open gap plus adverse exit slippage
 
     def test_both_stop_and_target_hit_intraday_takes_stop(self, conn):
         """If both stop and target hit intraday (not at open), conservative: assume stop with slippage."""
@@ -716,6 +1059,35 @@ class TestMarkToMarket:
         assert trade[0] == "stopped_out"
         # Long stop with slippage: 95 * (1 - 0.0005) = 94.9525
         assert trade[1] < 95.0  # slippage makes it worse
+
+    def test_missed_sessions_replay_in_order_instead_of_using_latest_bar(self, conn):
+        self._insert_open_trade(
+            conn, "AAPL", 100.0, stop_loss=95.0, target_price=110.0,
+            entry_date="2026-03-13",
+        )
+        _seed_price(
+            conn, "AAPL", 96.0, date="2026-03-14",
+            high=101.0, low=94.0, open_=100.0,
+        )
+        _seed_price(
+            conn, "AAPL", 108.0, date="2026-03-15",
+            high=109.0, low=107.0, open_=108.0,
+        )
+
+        result = mark_to_market(conn)
+
+        assert result["closed"] == 1
+        trade = conn.execute(
+            "SELECT status,exit_date,exit_price FROM paper_trades WHERE ticker='AAPL'"
+        ).fetchone()
+        assert trade[0] == "stopped_out"
+        assert trade[1] == "2026-03-14"
+        assert trade[2] < 95.0
+        assert conn.execute(
+            "SELECT event_type,event_date FROM paper_trade_events "
+            "WHERE trade_id=(SELECT id FROM paper_trades WHERE ticker='AAPL') "
+            "ORDER BY id"
+        ).fetchall() == [("mark", "2026-03-14"), ("close", "2026-03-14")]
 
     def test_triggers_target_hit(self, conn):
         self._insert_open_trade(conn, "AAPL", 100.0, target_price=110.0)
@@ -768,7 +1140,10 @@ class TestMarkToMarket:
     def test_triggers_expiry(self, conn):
         old_date = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=20)).strftime("%Y-%m-%d")
         self._insert_open_trade(conn, "AAPL", 100.0, entry_date=old_date)
-        _seed_price(conn, "AAPL", 102.0)
+        price_date = (
+            dt.datetime.strptime(old_date, "%Y-%m-%d") + dt.timedelta(days=14)
+        ).strftime("%Y-%m-%d")
+        _seed_price(conn, "AAPL", 102.0, date=price_date)
         # Seed 11 trading days of SPY so trading-day expiry triggers (>= 10)
         base = dt.datetime.strptime(old_date, "%Y-%m-%d")
         for i in range(1, 15):
@@ -814,7 +1189,11 @@ class TestMarkToMarket:
         )
         conn.commit()
         # Target hit at 90 (limit order, no slippage)
-        _seed_price(conn, "AAPL", 88.0, high=95.0, low=87.0, open_=93.0)
+        _seed_price(
+            conn, "AAPL", 88.0,
+            date=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"),
+            high=95.0, low=87.0, open_=93.0,
+        )
 
         mark_to_market(conn)
         conn.commit()
@@ -856,9 +1235,10 @@ class TestManuallyCloseTrade:
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
                stop_loss, status, current_price, unrealized_pnl_pct,
-               high_water_mark, low_water_mark, generated_ts)
+               high_water_mark, low_water_mark, generated_ts, report_run_id)
             VALUES ('2026-03-14', 'MSFT', 'long', 300.0, '2026-03-14',
-               290.0, 'open', 300.0, 0.0, 300.0, 300.0, 'ts')""",
+               290.0, 'open', 300.0, 0.0, 300.0, 300.0, 'ts',
+               'paper-trade-test-run')""",
         )
         conn.commit()
         trade_id = conn.execute("SELECT id FROM paper_trades").fetchone()[0]
@@ -869,12 +1249,32 @@ class TestManuallyCloseTrade:
         assert result["status"] == "closed"
         assert result["ticker"] == "MSFT"
 
+    def test_unresolved_price_rejects_even_explicit_manual_exit(self, conn):
+        conn.execute(
+            """INSERT INTO paper_trades (
+               report_date,ticker,direction,entry_price,entry_date,stop_loss,status,
+               current_price,unrealized_pnl_pct,high_water_mark,low_water_mark,generated_ts,
+               report_run_id
+            ) VALUES ('2026-03-14','MSFT','long',300,'2026-03-14',290,'open',
+                      300,0,300,300,'ts',?)"""
+            , (TEST_REPORT_RUN_ID,)
+        )
+        conn.execute("UPDATE price_daily SET basis_status='unresolved' WHERE ticker='MSFT'")
+        conn.commit()
+        trade_id = conn.execute("SELECT id FROM paper_trades").fetchone()[0]
+
+        with pytest.raises(ValueError, match="remains open"):
+            manually_close_trade(conn, trade_id=trade_id, exit_price=320.0)
+        assert conn.execute(
+            "SELECT status FROM paper_trades WHERE id=?", (trade_id,)
+        ).fetchone()[0] == "open"
+
     def test_raises_on_already_closed(self, conn):
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
-               status, current_price, generated_ts)
+               status, current_price, generated_ts, report_run_id)
             VALUES ('2026-03-14', 'GOOG', 'long', 150.0, '2026-03-14',
-               'closed', 150.0, 'ts')""",
+               'closed', 150.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.commit()
         trade_id = conn.execute("SELECT id FROM paper_trades").fetchone()[0]
@@ -893,13 +1293,15 @@ class TestListPaperTrades:
     def test_filters_by_status(self, conn):
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
-               status, current_price, generated_ts)
-            VALUES ('2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open', 150.0, 'ts')""",
+               status, current_price, generated_ts, report_run_id)
+            VALUES ('2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open',
+                    150.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
-               status, current_price, generated_ts)
-            VALUES ('2026-03-14', 'MSFT', 'long', 300.0, '2026-03-14', 'closed', 310.0, 'ts')""",
+               status, current_price, generated_ts, report_run_id)
+            VALUES ('2026-03-14', 'MSFT', 'long', 300.0, '2026-03-14', 'closed',
+                    310.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.commit()
 
@@ -913,8 +1315,9 @@ class TestListPaperTrades:
     def test_filters_by_ticker(self, conn):
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
-               status, current_price, generated_ts)
-            VALUES ('2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open', 150.0, 'ts')""",
+               status, current_price, generated_ts, report_run_id)
+            VALUES ('2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open',
+                    150.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.commit()
 
@@ -929,7 +1332,7 @@ class TestListPaperTrades:
                    report_date, ticker, direction, entry_price, entry_date,
                    status, current_price, generated_ts, notes,
                    ml_predicted_win_prob, ml_confidence, ml_signal,
-                   entry_reason, entry_evidence, entry_risks
+                   entry_reason, entry_evidence, entry_risks, report_run_id
                )
                VALUES (
                    '2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14',
@@ -937,7 +1340,8 @@ class TestListPaperTrades:
                    0.62, 0.71, 'bullish',
                    'AAPL long test rationale',
                    '["breakout evidence"]',
-                   '["event risk"]'
+                   '["event risk"]',
+                   'paper-trade-test-run'
                )""",
         )
         conn.commit()
@@ -963,16 +1367,20 @@ class TestPaperTradeSummary:
         assert result["by_direction"] == {}
         assert result["equity_curve"] == []
         assert result["policy"]["bot_version"] == "v1.0.0"
-        assert result["policy"]["decision_version"] == "paper-trade-eval-v1"
+        assert result["policy"]["decision_version"] == "paper-campaign-v2.0"
         assert result["feedback"] == []
+        assert result["strategy_evidence"]["readiness_status"] == "insufficient_history"
+        assert result["strategy_evidence"]["decision_eligible"] is False
 
     def test_summary_with_closed_trades(self, conn):
         for ticker, pnl, r in [("AAPL", 5.0, 1.0), ("MSFT", -3.0, -0.6), ("GOOG", 8.0, 1.6)]:
             conn.execute(
                 """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
-                   status, pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts)
+                   status, pnl_pct, r_multiple, exit_date, exit_reason, current_price,
+                   generated_ts, report_run_id)
                 VALUES (?, ?, 'long', 100.0, '2026-03-10',
-                   'closed', ?, ?, '2026-03-14', 'manual_close', 100.0, 'ts')""",
+                   'closed', ?, ?, '2026-03-14', 'manual_close', 100.0, 'ts',
+                   'paper-trade-test-run')""",
                 (f"2026-03-{10 + hash(ticker) % 3}", ticker, pnl, r),
             )
         conn.commit()
@@ -997,8 +1405,10 @@ class TestPaperTradeSummary:
         entry_date = base_date.isoformat()
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
-               status, pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts)
-            VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 3.0, 0.6, ?, 'expired', 103.0, 'ts')""",
+               status, pnl_pct, r_multiple, exit_date, exit_reason, current_price,
+               generated_ts, report_run_id)
+            VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 3.0, 0.6, ?,
+                    'expired', 103.0, 'ts', 'paper-trade-test-run')""",
             (entry_date, entry_date, (base_date + dt.timedelta(days=5)).isoformat()),
         )
         conn.executemany(
@@ -1006,9 +1416,11 @@ class TestPaperTradeSummary:
                    asof_date, ticker, call_direction, validity_days,
                    setup_family, setup_tier, signal_bias, actionability,
                    score, close_asof, status, evaluated_date,
-                   close_evaluated, raw_return_pct, signed_return_pct, direction_hit
+                   close_evaluated, raw_return_pct, signed_return_pct, direction_hit,
+                   report_run_id
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scored', ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scored', ?, ?, ?, ?, ?,
+                       'paper-trade-test-run')""",
             [
                 (
                     entry_date, "AAA", "long", 5, "bullish_continuation",
@@ -1046,8 +1458,10 @@ class TestPaperTradeSummary:
             )
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
-               status, pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts)
-            VALUES (?, 'AAPL', 'long', 100.0, ?, 'closed', 2.0, 0.4, ?, 'expired', 102.0, 'ts')""",
+               status, pnl_pct, r_multiple, exit_date, exit_reason, current_price,
+               generated_ts, report_run_id)
+            VALUES (?, 'AAPL', 'long', 100.0, ?, 'closed', 2.0, 0.4, ?,
+                    'expired', 102.0, 'ts', 'paper-trade-test-run')""",
             (entry_date, entry_date, (base_date + dt.timedelta(days=5)).isoformat()),
         )
         conn.commit()
@@ -1071,9 +1485,10 @@ class TestPaperTradeSummary:
             """INSERT INTO paper_trades (
                    report_date, ticker, direction, entry_price, entry_date,
                    status, pnl_pct, r_multiple, exit_date, exit_reason,
-                   current_price, generated_ts, position_size_pct
+                   current_price, generated_ts, position_size_pct, report_run_id
                )
-               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 1.0, 0.2, ?, 'expired', 101.0, 'ts', 8.0)""",
+               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 1.0, 0.2, ?,
+                       'expired', 101.0, 'ts', 8.0, 'paper-trade-test-run')""",
             (entry_date, entry_date, exit_date),
         )
         conn.commit()
@@ -1082,7 +1497,8 @@ class TestPaperTradeSummary:
 
         assert result["feedback"][0]["kind"] == "benchmark"
         assert result["feedback"][0]["severity"] == "high"
-        assert "trailing SPY" in result["feedback"][0]["title"]
+        assert result["feedback"][0]["title"] == "Observed portfolio return is below SPY"
+        assert "Research only" in result["feedback"][0]["action"]
 
     def test_summary_includes_core_satellite_benchmark(self, conn):
         base_date = dt.date.today() - dt.timedelta(days=30)
@@ -1094,9 +1510,10 @@ class TestPaperTradeSummary:
             """INSERT INTO paper_trades (
                    report_date, ticker, direction, entry_price, entry_date,
                    status, pnl_pct, r_multiple, exit_date, exit_reason,
-                   current_price, generated_ts, position_size_pct
+                   current_price, generated_ts, position_size_pct, report_run_id
                )
-               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 10.0, 2.0, ?, 'target_hit', 110.0, 'ts', 10.0)""",
+               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 10.0, 2.0, ?,
+                       'target_hit', 110.0, 'ts', 10.0, 'paper-trade-test-run')""",
             (entry_date, entry_date, exit_date),
         )
         conn.commit()
@@ -1107,16 +1524,22 @@ class TestPaperTradeSummary:
         assert core_satellite["core_allocation_pct"] == pytest.approx(70.0)
         assert core_satellite["satellite_allocation_pct"] == pytest.approx(30.0)
         assert core_satellite["core_return_pct"] == pytest.approx(10.05)
-        # Trade contributes 10% PnL on a 10% position = 1% satellite book return.
-        # Blended: 70% * 10.05 + 30% * 1.0 = 7.335 -> 7.33 rounded.
-        assert core_satellite["satellite_return_pct"] == pytest.approx(1.0)
-        assert core_satellite["total_return_pct"] == pytest.approx(7.33)
-        assert core_satellite["alpha_vs_spy_pct"] == pytest.approx(-2.72)
+        # Quantity/cash history is absent, so the legacy row is excluded rather
+        # than converted into an invented 10%-of-starting-capital position.
+        assert core_satellite["satellite_return_pct"] == pytest.approx(0.0)
+        assert core_satellite["total_return_pct"] == pytest.approx(7.04)
+        assert core_satellite["alpha_vs_spy_pct"] == pytest.approx(-3.02)
 
     def test_summary_includes_recent_reflections(self, conn):
         base_date = dt.date.today() - dt.timedelta(days=30)
         entry_date = base_date.isoformat()
         exit_date = (base_date + dt.timedelta(days=5)).isoformat()
+        conn.execute(
+            """INSERT INTO paper_trades
+               (id,report_date,ticker,direction,entry_price,entry_date,status,campaign_id,report_run_id)
+               VALUES (99,?,'AAPL','long',100,?,'closed','paper-v2',?)""",
+            (entry_date, entry_date, TEST_REPORT_RUN_ID),
+        )
         conn.execute(
             """
             INSERT INTO paper_trade_reflections (
@@ -1145,8 +1568,10 @@ class TestPaperTradeSummary:
                 """INSERT INTO paper_trades (
                     report_date, ticker, direction, entry_price, entry_date, status,
                     pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts,
-                    setup_family, regime_state_at_entry, vix_at_entry, bot_version
-                ) VALUES (?, ?, 'long', 100.0, ?, 'closed', ?, ?, ?, ?, 100.0, 'ts', ?, ?, ?, ?)""",
+                    setup_family, regime_state_at_entry, vix_at_entry, bot_version,
+                    report_run_id
+                ) VALUES (?, ?, 'long', 100.0, ?, 'closed', ?, ?, ?, ?, 100.0,
+                          'ts', ?, ?, ?, ?, 'paper-trade-test-run')""",
                 (
                     entry_date,
                     f"T{idx}",
@@ -1168,6 +1593,13 @@ class TestPaperTradeSummary:
         assert result["family_edges"]
         assert result["regime_edges"]
         assert result["vix_bucket_edges"]
+        serialized_feedback = " ".join(
+            f"{item['title']} {item['action']}" for item in result["feedback"]
+        ).lower()
+        assert "size up" not in serialized_feedback
+        assert "priority allocation" not in serialized_feedback
+        assert "shows edge" not in serialized_feedback
+        assert "research only" in serialized_feedback
 
 
 # ── Regime Alignment Policy ────────────────────────────────────
@@ -1367,14 +1799,15 @@ class TestTradingDayExpiry:
     def _insert_open_trade(self, conn, ticker="AAPL", entry_price=100.0, direction="long",
                            stop_loss=95.0, target_price=110.0, entry_date=None):
         if entry_date is None:
-            entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+            entry_date = "2026-03-13"
         conn.execute(
             """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, status, current_price, unrealized_pnl_pct,
-               high_water_mark, low_water_mark, generated_ts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?)""",
+               high_water_mark, low_water_mark, generated_ts, report_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?, ?)""",
             (entry_date, ticker, direction, entry_price, entry_date,
-             target_price, stop_loss, entry_price, entry_price, entry_price, "ts"),
+             target_price, stop_loss, entry_price, entry_price, entry_price, "ts",
+             TEST_REPORT_RUN_ID),
         )
         conn.commit()
 
@@ -1423,7 +1856,7 @@ class TestTradingDayExpiry:
 
     def test_mtm_trailing_updates_stop_to_breakeven(self, conn):
         """Trade at 1.25R should move stop to breakeven."""
-        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        entry_date = "2026-03-13"
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
         # Seed the persisted entry stop distance used by trailing-stop logic
@@ -1442,7 +1875,7 @@ class TestTradingDayExpiry:
 
     def test_mtm_trailing_mid_level(self, conn):
         """Trade at 1.5R should trail with mid cushion."""
-        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        entry_date = "2026-03-13"
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
         conn.execute(
@@ -1461,7 +1894,7 @@ class TestTradingDayExpiry:
 
     def test_mtm_trailing_prefers_persisted_entry_stop_distance(self, conn):
         """Trailing math should use stored entry risk, not raw ATR%."""
-        entry_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        entry_date = "2026-03-13"
         self._insert_open_trade(conn, "AAPL", 100.0, stop_loss=95.0,
                                 target_price=110.0, entry_date=entry_date)
         conn.execute(

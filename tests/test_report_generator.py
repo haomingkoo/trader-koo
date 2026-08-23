@@ -1,6 +1,7 @@
 """Focused tests for report-generation guardrails."""
 from __future__ import annotations
 
+import datetime as dt
 import sqlite3
 from pathlib import Path
 
@@ -121,3 +122,86 @@ def test_fetch_report_payload_aborts_before_signal_build_when_prices_are_stale(t
             run_log=run_log,
             tail_lines=40,
         )
+
+
+def test_unlinked_report_generation_is_read_only_for_calls_and_trades(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from trader_koo.report import generator
+
+    db_path = tmp_path / "report.db"
+    run_log = tmp_path / "cron.log"
+    _create_minimal_report_db(db_path)
+    now = dt.datetime.now(dt.timezone.utc)
+    asof_date = now.date().isoformat()
+    snapshot_ts = now.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM price_daily")
+    conn.execute("DELETE FROM ingest_runs")
+    conn.execute(
+        "INSERT INTO price_daily (ticker, date, open, high, low, close, volume, data_source) "
+        "VALUES ('AAA', ?, 100, 101, 99, 100, 1000000, 'test')",
+        (asof_date,),
+    )
+    conn.execute(
+        "INSERT INTO finviz_fundamentals (ticker, snapshot_ts, price) VALUES ('AAA', ?, 100)",
+        (snapshot_ts,),
+    )
+    conn.execute(
+        "INSERT INTO yolo_patterns (ticker, timeframe, detected_ts, as_of_date, confidence) "
+        "VALUES ('AAA', 'daily', ?, ?, 0.9)",
+        (snapshot_ts, asof_date),
+    )
+    conn.execute(
+        "INSERT INTO ingest_runs (run_id, started_ts, finished_ts, status, tickers_total, tickers_ok) "
+        "VALUES ('fresh', ?, ?, 'ok', 1, 1)",
+        (snapshot_ts, snapshot_ts),
+    )
+    conn.commit()
+    conn.close()
+
+    setup = {
+        "ticker": "AAA",
+        "setup_family": "bullish_continuation",
+        "setup_tier": "A",
+        "signal_bias": "bullish",
+        "actionability": "higher-probability",
+        "score": 90.0,
+        "close": 100.0,
+        "atr_pct_14": 2.0,
+        "debate_agreement_score": 90.0,
+    }
+    monkeypatch.setattr(
+        generator,
+        "fetch_signals",
+        lambda _conn: {
+            "setup_quality_top": [dict(setup)],
+            "setup_quality_all": [dict(setup)],
+            "setup_quality_lookup": {"AAA": dict(setup)},
+            "report_decisions": [],
+            "scanned_universe": [],
+            "regime_context": {},
+        },
+    )
+    monkeypatch.setattr(generator, "llm_enabled", lambda: False)
+    monkeypatch.setattr(generator, "build_earnings_calendar_payload", lambda *args, **kwargs: {})
+    monkeypatch.setattr(generator, "build_tonight_key_changes", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generator, "fetch_yolo_delta", lambda *args, **kwargs: {})
+    monkeypatch.setattr(generator, "fetch_yolo_pattern_persistence", lambda *args, **kwargs: {})
+
+    payload = fetch_report_payload(
+        db_path=db_path,
+        run_log=run_log,
+        tail_lines=0,
+        report_run_id=None,
+    )
+
+    verify = sqlite3.connect(db_path)
+    assert verify.execute("SELECT COUNT(*) FROM setup_call_evaluations").fetchone() == (0,)
+    assert verify.execute("SELECT COUNT(*) FROM paper_trades").fetchone() == (0,)
+    assert payload["signals"]["setup_evaluation"]["admission_state"] == (
+        "requires_report_run_publication"
+    )
+    assert payload["paper_trades"]["admission_state"] == "requires_report_run_publication"
+    verify.close()

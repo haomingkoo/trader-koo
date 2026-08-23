@@ -1,0 +1,219 @@
+name: Dark deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: production-dark
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  dark-deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: production-dark
+      url: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+      RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
+      BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
+      ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check out the exact CI commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: trader_koo/frontend-v2/package-lock.json
+
+      - name: Install release tooling
+        run: |
+          make backend-install
+          npm ci --prefix trader_koo/frontend-v2
+          npx --prefix trader_koo/frontend-v2 playwright install --with-deps chromium
+          npm install --global @railway/cli@5.27.0
+
+      - name: Link the exact Railway target
+        run: >-
+          railway link
+          --project "$RAILWAY_PROJECT_ID"
+          --environment "$RAILWAY_ENVIRONMENT"
+          --service "$RAILWAY_SERVICE"
+          --json
+
+      - name: Refuse a Railway GitHub autodeploy bypass
+        run: |
+          railway environment config --environment "$RAILWAY_ENVIRONMENT" --json \
+            | jq -e --arg service "$RAILWAY_SERVICE" \
+            '.services[$service].source.repo == null' \
+            > /dev/null
+
+      - name: Create and download a fresh consistent production backup
+        run: |
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "X-API-Key: ${ADMIN_API_KEY}" \
+            "${BASE_URL}/api/admin/backups" \
+            --output /tmp/backup-created.json
+          jq -e '.ok == true and (.backup_name | length > 0) and (.sha256 | length == 64) and .dest_size_bytes > 0' /tmp/backup-created.json > /dev/null
+          backup_name=$(jq -r '.backup_name' /tmp/backup-created.json)
+          backup_sha=$(jq -r '.sha256' /tmp/backup-created.json)
+          backup_size=$(jq -r '.dest_size_bytes' /tmp/backup-created.json)
+          mkdir -p release-evidence
+          jq '{schema: "production-backup-v1", backup_name, sha256, dest_size_bytes}' \
+            /tmp/backup-created.json > release-evidence/production-backup-manifest.json
+          curl --fail --silent --show-error \
+            --header "X-API-Key: ${ADMIN_API_KEY}" \
+            "${BASE_URL}/api/admin/backups/${backup_name}" \
+            --output /tmp/production-backup.db.gz
+          test "$(wc -c < /tmp/production-backup.db.gz | tr -d ' ')" = "$backup_size"
+          test "$(sha256sum /tmp/production-backup.db.gz | cut -d' ' -f1)" = "$backup_sha"
+
+      - name: Verify migrations and replay against the production copy
+        run: >-
+          python -m trader_koo.scripts.release_evidence
+          --source-db /tmp/production-backup.db.gz
+          --output-dir release-evidence
+
+      - name: Record previous verified deployment
+        id: previous
+        run: |
+          railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-deployments.json
+          deployment_id=$(jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty' /tmp/previous-deployments.json)
+          release_sha=$(jq -r '[.[] | select(.status == "SUCCESS")][0].meta.commitHash // empty' /tmp/previous-deployments.json)
+          curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
+          campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
+          case "$campaign_status" in active|draft|frozen|absent) ;; *) exit 1 ;; esac
+          test -n "$deployment_id"
+          test -n "$release_sha"
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "campaign_status=$campaign_status" >> "$GITHUB_OUTPUT"
+
+      - name: Bind release identity without starting a second deployment
+        run: >-
+          railway variable set
+          "TRADER_KOO_GIT_SHA=${RELEASE_SHA}"
+          "TRADER_KOO_PAPER_TRADE_ENABLED=0"
+          --skip-deploys
+          --service "$RAILWAY_SERVICE"
+          --environment "$RAILWAY_ENVIRONMENT"
+
+      - name: Upload dark release and wait for Railway health gate
+        run: >-
+          railway up --ci
+          --project "$RAILWAY_PROJECT_ID"
+          --service "$RAILWAY_SERVICE"
+          --environment "$RAILWAY_ENVIRONMENT"
+          --message "dark release ${RELEASE_SHA}"
+
+      - name: Record dark deployment
+        id: deployed
+        run: |
+          deployment_id=$(railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" | jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty')
+          test -n "$deployment_id"
+          test "$deployment_id" != "${{ steps.previous.outputs.id }}"
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+
+      - name: Verify API contracts and exact commit
+        run: >-
+          python -m trader_koo.scripts.verify_deployment
+          --base-url "$BASE_URL"
+          --expected-sha "$RELEASE_SHA"
+          --api-key "$ADMIN_API_KEY"
+          --expected-campaign-status "${{ steps.previous.outputs.campaign_status }}"
+
+      - name: Verify production Chromium journeys
+        working-directory: trader_koo/frontend-v2
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ env.BASE_URL }}
+          PLAYWRIGHT_EXPECTED_SHA: ${{ env.RELEASE_SHA }}
+          PLAYWRIGHT_ADMIN_API_KEY: ${{ env.ADMIN_API_KEY }}
+        run: npx playwright test --config=playwright.production.config.ts
+
+      - name: Roll back code and variables after any failed release check
+        id: rollback
+        if: ${{ failure() && steps.previous.outputs.id != '' }}
+        run: |
+          railway api --file ops/railway-rollback.graphql --raw-var "id=${{ steps.previous.outputs.id }}" --compact > /tmp/rollback.json
+          rollback_id=$(jq -r '.data.deploymentRollback.id // empty' /tmp/rollback.json)
+          test -n "$rollback_id"
+          echo "id=$rollback_id" >> "$GITHUB_OUTPUT"
+          for attempt in $(seq 1 30); do
+            railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-deployments.json
+            status=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .status' /tmp/rollback-deployments.json)
+            if [ "$status" = "SUCCESS" ]; then
+              rollback_sha=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .meta.commitHash // empty' /tmp/rollback-deployments.json)
+              test "$rollback_sha" = "${{ steps.previous.outputs.sha }}"
+              curl --fail --silent --show-error "${BASE_URL}/api/health" > /tmp/rollback-health.json
+              jq -e '.ok == true' /tmp/rollback-health.json > /dev/null
+              release_status=$(curl --silent --show-error --output /tmp/rollback-release.json --write-out '%{http_code}' "${BASE_URL}/api/release")
+              if [ "$release_status" = "200" ]; then
+                jq -e --arg sha "${{ steps.previous.outputs.sha }}" '.git_sha == $sha' /tmp/rollback-release.json > /dev/null
+              else
+                test "$release_status" = "404"
+              fi
+              curl --fail --silent --show-error \
+                "${BASE_URL}/api/paper-trades/summary" \
+                > /tmp/rollback-paper-summary.json
+              jq -e '.ok == true' /tmp/rollback-paper-summary.json > /dev/null
+              exit 0
+            fi
+            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Write deployment manifest
+        if: ${{ always() }}
+        run: |
+          mkdir -p release-evidence
+          jq -n \
+            --arg schema "dark-deploy-manifest-v1" \
+            --arg git_sha "$RELEASE_SHA" \
+            --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
+            --arg previous_git_sha "${{ steps.previous.outputs.sha }}" \
+            --arg expected_campaign_status "${{ steps.previous.outputs.campaign_status }}" \
+            --arg dark_deployment_id "${{ steps.deployed.outputs.id }}" \
+            --arg rollback_deployment_id "${{ steps.rollback.outputs.id }}" \
+            --arg job_status "${{ job.status }}" \
+            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, verification_status: $job_status, campaign_activation_invoked: false}' \
+            > release-evidence/deployment-manifest.json
+
+      - name: Upload deployment evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: dark-deploy-evidence-${{ github.event.workflow_run.head_sha }}
+          path: release-evidence/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+      # Deliberately absent: campaign activate/reset endpoints. Activation is a
+      # separate authenticated human action after production verification.

@@ -6,6 +6,7 @@ ingest-run metadata, and data-source information from the database.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 import sqlite3
@@ -14,6 +15,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from trader_koo.backend.services.database import DB_PATH, table_exists
+from trader_koo.db.price_contract import research_price_contract
+from trader_koo.report.utils import (
+    completed_nyse_period_through,
+    last_completed_nyse_session,
+)
 
 LOG = logging.getLogger("trader_koo.services.market_data")
 
@@ -24,6 +30,15 @@ except Exception:
     MARKET_TZ = dt.timezone.utc
 
 MARKET_CLOSE_HOUR = min(23, max(0, int(os.getenv("TRADER_KOO_MARKET_CLOSE_HOUR", "16"))))
+
+
+def market_session_completion(now: dt.datetime | None = None) -> dict[str, str]:
+    instant = now or dt.datetime.now(dt.timezone.utc)
+    return {
+        "last_completed_session": last_completed_nyse_session(instant).isoformat(),
+        "completed_week_through": completed_nyse_period_through("weekly", instant).isoformat(),
+        "completed_month_through": completed_nyse_period_through("monthly", instant).isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +194,37 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
     Returns a dict with the latest data_source and fetch_timestamp.
     """
     try:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(price_daily)").fetchall()
+        }
+        contract_columns = {
+            "adjustment_basis", "adjustment_version", "basis_status", "unresolved_reason"
+        }
+        if not contract_columns.issubset(columns):
+            legacy = conn.execute(
+                """
+                SELECT data_source, fetch_timestamp FROM price_daily
+                WHERE ticker = ? ORDER BY date DESC LIMIT 1
+                """,
+                (ticker,),
+            ).fetchone()
+            if legacy:
+                return {
+                    "price": legacy[0] or "unknown",
+                    "price_timestamp": legacy[1] or None,
+                    "adjustment_basis": "unknown",
+                    "return_basis": "unknown",
+                    "adjustment_version": "unknown",
+                    "basis_status": "unverified",
+                    "research_eligible": False,
+                    "unresolved_reason": "price_basis_schema_not_migrated",
+                    "corporate_actions": [],
+                    "distributions_included": False,
+                }
         row = conn.execute(
             """
-            SELECT data_source, fetch_timestamp
+            SELECT data_source, fetch_timestamp, adjustment_basis,
+                   adjustment_version, basis_status, unresolved_reason
             FROM price_daily
             WHERE ticker = ?
             ORDER BY date DESC
@@ -190,10 +233,51 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
             (ticker,),
         ).fetchone()
 
+        contract = research_price_contract(conn, [ticker])
+        actions: list[dict[str, Any]] = []
+        if table_exists(conn, "price_corporate_actions"):
+            for item in conn.execute(
+                """
+                SELECT action_date, action_type, provider, value,
+                       applied_to_prices, adjustment_version, fetch_timestamp,
+                       evidence_json
+                FROM price_corporate_actions WHERE ticker = ?
+                ORDER BY action_date DESC
+                """,
+                (ticker,),
+            ).fetchall():
+                try:
+                    evidence = json.loads(str(item[7] or "{}"))
+                except (TypeError, ValueError):
+                    evidence = {}
+                actions.append({
+                    "action_date": item[0],
+                    "action_type": item[1],
+                    "provider": item[2],
+                    "value": item[3],
+                    "applied_to_prices": bool(item[4]),
+                    "adjustment_version": item[5],
+                    "fetch_timestamp": item[6],
+                    "evidence_json": evidence,
+                    "basis_evidence": evidence.get("basis_evidence"),
+                    "full_history_verified": bool(evidence.get("full_history_verified")),
+                })
         if row:
+            basis = str(contract["basis"])
             return {
                 "price": row[0] or "unknown",
                 "price_timestamp": row[1] or None,
+                "adjustment_basis": basis,
+                "return_basis": "total_return" if basis == "total_return" else "price_only",
+                "adjustment_version": contract["version"],
+                "basis_status": contract["status"],
+                "research_eligible": contract["eligible"],
+                "unresolved_reason": row[5] or contract["reason"],
+                "corporate_actions": actions,
+                "distributions_included": bool(contract.get("distributions_included")),
+                "price_revision": contract.get("revision"),
+                "managed_window": contract.get("managed_window"),
+                "session_completion": market_session_completion(),
             }
     except Exception as exc:
         LOG.warning("Failed to get data sources for %s: %s", ticker, exc)
@@ -201,6 +285,14 @@ def get_data_sources(conn: sqlite3.Connection, ticker: str) -> dict[str, Any]:
     return {
         "price": "unknown",
         "price_timestamp": None,
+        "adjustment_basis": "unknown",
+        "return_basis": "unknown",
+        "adjustment_version": "unknown",
+        "basis_status": "unverified",
+        "research_eligible": False,
+        "unresolved_reason": "price_basis_provenance_unavailable",
+        "corporate_actions": [],
+        "distributions_included": False,
     }
 
 

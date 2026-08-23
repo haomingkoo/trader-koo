@@ -48,6 +48,8 @@ id_ed25519.pub
 # Frontend v2 build artifacts
 dist-v2/
 trader_koo/frontend-v2/node_modules/
+trader_koo/frontend-v2/test-results/
+trader_koo/frontend-v2/playwright-report/
 
 # Local planning artifacts (not for git)
 planning/

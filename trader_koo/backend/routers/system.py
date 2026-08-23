@@ -25,6 +25,7 @@ from trader_koo.backend.services.report_loader import (
     is_report_fresh,
     latest_daily_report_json,
 )
+from trader_koo.db.price_contract import research_eligible_tickers
 from trader_koo.llm_narrative import llm_status
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
@@ -219,6 +220,17 @@ def health() -> dict[str, Any]:
     return sanitize_public_response(payload)
 
 
+@router.get("/api/release")
+def release() -> dict[str, Any]:
+    """Return the non-secret release identity used by deployment verification."""
+    return {
+        "ok": bool(STATUS_GIT_SHA),
+        "service": "trader_koo-api",
+        "version": APP_VERSION,
+        "git_sha": STATUS_GIT_SHA,
+    }
+
+
 @router.get("/api/config", include_in_schema=False)
 def config() -> dict[str, Any]:
     """Public client config -- never expose secrets (Requirement 6.6)."""
@@ -389,6 +401,31 @@ def status() -> dict[str, Any]:
         fund_age_hours = hours_since(latest_fund_snapshot, now)
         opt_age_hours = hours_since(latest_opt_snapshot, now)
 
+        price_basis = {
+            "verified_tickers": 0,
+            "unresolved_tickers": int(counts["tracked_tickers"] if counts else 0),
+            "bases": [],
+        }
+        price_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(price_daily)").fetchall()
+        }
+        if {"adjustment_basis", "adjustment_version", "basis_status"}.issubset(price_columns):
+            basis_rows = conn.execute(
+                """
+                SELECT adjustment_basis, adjustment_version, basis_status,
+                       COUNT(DISTINCT ticker) AS ticker_count
+                FROM price_daily
+                GROUP BY adjustment_basis, adjustment_version, basis_status
+                """
+            ).fetchall()
+            price_basis["bases"] = [dict(row) for row in basis_rows]
+            price_basis["verified_tickers"] = len(research_eligible_tickers(conn))
+            price_basis["unresolved_tickers"] = max(
+                0,
+                int(counts["tracked_tickers"] if counts else 0)
+                - int(price_basis["verified_tickers"]),
+            )
+
         # Report freshness
         _, report_payload = latest_daily_report_json(REPORT_DIR)
         report_generated_ts_str = (report_payload or {}).get("generated_ts")
@@ -407,6 +444,8 @@ def status() -> dict[str, Any]:
             warnings.append("finviz_fundamentals stale")
         if not report_fresh:
             warnings.append("daily_report stale")
+        if price_basis["unresolved_tickers"]:
+            warnings.append("price basis unresolved")
 
         latest_run = dict(run_row) if run_row is not None else None
         if latest_run and latest_run.get("status") in {"failed"}:
@@ -536,6 +575,7 @@ def status() -> dict[str, Any]:
                 "fundamentals_rows": counts["fundamentals_rows"] if counts else 0,
                 "options_rows": counts["options_rows"] if counts else 0,
             },
+            "price_basis": price_basis,
             "activity": activity,
             "llm": llm_meta,
             "latest_data": {

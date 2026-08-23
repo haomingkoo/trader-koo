@@ -11,8 +11,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from trader_koo.backend.services.database import DB_PATH, get_conn
-from trader_koo.middleware.auth import require_admin_auth
-from trader_koo.paper_trades import manually_close_trade, mark_to_market
+from trader_koo.paper_trades import (
+    PaperTradeWritesDisabled,
+    manually_close_trade,
+    mark_to_market,
+)
 
 from trader_koo.backend.routers.admin._shared import LOG
 
@@ -108,7 +111,6 @@ def _finalize_model_promotion(
 
 
 @router.post("/api/admin/train-ml-model")
-@require_admin_auth
 def train_ml_model(
     request: Request,
     start_date: str = Query(default="2025-06-01"),
@@ -178,14 +180,17 @@ def train_ml_model(
 
 
 @router.get("/api/admin/ml-model-status")
-@require_admin_auth
 def ml_model_status(request: Request) -> dict[str, Any]:
     """Return the current ML model status, training progress, and metrics."""
     training_active = bool(_ml_train_thread and _ml_train_thread.is_alive())
     try:
         from trader_koo.ml.scorer import model_status
 
-        status = model_status()
+        conn = get_conn()
+        try:
+            status = model_status(conn)
+        finally:
+            conn.close()
         status["training_active"] = training_active
         if _ml_train_result:
             status["last_train_result"] = _ml_train_result
@@ -199,7 +204,6 @@ def ml_model_status(request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/admin/ml-score-universe")
-@require_admin_auth
 def ml_score_universe(
     request: Request,
     date: str = Query(default=None),
@@ -222,7 +226,6 @@ def ml_score_universe(
 
 
 @router.get("/api/admin/macro-snapshot")
-@require_admin_auth
 def macro_snapshot(request: Request) -> dict[str, Any]:
     """Return current macro data snapshot (FRED + Polymarket)."""
     try:
@@ -234,16 +237,16 @@ def macro_snapshot(request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/admin/ml-shap-analysis")
-@require_admin_auth
 def ml_shap_analysis(request: Request) -> dict[str, Any]:
     """Run SHAP analysis on the current model to explain feature importance."""
     try:
-        from trader_koo.ml.scorer import load_model
+        from trader_koo.ml.scorer import load_model, require_model_price_contract
         from trader_koo.ml.features import (
             FEATURE_COLUMNS,
             extract_features_for_universe,
         )
         from trader_koo.ml.shap_analysis import compute_shap_summary
+        from trader_koo.db.price_contract import research_price_contract
 
         model, meta = load_model()
         if model is None:
@@ -256,13 +259,26 @@ def ml_shap_analysis(request: Request) -> dict[str, Any]:
         )
         conn = get_conn()
         try:
+            price_contract = research_price_contract(conn)
+            if not price_contract["eligible"]:
+                return {
+                    "ok": False,
+                    "error": f"Price basis is not research eligible: {price_contract['reason']}",
+                    "price_contract": price_contract,
+                }
+            model_contract = require_model_price_contract(meta, price_contract)
             today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
             features = extract_features_for_universe(conn, as_of_date=today)
             if features.empty:
                 return {"ok": False, "error": "No feature data available"}
             X = features.reindex(columns=feature_cols)
             result = compute_shap_summary(model, X)
-            return {"ok": True, **result}
+            return {
+                "ok": True,
+                **result,
+                "model_price_contract": model_contract,
+                "current_price_contract": price_contract,
+            }
         finally:
             conn.close()
     except Exception as exc:
@@ -270,7 +286,6 @@ def ml_shap_analysis(request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/admin/ml-drift-check")
-@require_admin_auth
 def ml_drift_check(
     request: Request,
     window_days: int = Query(default=30),
@@ -289,7 +304,6 @@ def ml_drift_check(
 
 
 @router.post("/api/admin/run-backtest")
-@require_admin_auth
 def run_backtest_endpoint(
     request: Request,
     start_date: str = Query(default="2025-06-01"),
@@ -392,7 +406,6 @@ def run_backtest_endpoint(
 
 
 @router.get("/api/admin/backtest-result")
-@require_admin_auth
 def get_backtest_result(request: Request) -> dict[str, Any]:
     """Return the latest backtest result."""
     running = bool(_backtest_thread and _backtest_thread.is_alive())
@@ -715,7 +728,6 @@ def _send_retrain_notification(result: dict[str, Any]) -> None:
 
 
 @router.post("/api/admin/ml/retrain")
-@require_admin_auth
 def retrain_ml_model(
     request: Request,
     start_date: str = Query(default="2025-01-01"),
@@ -816,7 +828,6 @@ def retrain_ml_model(
 
 
 @router.get("/api/admin/ml/retrain-status")
-@require_admin_auth
 def retrain_status(request: Request) -> dict[str, Any]:
     """Return current retrain pipeline status and latest result."""
     running = bool(_retrain_thread and _retrain_thread.is_alive())
@@ -832,7 +843,6 @@ def retrain_status(request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/admin/ml/retrain-history")
-@require_admin_auth
 def retrain_history(
     request: Request,
     limit: int = Query(default=10, ge=1, le=100),
@@ -864,7 +874,6 @@ def retrain_history(
 
 
 @router.get("/api/admin/ml/validation-runs")
-@require_admin_auth
 def validation_runs(
     request: Request,
     limit: int = Query(default=20, ge=1, le=100),
@@ -898,7 +907,6 @@ def validation_runs(
 
 
 @router.post("/api/admin/paper-trades/close")
-@require_admin_auth
 def admin_close_paper_trade(
     request: Request,
     trade_id: int = Query(..., ge=1),
@@ -915,6 +923,8 @@ def admin_close_paper_trade(
             exit_reason=exit_reason,
         )
         return {"ok": True, **result}
+    except PaperTradeWritesDisabled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
@@ -922,12 +932,14 @@ def admin_close_paper_trade(
 
 
 @router.post("/api/admin/paper-trades/mtm")
-@require_admin_auth
 def admin_trigger_mtm(request: Request) -> dict[str, Any]:
     """Trigger mark-to-market on all open paper trades."""
     conn = get_conn()
     try:
-        result = mark_to_market(conn)
+        try:
+            result = mark_to_market(conn)
+        except PaperTradeWritesDisabled as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         conn.commit()
         return {"ok": True, **result}
     finally:

@@ -68,25 +68,6 @@ class TestConfigValidation:
         assert isinstance(config, Config)
         assert config.trader_koo_api_key == "b" * 32
 
-    def test_as_bool_conversion(self):
-        """Test boolean conversion from environment variables."""
-        config = Config.__new__(Config)
-
-        assert config._as_bool("1") is True
-        assert config._as_bool("true") is True
-        assert config._as_bool("TRUE") is True
-        assert config._as_bool("yes") is True
-        assert config._as_bool("YES") is True
-        assert config._as_bool("on") is True
-        assert config._as_bool("ON") is True
-
-        assert config._as_bool("0") is False
-        assert config._as_bool("false") is False
-        assert config._as_bool("no") is False
-        assert config._as_bool("") is False
-        assert config._as_bool(None) is False
-        assert config._as_bool("random") is False
-
     def test_error_message_includes_generation_command(self, monkeypatch):
         """Test that error messages include command to generate secure key."""
         monkeypatch.setenv("ADMIN_STRICT_API_KEY", "1")

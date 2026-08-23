@@ -29,7 +29,6 @@ CONVICTION_B_HIGH: float = 75.0       # B-tier strong conviction — passes outr
 CONVICTION_B_MIN: float = 70.0        # B-tier minimum (requires approved decision_state)
 DEBATE_CONSENSUS_STRONG: float = 75.0  # Strong debate agreement — passes outright
 DEBATE_CONSENSUS_MIN: float = 60.0    # Minimum acceptable debate agreement
-MIN_REWARD_R: float = 2.0             # Minimum R:R required by critic
 GOOD_REWARD_R: float = 2.5            # R:R considered excellent
 REGIME_VIX_HIGH_VOL: float = 25.0     # VIX above this = high-vol regime (block new longs)
 REGIME_VIX_ELEVATED: float = 30.0     # VIX above this = elevated (log warning)
@@ -45,8 +44,6 @@ CAUTION_FLAGS_HARD_BLOCK: int = 3        # Block if risk_flags count >= this
 CAUTION_FLAGS_WARN: int = 2              # Log warning if risk_flags count >= this
 ROLLING_EXPECTANCY_MIN: float = -0.2     # Block new entries if avg PnL below this %
 ROLLING_EXPECTANCY_MIN_SAMPLE: int = 5   # Minimum trades needed for expectancy check
-BENCHMARK_UNDERPERFORM_BLOCK_PP: float = -5.0  # Block if portfolio trails SPY by this much
-BENCHMARK_MIN_CLOSED_TRADES: int = 20     # Need enough closed trades before benchmark gate applies
 CONVICTION_A_GRADE_SCORE: float = 80.0  # Score threshold for A+ vs A grade
 
 
@@ -100,15 +97,16 @@ def _check_debate_strength(
 def _check_risk_reward(
     plan: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Minimum 2R expected reward for a concentrated portfolio."""
+    """Apply the one reward/risk threshold carried by the versioned policy."""
     expected_r = float(plan.get("expected_r_multiple") or 0)
+    minimum_r = float(plan["minimum_reward_r_multiple"])
 
     if expected_r >= GOOD_REWARD_R:
         return True, f"Excellent risk/reward ({expected_r:.1f}R)"
-    if expected_r >= MIN_REWARD_R:
+    if expected_r >= minimum_r:
         return True, f"Good risk/reward ({expected_r:.1f}R)"
 
-    return False, f"Risk/reward insufficient ({expected_r:.1f}R). Critic requires ≥{MIN_REWARD_R:.1f}R for concentrated portfolio."
+    return False, f"Risk/reward insufficient ({expected_r:.1f}R). Policy requires ≥{minimum_r:.1f}R."
 
 
 def _check_regime_alignment(
@@ -217,12 +215,19 @@ def _check_portfolio_concentration(
     row: dict[str, Any],
     *,
     max_open: int = 5,
+    campaign_id: str | None = None,
 ) -> tuple[bool, str]:
     """Limit total open trades and avoid sector/family clustering."""
     try:
-        open_trades = conn.execute(
-            "SELECT ticker, direction, setup_family FROM paper_trades WHERE status = 'open'"
-        ).fetchall()
+        if campaign_id is None:
+            open_trades = conn.execute(
+                "SELECT ticker,direction,setup_family FROM paper_trades WHERE status='open'"
+            ).fetchall()
+        else:
+            open_trades = conn.execute(
+                "SELECT ticker,direction,setup_family FROM paper_trades WHERE status='open' AND campaign_id=?",
+                (campaign_id,),
+            ).fetchall()
     except Exception:
         return True, "Could not check portfolio — allowing"
 
@@ -308,6 +313,7 @@ def _check_family_edge(
     conn: sqlite3.Connection,
     row: dict[str, Any],
     evaluation: dict[str, Any],
+    campaign_id: str | None = None,
 ) -> tuple[bool, str]:
     """Block families with proven negative edge.
 
@@ -342,12 +348,13 @@ def _check_family_edge(
         pass  # Table not yet created — fail open and fall through
 
     # Layer 2: recent paper_trades win rate (real-time, smaller sample)
+    campaign_clause = "" if campaign_id is None else "AND campaign_id=? "
+    params = (family, direction) if campaign_id is None else (campaign_id, family, direction)
     rows = conn.execute(
-        "SELECT pnl_pct FROM paper_trades "
-        "WHERE status != 'open' AND pnl_pct IS NOT NULL "
-        "AND LOWER(REPLACE(setup_family, ' ', '_')) = ? AND direction = ? "
-        "ORDER BY exit_date DESC LIMIT 10",
-        (family, direction),
+        "SELECT pnl_pct FROM paper_trades WHERE status!='open' AND pnl_pct IS NOT NULL "
+        + campaign_clause
+        + "AND LOWER(REPLACE(setup_family,' ','_'))=? AND direction=? ORDER BY exit_date DESC LIMIT 10",
+        params,
     ).fetchall()
 
     if len(rows) < FAMILY_EDGE_MIN_SAMPLE:
@@ -378,78 +385,24 @@ def _check_family_edge(
 
 def _check_rolling_expectancy(
     conn: sqlite3.Connection,
+    campaign_id: str | None = None,
 ) -> tuple[bool, str]:
     """Reject if last 20 closed trades have negative avg return."""
-    rows = conn.execute(
-        "SELECT pnl_pct FROM paper_trades "
-        "WHERE status != 'open' AND pnl_pct IS NOT NULL "
-        "ORDER BY exit_date DESC LIMIT 20",
-    ).fetchall()
+    if campaign_id is None:
+        rows = conn.execute(
+            "SELECT pnl_pct FROM paper_trades WHERE status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT pnl_pct FROM paper_trades WHERE campaign_id=? AND status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20",
+            (campaign_id,),
+        ).fetchall()
     if len(rows) < ROLLING_EXPECTANCY_MIN_SAMPLE:
         return True, f"Insufficient history ({len(rows)} trades) for expectancy check"
     avg_pnl = sum(float(r[0]) for r in rows) / len(rows)
     if avg_pnl < ROLLING_EXPECTANCY_MIN:
         return False, f"Rolling expectancy negative ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
     return True, f"Rolling expectancy OK ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
-
-
-def _check_spy_benchmark(
-    conn: sqlite3.Connection,
-) -> tuple[bool, str]:
-    """Block new entries when the paper book materially trails SPY."""
-    rows = conn.execute(
-        """
-        SELECT entry_date, COALESCE(exit_date, entry_date), pnl_pct,
-               COALESCE(position_size_pct, 8.0)
-        FROM paper_trades
-        WHERE status != 'open'
-          AND pnl_pct IS NOT NULL
-          AND entry_date IS NOT NULL
-        ORDER BY COALESCE(exit_date, entry_date) DESC
-        LIMIT ?
-        """,
-        (BENCHMARK_MIN_CLOSED_TRADES,),
-    ).fetchall()
-    if len(rows) < BENCHMARK_MIN_CLOSED_TRADES:
-        return True, f"Insufficient closed trades ({len(rows)}) for SPY benchmark gate"
-
-    first_entry = min(str(r[0]) for r in rows if r[0])
-    last_exit = max(str(r[1]) for r in rows if r[1])
-    start_row = conn.execute(
-        "SELECT CAST(close AS REAL) FROM price_daily "
-        "WHERE ticker = 'SPY' AND date >= ? ORDER BY date ASC LIMIT 1",
-        (first_entry,),
-    ).fetchone()
-    end_row = conn.execute(
-        "SELECT CAST(close AS REAL) FROM price_daily "
-        "WHERE ticker = 'SPY' AND date <= ? ORDER BY date DESC LIMIT 1",
-        (last_exit,),
-    ).fetchone()
-    if not start_row or not end_row or start_row[0] is None or end_row[0] is None:
-        return True, "SPY benchmark data unavailable — allowing"
-
-    spy_start = float(start_row[0])
-    spy_end = float(end_row[0])
-    if spy_start <= 0:
-        return True, "SPY benchmark start price invalid — allowing"
-
-    portfolio_return = sum(
-        float(row[2]) * (float(row[3]) / 100.0)
-        for row in rows
-        if row[2] is not None
-    )
-    spy_return = (spy_end / spy_start - 1.0) * 100.0
-    spread = portfolio_return - spy_return
-
-    if spread <= BENCHMARK_UNDERPERFORM_BLOCK_PP:
-        return False, (
-            f"Portfolio trails SPY by {spread:.2f}pp over last {len(rows)} closed trades "
-            f"({portfolio_return:+.2f}% vs SPY {spy_return:+.2f}%). Blocking new entries."
-        )
-    return True, (
-        f"SPY benchmark gate OK: spread {spread:+.2f}pp over last {len(rows)} closed trades "
-        f"({portfolio_return:+.2f}% vs SPY {spy_return:+.2f}%)."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +417,7 @@ def critic_review(
     plan: dict[str, Any],
     market_ctx: dict[str, Any],
     max_open: int = 5,
+    campaign_id: str | None = None,
 ) -> dict[str, Any]:
     """Run all critic checks against a proposed trade.
 
@@ -490,16 +444,15 @@ def critic_review(
         ("debate_strength", lambda: _check_debate_strength(row, evaluation)),
         ("risk_reward", lambda: _check_risk_reward(plan)),
         ("regime_alignment", lambda: _check_regime_alignment(row, evaluation, market_ctx)),
-        ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row, max_open=max_open)),
+        ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row, max_open=max_open, campaign_id=campaign_id)),
         ("volatility_environment", lambda: _check_volatility_environment(market_ctx)),
         ("caution_flags", lambda: _check_caution_flags(evaluation)),
-        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn)),
-        ("spy_benchmark", lambda: _check_spy_benchmark(conn)),
-        ("family_edge", lambda: _check_family_edge(conn, row, evaluation)),
+        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn, campaign_id)),
+        ("family_edge", lambda: _check_family_edge(conn, row, evaluation, campaign_id)),
     ]
 
     # Checks that depend on external data availability — fail open on error
-    data_dependent_checks = {"regime_alignment", "volatility_environment", "rolling_expectancy", "spy_benchmark", "family_edge"}
+    data_dependent_checks = {"regime_alignment", "volatility_environment", "rolling_expectancy", "family_edge"}
 
     for name, fn in name_fn_pairs:
         try:

@@ -48,6 +48,16 @@ export interface PipelineStatus {
     fund_age_hours: number | null;
     opt_age_hours: number | null;
   };
+  price_basis: {
+    verified_tickers: number;
+    unresolved_tickers: number;
+    bases: Array<{
+      adjustment_basis: string | null;
+      adjustment_version: string | null;
+      basis_status: string | null;
+      ticker_count: number;
+    }>;
+  };
   errors: {
     failed_runs_7d: number;
     latest_error_message: string | null;
@@ -358,6 +368,20 @@ export interface GreenBarrierCoverage {
 
 export interface ReportLatest {
   generated_ts: string | null;
+  report_run?: {
+    run_id: string | null;
+    state: "started" | "completed" | "failed" | "published" | "unlinked_legacy";
+    lineage: "linked" | "unlinked legacy";
+    started_ts?: string | null;
+    completed_ts?: string | null;
+    published_ts?: string | null;
+    content_hash?: string | null;
+    config_hash?: string | null;
+    code_version?: string | null;
+    generation_key?: string | null;
+    canonical_generation?: boolean;
+    superseded_by_run_id?: string | null;
+  };
   counts: ReportCounts;
   yolo: YoloBlock;
   latest_ingest_run: IngestRun;
@@ -646,7 +670,7 @@ export interface DashboardPayload {
   hmm_regime: HmmRegime | null;
   cv_proxy_patterns?: PatternOverlayRow[];
   hybrid_cv_compare?: Record<string, unknown>[];
-  data_sources?: Record<string, unknown>;
+  data_sources?: PriceDataSource;
   live_candle?: LiveCandle;
 }
 
@@ -669,7 +693,7 @@ export interface DashboardQuickPayload {
   earnings_markers: EarningsMarker[];
   cv_proxy_patterns?: PatternOverlayRow[];
   hybrid_cv_compare?: Record<string, unknown>[];
-  data_sources?: Record<string, unknown>;
+  data_sources?: PriceDataSource;
   data_freshness?: {
     latest_price_date: string | null;
     age_hours: number | null;
@@ -677,6 +701,24 @@ export interface DashboardQuickPayload {
   };
   live_candle?: LiveCandle;
   meta?: Record<string, unknown>;
+}
+
+export interface PriceDataSource {
+  price: string;
+  price_timestamp: string | null;
+  adjustment_basis: string;
+  return_basis: string;
+  adjustment_version: string;
+  basis_status: string;
+  research_eligible: boolean;
+  unresolved_reason: string | null;
+  corporate_actions: Array<Record<string, unknown>>;
+  distributions_included: boolean;
+  session_completion?: {
+    last_completed_session: string;
+    completed_week_through: string;
+    completed_month_through: string;
+  };
 }
 
 /** Slow-path payload from /api/dashboard/{ticker}/commentary (LLM + HMM). */
@@ -925,6 +967,22 @@ export interface PaperTrade {
   ml_confidence?: number | null;
   ml_signal?: string | null;
   notes?: string | null;
+  quantity?: number | null;
+  entry_notional?: number | null;
+  entry_commission?: number | null;
+  exit_commission?: number | null;
+  borrow_cost?: number | null;
+  realized_pnl_usd?: number | null;
+  accounting_status?: string | null;
+  event_trace_status?: "unreconciled_legacy" | "active" | "complete";
+  timeline?: Array<{
+    source: "order" | "trade";
+    event_type: string;
+    event_date: string;
+    payload: Record<string, unknown>;
+    payload_hash: string;
+    created_ts: string;
+  }>;
 }
 
 export interface PaperTradeList {
@@ -953,9 +1011,13 @@ export interface PaperTradeSummaryOverall {
   stopped_out_rate_pct?: number | null;
   starting_capital?: number;
   portfolio_value?: number;
+  cash?: number;
   realized_pnl?: number;
   unrealized_pnl?: number;
   total_return_pct?: number;
+  gross_exposure_pct?: number | null;
+  legacy_unreconciled_count?: number;
+  accounting_breaks?: Array<Record<string, unknown>>;
 }
 
 export interface PaperTradeDirectionStats {
@@ -980,10 +1042,67 @@ export interface PaperTradePolicy {
   caution_position_scale: number;
   high_vol_position_scale: number;
   earnings_position_scale: number;
+  campaign_id?: string;
+  zero_admission_streak_limit?: number;
   core_satellite?: {
     core_allocation_pct: number;
     satellite_allocation_pct: number;
   };
+}
+
+export interface PaperCampaignHealth {
+  available: boolean;
+  campaign_id: string;
+  label?: string;
+  policy_version?: string;
+  status?: string;
+  write_state?: "enabled" | "paused";
+  starting_capital?: number;
+  reports_observed?: number;
+  consecutive_eligible_zero_admission_reports?: number;
+  zero_admission_streak_limit?: number;
+  replay_live_parity?: string;
+  healthy?: boolean;
+  health_reasons?: string[];
+  benchmark_evidence?: {
+    role: string;
+    spy_buy_hold?: SpyBuyHoldBenchmark | null;
+  };
+  campaigns?: Array<{
+    campaign_id: string;
+    label: string;
+    policy_version: string;
+    status: string;
+    starting_capital: number;
+    trade_count: number;
+  }>;
+  latest_report?: {
+    report_run_id: string;
+    report_date: string;
+    generated_ts: string;
+    ranked: number;
+    eligible: number;
+    rejected: number;
+    admitted: number;
+    exposure_pct: number;
+    conversion_rate_pct: number;
+    rejections_by_gate?: Array<{
+      gate: string;
+      reason_code: string;
+      count: number;
+    }>;
+    candidates?: Array<{
+      rank: number;
+      ticker: string;
+      eligibility_passed: boolean;
+      final_gate: string;
+      reason_code: string;
+      disposition: "rejected" | "pending" | "admitted" | "duplicate";
+      tradeability?: "actionable" | "pending_next_open" | "not_actionable";
+      execution_status?: "pending" | "filled" | "rejected" | "cancelled" | null;
+      expected_r_multiple?: number | null;
+    }>;
+  } | null;
 }
 
 export interface PaperTradeFeedbackItem {
@@ -1027,6 +1146,12 @@ export interface PaperTradeVixBucketEdgeRow extends PaperTradeEdgeRow {
 export interface EquityCurvePoint {
   date: string;
   equity_index: number;
+  open_trades?: number;
+  closed_total?: number;
+  cash?: number | null;
+  equity?: number | null;
+  drawdown_pct?: number | null;
+  gross_exposure_pct?: number | null;
 }
 
 export interface PaperTradeReflection {
@@ -1086,6 +1211,151 @@ export interface PaperTradeBenchmarks {
   core_satellite?: CoreSatelliteBenchmark;
 }
 
+export type StrategyEvidenceReadiness =
+  | "evidence_unavailable"
+  | "insufficient_history"
+  | "prospectively_accumulating"
+  | "eligible_for_human_promotion_review";
+
+export interface StrategyEvidenceState {
+  schema_version: string;
+  snapshot_asof: string | null;
+  lifecycle_stage: "descriptive" | "prospective" | "promotion_review";
+  readiness_status: StrategyEvidenceReadiness;
+  readiness_reasons: string[];
+  observation_count: number;
+  traded_signal_date_count: number;
+  effective_non_overlapping_block_count: number;
+  closed_trade_count: number;
+  expected_block_length_sessions?: number;
+  consumed_window: {
+    consumed: boolean;
+    reusable_for_policy_selection: boolean;
+    status: string;
+  };
+  causal_validity: {
+    valid: boolean;
+    reasons: string[];
+  };
+  return_basis: string;
+  decision_eligible: boolean;
+  provenance: {
+    artifact_name: string | null;
+    artifact_sha256: string | null;
+    input_hash_sha256: string | null;
+    artifact_spec_hash_sha256: string | null;
+    verified: boolean;
+    href: string | null;
+    upstream_artifact_name?: string | null;
+    upstream_artifact_sha256?: string | null;
+    upstream_input_hash_sha256?: string | null;
+  };
+}
+
+export interface NextOpenBaselineState {
+  available: boolean;
+  snapshot_asof?: string | null;
+  artifact_scope?: string;
+  evidence_state: "descriptive_invalid" | "diagnostic_invalid" | "evidence_unavailable";
+  readiness_status?: string;
+  readiness_reasons?: string[];
+  causal_valid: false;
+  causal_limitations?: string[];
+  decision_eligible: false;
+  return_basis?: string;
+  benchmark_basis?: string;
+  artifact_path?: string;
+  exclusions?: Array<{ call_id?: number; reason: string }>;
+  summary?: {
+    selected_calls: number;
+    closed_trades: number;
+    excluded_calls: number;
+    daily_observation_count: number;
+    equity_point_count: number;
+    null_mark_count?: number;
+    net_return_pct: number | null;
+    full_investment_spy_net_return_pct?: number | null;
+    opportunity_cost_vs_full_spy_pct?: number | null;
+    active_net_pnl: number | null;
+    matched_spy_target_notional: number | null;
+    matched_spy_filled_notional: number | null;
+    active_metrics_available: boolean;
+    max_name_weight_pct: number;
+    max_gross_exposure_pct: number;
+  };
+  provenance?: {
+    artifact_sha256: string;
+    input_sha256: string;
+    config_sha256: string;
+    implementation_sha256: string;
+    canonical_report_lineage_enforced?: boolean;
+    research_price_basis_enforced?: boolean;
+  };
+}
+
+export interface NextOpenBaselinePayload {
+  ok: boolean;
+  baseline: NextOpenBaselineState;
+}
+
+export type ExperimentEvidenceLabel =
+  | "descriptive"
+  | "validation"
+  | "sealed held-out"
+  | "prospective paper"
+  | "invalid"
+  | "promotion eligible";
+
+export interface ExperimentResult {
+  experiment_id: string;
+  title: string;
+  available: boolean;
+  evidence_label: ExperimentEvidenceLabel;
+  status: string;
+  selected: boolean;
+  automatic_promotion: false;
+  warnings: string[];
+  manifest: {
+    strategy_version: string | null;
+    code_sha: string | null;
+    implementation_sha256: string | null;
+    data_snapshot_hash: string | null;
+    universe_basis: string | null;
+    return_basis: string | null;
+    config_hash: string | null;
+    seed: number | null;
+    evaluation_windows: unknown;
+    benchmark: string | null;
+    costs: Record<string, unknown>;
+    artifact_hash: string | null;
+    ledger_hash: string | null;
+  };
+  metrics: Record<string, number | null | unknown> | null;
+  curves: {
+    strategy: Array<{ date: string; equity: number | null }>;
+    spy_total_return: Array<{ date: string; equity: number | null }>;
+    cash: Array<{ date: string; equity: number | null }>;
+  };
+  folds: unknown;
+  regimes: { count?: number | null } | null;
+  attribution: unknown;
+  cost_stress: unknown;
+  challengers?: Record<string, {
+    status: string;
+    reasons: string[];
+    config_sha256: string;
+    metrics: Record<string, unknown> | null;
+  }>;
+  heldout?: { accessed: boolean; access_log: unknown[] };
+  downloads: { manifest: string; ledger: string | null };
+}
+
+export interface ExperimentResultsPayload {
+  ok: boolean;
+  count: number;
+  experiments: ExperimentResult[];
+}
+
 export interface PaperTradeSummary {
   ok: boolean;
   overall: PaperTradeSummaryOverall;
@@ -1102,6 +1372,41 @@ export interface PaperTradeSummary {
   regime_edges?: PaperTradeRegimeEdgeRow[];
   vix_bucket_edges?: PaperTradeVixBucketEdgeRow[];
   benchmarks?: PaperTradeBenchmarks;
+  strategy_evidence?: StrategyEvidenceState;
+  campaign_health?: PaperCampaignHealth;
+  breadth_shadow?: BreadthShadowSummary;
+}
+
+export interface BreadthShadowSummary {
+  schema_version: string;
+  primary_endpoint: string;
+  policy_counts: Record<string, { candidate_count: number; accepted_count: number }>;
+  incremental_cohort: {
+    accepted_count: number;
+    resolved_count: number;
+    mean_net_return_pct: number | null;
+    mean_matched_active_return_pct: number | null;
+    mean_2x_cost_return_pct: number | null;
+  };
+  coverage: {
+    report_count: number;
+    resolved_outcome_count: number;
+    unresolved_matured_count: number;
+    immature_accepted_count: number;
+    effective_non_overlapping_block_count: number;
+  };
+  concentration: {
+    largest_ticker_pct: number | null;
+    largest_family_pct: number | null;
+    by_ticker: Record<string, number>;
+    by_family: Record<string, number>;
+  };
+  breadth_increase_pct: number | null;
+  gates: Record<string, boolean>;
+  human_promotion_review_eligible: boolean;
+  causal_state: "prospectively_accumulating" | "promotion_review" | "evidence_unavailable";
+  automatic_promotion: false;
+  can_create_orders: false;
 }
 
 /* ── Crypto ── */

@@ -6,7 +6,6 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from trader_koo.middleware.auth import require_admin_auth
 from trader_koo.notifications.telegram import send_telegram_message
 
 from trader_koo.backend.routers.admin._shared import DB_PATH, LOG
@@ -15,7 +14,6 @@ router = APIRouter(tags=["admin", "admin-telegram"])
 
 
 @router.get("/api/admin/telegram-alerts")
-@require_admin_auth
 def list_telegram_alerts(
     limit: int = Query(default=50, ge=1, le=500),
 ) -> dict[str, Any]:
@@ -37,7 +35,6 @@ def list_telegram_alerts(
 
 
 @router.post("/api/admin/telegram-test")
-@require_admin_auth
 def send_test_message() -> dict[str, Any]:
     """Send a test message to verify the Telegram connection."""
     text = (

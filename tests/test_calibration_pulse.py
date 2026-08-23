@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
+
+from trader_koo.report.runs import ensure_report_run_schema
 
 from trader_koo.report.calibration_pulse import (
     BLOCK_EXPECTANCY_THRESHOLD,
@@ -28,9 +33,65 @@ from trader_koo.report.calibration_pulse import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_conn() -> sqlite3.Connection:
+def _make_conn(tmp_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     ensure_calibration_schema(conn)
+    ensure_report_run_schema(conn)
+    config_hash = hashlib.sha256(b"{}").hexdigest()
+    artifact = tmp_path / "daily_report_20260401T000000Z_canonical-test-run.json"
+    markdown = tmp_path / "daily_report_20260401T000000Z_canonical-test-run.md"
+    payload = {
+        "generated_ts": "2026-04-01T00:00:00Z",
+        "meta": {
+            "report_kind": "daily",
+            "report_run": {"run_id": "canonical-test-run"},
+        },
+        "latest_data": {},
+        "signals": {
+            "report_decisions": [],
+            "scanned_universe": [],
+        },
+        "counts": {},
+        "risk_filters": {},
+        "warnings": [],
+        "ok": True,
+    }
+    artifact.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    markdown.write_text("fixture\n", encoding="utf-8")
+    content_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    markdown_hash = hashlib.sha256(markdown.read_bytes()).hexdigest()
+    conn.execute(
+        """
+        INSERT INTO report_runs (
+            run_id, report_kind, status, started_ts,
+            config_json, config_hash, code_version
+        ) VALUES ('canonical-test-run', 'daily', 'started',
+                  '2026-04-01T00:00:00Z', '{}', ?, ?)
+        """,
+        (config_hash, "a" * 40),
+    )
+    conn.execute(
+        """UPDATE report_runs
+           SET status='completed', completed_ts='2026-04-01T00:00:30Z',
+               generated_ts='2026-04-01T00:00:00Z',
+               generation_key='daily:2026-04-01T00:00:00Z',
+               scanned_universe_json='[]', ranked_candidates_json='[]',
+               decisions_json='[]',
+               inputs_json='{"report_kind":"daily","market_session":{},"counts":{},"risk_filters":{},"price_basis":null}',
+               source_timestamps_json='{}',
+               content_hash=?, markdown_hash=?, artifact_path=?, markdown_path=?
+           WHERE run_id='canonical-test-run'""",
+        (content_hash, markdown_hash, str(artifact), str(markdown)),
+    )
+    conn.execute(
+        """UPDATE report_runs
+           SET status='published', published_ts='2026-04-01T00:01:00Z',
+               publication_verified=1
+           WHERE run_id='canonical-test-run'"""
+    )
+    conn.execute(
+        "UPDATE report_runs SET is_generation_canonical=1 WHERE run_id='canonical-test-run'"
+    )
     conn.execute("""
         CREATE TABLE setup_call_evaluations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +100,8 @@ def _make_conn() -> sqlite3.Connection:
             call_direction TEXT,
             status TEXT DEFAULT 'scored',
             direction_hit INTEGER,
-            signed_return_pct REAL
+            signed_return_pct REAL,
+            report_run_id TEXT
         )
     """)
     conn.execute("""
@@ -49,7 +111,8 @@ def _make_conn() -> sqlite3.Connection:
             direction TEXT,
             status TEXT DEFAULT 'closed',
             pnl_pct REAL,
-            exit_date TEXT
+            exit_date TEXT,
+            report_run_id TEXT
         )
     """)
     conn.commit()
@@ -61,7 +124,8 @@ def _seed_eval(conn: sqlite3.Connection, family: str, direction: str, returns: l
     for ret in returns:
         conn.execute(
             "INSERT INTO setup_call_evaluations (asof_date, setup_family, call_direction, "
-            "status, direction_hit, signed_return_pct) VALUES (?, ?, ?, 'scored', ?, ?)",
+            "status, direction_hit, signed_return_pct, report_run_id) "
+            "VALUES (?, ?, ?, 'scored', ?, ?, 'canonical-test-run')",
             (asof_date, family, direction, 1 if ret > 0 else 0, ret),
         )
     conn.commit()
@@ -70,8 +134,8 @@ def _seed_eval(conn: sqlite3.Connection, family: str, direction: str, returns: l
 def _seed_paper(conn: sqlite3.Connection, family: str, direction: str, returns: list[float]) -> None:
     for ret in returns:
         conn.execute(
-            "INSERT INTO paper_trades (setup_family, direction, status, pnl_pct, exit_date) "
-            "VALUES (?, ?, 'closed', ?, '2026-04-01')",
+            "INSERT INTO paper_trades (setup_family, direction, status, pnl_pct, exit_date, report_run_id) "
+            "VALUES (?, ?, 'closed', ?, '2026-04-01', 'canonical-test-run')",
             (family, direction, ret),
         )
     conn.commit()
@@ -185,23 +249,23 @@ class TestComputeBlock:
 # ---------------------------------------------------------------------------
 
 class TestRunCalibrationPulse:
-    def test_empty_db_returns_ok(self):
-        conn = _make_conn()
+    def test_empty_db_returns_ok(self, tmp_path: Path):
+        conn = _make_conn(tmp_path)
         result = run_calibration_pulse(conn, trigger="test")
         assert result["ok"] is True
         assert result["families_updated"] == 0
         assert result["changes"] == []
 
-    def test_insufficient_sample_not_written(self):
-        conn = _make_conn()
+    def test_insufficient_sample_not_written(self, tmp_path: Path):
+        conn = _make_conn(tmp_path)
         # Only 3 eval samples — below MIN_EVAL_SAMPLE (15)
         _seed_eval(conn, "bullish_breakout", "long", [-1.0, -1.0, -1.0])
         run_calibration_pulse(conn, trigger="test")
         rows = conn.execute("SELECT * FROM calibration_state").fetchall()
         assert len(rows) == 0
 
-    def test_sufficient_eval_sample_written(self):
-        conn = _make_conn()
+    def test_sufficient_eval_sample_written(self, tmp_path: Path):
+        conn = _make_conn(tmp_path)
         returns = [-1.5] * MIN_EVAL_SAMPLE  # all losses → negative expectancy
         _seed_eval(conn, "bullish_continuation", "long", returns)
         run_calibration_pulse(conn, trigger="test")
@@ -212,8 +276,8 @@ class TestRunCalibrationPulse:
         assert row is not None
         assert row[0] < 0  # negative adjustment for losing family
 
-    def test_block_triggered_by_large_sample(self):
-        conn = _make_conn()
+    def test_block_triggered_by_large_sample(self, tmp_path: Path):
+        conn = _make_conn(tmp_path)
         # Lots of losses → should trigger block
         eval_returns = [-3.0] * MIN_EVAL_SAMPLE
         paper_returns = [-3.0] * MIN_PAPER_SAMPLE
@@ -230,8 +294,8 @@ class TestRunCalibrationPulse:
         assert row is not None
         assert row[0] == 1  # blocked
 
-    def test_load_calibration_state(self):
-        conn = _make_conn()
+    def test_load_calibration_state(self, tmp_path: Path):
+        conn = _make_conn(tmp_path)
         _seed_eval(conn, "bearish_continuation", "short", [-2.0] * MIN_EVAL_SAMPLE)
         run_calibration_pulse(conn, trigger="test")
         state = load_calibration_state(conn)
@@ -245,17 +309,19 @@ class TestRunCalibrationPulse:
         state = load_calibration_state(conn)
         assert state == {}
 
-    def test_upsert_idempotent(self):
-        conn = _make_conn()
+    def test_upsert_idempotent(self, tmp_path: Path):
+        conn = _make_conn(tmp_path)
         _seed_eval(conn, "bullish_watch", "long", [-1.0] * MIN_EVAL_SAMPLE)
         run_calibration_pulse(conn, trigger="test")
         run_calibration_pulse(conn, trigger="test")  # run twice
         count = conn.execute("SELECT COUNT(*) FROM calibration_state").fetchone()[0]
         assert count == 1  # not doubled
 
-    def test_paper_stats_per_family_not_dominated_by_active_family(self):
+    def test_paper_stats_per_family_not_dominated_by_active_family(
+        self, tmp_path: Path
+    ):
         """A high-volume family must not crowd out another family's recent trades."""
-        conn = _make_conn()
+        conn = _make_conn(tmp_path)
         # dominant family: 60 very recent trades (all losses)
         _seed_paper(conn, "dominant_family", "long", [-5.0] * 60)
         # quiet family: only 5 trades but should still appear
