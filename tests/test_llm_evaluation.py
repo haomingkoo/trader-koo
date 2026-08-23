@@ -71,6 +71,22 @@ def test_action_intent_cannot_change_wait_or_conditionality() -> None:
         wrong_side["errors"]
     )
 
+    mixed_negation = evaluate_setup_rewrite({
+        **wait_context["baseline"],
+        "action": "Do not sell now; sell only after confirmation.",
+    }, wait_context)
+    assert {"action_type_changed", "direction_action_contradiction"}.issubset(
+        mixed_negation["errors"]
+    )
+
+    neutral = _context(signal_bias="neutral")
+    direction_with_stop = evaluate_setup_rewrite({
+        **neutral["baseline"], "action": "Sell now with a stop.",
+    }, neutral)
+    assert {"action_type_changed", "action_urgency_changed", "unsupported_directional_action"}.issubset(
+        direction_with_stop["errors"]
+    )
+
 
 def test_mixed_observation_and_protective_risk_do_not_change_action() -> None:
     context = _context(baseline={
@@ -112,6 +128,39 @@ def test_numeric_grounding_normalizes_units_dates_and_formatting() -> None:
     }, context)
 
     assert result["passed"] is True
+
+    positive_to_negative = evaluate_setup_rewrite({
+        **context["baseline"], "observation": "AAA moved -5%.",
+    }, context)
+    assert "unsupported_numeric_claim" in positive_to_negative["errors"]
+
+    negative_context = {**context, "pct_change": -5.0}
+    matching_negative = evaluate_setup_rewrite({
+        **context["baseline"], "observation": "AAA moved -5%.",
+    }, negative_context)
+    reversed_positive = evaluate_setup_rewrite({
+        **context["baseline"], "observation": "AAA moved 5%.",
+    }, negative_context)
+    assert matching_negative["passed"] is True
+    assert "unsupported_numeric_claim" in reversed_positive["errors"]
+
+
+def test_risk_controls_cannot_be_negated_or_weakened() -> None:
+    cases = [
+        ("Use a protective stop.", "Do not use a protective stop."),
+        ("Limit position size.", "Increase position size."),
+        ("Keep risk bounded.", "Accept unlimited risk."),
+    ]
+    for baseline_risk, output_risk in cases:
+        context = _context(baseline={
+            "observation": "AAA has a bullish setup.",
+            "action": "Wait for confirmation.",
+            "risk_note": baseline_risk,
+        })
+        result = evaluate_setup_rewrite({
+            **context["baseline"], "risk_note": output_risk,
+        }, context)
+        assert "risk_posture_weakened" in result["errors"]
 
 
 def test_grounding_rejects_prompt_injection_and_stale_evidence() -> None:

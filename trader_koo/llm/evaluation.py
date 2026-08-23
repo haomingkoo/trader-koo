@@ -8,8 +8,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-EVALUATOR_VERSION = "setup-grounding-v2"
-CACHE_VERSION = "setup-rewrite-cache-v3"
+EVALUATOR_VERSION = "setup-grounding-v3"
+CACHE_VERSION = "setup-rewrite-cache-v4"
 PROMPT_TEMPLATE_VERSION = "setup-rewrite-v2"
 
 _INJECTION_MARKERS = (
@@ -21,7 +21,9 @@ _PROHIBITED_CLAIMS = (
     "recommended", "size up", "priority allocation", "risk free",
 )
 _INVALID_EVIDENCE = {"stale", "missing", "unknown", "mismatch", "unverified", "invalid"}
-_NUMBER = re.compile(r"(?<![\w])(?P<currency>\$)?(?P<number>\d[\d,]*(?:\.\d+)?)(?P<percent>%?)")
+_NUMBER = re.compile(
+    r"(?<![\w])(?P<prefix>[+-]?\$?|\$[+-]?)(?P<number>\d[\d,]*(?:\.\d+)?)(?P<percent>%?)"
+)
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _MONTH_DATE = re.compile(
     r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
@@ -48,13 +50,14 @@ def _contains(text: str, phrase: str) -> bool:
 
 
 def _affirmed(text: str, phrase: str) -> bool:
-    if not _contains(text, phrase):
-        return False
-    negated = re.search(
-        rf"\b(?:do\s+not|don't|never|avoid|not|no)\s+(?:\w+\s+){{0,2}}{re.escape(phrase)}\b",
-        text,
-    )
-    return negated is None
+    for match in re.finditer(rf"(?<!\w){re.escape(phrase)}(?!\w)", text):
+        clause_prefix = re.split(r"[.;,]", text[:match.start()])[-1][-60:]
+        if not re.search(
+            r"\b(?:do\s+not|don't|never|avoid|not|no)\s+(?:\w+\s+){0,2}$",
+            clause_prefix,
+        ):
+            return True
+    return False
 
 
 def _unit(path: str, currency: bool, percent: bool) -> str:
@@ -86,10 +89,11 @@ def _number_facts(value: Any, path: str = "") -> set[tuple[Decimal, str]]:
     text = _ISO_DATE.sub("", str(value))
     for match in _NUMBER.finditer(text):
         try:
-            number = Decimal(match.group("number").replace(",", "")).normalize()
+            sign = -1 if "-" in match.group("prefix") else 1
+            number = (Decimal(match.group("number").replace(",", "")) * sign).normalize()
         except InvalidOperation:
             continue
-        facts.add((number, _unit(path, bool(match.group("currency")), bool(match.group("percent")))))
+        facts.add((number, _unit(path, "$" in match.group("prefix"), bool(match.group("percent")))))
     return facts
 
 
@@ -98,10 +102,11 @@ def _output_number_claims(text: str) -> set[tuple[Decimal, str]]:
     without_dates = _MONTH_DATE.sub("", _ISO_DATE.sub("", text))
     for match in _NUMBER.finditer(without_dates):
         try:
-            number = Decimal(match.group("number").replace(",", "")).normalize()
+            sign = -1 if "-" in match.group("prefix") else 1
+            number = (Decimal(match.group("number").replace(",", "")) * sign).normalize()
         except InvalidOperation:
             continue
-        unit = "percent" if match.group("percent") else "price" if match.group("currency") else "plain"
+        unit = "percent" if match.group("percent") else "price" if "$" in match.group("prefix") else "plain"
         claims.add((number, unit))
     return claims
 
@@ -132,17 +137,23 @@ def _dates(text: str) -> set[date]:
 
 def _action_side(text: str) -> str | None:
     action = _normal(text)
-    protective = any(_contains(action, term) for term in (
-        "stop", "exit", "invalidation", "protect", "cover",
-    ))
-    long_side = any(_affirmed(action, term) for term in (
-        "buy", "long", "breakout", "above resistance",
-    ))
-    short_side = any(_affirmed(action, term) for term in (
-        "sell", "short", "breakdown", "below support",
-    ))
-    if protective and (long_side or short_side):
-        return None
+    long_side = False
+    short_side = False
+    for clause in re.split(r"[.;]", action):
+        immediate = any(_affirmed(clause, phrase) for phrase in (
+            "buy now", "sell now", "enter now", "act now", "open a position", "initiate",
+        ))
+        protective = any(_contains(clause, term) for term in (
+            "stop", "exit", "invalidation", "protect", "cover",
+        )) and not immediate
+        if protective:
+            continue
+        long_side = long_side or any(_affirmed(clause, term) for term in (
+            "buy", "long", "breakout", "above resistance",
+        ))
+        short_side = short_side or any(_affirmed(clause, term) for term in (
+            "sell", "short", "breakdown", "below support",
+        ))
     if long_side == short_side:
         return None
     return "long" if long_side else "short"
@@ -163,11 +174,25 @@ def _action_mode(text: str) -> str:
     return "neutral"
 
 
-def _risk_aware(text: str) -> bool:
+def _risk_posture(text: str) -> tuple[set[str], bool]:
     risk = _normal(text)
-    return any(_contains(risk, marker) for marker in (
-        "risk", "stop", "size", "caution", "invalidation", "protect", "limit", "bounded",
+    categories: set[str] = set()
+    if any(_affirmed(risk, marker) for marker in (
+        "stop", "invalidation", "protect", "protective",
+    )):
+        categories.add("stop")
+    if any(_affirmed(risk, marker) for marker in ("size", "limit")):
+        categories.add("size")
+    if any(_affirmed(risk, marker) for marker in ("risk", "bounded", "caution")):
+        categories.add("generic")
+    weakened = bool(re.search(
+        r"\b(?:do not|don't|never|no|remove|loosen|ignore)\b.{0,30}"
+        r"\b(?:stop|risk|size|limit|protect(?:ion|ive)?)\b",
+        risk,
+    )) or any(phrase in risk for phrase in (
+        "unbounded", "increase position size", "increase size", "unlimited risk",
     ))
+    return categories, weakened
 
 
 def cache_identity(context: dict[str, Any], runtime: dict[str, Any]) -> str:
@@ -242,9 +267,14 @@ def evaluate_setup_rewrite(
     output_mode = _action_mode(output_action)
     if baseline_mode in {"conditional", "immediate"} and output_mode != baseline_mode:
         errors.add("action_urgency_changed")
-    if _risk_aware(str(baseline.get("risk_note") or "")) and not _risk_aware(
-        str(output.get("risk_note") or "")
-    ):
+    baseline_controls, _ = _risk_posture(str(baseline.get("risk_note") or ""))
+    output_controls, weakened_risk = _risk_posture(str(output.get("risk_note") or ""))
+    missing_specific_control = any(
+        category in baseline_controls and category not in output_controls
+        for category in ("stop", "size")
+    )
+    missing_all_controls = bool(baseline_controls) and not output_controls
+    if weakened_risk or missing_specific_control or missing_all_controls:
         errors.add("risk_posture_weakened")
 
     bias = _normal(context.get("signal_bias"))
