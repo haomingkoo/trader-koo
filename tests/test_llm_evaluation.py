@@ -30,6 +30,7 @@ def test_grounding_rejects_unsupported_facts_direction_and_causal_copy() -> None
 
     assert result["passed"] is False
     assert set(result["errors"]) == {
+        "action_type_changed",
         "direction_action_contradiction",
         "unsupported_causal_or_recommendation_claim",
         "unsupported_numeric_claim",
@@ -37,6 +38,80 @@ def test_grounding_rejects_unsupported_facts_direction_and_causal_copy() -> None
     }
     assert result["semantic_outcome"] == "contradicted"
     assert result["prose_quality_scored"] is False
+
+
+def test_action_intent_cannot_change_wait_or_conditionality() -> None:
+    wait_context = _context()
+    buy_now = evaluate_setup_rewrite({
+        "observation": wait_context["baseline"]["observation"],
+        "action": "Buy now.",
+        "risk_note": wait_context["baseline"]["risk_note"],
+    }, wait_context)
+    assert {"action_type_changed", "action_urgency_changed"}.issubset(buy_now["errors"])
+
+    conditional = _context(baseline={
+        "observation": "AAA has a bullish setup.",
+        "action": "Buy only after confirmation.",
+        "risk_note": "Use a protective stop.",
+    })
+    immediate = evaluate_setup_rewrite({
+        **conditional["baseline"], "action": "Buy now.",
+    }, conditional)
+    assert immediate["errors"] == ["action_urgency_changed"]
+
+    bearish = _context(signal_bias="bearish", baseline={
+        "observation": "AAA has a bearish setup.",
+        "action": "Sell only after confirmation.",
+        "risk_note": "Use a protective stop.",
+    })
+    wrong_side = evaluate_setup_rewrite({
+        **bearish["baseline"], "action": "Buy now.",
+    }, bearish)
+    assert {"action_type_changed", "action_urgency_changed", "direction_action_contradiction"}.issubset(
+        wrong_side["errors"]
+    )
+
+
+def test_mixed_observation_and_protective_risk_do_not_change_action() -> None:
+    context = _context(baseline={
+        "observation": "AAA has a bullish setup with mixed evidence.",
+        "action": "Wait for confirmation.",
+        "risk_note": "Protect with a stop.",
+    })
+    result = evaluate_setup_rewrite({
+        "observation": "AAA remains bullish despite a bearish gap.",
+        "action": "Watch and wait for confirmation.",
+        "risk_note": "Use an exit at invalidation.",
+    }, context)
+
+    assert result["passed"] is True
+    assert result["semantic_outcome"] == "rephrased"
+
+    negated = evaluate_setup_rewrite({
+        "observation": "AAA has a bullish setup.",
+        "action": "Do not buy now; wait for confirmation.",
+        "risk_note": "Protect with a stop.",
+    }, context)
+    assert negated["passed"] is True
+
+
+def test_numeric_grounding_normalizes_units_dates_and_formatting() -> None:
+    context = _context(
+        support_level=110.0, pct_change=5.0, capital=1000,
+        asof="2026-08-23",
+        baseline={
+            "observation": "AAA evidence is current.",
+            "action": "Wait for confirmation.",
+            "risk_note": "Risk remains bounded.",
+        },
+    )
+    result = evaluate_setup_rewrite({
+        "observation": "AAA was at 110 with a 5% move and $1,000 capital on August 23, 2026.",
+        "action": "Wait for confirmation.",
+        "risk_note": "Risk remains bounded.",
+    }, context)
+
+    assert result["passed"] is True
 
 
 def test_grounding_rejects_prompt_injection_and_stale_evidence() -> None:

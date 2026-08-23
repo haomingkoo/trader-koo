@@ -21,6 +21,7 @@ from trader_koo.llm.schemas import SetupRewrite
 from trader_koo.llm.sanitizer import sanitize_llm_output
 from trader_koo.llm.validator import validate_llm_output
 from trader_koo.llm.evaluation import (
+    EVALUATOR_VERSION,
     PROMPT_TEMPLATE_VERSION,
     cache_identity,
     evaluate_setup_rewrite,
@@ -624,7 +625,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     evaluation = (
         evaluate_setup_rewrite(rewritten, context)
         if validation_result.is_valid else {
-            "version": "setup-grounding-v1", "passed": False,
+            "version": EVALUATOR_VERSION, "passed": False,
             "errors": ["schema_validation_failed"],
             "semantic_outcome": "contradicted", "prose_quality_scored": False,
             "decision_scope": "narrative_only",
