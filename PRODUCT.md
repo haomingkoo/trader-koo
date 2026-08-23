@@ -129,6 +129,9 @@ database and run the release-evidence copied-database verifier; a refusal report
 the admission-ledger contract, and the backup remains the rollback source. No
 automatic mapping is attempted because the old code does not contain enough
 information to infer a truthful replacement phase.
+Release database evidence uses the versioned `release-database-copy-v2`
+manifest. Failed contracts report the total count and an explicitly truncated,
+ascending sample of at most 20 numeric attempt IDs with invariant categories.
 
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,

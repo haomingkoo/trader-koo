@@ -212,7 +212,8 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                 (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                 OR
                 (status='failed' AND COALESCE(error_code,'') IN ({allowed_admission_codes})
-                 AND TRIM(COALESCE(error_message,''))!='')
+                 AND COALESCE(error_message,'') GLOB '[A-Za-z_]*'
+                 AND COALESCE(error_message,'') NOT GLOB '*[^A-Za-z0-9_.]*')
             )
         )""".format(allowed_admission_codes=allowed_admission_codes)
     )
@@ -226,9 +227,9 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                applied_ts TEXT NOT NULL
            )"""
     )
-    # v3 intentionally rescans databases marked by v2, whose NULL validation
-    # used SQLite three-valued logic incorrectly.
-    admission_contract_migration = "admission-ledger-contract-v3"
+    # v4 rescans v3 ledgers so exception-class metadata uses one exact contract
+    # in SQLite validation and Python diagnostics, including whitespace.
+    admission_contract_migration = "admission-ledger-contract-v4"
     needs_admission_scan = conn.execute(
         "SELECT 1 FROM report_schema_migrations WHERE migration=?",
         (admission_contract_migration,),
@@ -251,7 +252,8 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                   (status='succeeded' AND error_code IS NULL AND error_message IS NULL)
                   OR
                   (status='failed' AND COALESCE(error_code,'') IN ({allowed_historical_admission_codes})
-                   AND TRIM(COALESCE(error_message,''))!='')
+                   AND COALESCE(error_message,'') GLOB '[A-Za-z_]*'
+                   AND COALESCE(error_message,'') NOT GLOB '*[^A-Za-z0-9_.]*')
               ),1)""".format(
         allowed_historical_admission_codes=allowed_historical_admission_codes
     )
@@ -285,7 +287,8 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
             elif status == "succeeded" and (code is not None or message is not None):
                 violations.append("success_error_metadata_present")
             elif status == "failed" and (
-                code not in historical_codes or not str(message or "").strip()
+                code not in historical_codes
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", str(message or "")) is None
             ):
                 violations.append("failure_error_metadata_invalid")
             diagnostics.append({
@@ -316,7 +319,8 @@ def _ensure_report_run_schema(conn: sqlite3.Connection) -> None:
                   AND NEW.error_message IS NULL)
                  OR
                  (NEW.status='failed' AND COALESCE(NEW.error_code,'') IN ({allowed_admission_codes})
-                  AND TRIM(COALESCE(NEW.error_message,''))!='')
+                  AND COALESCE(NEW.error_message,'') GLOB '[A-Za-z_]*'
+                  AND COALESCE(NEW.error_message,'') NOT GLOB '*[^A-Za-z0-9_.]*')
              ),1)
            BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END""".format(
                allowed_admission_codes=allowed_admission_codes

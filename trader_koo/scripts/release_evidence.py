@@ -274,7 +274,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             conn.commit()
     if contract_failure is not None:
         failure_manifest = {
-            "schema": "release-database-copy-v1",
+            "schema": "release-database-copy-v2",
             "source_artifact": source.name,
             "source_artifact_sha256": source_artifact_hash,
             "source_snapshot_sha256": source_snapshot_hash,
@@ -283,14 +283,18 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
                 "passed": False,
                 "violation": "legacy_rows_invalid",
                 "invalid_row_count": contract_failure.invalid_count,
-                "affected_attempts": contract_failure.attempts,
+                "affected_attempt_sample": contract_failure.attempts,
+                "reported_attempt_count": len(contract_failure.attempts),
+                "diagnostic_limit": 20,
+                "truncated": contract_failure.invalid_count > len(contract_failure.attempts),
+                "ordering": "attempt_id_ascending",
             },
             "passed": False,
         }
         _write_json(output_dir / "database-migration-manifest.json", failure_manifest)
         raise RuntimeError("database copy report-admission contract failed") from contract_failure
     manifest = {
-        "schema": "release-database-copy-v1",
+        "schema": "release-database-copy-v2",
         "source_artifact": source.name,
         "source_artifact_sha256": source_artifact_hash,
         "source_snapshot_sha256": source_snapshot_hash,
@@ -300,7 +304,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         "expected_paper_trade_schema_version": PAPER_TRADE_SCHEMA_VERSION,
         "report_admission_contract": {
             "passed": True,
-            "migration": "admission-ledger-contract-v3",
+            "migration": "admission-ledger-contract-v4",
         },
         "accounting_invariants": {
             "breaks": account["accounting_breaks"],

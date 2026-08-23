@@ -119,9 +119,9 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
         conn.execute(
             """INSERT INTO report_admission_attempts
                (run_id,status,error_code,error_message,attempted_ts)
-               VALUES (?,'failed','admission_finalize_failed',?,
+               VALUES (?,'failed','admission_finalize_failed','ValueError',
                        '2026-08-22T00:00:00Z')""",
-            (run_id, "\t"),
+            (run_id,),
         )
         for second in range(1, 26):
             conn.execute(
@@ -132,11 +132,15 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
             )
         conn.execute(
             "DELETE FROM report_schema_migrations "
-            "WHERE migration='admission-ledger-contract-v3'"
+            "WHERE migration='admission-ledger-contract-v4'"
         )
         conn.execute(
             "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
             "VALUES ('admission-ledger-contract-v2','2026-08-21T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO report_schema_migrations(migration,applied_ts) "
+            "VALUES ('admission-ledger-contract-v3','2026-08-21T00:00:00Z')"
         )
         conn.commit()
 
@@ -152,10 +156,14 @@ def test_release_copy_rescans_current_v4_admission_ledger(tmp_path: Path) -> Non
         "passed": False,
         "violation": "legacy_rows_invalid",
         "invalid_row_count": 25,
-        "affected_attempts": [{
+        "affected_attempt_sample": [{
             "attempt_id": attempt_id,
             "violations": ["failure_error_metadata_invalid"],
         } for attempt_id in range(2, 22)],
+        "reported_attempt_count": 20,
+        "diagnostic_limit": 20,
+        "truncated": True,
+        "ordering": "attempt_id_ascending",
     }
     assert failure["migrated_copy_sha256"] == hashlib.sha256(
         (output_dir / "database-copy.db").read_bytes()
@@ -174,7 +182,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     assert manifest["passed"] is True
     assert manifest["report_admission_contract"] == {
         "passed": True,
-        "migration": "admission-ledger-contract-v3",
+        "migration": "admission-ledger-contract-v4",
     }
 
 
