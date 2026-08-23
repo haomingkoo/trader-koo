@@ -243,14 +243,42 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
     required = {"ticker", "date", "open", "close", "volume"}
     if not required.issubset(columns):
         return {"eligible": False, "reasons": ["required_price_columns_unavailable"]}
-    start, end, ticker_count, row_count = conn.execute(
-        "SELECT MIN(date),MAX(date),COUNT(DISTINCT ticker),COUNT(*) FROM price_daily"
-    ).fetchone()
-    tickers = [
-        str(row[0]) for row in conn.execute(
-            "SELECT DISTINCT ticker FROM price_daily ORDER BY ticker"
-        )
-    ]
+    price_rows = list(conn.execute(
+        "SELECT ticker,date,open,close,volume FROM price_daily"
+    ))
+    tickers = sorted({str(row[0]) for row in price_rows if str(row[0]).strip()})
+    ticker_count = len(tickers)
+    row_count = len(price_rows)
+    reasons: list[str] = []
+    valid_dates: list[dt.date] = []
+    spy_prices: list[tuple[dt.date, float]] = []
+    invalid_spy_prices = 0
+    for ticker, date_value, open_value, close_value, volume_value in price_rows:
+        try:
+            parsed_date = dt.date.fromisoformat(str(date_value))
+            valid_dates.append(parsed_date)
+        except (TypeError, ValueError):
+            reasons.append("invalid_price_date")
+            parsed_date = None
+        try:
+            open_price, close_price, volume = (
+                float(open_value), float(close_value), float(volume_value)
+            )
+            valid_values = (
+                math.isfinite(open_price) and open_price > 0
+                and math.isfinite(close_price) and close_price > 0
+                and math.isfinite(volume) and volume >= 0
+            )
+        except (TypeError, ValueError):
+            valid_values = False
+        if not valid_values:
+            reasons.append("invalid_price_value")
+            if str(ticker) == "SPY":
+                invalid_spy_prices += 1
+        elif str(ticker) == "SPY" and parsed_date is not None:
+            spy_prices.append((parsed_date, close_price))
+    start = min(valid_dates).isoformat() if valid_dates else None
+    end = max(valid_dates).isoformat() if valid_dates else None
     try:
         contract = research_price_contract(conn, tickers)
     except Exception as exc:
@@ -258,7 +286,6 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
             "eligible": False, "basis": "unknown", "status": "unresolved",
             "reason": f"price_contract_error:{type(exc).__name__}",
         }
-    reasons: list[str] = []
     if not contract.get("eligible"):
         reasons.append(str(contract.get("reason") or "price_contract_unverified"))
     if contract.get("basis") != "total_return" or not contract.get("distributions_included"):
@@ -273,21 +300,7 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
             reasons.append("invalid_price_date")
     if years < 5:
         reasons.append("fewer_than_five_years")
-    spy_closes: list[float] = []
-    invalid_spy_prices = 0
-    for row in conn.execute(
-        "SELECT close FROM price_daily WHERE ticker='SPY' "
-        "AND close IS NOT NULL ORDER BY date"
-    ):
-        try:
-            close = float(row[0])
-        except (TypeError, ValueError):
-            invalid_spy_prices += 1
-            continue
-        if math.isfinite(close) and close > 0:
-            spy_closes.append(close)
-        else:
-            invalid_spy_prices += 1
+    spy_closes = [close for _, close in sorted(spy_prices)]
     if invalid_spy_prices:
         reasons.append("invalid_spy_price")
     rolling_volatility = [
