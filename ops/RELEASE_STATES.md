@@ -62,7 +62,9 @@ and ordered columns, normalized trigger definitions, required foreign-key
 declarations, compatible campaign defaults, foreign-key data, legacy read shapes,
 integrity, and accounting. It does not claim to execute the previous container;
 Campaign v2 and paper writes remain disabled throughout the image-rollback
-window.
+window. The legacy `paper_trades.report_run_id` foreign key is intentionally
+deferred to the contract migration because SQLite requires a table rebuild to
+add it; the expand-only v4 gate does not pretend that constraint already exists.
 
 The public schema initializer owns its migration phases and rejects a connection
 that already has a transaction. Private table rebuilds use an immediate
@@ -88,16 +90,20 @@ destructive parent-table rebuild on the live volume.
    phase-aware initializer, contracted-schema verifier, copied-production test,
    and rollback-incompatibility evidence. The current v4 image rejects Campaign
    v2 activation because that migration does not exist yet.
-9. After explicit rollback-retirement approval, take a named backup, run and
-   verify the contract migration, deploy the contract-aware image, and perform a
-   named non-production write smoke test with recovery criteria at each boundary.
+9. Deploy a phase-aware image that still operates safely on v4. After explicit
+   rollback-retirement approval, quiesce every v4 writer, take a named backup,
+   run and verify the contract migration under a maintenance boundary, then
+   restart and verify that same contract-aware image. Perform a named
+   non-production write smoke test with recovery criteria at each boundary.
 10. In another audited configuration transition, enable paper writes and verify
     the API reports `write_state=enabled`.
 11. Only then accept a separate human Campaign v2 activation request and verify
     its first production admission write and audit event.
 
-Every later release must preserve the approved write-gate state instead of
-blindly resetting it. An active campaign with `write_state=paused` is visibly
+The current dark-deploy workflow deliberately resets writes to paused on every
+release. Before the first activation, the contract-aware workflow must be changed
+to capture, audit, preserve, and verify the approved write-gate state across
+deploy and rollback. An active campaign with `write_state=paused` is visibly
 non-operational and fails campaign health until writes are deliberately restored.
 
 Configure the `production-dark` GitHub environment with required reviewers,

@@ -75,6 +75,11 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
 | Scheduled-session SPY observation missing | `pending` with `scheduled_spy_open_missing` | Same pending disposition and reason; no later row is consulted |
 | Scheduled-session ticker open missing | `pending` with `scheduled_ticker_open_missing` | Same pending disposition and reason; no later row is consulted |
 
+Publication chronology has precedence over observation availability: a missing,
+malformed, or late verified publication is rejected before SPY or ticker gaps
+can create a pending order. SPY precedence applies next, then ticker availability.
+This ordering is identical in live admission and replay.
+
 Canonical parity compares campaign, report/run lineage, ticker, direction,
 decision and reason, intended session, entry date/price, sizing inputs, costs,
 and the sealed-input hash. Later-session OHLCV is never an allowed substitute.

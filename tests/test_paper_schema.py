@@ -91,6 +91,42 @@ def test_v3_database_runs_v4_expand_contract_instead_of_short_circuiting() -> No
     assert contract["malformed_indexes"] == []
 
 
+def test_v4_expand_contract_accepts_legacy_trade_table_without_lineage_fk() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_paper_trade_schema(conn)
+    table_sql = str(conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='paper_trades'"
+    ).fetchone()[0])
+    legacy_sql = table_sql.replace(
+        "CREATE TABLE paper_trades", "CREATE TABLE paper_trades_legacy", 1
+    ).replace(
+        "report_run_id TEXT REFERENCES report_runs(run_id)", "report_run_id TEXT", 1
+    )
+    assert legacy_sql != table_sql
+    columns = [str(row[1]) for row in conn.execute("PRAGMA table_info(paper_trades)")]
+    column_list = ",".join(f'"{column}"' for column in columns)
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(legacy_sql)
+    conn.execute(
+        f"INSERT INTO paper_trades_legacy ({column_list}) "
+        f"SELECT {column_list} FROM paper_trades"
+    )
+    conn.execute("DROP TABLE paper_trades")
+    conn.execute("ALTER TABLE paper_trades_legacy RENAME TO paper_trades")
+    conn.execute("UPDATE paper_trade_schema_meta SET schema_version=3 WHERE id=1")
+    conn.commit()
+
+    ensure_paper_trade_schema(conn)
+    contract = _schema_contract(conn)
+
+    assert contract["passed"] is True
+    assert not any(
+        str(row[2]) == "report_runs" and str(row[3]) == "report_run_id"
+        for row in conn.execute("PRAGMA foreign_key_list(paper_trades)")
+    )
+
+
 def test_schema_contract_rejects_correctly_named_malformed_objects() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_paper_trade_schema(conn)

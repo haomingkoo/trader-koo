@@ -240,23 +240,14 @@ def _seed_promotion(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _mark_contracted_for_test(conn: sqlite3.Connection) -> None:
-    conn.execute("DROP INDEX idx_paper_trades_legacy_compat")
-    conn.execute("DROP INDEX idx_paper_portfolio_legacy_compat")
-    conn.execute("UPDATE paper_trade_schema_meta SET schema_version=5 WHERE id=1")
-    conn.commit()
-
-
 def _activate(conn: sqlite3.Connection) -> None:
-    _seed_promotion(conn)
-    _mark_contracted_for_test(conn)
-    transition_campaign(
-        conn, campaign_id="paper-v2", action="activate", actor="test-admin",
-        reason="test activation", idempotency_key=f"activate-{id(conn)}",
+    # Business-path fixtures exercise a historically active campaign. The v4
+    # production transition itself is unconditionally interlocked.
+    conn.execute(
+        "UPDATE paper_campaigns SET status='active',replay_live_parity='matched' "
+        "WHERE campaign_id='paper-v2'"
     )
-    # Business-path fixtures exercise an already-active campaign on the current
-    # expand schema; production v4 cannot perform this transition itself.
-    ensure_paper_trade_schema(conn)
+    conn.commit()
 
 
 def test_legacy_trades_are_backfilled_to_immutable_v1_once():
@@ -438,10 +429,13 @@ def test_inactive_campaign_records_sealed_shadow_set_without_trading():
     ).fetchone() == ("campaign_lifecycle", "campaign_not_active")
 
 
-def test_lifecycle_is_idempotent_audited_atomic_and_reversible():
+def test_lifecycle_is_idempotent_audited_atomic_and_reversible(monkeypatch):
     conn = _db()
     _seed_promotion(conn)
-    _mark_contracted_for_test(conn)
+    monkeypatch.setattr(
+        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
+        lambda conn: None,
+    )
     first = transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="alice",
         reason="paper validation approved", idempotency_key="activate-paper-v2-001",
@@ -723,6 +717,27 @@ def test_report_published_after_intended_open_cannot_backdate_a_fill(
     assert replay["decisions"][0]["inputs_hash"] == decision_row[3]
 
 
+def test_late_publication_precedes_missing_spy_and_ticker_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "trader_koo.report.runs._utc_now", lambda: "2026-08-24T14:02:00Z"
+    )
+    conn = _db()
+    _activate(conn)
+
+    assert create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("LATEGAP")], report_date="2026-08-21",
+        generated_ts="late-gap-ts", report_run_id="late-gap-run",
+    ) == 0
+
+    assert conn.execute(
+        "SELECT disposition,reason_code FROM paper_candidate_decisions "
+        "WHERE report_run_id='late-gap-run'"
+    ).fetchone() == ("rejected", "report_published_after_intended_open")
+    assert conn.execute("SELECT COUNT(*) FROM paper_pending_orders").fetchone()[0] == 0
+
+
 def test_pending_order_payload_is_immutable_and_hash_verified_before_fill():
     conn = _db()
     _activate(conn)
@@ -806,7 +821,7 @@ def test_seal_rejects_later_insert_and_verifier_detects_forged_child():
         verify_decision_set(conn, report_run_id="sealed-run", campaign_id="paper-v2")
 
 
-def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload():
+def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload(monkeypatch):
     conn = _db()
     started_run = start_report_run(
         conn,
@@ -820,13 +835,16 @@ def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload():
             report_run_id=started_run,
         )
     conn.commit()
-    with pytest.raises(ValueError, match="contracted paper schema"):
+    with pytest.raises(ValueError, match="activation interlock"):
         transition_campaign(
             conn, campaign_id="paper-v2", action="activate", actor="alice",
             reason="attempt without evidence", idempotency_key="no-evidence-001",
         )
     _seed_promotion(conn)
-    _mark_contracted_for_test(conn)
+    monkeypatch.setattr(
+        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
+        lambda conn: None,
+    )
     transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="alice",
         reason="approved evidence", idempotency_key="payload-bound-001",
@@ -1062,10 +1080,13 @@ def test_replay_fails_closed_without_an_observed_spy_calendar():
     assert replay["trades"] == []
 
 
-def test_activation_never_falls_back_to_older_eligible_experiment():
+def test_activation_never_falls_back_to_older_eligible_experiment(monkeypatch):
     conn = _db()
     _seed_promotion(conn)
-    _mark_contracted_for_test(conn)
+    monkeypatch.setattr(
+        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
+        lambda conn: None,
+    )
     with pytest.raises(sqlite3.IntegrityError, match="preregistrations are immutable"):
         conn.execute(
             "UPDATE paper_campaign_preregistrations SET gates_json='{}'"

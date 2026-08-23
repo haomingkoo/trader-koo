@@ -412,7 +412,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
         },
     )
     assert response.status_code == 409
-    assert "contracted paper schema" in response.json()["detail"]
+    assert "activation interlock" in response.json()["detail"]
     verify = sqlite3.connect(db_path)
     assert verify.execute("SELECT COUNT(*) FROM paper_campaign_audit").fetchone()[0] == 0
     verify.close()

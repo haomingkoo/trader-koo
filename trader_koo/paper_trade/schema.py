@@ -13,34 +13,14 @@ from typing import Any
 _ensured_db_paths: set[str] = set()
 _ensured_db_paths_lock = threading.Lock()
 PAPER_TRADE_SCHEMA_VERSION = 4
-PAPER_TRADE_MIN_CONTRACTED_SCHEMA_VERSION = 5
 
 
 def require_contracted_paper_schema(conn: sqlite3.Connection) -> None:
-    """Fail closed until a later migration retires v4 rollback compatibility."""
-    row = (
-        conn.execute(
-            "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
-        ).fetchone()
-        if _table_exists(conn, "paper_trade_schema_meta")
-        else None
+    """Block activation until a later release implements the v5 verifier."""
+    del conn
+    raise ValueError(
+        "activation interlock: the contracted paper-schema verifier is not implemented"
     )
-    version = int(row[0]) if row else 0
-    legacy_indexes = {
-        str(index_row[0])
-        for index_row in conn.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='index' AND name IN "
-            "('idx_paper_trades_legacy_compat','idx_paper_portfolio_legacy_compat')"
-        )
-    }
-    if (
-        version < PAPER_TRADE_MIN_CONTRACTED_SCHEMA_VERSION
-        or legacy_indexes
-    ):
-        raise ValueError(
-            "activation requires a verified contracted paper schema and retired image rollback"
-        )
 
 
 def _resolve_main_db_path(conn: sqlite3.Connection) -> str:
