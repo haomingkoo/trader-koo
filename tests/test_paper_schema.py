@@ -7,7 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from trader_koo.paper_trade.schema import (
     PAPER_TRADE_SCHEMA_VERSION,
@@ -207,21 +207,38 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     integrity_failure = deepcopy(manifest)
     integrity_failure.update(passed=False, integrity_check="page 4 malformed")
     validator.validate(integrity_failure)
-    accounting_failure = deepcopy(manifest)
-    accounting_failure["passed"] = False
-    accounting_failure["accounting_invariants"]["breaks"] = [{
-        "reason": "equity_pnl_invariant", "delta_usd": 1.25,
-    }]
-    validator.validate(accounting_failure)
+    accounting_breaks = [
+        {"reason": "equity_pnl_invariant", "delta_usd": 1.25},
+        {"reason": "missing_entry_accounting", "trade_id": 1},
+        {"reason": "missing_close_accounting", "trade_id": 1},
+        {"reason": "missing_open_mark", "trade_id": 1},
+    ]
+    for accounting_break in accounting_breaks:
+        accounting_failure = deepcopy(manifest)
+        accounting_failure["passed"] = False
+        accounting_failure["accounting_invariants"]["breaks"] = [accounting_break]
+        validator.validate(accounting_failure)
+    contradictory_success = deepcopy(manifest)
+    contradictory_success["accounting_invariants"]["breaks"] = [accounting_breaks[0]]
+    with pytest.raises(ValidationError):
+        validator.validate(contradictory_success)
     version_failure = deepcopy(manifest)
     version_failure["passed"] = False
     version_failure["paper_trade_schema_version"] -= 1
     validator.validate(version_failure)
+    contradictory_version = deepcopy(version_failure)
+    contradictory_version["passed"] = True
+    with pytest.raises(ValidationError):
+        validator.validate(contradictory_version)
     schema_failure = deepcopy(manifest)
     schema_failure["passed"] = False
     schema_failure["schema_contract"]["passed"] = False
     schema_failure["schema_contract"]["malformed_indexes"] = ["broken_index"]
     validator.validate(schema_failure)
+    contradictory_schema = deepcopy(schema_failure)
+    contradictory_schema["passed"] = True
+    with pytest.raises(ValidationError):
+        validator.validate(contradictory_schema)
 
     assert manifest["schema"] == "release-database-copy-v2"
     assert manifest["passed"] is True

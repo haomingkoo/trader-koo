@@ -99,7 +99,28 @@
   "allOf": [
     {
       "if": {"properties": {"passed": {"const": true}}},
-      "then": {"properties": {"integrity_check": {"const": "ok"}}}
+      "then": {
+        "properties": {
+          "integrity_check": {"const": "ok"},
+          "paper_trade_schema_version": {"const": 4},
+          "expected_paper_trade_schema_version": {"const": 4},
+          "accounting_invariants": {
+            "properties": {"breaks": {"maxItems": 0}}
+          },
+          "schema_contract": {
+            "properties": {
+              "malformed_indexes": {"maxItems": 0},
+              "malformed_triggers": {"maxItems": 0},
+              "missing_foreign_keys": {"maxItems": 0},
+              "malformed_optional_foreign_keys": {"maxItems": 0},
+              "campaign_defaults_compatible": {"const": true},
+              "foreign_key_breaks": {"maxItems": 0},
+              "legacy_read_probe": {"const": true},
+              "passed": {"const": true}
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -116,13 +137,32 @@
         "breaks": {
           "type": "array",
           "items": {
-            "type": "object",
-            "required": ["reason", "delta_usd"],
-            "properties": {
-              "reason": {"const": "equity_pnl_invariant"},
-              "delta_usd": {"type": "number"}
-            },
-            "additionalProperties": false
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["reason", "delta_usd"],
+                "properties": {
+                  "reason": {"const": "equity_pnl_invariant"},
+                  "delta_usd": {"type": "number"}
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["reason", "trade_id"],
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "missing_entry_accounting",
+                      "missing_close_accounting",
+                      "missing_open_mark"
+                    ]
+                  },
+                  "trade_id": {"type": "integer", "minimum": 1}
+                },
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "legacy_unreconciled_count": {"type": "integer", "minimum": 0},
