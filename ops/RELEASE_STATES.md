@@ -34,3 +34,8 @@ the non-secret target variables `TRADER_KOO_PRODUCTION_URL`,
 `RAILWAY_TOKEN` and `TRADER_KOO_API_KEY` secrets referenced by
 `.github/workflows/dark-deploy.yml`. Required branch checks should be the CI
 jobs only after one green pull-request run proves their exact names.
+
+The production Railway service must not have a GitHub repository source
+attached. A connected source can deploy `main` outside the reviewed GitHub
+environment, so the dark-deploy workflow treats it as a release-blocking
+configuration error. CI uploads the exact tested commit with `railway up`.

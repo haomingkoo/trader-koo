@@ -65,6 +65,13 @@ jobs:
           --service "$RAILWAY_SERVICE"
           --json
 
+      - name: Refuse a Railway GitHub autodeploy bypass
+        run: |
+          railway environment config --environment "$RAILWAY_ENVIRONMENT" --json \
+            | jq -e --arg service "$RAILWAY_SERVICE" \
+            '.services[$service].source.repo == null' \
+            > /dev/null
+
       - name: Download the latest production database backup
         run: >-
           curl --fail --silent --show-error
