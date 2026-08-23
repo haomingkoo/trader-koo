@@ -23,8 +23,10 @@ from trader_koo.llm.validator import validate_llm_output
 from trader_koo.llm.evaluation import (
     EVALUATOR_VERSION,
     PROMPT_TEMPLATE_VERSION,
+    baseline_candidate,
     cache_identity,
     evaluate_setup_rewrite,
+    intent_contract,
 )
 from trader_koo.llm.observability import record_llm_call
 
@@ -287,10 +289,12 @@ def _gemini_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any]
         f":generateContent?key={cfg['api_key']}"
     )
     system_prompt = (
-        "You rewrite stock setup copy for a dashboard. "
+        "You analyze and rewrite the observation for a stock setup dashboard. "
         "Use ONLY facts from INPUT. Do not fabricate indicators, events, or prices. "
-        "Keep text concise, risk-first, and confirmation-first. "
-        "Return STRICT JSON only with keys: observation, action, risk_note."
+        "Copy baseline.action and baseline.risk_note exactly; they are deterministic decisions. "
+        "Copy intent_contract exactly; decision_delta must remain none. "
+        "Keep the observation concise and evidence-first. Return STRICT JSON only with keys: "
+        "observation, action, risk_note, intent."
     )
     user_prompt = json.dumps(prompt_payload, ensure_ascii=True, separators=(",", ":"))
     body = {
@@ -306,8 +310,17 @@ def _gemini_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any]
                     "observation": {"type": "STRING"},
                     "action": {"type": "STRING"},
                     "risk_note": {"type": "STRING"},
+                    "intent": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "signal_bias": {"type": "STRING"},
+                            "actionability": {"type": "STRING"},
+                            "decision_delta": {"type": "STRING", "enum": ["none"]},
+                        },
+                        "required": ["signal_bias", "actionability", "decision_delta"],
+                    },
                 },
-                "required": ["observation", "action", "risk_note"],
+                "required": ["observation", "action", "risk_note", "intent"],
             },
         },
     }
@@ -350,10 +363,12 @@ def _azure_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any],
         f"/chat/completions?api-version={cfg['api_version']}"
     )
     system_prompt = (
-        "You rewrite stock setup copy for a dashboard. "
+        "You analyze and rewrite the observation for a stock setup dashboard. "
         "Use ONLY facts from INPUT. Do not fabricate indicators, events, or prices. "
-        "Keep text concise, risk-first, and confirmation-first. "
-        "Return STRICT JSON only with keys: observation, action, risk_note."
+        "Copy baseline.action and baseline.risk_note exactly; they are deterministic decisions. "
+        "Copy intent_contract exactly; decision_delta must remain none. "
+        "Keep the observation concise and evidence-first. Return STRICT JSON only with keys: "
+        "observation, action, risk_note, intent."
     )
     user_prompt = json.dumps(prompt_payload, ensure_ascii=True, separators=(",", ":"))
     body = {
@@ -415,9 +430,9 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     if not llm_ready():
         return {}
 
-    base_observation = _compact_text(row.get("observation"), max_chars=320)
-    base_action = _compact_text(row.get("action"), max_chars=260)
-    base_risk = _compact_text(row.get("risk_note"), max_chars=120)
+    base_observation = _compact_text(row.get("observation"), max_chars=260)
+    base_action = _compact_text(row.get("action"), max_chars=180)
+    base_risk = _compact_text(row.get("risk_note"), max_chars=80)
     if not (base_observation or base_action):
         return {}
 
@@ -429,6 +444,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         "setup_tier": row.get("setup_tier"),
         "setup_family": row.get("setup_family"),
         "signal_bias": row.get("signal_bias"),
+        "actionability": row.get("actionability"),
         "trend_state": row.get("trend_state"),
         "level_context": row.get("level_context"),
         "level_event": row.get("level_event"),
@@ -460,6 +476,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             "style": "plain text, no markdown",
         },
     }
+    context["intent_contract"] = intent_contract(context)
 
     provider = _llm_provider()
     configured = _gemini_cfg() if provider == "gemini" else _azure_cfg()
@@ -509,7 +526,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
                 terminal_status=status,
                 ticker=context.get("ticker"),
                 report_run_id=str(context.get("report_run_id") or "") or None,
-                decision_scope="narrative_only",
+                decision_scope="observation_narrative_only",
                 evaluation_result=evaluation,
                 cache_identity_sha256=prompt_hash,
             )
@@ -517,11 +534,14 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
             LOG.warning("Failed to persist append-only LLM trace", exc_info=True)
 
     def baseline_fallback() -> tuple[dict[str, str], dict[str, Any]]:
-        out = sanitize_llm_output(
-            dict(context["baseline"]),
+        candidate = sanitize_llm_output(
+            baseline_candidate(context),
             field_limits={"observation": 260, "action": 180, "risk_note": 80},
         )
-        return out, evaluate_setup_rewrite(out, context)
+        out = {key: str(candidate.get(key) or "") for key in (
+            "observation", "action", "risk_note",
+        )}
+        return out, evaluate_setup_rewrite(candidate, context)
 
     baseline, preflight = baseline_fallback()
     preflight_errors = set(preflight["errors"])
@@ -660,7 +680,13 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         }
     else:
         validated_dict = validation_result.data.model_dump()
-        out = sanitize_llm_output(validated_dict, field_limits={"observation": 260, "action": 180, "risk_note": 80})
+        sanitized = sanitize_llm_output(
+            validated_dict,
+            field_limits={"observation": 260, "action": 180, "risk_note": 80},
+        )
+        out = {key: str(sanitized.get(key) or "") for key in (
+            "observation", "action", "risk_note",
+        )}
         # Only record success when validation actually passes
         _safe_note_success(
             db_path,

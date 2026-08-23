@@ -20,6 +20,12 @@ from trader_koo.llm.validator import (
     validate_llm_output,
 )
 
+_INTENT = {
+    "signal_bias": "bullish",
+    "actionability": "conditional",
+    "decision_delta": "none",
+}
+
 
 class TestValidateLLMOutput:
     """Test LLM output validation against schemas."""
@@ -30,6 +36,7 @@ class TestValidateLLMOutput:
             "observation": "SPY shows bullish setup in uptrend",
             "action": "Watch for entry above resistance",
             "risk_note": "Use stop losses",
+            "intent": _INTENT,
         }
         result = validate_llm_output(output, SetupRewrite)
 
@@ -46,6 +53,7 @@ class TestValidateLLMOutput:
         output = {
             "observation": "SPY shows bullish setup",
             "action": "Watch for entry",
+            "intent": _INTENT,
         }
         result = validate_llm_output(output, SetupRewrite)
 
@@ -167,6 +175,7 @@ class TestValidateLLMOutput:
         output = {
             "observation": "SPY bullish",
             "action": "Buy",
+            "intent": _INTENT,
         }
         context = {"ticker": "SPY", "source": "report"}
         result = validate_llm_output(output, SetupRewrite, context=context)
@@ -306,7 +315,7 @@ class TestValidationResult:
 
     def test_validation_result_success(self):
         """Test ValidationResult for successful validation."""
-        data = SetupRewrite(observation="Test", action="Test action")
+        data = SetupRewrite(observation="Test", action="Test action", intent=_INTENT)
         result = ValidationResult(is_valid=True, data=data)
 
         assert result.is_valid

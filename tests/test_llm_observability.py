@@ -149,8 +149,13 @@ def test_real_narrative_call_records_trace_and_contribution(tmp_path, monkeypatc
     })
     monkeypatch.setattr(llm_narrative, "_azure_chat_rewrite", lambda _context: ({
         "observation": "Validated rewrite.",
-        "action": "Wait for confirmation.",
-        "risk_note": "Use a stop.",
+        "action": "Original action.",
+        "risk_note": "Original risk.",
+        "intent": {
+            "signal_bias": "unspecified",
+            "actionability": "unspecified",
+            "decision_delta": "none",
+        },
     }, {
         "model": "gpt-fixture", "deployment": "fixture",
         "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
@@ -168,4 +173,4 @@ def test_real_narrative_call_records_trace_and_contribution(tmp_path, monkeypatc
     assert result["observation"] == "Validated rewrite."
     assert summary["aggregate"]["traces"] == 1
     assert summary["traces"][0]["terminal_status"] == "success"
-    assert summary["traces"][0]["decision_scope"] == "narrative_only"
+    assert summary["traces"][0]["decision_scope"] == "observation_narrative_only"

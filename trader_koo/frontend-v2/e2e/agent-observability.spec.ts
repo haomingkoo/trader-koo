@@ -14,7 +14,7 @@ test("authenticated agent view shows only real redacted model spans", async ({ p
   await expect(view).toContainText("gpt-fixture");
   await expect(view).toContainText("passed");
   await expect(view).toContainText("rephrased");
-  await expect(view).toContainText("setup-grounding-v11");
+  await expect(view).toContainText("setup-grounding-v12");
   await expect(view).toContainText("narrative only: changed");
   await expect(view).toContainText("credentials stored: no");
   await expect(view).not.toContainText("api-key");

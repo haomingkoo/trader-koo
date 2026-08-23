@@ -81,7 +81,7 @@ record_llm_call(
     validator_result="passed", fallback_reason=None, terminal_status="success",
     ticker="REJECT",
     evaluation_result={
-        "version": "setup-grounding-v11", "passed": True, "errors": [],
+        "version": "setup-grounding-v12", "passed": True, "errors": [],
         "semantic_outcome": "rephrased", "prose_quality_scored": False,
         "decision_scope": "narrative_only",
     },
