@@ -41,7 +41,7 @@ IMPLEMENTATION_PATHS = (
 )
 IMPLEMENTATION_ENVIRONMENT_PATHS = (
     "pyproject.toml",
-    "trader_koo/requirements.txt",
+    "requirements.txt",
 )
 
 CHALLENGERS: dict[str, dict[str, Any]] = {
