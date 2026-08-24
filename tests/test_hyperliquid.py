@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from trader_koo.hyperliquid.tracker import (
+    PositionChange,
     WalletPosition,
     WalletSnapshot,
     _check_reload,
@@ -44,6 +45,7 @@ class TestSchema:
         assert "hyperliquid_snapshots" in tables
         assert "hyperliquid_counter_signals" in tables
         assert "hyperliquid_reload_events" in tables
+        assert "hyperliquid_alert_state" in tables
 
     def test_seed_default_wallets(self, conn):
         seed_default_wallets(conn)
@@ -227,15 +229,20 @@ class TestCounterSignals:
         # Larger positions have higher concentration → higher score
         assert large[0]["score"] >= small[0]["score"]
 
-    def test_telegram_alert_escapes_external_html(self, monkeypatch):
+    def test_telegram_alert_escapes_external_html(self, conn, monkeypatch):
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
         monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
         posted: dict[str, Any] = {}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
 
         def fake_post(url, json, timeout):
             posted["url"] = url
             posted["json"] = json
             posted["timeout"] = timeout
+            return FakeResponse()
 
         monkeypatch.setattr("httpx.post", fake_post)
 
@@ -264,6 +271,7 @@ class TestCounterSignals:
             timestamp="2026-03-24T00:00:00Z",
         )
         _send_telegram_signal_alert(
+            conn,
             snapshot,
             [{
                 "coin": "ETH<script>",
@@ -363,6 +371,151 @@ def _make_multi_snapshot(position_count: int, **kwargs: Any) -> WalletSnapshot:
         positions=positions,
         timestamp="2026-04-07T00:00:00Z",
     )
+
+
+def _make_alert_snapshot(side: str = "long") -> WalletSnapshot:
+    return WalletSnapshot(
+        wallet_label="machibro",
+        wallet_address="0x020c",
+        account_value=500000.0,
+        total_margin_used=400000.0,
+        margin_ratio=0.8,
+        positions=[_make_position(coin="ETH", side=side)],
+        timestamp="2026-04-07T00:00:00Z",
+    )
+
+
+def _counter_signal(counter_side: str = "short") -> dict[str, Any]:
+    return {
+        "coin": "ETH",
+        "action": "COUNTER",
+        "score": 6,
+        "counter_side": counter_side,
+        "reasons": ["high leverage", "concentrated position"],
+    }
+
+
+class TestTelegramAlertSemantics:
+    @pytest.fixture(autouse=True)
+    def _telegram(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+        self.posts: list[dict[str, Any]] = []
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+        def fake_post(url, json, timeout):
+            self.posts.append({"url": url, "json": json, "timeout": timeout})
+            return FakeResponse()
+
+        monkeypatch.setattr("httpx.post", fake_post)
+
+    def test_position_resize_does_not_page(self, conn):
+        resize = PositionChange(
+            coin="ETH",
+            change_type="increased",
+            prev_side="long",
+            prev_size=100.0,
+            curr_side="long",
+            curr_size=160.0,
+            size_delta_pct=60.0,
+        )
+
+        sent = _send_telegram_signal_alert(conn, _make_alert_snapshot(), [], [resize])
+
+        assert sent is False
+        assert self.posts == []
+
+    def test_unchanged_counter_signal_pages_once(self, conn):
+        snapshot = _make_alert_snapshot()
+        signal = _counter_signal()
+
+        assert _send_telegram_signal_alert(conn, snapshot, [signal]) is True
+        changed_metrics = {
+            **signal,
+            "score": 9,
+            "reasons": ["different measurements"],
+        }
+        assert _send_telegram_signal_alert(conn, snapshot, [changed_metrics]) is False
+
+        assert len(self.posts) == 1
+        text = self.posts[0]["json"]["text"]
+        assert "Affected positions" in text
+        assert "Open positions" not in text
+
+    def test_counter_direction_change_pages_again(self, conn):
+        snapshot = _make_alert_snapshot()
+
+        assert _send_telegram_signal_alert(
+            conn, snapshot, [_counter_signal("short")]
+        ) is True
+        assert _send_telegram_signal_alert(
+            conn, snapshot, [_counter_signal("long")]
+        ) is True
+
+        assert len(self.posts) == 2
+
+    def test_counter_reentry_after_non_counter_state_pages_again(self, conn):
+        snapshot = _make_alert_snapshot()
+        counter = _counter_signal()
+        monitor = {**counter, "action": "MONITOR"}
+
+        assert _send_telegram_signal_alert(conn, snapshot, [counter]) is True
+        assert _send_telegram_signal_alert(conn, snapshot, [monitor]) is False
+        assert _send_telegram_signal_alert(conn, snapshot, [counter]) is True
+
+        assert len(self.posts) == 2
+
+    def test_lifecycle_event_pages(self, conn):
+        opened = PositionChange(
+            coin="ETH",
+            change_type="new",
+            prev_side=None,
+            prev_size=None,
+            curr_side="long",
+            curr_size=5000.0,
+            size_delta_pct=None,
+        )
+
+        assert _send_telegram_signal_alert(
+            conn, _make_alert_snapshot(), [], [opened]
+        ) is True
+        assert "NEW LONG" in self.posts[0]["json"]["text"]
+
+    def test_signal_state_survives_connection_restart(self, tmp_path):
+        db_path = tmp_path / "alerts.db"
+        first = sqlite3.connect(db_path)
+        ensure_hyperliquid_schema(first)
+        assert _send_telegram_signal_alert(
+            first, _make_alert_snapshot(), [_counter_signal()]
+        ) is True
+        first.close()
+
+        second = sqlite3.connect(db_path)
+        ensure_hyperliquid_schema(second)
+        assert _send_telegram_signal_alert(
+            second, _make_alert_snapshot(), [_counter_signal()]
+        ) is False
+        second.close()
+
+        assert len(self.posts) == 1
+
+    def test_failed_send_does_not_create_in_memory_fallback(self, conn, monkeypatch):
+        class FailedResponse:
+            def raise_for_status(self):
+                raise RuntimeError("telegram unavailable")
+
+        monkeypatch.setattr("httpx.post", lambda *args, **kwargs: FailedResponse())
+
+        assert _send_telegram_signal_alert(
+            conn, _make_alert_snapshot(), [_counter_signal()]
+        ) is False
+        state_count = conn.execute(
+            "SELECT COUNT(*) FROM hyperliquid_alert_state"
+        ).fetchone()[0]
+        assert state_count == 0
 
 class TestCounterSignalOverhaul:
     """Tests for v2 counter-trade signal enhancements."""

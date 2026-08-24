@@ -20,6 +20,8 @@ from trader_koo.hyperliquid.wallets import get_tracked_wallets
 
 LOG = logging.getLogger(__name__)
 
+_TELEGRAM_REQUEST_TIMEOUT_SECONDS = 10
+
 
 @dataclass(frozen=True)
 class WalletPosition:
@@ -829,6 +831,16 @@ def ensure_hyperliquid_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_hl_reload_wallet_ts "
         "ON hyperliquid_reload_events(wallet_label, detected_ts DESC)"
     )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS hyperliquid_alert_state (
+            wallet_label TEXT NOT NULL,
+            coin TEXT NOT NULL,
+            signal_action TEXT NOT NULL,
+            counter_side TEXT NOT NULL,
+            updated_ts TEXT NOT NULL,
+            PRIMARY KEY (wallet_label, coin)
+        )
+    """)
     conn.commit()
 
 
@@ -931,6 +943,14 @@ class PositionChange:
     curr_side: str | None
     curr_size: float | None
     size_delta_pct: float | None  # % change in absolute size
+
+
+_TELEGRAM_LIFECYCLE_CHANGE_TYPES = frozenset({
+    "new",
+    "closed",
+    "flipped",
+    "partial_liq",
+})
 
 
 def _diff_positions(
@@ -1043,7 +1063,7 @@ def poll_all_wallets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
         # Diff positions and only alert on meaningful changes
         changes = _diff_positions(prev_positions, snapshot.positions)
-        _send_telegram_signal_alert(snapshot, signals, changes)
+        _send_telegram_signal_alert(conn, snapshot, signals, changes)
 
     return all_signals
 
@@ -1240,58 +1260,104 @@ def _send_telegram_liquidation_alert(
         LOG.debug("Telegram liquidation alert failed: %s", exc)
 
 
-# Cooldown: suppress repeated alerts for unchanged positions
-_SIGNAL_ALERT_COOLDOWN: dict[str, dt.datetime] = {}
-_SIGNAL_ALERT_COOLDOWN_HOURS = 6
+def _signal_alert_states(
+    signals: list[dict[str, Any]],
+) -> dict[str, tuple[str, str]]:
+    """Return the semantic signal state that controls Telegram transitions."""
+    return {
+        str(signal["coin"]): (
+            str(signal.get("action") or "").upper(),
+            str(signal.get("counter_side") or "").upper(),
+        )
+        for signal in signals
+        if signal.get("coin")
+    }
+
+
+def _load_signal_alert_states(
+    conn: sqlite3.Connection,
+    wallet_label: str,
+) -> dict[str, tuple[str, str]]:
+    rows = conn.execute(
+        """
+        SELECT coin, signal_action, counter_side
+        FROM hyperliquid_alert_state
+        WHERE wallet_label = ?
+        """,
+        (wallet_label,),
+    ).fetchall()
+    return {coin: (action, counter_side) for coin, action, counter_side in rows}
+
+
+def _store_signal_alert_states(
+    conn: sqlite3.Connection,
+    snapshot: WalletSnapshot,
+    states: dict[str, tuple[str, str]],
+) -> None:
+    """Atomically replace one wallet's last observed semantic signal state."""
+    conn.execute(
+        "DELETE FROM hyperliquid_alert_state WHERE wallet_label = ?",
+        (snapshot.wallet_label,),
+    )
+    conn.executemany(
+        """
+        INSERT INTO hyperliquid_alert_state
+            (wallet_label, coin, signal_action, counter_side, updated_ts)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (snapshot.wallet_label, coin, action, counter_side, snapshot.timestamp)
+            for coin, (action, counter_side) in states.items()
+        ],
+    )
+    conn.commit()
 
 
 def _send_telegram_signal_alert(
+    conn: sqlite3.Connection,
     snapshot: WalletSnapshot,
     signals: list[dict[str, Any]],
     changes: list[PositionChange] | None = None,
-) -> None:
-    """Send Telegram alert only when positions meaningfully change.
+) -> bool:
+    """Send Telegram only for lifecycle events or new COUNTER states.
 
-    Alert triggers:
-    - Position opened, closed, partially closed, increased, or flipped
-    - High-score signal (COUNTER >= 6) even without size change (liq proximity)
-    Stays silent when nothing changed and no critical scores.
-    Suppresses repeat alerts for unchanged positions within 6h cooldown.
+    Position resizing and ordinary partial closes remain available in stored
+    snapshots and the web UI. Signal alert state is stored in SQLite so the
+    decision survives process restarts. If state persistence fails, the
+    exception is allowed to stop the send rather than falling back in memory.
     """
-    import os
-
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not bot_token or not chat_id:
-        return
+        return False
 
-    changes = changes or []
-    changed_coins = {c.coin for c in changes}
-    has_position_changes = len(changes) > 0
-
-    # Only alert on actionable COUNTER signals if no position changes.
-    # LEAN_COUNTER/MONITOR/SKIP stay visible in the web UI but do not page Telegram.
-    critical_signals = [
-        s for s in signals
-        if str(s.get("action") or "").upper() == "COUNTER"
+    lifecycle_changes = [
+        change
+        for change in (changes or [])
+        if change.change_type in _TELEGRAM_LIFECYCLE_CHANGE_TYPES
     ]
-    if not has_position_changes and not critical_signals:
-        return
+    current_states = _signal_alert_states(signals)
+    previous_states = _load_signal_alert_states(conn, snapshot.wallet_label)
 
-    # Cooldown: suppress repeat critical-score alerts if no position changes
-    # Position changes always bypass cooldown (something actually happened)
-    if not has_position_changes and critical_signals:
-        cooldown_key = f"{snapshot.wallet_label}:{len(snapshot.positions)}"
-        now = dt.datetime.now(dt.timezone.utc)
-        last_alert = _SIGNAL_ALERT_COOLDOWN.get(cooldown_key)
-        if last_alert and (now - last_alert).total_seconds() < _SIGNAL_ALERT_COOLDOWN_HOURS * 3600:
-            return  # suppress — same state, already alerted recently
-        _SIGNAL_ALERT_COOLDOWN[cooldown_key] = now
+    critical_signals = [
+        signal
+        for signal in signals
+        if str(signal.get("action") or "").upper() == "COUNTER"
+        and previous_states.get(str(signal.get("coin")))
+        != current_states.get(str(signal.get("coin")))
+    ]
+    if not lifecycle_changes and not critical_signals:
+        _store_signal_alert_states(conn, snapshot, current_states)
+        return False
 
     total_notional = sum(p.notional_usd for p in snapshot.positions)
     acct_leverage = total_notional / snapshot.account_value if snapshot.account_value > 0 else 0
 
     sig_by_coin = {s["coin"]: s for s in signals}
+    affected_coins = {
+        *(change.coin for change in lifecycle_changes),
+        *(str(signal["coin"]) for signal in critical_signals),
+    }
 
     lines = [f"<b>{_html(snapshot.wallet_label)}</b>"]
     lines.append(
@@ -1301,14 +1367,12 @@ def _send_telegram_signal_alert(
     lines.append("")
 
     # Position changes section
-    if changes:
-        for ch in changes:
+    if lifecycle_changes:
+        for ch in lifecycle_changes:
             _CHANGE_EMOJI = {
                 "new": "\U0001f7e2",       # green circle
                 "closed": "\u274c",         # red X
-                "partial_close": "\U0001f4c9",  # chart decreasing
                 "partial_liq": "\U0001f4a5",    # explosion — suspected partial liquidation
-                "increased": "\U0001f4c8",  # chart increasing
                 "flipped": "\U0001f504",    # arrows
             }
             emoji = _CHANGE_EMOJI.get(ch.change_type, "\u2022")
@@ -1319,13 +1383,12 @@ def _send_telegram_signal_alert(
                     f"{emoji} <b>{_html(ch.coin)}</b> CLOSED "
                     f"(was {_html(ch.prev_side or '?')} {prev_size:,.2f})"
                 )
-            elif ch.change_type in ("partial_close", "partial_liq"):
-                label = "PARTIAL LIQ" if ch.change_type == "partial_liq" else "PARTIAL CLOSE"
+            elif ch.change_type == "partial_liq":
                 prev_size = ch.prev_size or 0.0
                 curr_size = ch.curr_size or 0.0
                 delta_pct = ch.size_delta_pct or 0.0
                 lines.append(
-                    f"{emoji} <b>{_html(ch.coin)}</b> {label} {delta_pct:+.0f}%"
+                    f"{emoji} <b>{_html(ch.coin)}</b> PARTIAL LIQ {delta_pct:+.0f}%"
                     f" ({prev_size:,.2f} \u2192 {curr_size:,.2f} {_html(ch.curr_side or '?')})"
                 )
             elif ch.change_type == "new":
@@ -1333,14 +1396,6 @@ def _send_telegram_signal_alert(
                 lines.append(
                     f"{emoji} <b>{_html(ch.coin)}</b> NEW "
                     f"{_html((ch.curr_side or '?').upper())} {curr_size:,.2f}"
-                )
-            elif ch.change_type == "increased":
-                prev_size = ch.prev_size or 0.0
-                curr_size = ch.curr_size or 0.0
-                delta_pct = ch.size_delta_pct or 0.0
-                lines.append(
-                    f"{emoji} <b>{_html(ch.coin)}</b> INCREASED {delta_pct:+.0f}%"
-                    f" ({prev_size:,.2f} \u2192 {curr_size:,.2f} {_html(ch.curr_side or '?')})"
                 )
             elif ch.change_type == "flipped":
                 curr_size = ch.curr_size or 0.0
@@ -1362,10 +1417,12 @@ def _send_telegram_signal_alert(
 
         lines.append("")
 
-    # Current positions summary with liquidation prices
-    if snapshot.positions:
-        lines.append("<b>Open positions:</b>")
-        for pos in snapshot.positions:
+    affected_positions = [
+        position for position in snapshot.positions if position.coin in affected_coins
+    ]
+    if affected_positions:
+        lines.append("<b>Affected positions:</b>")
+        for pos in affected_positions:
             liq_info = ""
             if pos.liquidation_price:
                 if pos.mark_price > 0:
@@ -1374,9 +1431,8 @@ def _send_telegram_signal_alert(
                     else:
                         dist = (pos.liquidation_price - pos.mark_price) / pos.mark_price * 100
                     liq_info = f" | liq ${pos.liquidation_price:,.2f} ({dist:.1f}%)"
-            coin_marker = " \u26a0\ufe0f" if pos.coin in changed_coins else ""
             lines.append(
-                f"  {_html(pos.coin)}{coin_marker} {_html(pos.side.upper())} ${pos.notional_usd:,.0f}"
+                f"  {_html(pos.coin)} {_html(pos.side.upper())} ${pos.notional_usd:,.0f}"
                 f" ({pos.leverage_value}x) uPnL ${pos.unrealized_pnl:+,.0f}{liq_info}"
             )
         lines.append("")
@@ -1390,7 +1446,7 @@ def _send_telegram_signal_alert(
         )
         for sig in critical_signals:
             reasons = sig.get("reasons", [])
-            reasons_text = ", ".join(_html(reason) for reason in reasons[:4])
+            reasons_text = ", ".join(_html(reason) for reason in reasons)
             age_str = ""
             age_h = sig.get("position_age_hours")
             if age_h is not None and age_h > 1:
@@ -1410,10 +1466,15 @@ def _send_telegram_signal_alert(
     try:
         import httpx
 
-        httpx.post(
+        response = httpx.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            timeout=10,
+            timeout=_TELEGRAM_REQUEST_TIMEOUT_SECONDS,
         )
+        response.raise_for_status()
     except Exception as exc:
         LOG.debug("Telegram whale alert failed: %s", exc)
+        return False
+
+    _store_signal_alert_states(conn, snapshot, current_states)
+    return True
