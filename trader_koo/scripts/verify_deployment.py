@@ -9,7 +9,10 @@ from typing import Any
 
 
 def _get(base_url: str, path: str, *, api_key: str | None = None) -> tuple[int, Any]:
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "trader-koo-release-verifier/1",
+    }
     if api_key:
         headers["X-API-Key"] = api_key
     request = urllib.request.Request(f"{base_url.rstrip('/')}{path}", headers=headers)

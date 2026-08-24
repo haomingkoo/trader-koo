@@ -1,8 +1,41 @@
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from trader_koo.scripts import verify_deployment
+
+
+def test_get_identifies_release_verifier_and_sends_admin_key(monkeypatch) -> None:
+    captured = {}
+
+    class Response(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response(b'{"ok": true}')
+
+    monkeypatch.setattr(verify_deployment.urllib.request, "urlopen", fake_urlopen)
+
+    status, payload = verify_deployment._get(
+        "https://example.invalid", "/api/health", api_key="test-key"
+    )
+
+    assert status == 200
+    assert payload == {"ok": True}
+    assert captured["request"].get_header("User-agent") == (
+        "trader-koo-release-verifier/1"
+    )
+    assert captured["request"].get_header("X-api-key") == "test-key"
 
 
 def test_verify_deployment_checks_exact_sha_auth_and_public_contracts(monkeypatch) -> None:

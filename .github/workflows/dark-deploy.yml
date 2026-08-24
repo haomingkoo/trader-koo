@@ -113,7 +113,8 @@ jobs:
         run: |
           railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-deployments.json
           deployment_id=$(jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty' /tmp/previous-deployments.json)
-          release_sha=$(jq -r '[.[] | select(.status == "SUCCESS")][0].meta.commitHash // empty' /tmp/previous-deployments.json)
+          curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/previous-release.json
+          release_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
           curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
           campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
           case "$campaign_status" in active|draft|frozen|absent) ;; *) exit 1 ;; esac
