@@ -1266,63 +1266,10 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         LOG.error("Candle patterns / setup scoring section failed: %s", exc, exc_info=True)
         _report_warnings.append("candle_patterns_section_failed")
 
-    # ── Pre-compute HMM regime for top setup tickers only ─────────────────
-    #    Full 536-ticker HMM takes 8+ hours on Railway with cold cache.
-    #    Only pre-compute for the top-40 report setups + market context tickers.
-    #    Other tickers get HMM on-demand via the chart endpoint (cached 24h).
-    try:
-        import pandas as pd
-        from trader_koo.structure.hmm_regime import predict_regimes as hmm_predict_regimes
-
-        # Top setup tickers (actionable) + market context tickers
-        _top_setup_tickers = [
-            str(r.get("ticker") or "").upper()
-            for r in (signals.get("setup_quality_top") or [])
-            if isinstance(r, dict) and r.get("ticker")
-        ]
-        _market_ctx_tickers = ["^VIX", "SPY", "QQQ"]
-        lookup_tickers = list(dict.fromkeys(_top_setup_tickers + _market_ctx_tickers))
-        hmm_total = len(lookup_tickers)
-        hmm_cache: dict[str, dict[str, Any]] = {}
-        hmm_t0 = dt.datetime.now(dt.timezone.utc)
-        _HMM_PER_TICKER_TIMEOUT = 120  # seconds
-        for hmm_idx, ticker_sym in enumerate(lookup_tickers, 1):
-            try:
-                ticker_t0 = dt.datetime.now(dt.timezone.utc)
-                rows = conn.execute(
-                    "SELECT date, open, high, low, close, volume FROM price_daily WHERE ticker = ? ORDER BY date",
-                    (ticker_sym,),
-                ).fetchall()
-                if len(rows) < 140:
-                    pct = int(hmm_idx * 100 / hmm_total) if hmm_total else 0
-                    LOG.info("HMM regime: %d/%d (%d%%) - %s skipped (<140 rows)", hmm_idx, hmm_total, pct, ticker_sym)
-                    continue
-                df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
-                result = hmm_predict_regimes(df, ticker=ticker_sym)
-                ticker_elapsed = (dt.datetime.now(dt.timezone.utc) - ticker_t0).total_seconds()
-                if ticker_elapsed > _HMM_PER_TICKER_TIMEOUT:
-                    LOG.warning("HMM regime: %s took %.1fs (exceeded %ds timeout)", ticker_sym, ticker_elapsed, _HMM_PER_TICKER_TIMEOUT)
-                state = result.get("current_state", "unknown") if result else "failed"
-                pct = int(hmm_idx * 100 / hmm_total) if hmm_total else 0
-                LOG.info("HMM regime: %d/%d (%d%%) - %s -> %s (%.1fs)", hmm_idx, hmm_total, pct, ticker_sym, state, ticker_elapsed)
-                if result is not None:
-                    hmm_cache[ticker_sym] = {
-                        "current_state": result.get("current_state"),
-                        "current_probs": result.get("current_probs"),
-                        "transition_risk_pct": result.get("transition_risk_pct"),
-                        "days_in_current": result.get("days_in_current"),
-                        "regimes": result.get("regimes", [])[-120:],
-                    }
-            except Exception:
-                pct = int(hmm_idx * 100 / hmm_total) if hmm_total else 0
-                LOG.warning("HMM regime: %d/%d (%d%%) - %s -> error", hmm_idx, hmm_total, pct, ticker_sym)
-        hmm_elapsed = (dt.datetime.now(dt.timezone.utc) - hmm_t0).total_seconds()
-        signals["hmm_regime_by_ticker"] = hmm_cache
-        LOG.info("HMM regime pre-computed for %d/%d tickers in %.1fs", len(hmm_cache), len(lookup_tickers), hmm_elapsed)
-    except Exception as exc:
-        LOG.error("HMM regime pre-computation failed: %s", exc, exc_info=True)
-        _report_warnings.append("hmm_regime_precompute_failed")
-        signals["hmm_regime_by_ticker"] = {}
+    # Per-ticker HMMs remain available on demand in the chart workspace. They
+    # are intentionally absent here because they do not affect report ranking
+    # and cold model fits delayed publication by tens of minutes.
+    signals["hmm_regime_by_ticker"] = {}
 
     # ── Pre-fetch FRED economic calendar (90 days forward) ────────────────
     try:
