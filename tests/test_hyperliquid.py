@@ -484,6 +484,51 @@ class TestTelegramAlertSemantics:
         ) is True
         assert "NEW LONG" in self.posts[0]["json"]["text"]
 
+    def test_recently_closed_position_is_labeled_reopened(self, conn):
+        prior_position = {
+            "coin": "HYPE",
+            "side": "long",
+            "size": 10_000.0,
+        }
+        conn.executemany(
+            """
+            INSERT INTO hyperliquid_snapshots
+                (wallet_label, wallet_address, account_value, total_margin_used,
+                 margin_ratio, positions_json, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("machibro", "0x020c", 9_300_000, 0, 0, json.dumps([prior_position]), "2026-08-25T07:10:00+00:00"),
+                ("machibro", "0x020c", 9_300_000, 0, 0, "[]", "2026-08-25T07:15:00+00:00"),
+                ("machibro", "0x020c", 9_500_000, 0, 0, "[]", "2026-08-25T07:50:00+00:00"),
+            ],
+        )
+        conn.commit()
+        snapshot = WalletSnapshot(
+            wallet_label="machibro",
+            wallet_address="0x020c",
+            account_value=9_706_706,
+            total_margin_used=0,
+            margin_ratio=0,
+            positions=[_make_position(coin="HYPE", size=21_000, notional=1_708_014)],
+            timestamp="2026-08-25T07:55:00+00:00",
+        )
+        reopened = PositionChange(
+            coin="HYPE",
+            change_type="new",
+            prev_side=None,
+            prev_size=None,
+            curr_side="long",
+            curr_size=21_000,
+            size_delta_pct=None,
+        )
+
+        assert _send_telegram_signal_alert(conn, snapshot, [], [reopened]) is True
+        text = self.posts[0]["json"]["text"]
+        assert "HYPE</b> REOPENED LONG 21,000.00 after 40m" in text
+        assert "was LONG 10,000.00; 2.1x size" in text
+        assert "Exposure $1,708,014 gross | HYPE 100%" in text
+
     def test_signal_state_survives_connection_restart(self, tmp_path):
         db_path = tmp_path / "alerts.db"
         first = sqlite3.connect(db_path)

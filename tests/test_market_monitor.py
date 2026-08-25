@@ -354,6 +354,7 @@ class TestSendSpikeAlerts:
         result = send_spike_alerts(db_path, Path("/tmp"))
         assert result == 1
         mock_send.assert_called_once()
+        assert "Market Spikes (1 event)" in mock_send.call_args.args[0]
 
     @patch("trader_koo.notifications.telegram.is_configured")
     @patch("trader_koo.notifications.telegram.send_message")

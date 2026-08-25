@@ -316,38 +316,28 @@ def get_m2_growth() -> dict[str, float | None]:
 _POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 
 
-_FINANCE_KEYWORDS = frozenset({
-    "fed ", "rate cut", "rate hike", "recession", "bitcoin", "btc ",
-    "inflation", "cpi ", "gdp ", "tariff", "china", "iran",
-    "oil price", "crude oil", "gold price", "stock market",
-    "interest rate", "central bank", "economy", "economic",
-    "debt ceiling", "stimulus", "sanctions", "opec", "fomc",
-    "powell", "fiscal", "monetary", "yield curve", "bond",
-    "s&p 500", "nasdaq", "dow jones", "microstrategy",
-    "ceasefire", "invade", "invasion",
-    "crypto market", "ethereum", "defi",
+_POLYMARKET_TRADING_TAGS = frozenset({
+    "business",
+    "commodities",
+    "crypto",
+    "crypto-prices",
+    "economic-policy",
+    "economy",
+    "fed",
+    "fed-rates",
+    "finance",
+    "stocks",
 })
 
-_EXCLUDE_KEYWORDS = frozenset({
-    # Team sports
-    "nba", "nfl", "nhl", "mlb", "mls", "fifa", "world cup", "premier league",
-    "la liga", "champions league", "serie a", "bundesliga", "euroleague",
-    "cricket", "rugby", "soccer", "futbol",
-    # Individual sports
-    "ufc", "boxing", "tennis", "golf", "masters", "wimbledon", "mma",
-    "formula 1", "f1 ", "nascar", "cycling", "marathon", "olympics",
-    # Esports
-    "valorant", "cs2 ", "dota", "league of legends", "esport",
-    # Entertainment / pop culture
-    "oscar", "grammy", "emmy", "super bowl", "mvp", "stanley cup",
-    "movie", "film", "album", "tv show", "reality tv", "award show",
-    "gta", "rihanna", "kardashian", "taylor swift", "celebrity",
-    # Social media / meme
-    "tweet", "tiktok", "youtube", "instagram", "influencer",
-    "jesus", "bitboy", "airdrop", "meme coin",
-    # Weather / misc
-    "weather", "temperature", "earthquake", "hurricane",
-})
+
+def _is_trading_relevant_polymarket_event(event: dict[str, Any]) -> bool:
+    """Use Polymarket's own taxonomy instead of matching words in prose."""
+    tag_slugs = {
+        str(tag.get("slug") or "").strip().lower()
+        for tag in (event.get("tags") or [])
+        if isinstance(tag, dict)
+    }
+    return bool(tag_slugs & _POLYMARKET_TRADING_TAGS)
 
 
 def _parse_single_market(m: dict[str, Any]) -> dict[str, Any]:
@@ -474,17 +464,10 @@ def fetch_polymarket_events(
         if not isinstance(raw_events, list):
             return []
 
-        # Filter for finance/macro relevance
+        # Filter using Polymarket's event taxonomy. Untagged events fail closed.
         relevant: list[dict[str, Any]] = []
         for ev in raw_events:
-            title = str(ev.get("title", "")).lower()
-            desc = str(ev.get("description", "")).lower()
-            text = f"{title} {desc}"
-            # Exclude sports/entertainment first
-            if any(kw in text for kw in _EXCLUDE_KEYWORDS):
-                continue
-            # Then require finance relevance
-            if not any(kw in text for kw in _FINANCE_KEYWORDS):
+            if not _is_trading_relevant_polymarket_event(ev):
                 continue
 
             raw_markets = ev.get("markets") or []

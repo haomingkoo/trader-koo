@@ -476,7 +476,8 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
 
     # Send ONE compiled message (HTML for clickable links)
     if all_lines:
-        header = f"\U0001F6A8 <b>Market Spikes ({len(all_lines)} events)</b>\n"
+        event_label = "event" if len(all_lines) == 1 else "events"
+        header = f"\U0001F6A8 <b>Market Spikes ({len(all_lines)} {event_label})</b>\n"
         body = "\n\n".join(all_lines)
         footer = '\n\n<a href="https://trader.kooexperience.com/markets">View all on Dashboard</a>'
         msg = f"{header}\n{body}{footer}"
