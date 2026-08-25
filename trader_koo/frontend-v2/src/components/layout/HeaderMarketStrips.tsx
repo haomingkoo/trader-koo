@@ -79,7 +79,7 @@ export function EquityPriceStrip() {
   const { data: marketSummary } = useMarketSummary(7);
   const snapshotPrices = Object.fromEntries(
     EQUITY_SYMBOLS.flatMap(({ key }) => {
-      const snapshot = marketSummary?.tickers[key];
+      const snapshot = marketSummary?.tickers?.[key];
       if (!snapshot || !marketSummary?.as_of) return [];
       const previous = snapshot.change_pct_1d === -100
         ? null
