@@ -29,7 +29,7 @@ def test_to_markdown_includes_green_barrier_conditions_and_coverage() -> None:
                 "stale_skipped_count": 1,
                 "stale_skipped_tickers": ["STALE"],
                 "invalid_date_skipped_count": 0,
-                "insufficient_history_skipped_count": 0,
+                "insufficient_history_skipped_count": 5,
             },
         },
     }
@@ -40,3 +40,4 @@ def test_to_markdown_includes_green_barrier_conditions_and_coverage() -> None:
     assert "Repeated daily while active" in text
     assert "### Green Barrier Scan Coverage" in text
     assert "**stale_skipped_tickers**: STALE" in text
+    assert "**insufficient_history_skipped_count**: 5" in text
