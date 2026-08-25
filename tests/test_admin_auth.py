@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -249,3 +251,17 @@ def test_openapi_marks_the_admin_surface_with_the_api_key_scheme():
     operation = schema["paths"]["/api/admin/ping"]["get"]
     assert operation["security"] == [{"APIKeyHeader": []}]
     assert schema["paths"]["/api/public/ping"]["get"].get("security") is None
+
+
+def test_cleanup_expired_removes_only_old_failure_records():
+    authenticator = AdminAuthenticator(
+        AdminAuthConfig(api_key="x" * 32, failure_window_sec=10, block_sec=10)
+    )
+    now_ts = time.time()
+    authenticator._failures = {
+        "expired": {"updated_ts": now_ts - 31},
+        "current": {"updated_ts": now_ts},
+    }
+
+    assert authenticator.cleanup_expired() == 1
+    assert set(authenticator._failures) == {"current"}

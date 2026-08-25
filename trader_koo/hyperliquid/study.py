@@ -366,7 +366,13 @@ def compute_study(
     _COST_BPS = 30  # entry + exit slippage + fees
 
     backtest: dict[str, Any] = {}
-    sorted_cycles = sorted(cycles, key=lambda c: c.get("cycle_start") or "")
+    sorted_cycles = sorted(
+        cycles,
+        key=lambda c: (
+            c.get("cycle_end") or c.get("cycle_start") or "",
+            c.get("cycle_start") or "",
+        ),
+    )
 
     for strat_name, min_notional, min_dur_hours in [
         ("counter_25m", 25_000_000, 0),

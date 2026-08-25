@@ -43,16 +43,15 @@ Railway Service (single process)
 
 | File | Purpose |
 |------|---------|
-| `railway.toml` | Build command + deploy config (start command, health check) |
+| `railway.toml` | Current Railway build/deploy config pending IaC migration |
+| `build.sh` | Production dependency installation and frontend build |
 | `start.sh` | Entrypoint — seeds DB on first run, then starts uvicorn |
 | `pyproject.toml` | Python package definition (allows `pip install -e .`) |
 
-**Build command** (in `railway.toml`):
-```bash
-pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu
-pip install -e .
-pip install opencv-python-headless==4.10.0.84 --force-reinstall --quiet
-```
+`railway.toml` delegates the build to `build.sh`. Railway has deprecated this
+Config-as-Code format in favor of `.railway/railway.ts`; the existing file
+remains supported until 2026-12-01. Treat migration as a release change and run
+the copied-database and production-browser gates before replacing it.
 
 Nixpacks installs the single canonical production dependency manifest at
 `requirements.txt` before running `build.sh`. Development-only packages live in
@@ -851,15 +850,14 @@ The `POST /api/admin/trigger-update` endpoint modifies the job's `next_run_time`
 
 Tests live in `tests/` and run via `python -m pytest tests/ -v`.
 
-Current baseline: **578 passed**.
-
 Key conventions:
 - No mock data for price/financial data — test against real schema and code paths
 - External services (LLM providers, HTTP APIs) are mocked
 - AAA pattern (Arrange-Act-Assert)
 - Tests must pass locally before pushing
 
-No frontend test coverage yet.
+Frontend unit, build, and Playwright journeys run in CI. Do not record a fixed
+test count here; use the exact CI run for the commit being evaluated.
 
 ---
 
@@ -869,8 +867,5 @@ No frontend test coverage yet.
 |------|-----------|--------------------------|
 | **Database** | SQLite: fine for single-process, would need Postgres for multi-worker | Acceptable for current single-service architecture |
 | **YOLO model** | Pre-trained HuggingFace model, not fine-tuned on gold labels yet | CV label pipeline exists; gold-label fine-tuning is planned |
-| **ML model** | AUC 0.5235 — useful as a filter, not a standalone signal generator | Meta-labeling reduces false positives; more features and data needed |
-| **FRED features** | Per-date API calls are too slow for bulk fetch | Needs bulk-fetch architecture or pre-cached daily snapshots |
-| **Frontend tests** | No test coverage for React components | Planned: Vitest + React Testing Library |
+| **Research evidence** | Current empirical evidence is not decision-eligible | Keep performance claims within `RESEARCH_STATUS.md` |
 | **Daily cron** | In-process APScheduler — if process restarts mid-run, job is lost | For higher reliability, could move to Railway cron or GitHub Actions |
-| **Public config** | `GET /api/config` returns API key in browser — acceptable for personal tool | Not suitable for multi-tenant deployment without auth redesign |

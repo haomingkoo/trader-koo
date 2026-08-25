@@ -147,11 +147,19 @@ class AdminAuthenticator:
         )
         return identity
 
-    def _prune(self, now_ts: float) -> None:
+    def _prune(self, now_ts: float) -> int:
+        before = len(self._failures)
         max_age = max(self.config.failure_window_sec, self.config.block_sec) * 3
         for ip_address, entry in list(self._failures.items()):
             if now_ts - float(entry.get("updated_ts", 0.0)) > max_age:
                 self._failures.pop(ip_address, None)
+        return before - len(self._failures)
+
+    def cleanup_expired(self) -> int:
+        """Remove expired failure records and return the number removed."""
+        now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
+        with self._lock:
+            return self._prune(now_ts)
 
     def _blocked(self, ip_address: str, now_ts: float) -> tuple[bool, int]:
         with self._lock:
