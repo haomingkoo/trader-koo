@@ -49,11 +49,14 @@ Railway Service (single process)
 
 **Build command** (in `railway.toml`):
 ```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install -r trader_koo/requirements.txt
+pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu
 pip install -e .
-pip install opencv-python-headless --force-reinstall --quiet
+pip install opencv-python-headless==4.10.0.84 --force-reinstall --quiet
 ```
+
+Nixpacks installs the single canonical production dependency manifest at
+`requirements.txt` before running `build.sh`. Development-only packages live in
+`requirements-dev.txt`, which includes that production manifest.
 
 The torch/torchvision pair must come from the same CPU index — installing them separately risks an ABI mismatch that breaks the `torchvision::nms` operator at runtime. The `opencv-python-headless` force-reinstall runs last because `sahi` (a transitive dependency of `ultralyticsplus`) installs the non-headless `opencv-python`, which requires `libGL.so.1` and fails on headless servers.
 
