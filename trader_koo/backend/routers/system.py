@@ -613,46 +613,106 @@ def methodology_stats() -> dict[str, Any]:
             ).fetchone()
             patterns_today = int(pt_row["n"]) if pt_row else 0
 
-        # ML feature count (static — matches FEATURE_COLUMNS length)
-        try:
-            from trader_koo.ml.features import FEATURE_COLUMNS
-            ml_features = len(FEATURE_COLUMNS)
-        except Exception:
-            ml_features = 51
+        from trader_koo.ml.features import FEATURE_COLUMNS
+        from trader_koo.ml.validation_registry import MIN_AVG_AUC
+        from trader_koo.paper_trades import PAPER_TRADE_ENABLED, _build_config
 
-        # Paper trade stats
+        ml_features = len(FEATURE_COLUMNS)
+        ml_auc: float | None = None
+        ml_fold_count: int | None = None
+        if table_exists(conn, "ml_validation_runs"):
+            validation_row = conn.execute(
+                "SELECT avg_auc, fold_count FROM ml_validation_runs ORDER BY created_ts DESC, id DESC LIMIT 1"
+            ).fetchone()
+            if validation_row:
+                ml_auc = (
+                    float(validation_row["avg_auc"])
+                    if validation_row["avg_auc"] is not None
+                    else None
+                )
+                ml_fold_count = (
+                    int(validation_row["fold_count"])
+                    if validation_row["fold_count"] is not None
+                    else None
+                )
+        ml_config = _build_config()
+        campaign_id = ml_config.campaign_id
+
+        # Paper trade stats. Keep the inactive current campaign separate from
+        # the frozen legacy ledger so historical results cannot look live.
         paper_total = 0
         paper_open = 0
         win_rate: float | None = None
+        legacy_total = 0
+        legacy_win_rate: float | None = None
+        campaign_status: str | None = None
+        ml_predictions_closed = 0
         if table_exists(conn, "paper_trades"):
+            trade_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(paper_trades)").fetchall()
+            }
+            has_campaign_id = "campaign_id" in trade_columns
+            campaign_filter = "campaign_id=? AND " if has_campaign_id else "0 AND "
+            campaign_params: tuple[str, ...] = (campaign_id,) if has_campaign_id else ()
+            if "ml_predicted_win_prob" in trade_columns:
+                prediction_row = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM paper_trades WHERE {campaign_filter}status != 'open' AND ml_predicted_win_prob IS NOT NULL",
+                    campaign_params,
+                ).fetchone()
+                ml_predictions_closed = int(prediction_row["n"]) if prediction_row else 0
             pt_total = conn.execute(
-                "SELECT COUNT(*) AS n FROM paper_trades WHERE status != 'open'"
+                f"SELECT COUNT(*) AS n FROM paper_trades WHERE {campaign_filter}status != 'open'",
+                campaign_params,
             ).fetchone()
             paper_total = int(pt_total["n"]) if pt_total else 0
             pt_open = conn.execute(
-                "SELECT COUNT(*) AS n FROM paper_trades WHERE status = 'open'"
+                f"SELECT COUNT(*) AS n FROM paper_trades WHERE {campaign_filter}status = 'open'",
+                campaign_params,
             ).fetchone()
             paper_open = int(pt_open["n"]) if pt_open else 0
             if paper_total > 0:
                 wins_row = conn.execute(
-                    "SELECT COUNT(*) AS n FROM paper_trades WHERE status != 'open' AND pnl_pct > 0"
+                    f"SELECT COUNT(*) AS n FROM paper_trades WHERE {campaign_filter}status != 'open' AND pnl_pct > 0",
+                    campaign_params,
                 ).fetchone()
                 wins = int(wins_row["n"]) if wins_row else 0
                 win_rate = round(wins / paper_total, 4)
-
-        # Data sources (hard count of integrated providers)
-        data_sources = 7
+            legacy_filter = "campaign_id='paper-v1' AND " if "campaign_id" in trade_columns else ""
+            legacy_row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM paper_trades WHERE {legacy_filter}status != 'open'"
+            ).fetchone()
+            legacy_total = int(legacy_row["n"]) if legacy_row else 0
+            if legacy_total:
+                legacy_wins_row = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM paper_trades WHERE {legacy_filter}status != 'open' AND pnl_pct > 0"
+                ).fetchone()
+                legacy_wins = int(legacy_wins_row["n"]) if legacy_wins_row else 0
+                legacy_win_rate = round(legacy_wins / legacy_total, 4)
+        if table_exists(conn, "paper_campaigns"):
+            campaign_row = conn.execute(
+                "SELECT status FROM paper_campaigns WHERE campaign_id=?",
+                (campaign_id,),
+            ).fetchone()
+            campaign_status = str(campaign_row["status"]) if campaign_row else None
 
         return {
             "ok": True,
             "tickers_tracked": tickers_tracked,
             "patterns_detected_today": patterns_today,
             "ml_features": ml_features,
-            "ml_auc": 0.5235,
+            "ml_auc": ml_auc,
+            "ml_fold_count": ml_fold_count,
+            "ml_min_auc": MIN_AVG_AUC,
+            "ml_enabled": ml_config.ml_enabled,
+            "ml_predictions_closed": ml_predictions_closed,
             "paper_trades_total": paper_total,
             "paper_trades_open": paper_open,
             "win_rate": win_rate,
-            "data_sources": data_sources,
+            "paper_campaign_id": campaign_id,
+            "paper_campaign_status": campaign_status,
+            "paper_campaign_write_state": "enabled" if PAPER_TRADE_ENABLED else "paused",
+            "legacy_paper_trades_total": legacy_total,
+            "legacy_win_rate": legacy_win_rate,
         }
     except Exception as exc:
         LOG.exception("methodology-stats failed: %s", exc)

@@ -37,7 +37,7 @@ class PaperTradeConfig:
     # Formula: position_size_pct = risk_per_trade_pct / stop_distance_pct × 100
     # Capped at tier notional max to prevent overleveraging on tight stops.
     risk_per_trade_pct: float = 0.5  # risk 0.5% of capital per trade (=$5K on $1M)
-    ml_enabled: bool = False  # Disabled — AUC 0.5051 (random). Rule-based pipeline decides.
+    ml_enabled: bool = False  # Disabled until the registered promotion gates pass.
     ml_min_win_prob: float = 0.55
     max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
     max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this

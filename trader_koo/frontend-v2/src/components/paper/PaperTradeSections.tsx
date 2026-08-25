@@ -463,7 +463,15 @@ export function PaperCampaignHealthPanel({
           )}
         </>
       ) : (
-        <p className="mt-3 text-xs text-[var(--muted)]">Campaign is ready; no completed report decisions are recorded yet.</p>
+        <p className="mt-3 text-xs text-[var(--muted)]">
+          {health.status === "frozen"
+            ? "Frozen historical campaign. It cannot accept new trades."
+            : health.write_state === "paused"
+              ? "Campaign is configured but inactive; writes are paused and no completed report decisions are recorded."
+              : health.status === "active"
+                ? "Campaign is active and awaiting its first completed report decision."
+                : `Campaign is ${health.status ?? "not active"}; no completed report decisions are recorded.`}
+        </p>
       )}
       {!!health.campaigns?.length && (
         <div className="mt-3 border-t border-[var(--line)] pt-3 text-[10px] text-[var(--muted)]">

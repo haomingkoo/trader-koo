@@ -41,5 +41,6 @@ test("paper campaign renders a real sealed decision through API and UI", async (
   await page.getByTestId("paper-campaign-selector").selectOption("paper-v1");
   await expect(panel).toContainText("paper-v1");
   await expect(panel).toContainText("frozen");
+  await expect(panel).toContainText("Frozen historical campaign. It cannot accept new trades.");
   await expect(page.getByTestId("paper-campaign-decisions")).toHaveCount(0);
 });

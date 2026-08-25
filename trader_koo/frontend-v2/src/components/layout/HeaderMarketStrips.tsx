@@ -83,7 +83,7 @@ export function EquityPriceStrip() {
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
           Equities
         </span>
-        <span className="text-[10px] text-[var(--amber)]">Market closed</span>
+        <span className="text-[10px] text-[var(--amber)]">Quotes unavailable</span>
       </div>
     );
   }
@@ -96,7 +96,7 @@ export function EquityPriceStrip() {
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
           Equities
         </span>
-        <span className="text-[10px] text-[var(--amber)]">Market closed</span>
+        <span className="text-[10px] text-[var(--amber)]">Quotes unavailable</span>
       </div>
     );
   }
