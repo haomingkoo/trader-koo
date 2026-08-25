@@ -103,7 +103,7 @@ export default function MacroStrip() {
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
           Macro
         </span>
-        <span className="text-[10px] text-[var(--muted)]">Market closed</span>
+        <span className="text-[10px] text-[var(--muted)]">No data</span>
       </div>
     );
   }

@@ -27,7 +27,7 @@ export default function VixPage() {
   } = useVixMetrics();
 
   if (isLoading || metricsLoading) return <Spinner className="mt-12" />;
-  if (error) {
+  if (error && !metricsData?.ok) {
     return (
       <div className="mt-12 text-center text-sm text-[var(--red)]">
         Failed to load VIX data: {String((error as Error)?.message ?? "Unknown error")}
@@ -37,10 +37,24 @@ export default function VixPage() {
 
   const regime = data?.latest?.signals?.regime_context;
   if (!regime || !Object.keys(regime).length) {
+    if (metricsData?.ok) {
+      return (
+        <div className="space-y-6" data-testid="vix-live-metrics-only">
+          <h2 className="text-xl font-bold tracking-tight">VIX / Regime Analysis</h2>
+          <div className="rounded-lg border border-[var(--amber)]/40 bg-[rgba(248,194,78,0.06)] p-3 text-xs text-[var(--muted)]" role="status">
+            The sealed daily regime report is unavailable. Live volatility metrics remain available below and are not a substitute for the missing report.
+          </div>
+          <SpikeAlertBanner metrics={metricsData} />
+          <VixMetricCardsGrid metrics={metricsData} />
+          <p className="text-[10px] text-[var(--muted)]">
+            Live metrics are descriptive and research-only. No regime or sizing decision is inferred from missing report evidence.
+          </p>
+        </div>
+      );
+    }
     return (
-      <div className="mt-12 text-center text-sm text-[var(--muted)]">
-        No regime context available yet. Data populates after the nightly
-        pipeline run.
+      <div className="mt-12 text-center text-sm text-[var(--red)]" role="alert">
+        VIX data is unavailable: neither a sealed regime report nor live volatility metrics could be loaded.
       </div>
     );
   }

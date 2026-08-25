@@ -2,7 +2,6 @@ import { lazy } from "react";
 import type { ComponentType, LazyExoticComponent } from "react";
 import {
   BarChart3,
-  Activity,
   Bell,
   Bitcoin,
   BookOpen,
@@ -94,10 +93,6 @@ export const appRoutes: AppRouteDefinition[] = [
   },
   {
     path: "agent-observability",
-    navPath: "/agent-observability",
-    label: "Agent Traces",
-    navGroup: "Method",
-    Icon: Activity,
     loaderTitle: "Loading agent traces",
     loaderDetail: "Checking redacted LLM spans, validation, fallback, and contribution records.",
     load: () => import("../pages/AgentObservabilityPage"),

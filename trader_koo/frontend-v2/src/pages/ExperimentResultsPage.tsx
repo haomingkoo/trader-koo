@@ -215,6 +215,7 @@ export default function ExperimentResultsPage() {
   const [selectedId, setSelectedId] = useState<string>("");
   const experiments = data?.experiments ?? [];
   const selected = experiments.find((item) => item.experiment_id === selectedId)
+    ?? experiments.find((item) => item.available)
     ?? experiments[0];
 
   if (isLoading) return <Spinner className="mt-12" />;

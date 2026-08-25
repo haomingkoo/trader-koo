@@ -207,6 +207,51 @@ def daily_report_fixture():
     }
 
 
+@app.get("/api/vix-metrics")
+def vix_metrics_fixture():
+    return {
+        "ok": True,
+        "vix_vix3m_ratio": None,
+        "term_structure_signal": "unknown",
+        "realized_vol_20d": 13.26,
+        "vol_risk_premium": 2.4,
+        "vol_premium_signal": "neutral",
+        "vix_percentile_252d": 22.1,
+        "percentile_zone": "normal",
+        "above_80th_pctile": False,
+        "vix_daily_change_pct": 4.76,
+        "is_spike": False,
+        "spike_magnitude": None,
+        "recommended_position_pct": 75,
+        "sizing_reason": "Fixture only.",
+        "gauge_zone": "normal",
+        "gauge_color": "#fdd835",
+    }
+
+
+@app.get("/api/methodology-stats")
+def methodology_stats_fixture():
+    return {
+        "ok": True,
+        "tickers_tracked": 551,
+        "patterns_detected_today": 125,
+        "ml_features": 14,
+        "ml_auc": None,
+        "ml_fold_count": None,
+        "ml_min_auc": 0.55,
+        "ml_enabled": False,
+        "ml_predictions_closed": 0,
+        "paper_trades_total": 0,
+        "paper_trades_open": 0,
+        "win_rate": None,
+        "paper_campaign_id": "paper-v2",
+        "paper_campaign_status": "draft",
+        "paper_campaign_write_state": "paused",
+        "legacy_paper_trades_total": 42,
+        "legacy_win_rate": 0.5238,
+    }
+
+
 @app.get("/api/admin/agent-observability", dependencies=[Depends(require_admin)])
 def agent_observability_fixture():
     return {"ok": True, **observability_summary(DB_PATH, limit=100)}

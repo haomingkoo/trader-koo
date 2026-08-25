@@ -40,9 +40,19 @@ export default function ReportPage() {
 
   const latest = data?.latest;
   if (!data?.ok || !latest || !Object.keys(latest).length) {
+    const detail = typeof data?.detail === "string" && data.detail.trim()
+      ? data.detail.trim()
+      : "No verified report artifact is available.";
     return (
-      <div className="mt-12 text-center text-sm text-[var(--muted)]">
-        No report data available yet.
+      <div className="space-y-6" data-testid="report-unavailable-state">
+        <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
+        <PipelineStatusInline />
+        <div className="rounded-lg border border-[var(--red)]/30 bg-[var(--red)]/5 px-4 py-3 text-sm text-[var(--red)]" role="status">
+          <strong>Report unavailable:</strong> {detail}
+        </div>
+        <p className="text-xs text-[var(--muted)]">
+          Setups, regime conclusions, and campaign decisions stay hidden until a complete report passes publication checks.
+        </p>
       </div>
     );
   }

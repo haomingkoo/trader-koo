@@ -27,11 +27,19 @@ interface MethodologyStats {
   tickers_tracked: number;
   patterns_detected_today: number;
   ml_features: number;
-  ml_auc: number;
+  ml_auc: number | null;
+  ml_fold_count: number | null;
+  ml_min_auc: number;
+  ml_enabled: boolean;
+  ml_predictions_closed: number;
   paper_trades_total: number;
   paper_trades_open: number;
   win_rate: number | null;
-  data_sources: number;
+  paper_campaign_id: string;
+  paper_campaign_status: string | null;
+  paper_campaign_write_state: "enabled" | "paused";
+  legacy_paper_trades_total: number;
+  legacy_win_rate: number | null;
 }
 
 interface PipelineStep {
@@ -421,7 +429,7 @@ const PIPELINE_STEPS: PipelineStep[] = [
     icon: Brain,
     label: "ML Filter",
     description:
-      "LightGBM meta-labeling classifier with early stopping, 3 target modes (return sign, barrier, cross-sectional rank), and slim feature sets (7\u201315 features). Used as observation filter, not signal generator (AUC 0.52\u20130.53).",
+      "Inactive LightGBM observation layer. It records research predictions but cannot filter, size, or veto trades until its activation gates pass.",
   },
   {
     icon: MessageSquare,
@@ -439,7 +447,7 @@ const PIPELINE_STEPS: PipelineStep[] = [
     icon: Target,
     label: "Paper Trade",
     description:
-      "Setup opens a simulated trade with an ATR-aware initial stop, target, trading-day expiry, and graduated trailing-stop management. Full audit trail recorded.",
+      "A qualified setup may open a simulated trade only when the campaign is active and writes are enabled. The current campaign is paused.",
   },
 ];
 
@@ -561,8 +569,8 @@ export default function MethodologyPage() {
         <Reveal delay={200}>
           <p className="text-[15px] leading-[1.7] text-[var(--muted)] max-w-[640px] mb-8">
             A multi-layered decision pipeline for swing trade analysis &mdash;
-            from data ingestion through pattern detection, ML filtering,
-            multi-angle debate, and risk-gated paper trade execution.
+            from data ingestion through pattern detection and bounded analysis
+            to risk-gated simulation. Inactive stages are labelled below.
           </p>
         </Reveal>
 
@@ -596,10 +604,6 @@ export default function MethodologyPage() {
                 label="ML Features"
                 value={String(stats.ml_features)}
               />
-              <StatCard
-                label="Data Sources"
-                value={String(stats.data_sources)}
-              />
             </div>
           </Reveal>
         )}
@@ -626,7 +630,7 @@ export default function MethodologyPage() {
           step={0}
           icon={Layers}
           title="Pipeline Overview"
-          subtitle="Six stages transform raw market data into risk-managed paper trades. Watch the flow animate below."
+          subtitle="Six configured stages describe the intended flow. ML gating is inactive and the current paper campaign is paused."
         />
 
         <Reveal delay={300}>
@@ -871,9 +875,8 @@ export default function MethodologyPage() {
                 Meta-Labeling Filter
               </div>
               <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-                A secondary model acts as a filter on pattern detections,
-                adjusting position size or vetoing setups that the primary model
-                flags as low-probability.
+                A secondary model is being evaluated as a possible future filter.
+                It does not currently adjust position size or veto setups.
               </p>
             </VizPanel>
           </Reveal>
@@ -889,7 +892,7 @@ export default function MethodologyPage() {
                 Not Met
               </span>
               <span className="font-mono text-[10px] text-[var(--muted)]">
-                AUC {stats ? stats.ml_auc : "0.52\u20130.53"}
+                AUC {stats?.ml_auc != null ? stats.ml_auc : "N/A"}
               </span>
             </div>
             <p className="text-xs leading-relaxed text-[var(--muted)] mb-4">
@@ -900,9 +903,23 @@ export default function MethodologyPage() {
             </p>
             <ul className="space-y-2 text-[12px]">
               {[
-                { label: "AUC > 0.55 across 5+ walk-forward folds", current: `currently ${stats ? stats.ml_auc : "0.52\u20130.53"}`, status: "fail" as const },
-                { label: "\u2265 20 closed trades with predictions populated", current: "currently 0", status: "fail" as const },
-                { label: "ml_enabled config flag flipped on", current: "currently False", status: "fail" as const },
+                {
+                  label: `AUC > ${stats?.ml_min_auc ?? 0.55} across 5+ walk-forward folds`,
+                  current: stats?.ml_auc != null
+                    ? `currently ${stats.ml_auc} across ${stats.ml_fold_count ?? "unknown"} folds`
+                    : "no registered validation run",
+                  status: stats?.ml_auc != null && stats.ml_auc <= stats.ml_min_auc ? "fail" as const : "pending" as const,
+                },
+                {
+                  label: "\u2265 20 closed trades with predictions populated",
+                  current: `currently ${stats?.ml_predictions_closed ?? 0}`,
+                  status: (stats?.ml_predictions_closed ?? 0) < 20 ? "fail" as const : "pending" as const,
+                },
+                {
+                  label: "ml_enabled config flag flipped on",
+                  current: `currently ${stats?.ml_enabled ?? false}`,
+                  status: stats?.ml_enabled ? "pending" as const : "fail" as const,
+                },
                 { label: "Calibration: 60% predicted \u2248 60% actual win rate", current: "needs sample", status: "pending" as const },
                 { label: "Feature audit: macro_sp500_ret_63d not top feature", current: "untested", status: "pending" as const },
                 { label: "No-leakage audit: FRED vintage + OOS meta-model", current: "untested", status: "pending" as const },
@@ -937,7 +954,7 @@ export default function MethodologyPage() {
           step={4}
           icon={MessageSquare}
           title="Multi-Angle Debate Engine"
-          subtitle="Five specialist analysts evaluate each setup from different perspectives, then an arbiter synthesizes a consensus."
+          subtitle="Five bounded analysis roles produce structured views. Deterministic consensus and risk rules remain authoritative; a role is not proof of a live model call."
         />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mt-8">
           <AnalystCard
@@ -1109,25 +1126,34 @@ export default function MethodologyPage() {
         </Reveal>
 
         {/* Live paper trade stats */}
-        {stats && stats.paper_trades_total > 0 && (
+        {stats && (
           <Reveal delay={300}>
-            <div className="flex flex-wrap gap-4 mt-6">
+            <div className="mt-6">
+              <div className="mb-3 rounded-lg border border-[var(--amber)]/40 bg-[rgba(248,194,78,0.06)] p-3 text-xs text-[var(--muted)]">
+                Current campaign: <strong className="text-[var(--text)]">{stats.paper_campaign_id}</strong> · {stats.paper_campaign_status ?? "unknown"} · writes {stats.paper_campaign_write_state}. Frozen v1 figures below are historical and unreconciled; they are not current campaign performance.
+              </div>
+              <div className="flex flex-wrap gap-4">
               <StatCard
-                label="Total Trades"
+                label="Current v2 Trades"
                 value={String(stats.paper_trades_total)}
               />
               <StatCard
-                label="Open Now"
+                label="Current v2 Open"
                 value={String(stats.paper_trades_open)}
               />
               <StatCard
-                label="Win Rate"
+                label="Frozen v1 Trades"
+                value={String(stats.legacy_paper_trades_total)}
+              />
+              <StatCard
+                label="Frozen v1 Win Rate"
                 value={
-                  stats.win_rate !== null
-                    ? `${(stats.win_rate * 100).toFixed(1)}%`
+                  stats.legacy_win_rate !== null
+                    ? `${(stats.legacy_win_rate * 100).toFixed(1)}%`
                     : "\u2014"
                 }
               />
+              </div>
             </div>
           </Reveal>
         )}
@@ -1141,7 +1167,7 @@ export default function MethodologyPage() {
           step={7}
           icon={Clock}
           title="Daily Pipeline"
-          subtitle="Automated nightly orchestration runs Monday through Friday."
+          subtitle="Configured Monday-to-Friday schedule. A schedule is not proof that the latest report completed or was published."
         />
         <VizPanel className="mt-8">
           <div className="ml-1">
@@ -1166,7 +1192,7 @@ export default function MethodologyPage() {
             <TimelineStep
               time="22:15 UTC"
               label="Email Delivery"
-              detail="HTML report emailed with top setups, risk summary, VIX regime, and paper trade performance."
+              detail="If report generation completes and publication gates pass, an HTML report can be emailed. Failed or incomplete runs must remain unavailable."
               delay={300}
             />
             <TimelineStep

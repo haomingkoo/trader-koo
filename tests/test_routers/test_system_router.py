@@ -77,6 +77,22 @@ class TestVixGlossaryEndpoint:
         assert "bear_trap" in glossary
 
 
+class TestMethodologyStatsEndpoint:
+    def test_separates_current_campaign_from_legacy_history(self, test_app, seeded_conn):
+        with patch("trader_koo.backend.routers.system.get_conn", return_value=seeded_conn):
+            response = test_app.get("/api/methodology-stats")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ok"] is True
+        assert data["paper_campaign_id"] == "paper-v2"
+        assert data["paper_trades_total"] == 0
+        assert "legacy_paper_trades_total" in data
+        assert data["paper_campaign_write_state"] in {"enabled", "paused"}
+        assert data["ml_auc"] is None
+        assert data["ml_enabled"] is False
+
+
 class TestVixPatternMarkersEndpoint:
     def test_vix_markers_returns_200(self, test_app):
         response = test_app.get("/api/vix-pattern-markers")
