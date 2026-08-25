@@ -85,6 +85,14 @@ LOG = logging.getLogger(__name__)
 _report_warnings: list[str] = []
 
 
+def _green_barrier_coverage_requires_warning(coverage: dict[str, Any]) -> bool:
+    """Return whether missing coverage reflects stale or invalid market data."""
+    return (
+        int(coverage.get("stale_skipped_count") or 0) > 0
+        or int(coverage.get("invalid_date_skipped_count") or 0) > 0
+    )
+
+
 def _trading_days_between(start_date: dt.date, end_date: dt.date) -> int:
     """Count NYSE trading days in the open interval (start_date, end_date]."""
     if end_date <= start_date:
@@ -326,11 +334,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         signals["green_barrier_hits"] = green_barrier["hits"]
         signals["green_barrier_coverage"] = green_barrier["coverage"]
         coverage = green_barrier["coverage"]
-        if (
-            int(coverage.get("stale_skipped_count") or 0) > 0
-            or int(coverage.get("invalid_date_skipped_count") or 0) > 0
-            or int(coverage.get("insufficient_history_skipped_count") or 0) > 0
-        ):
+        if _green_barrier_coverage_requires_warning(coverage):
             _report_warnings.append("green_barrier_incomplete_coverage")
     except Exception as exc:
         LOG.error("Green Barrier scan failed: %s", exc, exc_info=True)

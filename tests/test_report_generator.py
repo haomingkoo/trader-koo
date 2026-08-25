@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from trader_koo.report.generator import (
+    _green_barrier_coverage_requires_warning,
     _report_stale_price_guard_error,
     fetch_report_payload,
 )
@@ -109,6 +110,28 @@ def test_report_stale_price_guard_allows_failed_ingest_with_current_prices():
     )
 
     assert message is None
+
+
+def test_green_barrier_insufficient_timeframe_history_is_not_fatal() -> None:
+    coverage = {
+        "stale_skipped_count": 0,
+        "invalid_date_skipped_count": 0,
+        "insufficient_history_skipped_count": 5,
+    }
+
+    assert _green_barrier_coverage_requires_warning(coverage) is False
+
+
+@pytest.mark.parametrize("coverage_gap", ["stale_skipped_count", "invalid_date_skipped_count"])
+def test_green_barrier_stale_or_invalid_dates_fail_closed(coverage_gap: str) -> None:
+    coverage = {
+        "stale_skipped_count": 0,
+        "invalid_date_skipped_count": 0,
+        "insufficient_history_skipped_count": 0,
+    }
+    coverage[coverage_gap] = 1
+
+    assert _green_barrier_coverage_requires_warning(coverage) is True
 
 
 def test_fetch_report_payload_aborts_before_signal_build_when_prices_are_stale(tmp_path: Path):
