@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trader_koo.notifications.market_monitor import (
+    POLYMARKET_MIN_ALERT_VOLUME_USD,
     _format_volume,
     detect_crypto_spikes,
     detect_polymarket_spikes,
@@ -221,6 +222,57 @@ class TestDetectPolymarketSpikes:
         spikes = detect_polymarket_spikes(db_path, lookback_hours=6, threshold_pct=5.0)
         assert spikes == []
 
+    def test_low_volume_market_is_not_alertable(self, db_path: Path) -> None:
+        self._seed_snapshots(db_path, old_prob=10.0, new_prob=25.0)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "UPDATE polymarket_snapshots SET volume = ?",
+            (POLYMARKET_MIN_ALERT_VOLUME_USD - 1,),
+        )
+        conn.commit()
+        conn.close()
+
+        assert detect_polymarket_spikes(db_path) == []
+
+    def test_stale_latest_snapshot_is_not_alertable(self, db_path: Path) -> None:
+        now = dt.datetime(2026, 8, 26, 12, 0, tzinfo=dt.timezone.utc)
+        conn = sqlite3.connect(str(db_path))
+        conn.executemany(
+            """
+            INSERT INTO polymarket_snapshots
+                (event_slug, event_title, market_question, probability, volume, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("stale", "Stale", "Will it?", 10.0, 1_000_000, (now - dt.timedelta(hours=8)).isoformat()),
+                ("stale", "Stale", "Will it?", 25.0, 1_000_000, (now - dt.timedelta(hours=1)).isoformat()),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        assert detect_polymarket_spikes(db_path, now_utc=now) == []
+
+    def test_uses_closest_snapshot_at_or_before_cutoff(self, db_path: Path) -> None:
+        now = dt.datetime(2026, 8, 26, 12, 0, tzinfo=dt.timezone.utc)
+        conn = sqlite3.connect(str(db_path))
+        conn.executemany(
+            """
+            INSERT INTO polymarket_snapshots
+                (event_slug, event_title, market_question, probability, volume, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("baseline", "Baseline", "Will it?", 10.0, 1_000_000, (now - dt.timedelta(days=5)).isoformat()),
+                ("baseline", "Baseline", "Will it?", 48.0, 1_000_000, (now - dt.timedelta(hours=6)).isoformat()),
+                ("baseline", "Baseline", "Will it?", 50.0, 1_000_000, now.isoformat()),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        assert detect_polymarket_spikes(db_path, now_utc=now) == []
+
 
 # ---------------------------------------------------------------------------
 # Crypto spike detection tests
@@ -351,7 +403,7 @@ class TestSendSpikeAlerts:
         conn.commit()
         conn.close()
 
-        result = send_spike_alerts(db_path, Path("/tmp"))
+        result = send_spike_alerts(db_path)
         assert result == 1
         mock_send.assert_called_once()
         assert "Market Spikes (1 event)" in mock_send.call_args.args[0]
@@ -387,7 +439,7 @@ class TestSendSpikeAlerts:
         conn.commit()
         conn.close()
 
-        result = send_spike_alerts(db_path, Path("/tmp"))
+        result = send_spike_alerts(db_path)
 
         assert result == 1
         text = mock_send.call_args.args[0]
@@ -402,8 +454,69 @@ class TestSendSpikeAlerts:
     ) -> None:
         mock_configured.return_value = False
 
-        result = send_spike_alerts(db_path, Path("/tmp"))
+        result = send_spike_alerts(db_path)
         assert result == 0
+
+    @patch("trader_koo.notifications.telegram.is_configured", return_value=True)
+    @patch("trader_koo.notifications.telegram.send_message", side_effect=[False, True])
+    def test_failed_send_does_not_consume_spike_cooldown(
+        self,
+        mock_send: MagicMock,
+        _mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        conn = sqlite3.connect(str(db_path))
+        now = dt.datetime.now(dt.timezone.utc)
+        conn.executemany(
+            """
+            INSERT INTO polymarket_snapshots
+                (event_slug, event_title, market_question, probability, volume, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("retry", "Retry", "Will retry?", 10.0, 1_000_000, (now - dt.timedelta(hours=8)).isoformat()),
+                ("retry", "Retry", "Will retry?", 25.0, 1_000_000, now.isoformat()),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        assert send_spike_alerts(db_path) == 0
+        assert send_spike_alerts(db_path) == 1
+        assert mock_send.call_count == 2
+
+    @patch("trader_koo.notifications.telegram.is_configured", return_value=True)
+    @patch("trader_koo.notifications.telegram.send_message", return_value=True)
+    def test_successful_send_persists_full_identity_cooldown(
+        self,
+        mock_send: MagicMock,
+        _mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        question = "Will this deliberately long market question remain fully identified after sixty characters?"
+        conn = sqlite3.connect(str(db_path))
+        now = dt.datetime.now(dt.timezone.utc)
+        conn.executemany(
+            """
+            INSERT INTO polymarket_snapshots
+                (event_slug, event_title, market_question, probability, volume, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("full-key", "Full key", question, 10.0, 1_000_000, (now - dt.timedelta(hours=8)).isoformat()),
+                ("full-key", "Full key", question, 25.0, 1_000_000, now.isoformat()),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        assert send_spike_alerts(db_path) == 1
+        assert send_spike_alerts(db_path) == 0
+        mock_send.assert_called_once()
+        conn = sqlite3.connect(str(db_path))
+        key = conn.execute("SELECT event_key FROM spike_alert_cooldown").fetchone()[0]
+        conn.close()
+        assert key == f"polymarket:full-key:{question}"
 
 
 # ---------------------------------------------------------------------------

@@ -53,9 +53,7 @@ def test_spike_alerts() -> dict[str, Any]:
     """Manually run spike detection and send alerts via Telegram."""
     try:
         from trader_koo.notifications.market_monitor import send_spike_alerts
-        from trader_koo.backend.routers.admin._shared import REPORT_DIR
-
-        alerts_sent = send_spike_alerts(DB_PATH, REPORT_DIR)
+        alerts_sent = send_spike_alerts(DB_PATH)
         return {
             "ok": True,
             "alerts_sent": alerts_sent,

@@ -558,7 +558,7 @@ def _run_spike_alerts() -> None:
     _append_run_log("MARKET_MONITOR", "Spike alert check started")
     LOG.info("Scheduler: starting spike alert check")
     try:
-        alerts_sent = send_spike_alerts(DB_PATH, REPORT_DIR)
+        alerts_sent = send_spike_alerts(DB_PATH)
         _append_run_log("MARKET_MONITOR", f"Spike alerts: {alerts_sent} sent")
         LOG.info("Scheduler: spike alerts sent: %d", alerts_sent)
     except Exception as exc:
