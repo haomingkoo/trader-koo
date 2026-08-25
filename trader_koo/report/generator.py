@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 
 from trader_koo.catalyst_data import build_earnings_calendar_payload
-from trader_koo.db.price_contract import research_price_contract
+from trader_koo.db.price_contract import research_eligible_tickers, research_price_contract
 from trader_koo.llm_narrative import llm_enabled, llm_status
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.paper_trades import (
@@ -234,7 +234,55 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         "green_barrier_hits": [],
         "green_barrier_coverage": {},
     }
-    price_contract = research_price_contract(conn)
+    try:
+        universe_row = conn.execute(
+            """
+            SELECT run_id
+            FROM ingest_runs
+            WHERE status = 'ok'
+              AND tickers_failed = 0
+              AND json_extract(args_json, '$.use_sp500') = 1
+            ORDER BY started_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        current_universe = (
+            [
+                str(row[0])
+                for row in conn.execute(
+                    """
+                    SELECT ticker
+                    FROM ingest_ticker_status
+                    WHERE run_id = ? AND status = 'ok' AND price_rows > 0
+                    ORDER BY ticker
+                    """,
+                    (universe_row[0],),
+                )
+            ]
+            if universe_row is not None
+            else []
+        )
+    except sqlite3.OperationalError:
+        current_universe = []
+    current_universe_set = set(current_universe)
+    eligible_universe = current_universe_set & research_eligible_tickers(conn)
+    excluded_universe = sorted(current_universe_set - eligible_universe)
+    price_contract = (
+        research_price_contract(conn, sorted(eligible_universe))
+        if eligible_universe
+        else {
+            "eligible": False,
+            "basis": "unknown",
+            "version": "unknown",
+            "status": "unresolved",
+            "reason": "no_research_eligible_tickers",
+        }
+    )
+    price_contract.update({
+        "requested_universe_count": len(current_universe_set),
+        "eligible_universe_count": len(eligible_universe),
+        "excluded_tickers": excluded_universe,
+    })
     signals["price_contract"] = price_contract
     if not price_contract["eligible"]:
         _report_warnings.append("price_basis_unresolved")
@@ -687,7 +735,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         setup_rows: list[dict[str, Any]] = []
         for m in movers_all:
             ticker = str(m.get("ticker") or "").upper()
-            if not ticker:
+            if not ticker or ticker not in eligible_universe:
                 continue
             pct_change = float(m.get("pct_change") or 0.0)
             near_high = bool(m.get("near_52w_high"))

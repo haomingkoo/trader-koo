@@ -47,6 +47,9 @@ export interface PipelineStatus {
     price_age_days: number | null;
     fund_age_hours: number | null;
     opt_age_hours: number | null;
+    report_age_hours: number | null;
+    report_generated_ts: string | null;
+    report_fresh: boolean;
   };
   price_basis: {
     verified_tickers: number;

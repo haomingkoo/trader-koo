@@ -8,7 +8,6 @@ import {
   Calendar,
   DollarSign,
   FileText,
-  FlaskConical,
   Fish,
   Layers,
   Search,
@@ -83,10 +82,6 @@ export const appRoutes: AppRouteDefinition[] = [
   },
   {
     path: "experiments",
-    navPath: "/experiments",
-    label: "Experiments",
-    navGroup: "Research",
-    Icon: FlaskConical,
     loaderTitle: "Loading experiment results",
     loaderDetail: "Verifying manifests, evidence states, and reproducible artifacts.",
     load: () => import("../pages/ExperimentResultsPage"),

@@ -463,8 +463,15 @@ def status() -> dict[str, Any]:
             latest_error_message = str(latest_run.get("error_message") or "").strip() or None
             latest_error_ts = latest_run.get("finished_ts") or latest_run.get("started_ts")
         if latest_error_message is None and latest_failed:
-            latest_error_message = str(latest_failed.get("error_message") or "").strip() or None
-            latest_error_ts = latest_failed.get("finished_ts") or latest_failed.get("started_ts")
+            failed_ts = parse_iso_utc(
+                latest_failed.get("finished_ts") or latest_failed.get("started_ts")
+            )
+            successful_ts = parse_iso_utc(
+                (latest_run or {}).get("finished_ts") or (latest_run or {}).get("started_ts")
+            )
+            if successful_ts is None or (failed_ts is not None and failed_ts > successful_ts):
+                latest_error_message = str(latest_failed.get("error_message") or "").strip() or None
+                latest_error_ts = latest_failed.get("finished_ts") or latest_failed.get("started_ts")
 
         pipeline_snap = pipeline_status_snapshot(log_lines=60)
         resume_candidate = post_ingest_resume_candidate(

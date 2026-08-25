@@ -1,5 +1,6 @@
 import { useCryptoWs } from "../../hooks/useCryptoWs";
 import { useEquityWs } from "../../hooks/useEquityWs";
+import { useMarketSummary } from "../../api/hooks";
 import type { CryptoPrice, EquityTick } from "../../api/types";
 
 function formatPrice(price: number): string {
@@ -75,7 +76,25 @@ const EQUITY_SYMBOLS = [
 
 export function EquityPriceStrip() {
   const { prices, connected } = useEquityWs();
-  const hasData = Object.keys(prices).length > 0;
+  const { data: marketSummary } = useMarketSummary(7);
+  const snapshotPrices = Object.fromEntries(
+    EQUITY_SYMBOLS.flatMap(({ key }) => {
+      const snapshot = marketSummary?.tickers[key];
+      if (!snapshot || !marketSummary?.as_of) return [];
+      const previous = snapshot.change_pct_1d === -100
+        ? null
+        : snapshot.price / (1 + snapshot.change_pct_1d / 100);
+      return [[key, {
+        symbol: key,
+        price: snapshot.price,
+        volume: 0,
+        timestamp: marketSummary.as_of,
+        prev_price: previous,
+      } satisfies EquityTick]];
+    }),
+  );
+  const displayedPrices = { ...snapshotPrices, ...prices };
+  const hasData = Object.keys(displayedPrices).length > 0;
 
   if (!connected && !hasData) {
     return (
@@ -88,7 +107,7 @@ export function EquityPriceStrip() {
     );
   }
 
-  const availableChips = EQUITY_SYMBOLS.filter((symbol) => prices[symbol.key]);
+  const availableChips = EQUITY_SYMBOLS.filter((symbol) => displayedPrices[symbol.key]);
 
   if (availableChips.length === 0 && connected) {
     return (
@@ -106,9 +125,14 @@ export function EquityPriceStrip() {
       {availableChips.map((symbol, index) => (
         <span key={symbol.key} className="flex items-center gap-3 whitespace-nowrap">
           {index > 0 && <span className="text-[var(--line)]">|</span>}
-          <EquityPriceChip label={symbol.label} tick={prices[symbol.key]} />
+          <EquityPriceChip label={symbol.label} tick={displayedPrices[symbol.key]} />
         </span>
       ))}
+      {Object.keys(prices).length === 0 && marketSummary?.as_of && (
+        <span className="whitespace-nowrap text-[10px] text-[var(--muted)]">
+          Close · {marketSummary.as_of}
+        </span>
+      )}
       {!connected && (
         <span className="ml-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--red)]" title="Reconnecting..." />
       )}

@@ -190,8 +190,8 @@ def vix_metrics() -> dict[str, Any]:
 
 @router.get("/api/market-summary")
 def market_summary(days: int = Query(90, ge=7, le=365)) -> Any:
-    """Public endpoint -- SPY & QQQ price history for the portfolio chart."""
-    ticker_list = ["SPY", "QQQ"]
+    """Public endpoint -- timestamped index ETF closes for charts and the header."""
+    ticker_list = ["SPY", "QQQ", "DIA"]
     conn = get_conn()
     try:
         result: dict[str, Any] = {"as_of": None, "tickers": {}}
