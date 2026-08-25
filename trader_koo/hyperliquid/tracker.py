@@ -21,6 +21,7 @@ from trader_koo.hyperliquid.wallets import get_tracked_wallets
 LOG = logging.getLogger(__name__)
 
 _TELEGRAM_REQUEST_TIMEOUT_SECONDS = 10
+_TELEGRAM_REENTRY_LOOKBACK_HOURS = 24
 
 
 @dataclass(frozen=True)
@@ -945,6 +946,56 @@ class PositionChange:
     size_delta_pct: float | None  # % change in absolute size
 
 
+def _recent_closed_position_context(
+    conn: sqlite3.Connection,
+    snapshot: WalletSnapshot,
+    coin: str,
+) -> dict[str, Any] | None:
+    """Return the last position before a recent flat interval for ``coin``."""
+    try:
+        current_dt = dt.datetime.fromisoformat(snapshot.timestamp.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    cutoff = current_dt - dt.timedelta(hours=_TELEGRAM_REENTRY_LOOKBACK_HOURS)
+    rows = conn.execute(
+        """
+        SELECT positions_json, snapshot_ts
+        FROM hyperliquid_snapshots
+        WHERE wallet_label = ?
+          AND datetime(snapshot_ts) < datetime(?)
+          AND datetime(snapshot_ts) >= datetime(?)
+        ORDER BY datetime(snapshot_ts) DESC
+        """,
+        (snapshot.wallet_label, snapshot.timestamp, cutoff.isoformat()),
+    ).fetchall()
+
+    flat_since: dt.datetime | None = None
+    for positions_json, snapshot_ts in rows:
+        try:
+            positions = json.loads(positions_json or "[]")
+            row_dt = dt.datetime.fromisoformat(str(snapshot_ts).replace("Z", "+00:00"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        previous = next((p for p in positions if p.get("coin") == coin), None)
+        if previous is not None:
+            if flat_since is None:
+                return None
+            return {
+                "side": str(previous.get("side") or "?"),
+                "size": float(previous.get("size") or 0),
+                "flat_minutes": max(0, round((current_dt - flat_since).total_seconds() / 60)),
+            }
+        flat_since = row_dt
+    return None
+
+
+def _format_elapsed_minutes(minutes: int) -> str:
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"{hours}h" if remaining_minutes == 0 else f"{hours}h {remaining_minutes}m"
+
+
 _TELEGRAM_LIFECYCLE_CHANGE_TYPES = frozenset({
     "new",
     "closed",
@@ -1364,6 +1415,12 @@ def _send_telegram_signal_alert(
         f"Account ${snapshot.account_value:,.0f} | {acct_leverage:.0f}x leverage"
         f" | {len(snapshot.positions)} positions"
     )
+    if snapshot.positions and total_notional > 0:
+        top_position = max(snapshot.positions, key=lambda position: position.notional_usd)
+        top_share = top_position.notional_usd / total_notional * 100
+        lines.append(
+            f"Exposure ${total_notional:,.0f} gross | {_html(top_position.coin)} {top_share:.0f}%"
+        )
     lines.append("")
 
     # Position changes section
@@ -1393,10 +1450,22 @@ def _send_telegram_signal_alert(
                 )
             elif ch.change_type == "new":
                 curr_size = ch.curr_size or 0.0
-                lines.append(
-                    f"{emoji} <b>{_html(ch.coin)}</b> NEW "
-                    f"{_html((ch.curr_side or '?').upper())} {curr_size:,.2f}"
-                )
+                prior = _recent_closed_position_context(conn, snapshot, ch.coin)
+                if prior is None:
+                    lines.append(
+                        f"{emoji} <b>{_html(ch.coin)}</b> NEW "
+                        f"{_html((ch.curr_side or '?').upper())} {curr_size:,.2f}"
+                    )
+                else:
+                    prior_size = float(prior["size"])
+                    size_ratio = curr_size / prior_size if prior_size > 0 else None
+                    ratio_text = f"; {size_ratio:.1f}x size" if size_ratio is not None else ""
+                    lines.append(
+                        f"{emoji} <b>{_html(ch.coin)}</b> REOPENED "
+                        f"{_html((ch.curr_side or '?').upper())} {curr_size:,.2f} after "
+                        f"{_format_elapsed_minutes(int(prior['flat_minutes']))} "
+                        f"(was {_html(str(prior['side']).upper())} {prior_size:,.2f}{ratio_text})"
+                    )
             elif ch.change_type == "flipped":
                 curr_size = ch.curr_size or 0.0
                 lines.append(
