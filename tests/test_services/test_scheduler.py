@@ -1,14 +1,20 @@
 """Unit tests for trader_koo.backend.services.scheduler."""
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
 
 from trader_koo.backend.services.scheduler import (
     _run_memory_cleanup,
+    _run_daily_update_unlocked,
     _normalize_update_mode,
     create_scheduler,
+)
+from trader_koo.backend.services.pipeline import (
+    ensure_pipeline_runs_schema,
+    reserve_pipeline_run,
 )
 from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
 
@@ -152,3 +158,44 @@ class TestNormalizeUpdateMode:
 
     def test_whitespace_stripped(self):
         assert _normalize_update_mode("  full  ") == "full"
+
+
+def test_worker_transitions_reserved_record_before_subprocess(tmp_path, monkeypatch):
+    db_path = tmp_path / "scheduler.db"
+    conn = sqlite3.connect(db_path)
+    ensure_pipeline_runs_schema(conn)
+    conn.close()
+    reserve_pipeline_run(
+        run_id="pipe_reserved",
+        mode="report",
+        source="admin",
+        db_path=db_path,
+    )
+
+    def completed_subprocess(*args, **kwargs):
+        verify = sqlite3.connect(db_path)
+        row = verify.execute(
+            "SELECT status, stage FROM pipeline_runs WHERE run_id = 'pipe_reserved'"
+        ).fetchone()
+        verify.close()
+        assert row == ("running", "report")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
+    monkeypatch.setattr(
+        "trader_koo.backend.services.scheduler.subprocess.run",
+        completed_subprocess,
+    )
+
+    _run_daily_update_unlocked(
+        "report",
+        "admin",
+        pipeline_run_id="pipe_reserved",
+    )
+
+    verify = sqlite3.connect(db_path)
+    rows = verify.execute(
+        "SELECT run_id, status, report_ok FROM pipeline_runs"
+    ).fetchall()
+    verify.close()
+    assert rows == [("pipe_reserved", "ok", 1)]

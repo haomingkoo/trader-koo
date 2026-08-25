@@ -1,5 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
+import {
+  requireSuccessfulTrigger,
+  type TriggerUpdateResponse,
+} from "./triggerUpdate";
 import { OPTIONS_PREMIUM_CONFIG } from "./optionsConfig";
 import type { OptionsPremiumSort } from "./optionsConfig";
 import type {
@@ -303,18 +307,14 @@ export function useTriggerUpdate() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ mode, apiKey }: { mode: "full" | "yolo" | "report"; apiKey: string }) => {
-      const result = await apiFetch<{ ok: boolean; detail?: string; message?: string }>(
+      const result = await apiFetch<TriggerUpdateResponse>(
         `/api/admin/trigger-update?mode=${encodeURIComponent(mode)}`,
         {
           method: "POST",
           headers: { "X-API-Key": apiKey },
         },
       );
-      return typeof result.detail === "string"
-        ? result.detail
-        : typeof result.message === "string"
-          ? result.message
-          : "Triggered successfully";
+      return requireSuccessfulTrigger(result);
     },
     onSuccess: () => {
       // Auto-refresh pipeline status after triggering

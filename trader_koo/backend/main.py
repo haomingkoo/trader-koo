@@ -65,6 +65,7 @@ from trader_koo.backend.services.pipeline import (
     read_interrupted_pipeline_run,
     reconcile_stale_running_runs,
     queue_post_ingest_resume,
+    queue_reserved_pipeline_run,
 )
 from trader_koo.crypto.service import start_crypto_feed, stop_crypto_feed
 from trader_koo.crypto.storage import ensure_crypto_schema
@@ -229,6 +230,15 @@ async def lifespan(_app: FastAPI):
                 "Startup recovered %s stale ingest run(s): %s",
                 reconcile.get("reconciled"),
                 ",".join(reconcile.get("run_ids", [])),
+            )
+
+        reserved = queue_reserved_pipeline_run(_scheduler)
+        if reserved.get("scheduled"):
+            LOG.warning(
+                "Startup requeued reserved pipeline run_id=%s job_id=%s mode=%s",
+                reserved.get("run_id"),
+                reserved.get("job_id"),
+                reserved.get("mode"),
             )
 
         # DB-based pipeline resume: check for interrupted pipeline_runs

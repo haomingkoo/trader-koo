@@ -19,7 +19,11 @@ from trader_koo.backend.services.pipeline import (
     determine_resume_mode,
     ensure_pipeline_runs_schema,
     finish_pipeline_run,
+    queue_reserved_pipeline_run,
+    read_active_pipeline_run,
     read_interrupted_pipeline_run,
+    reserve_pipeline_run,
+    start_pipeline_run,
     update_pipeline_stage,
 )
 
@@ -130,6 +134,84 @@ class TestCreatePipelineRun:
         row = _read_row(db_file, "pipe_auto_schema")
         assert row is not None
         assert row["mode"] == "yolo"
+
+
+class TestPipelineReservation:
+    def test_reserves_durably_and_rejects_a_second_active_run(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        db_file = _make_db(tmp_path)
+
+        assert reserve_pipeline_run(
+            run_id="pipe_reserved",
+            mode="report",
+            source="admin",
+            db_path=db_file,
+        ) is None
+        active = reserve_pipeline_run(
+            run_id="pipe_duplicate",
+            mode="full",
+            source="admin",
+            db_path=db_file,
+        )
+
+        row = _read_row(db_file, "pipe_reserved")
+        assert row is not None
+        assert row["status"] == "queued"
+        assert row["stage"] == "queued"
+        assert active is not None and active["run_id"] == "pipe_reserved"
+        assert _read_row(db_file, "pipe_duplicate") is None
+
+    def test_worker_transitions_the_same_reserved_record(self, tmp_path: Path) -> None:
+        db_file = _make_db(tmp_path)
+        reserve_pipeline_run(
+            run_id="pipe_reserved",
+            mode="report",
+            source="admin",
+            db_path=db_file,
+        )
+        reserved = _read_row(db_file, "pipe_reserved")
+
+        assert start_pipeline_run(
+            run_id="pipe_reserved",
+            mode="report",
+            source="admin",
+            db_path=db_file,
+        ) is True
+
+        running = _read_row(db_file, "pipe_reserved")
+        assert running is not None and reserved is not None
+        assert running["status"] == "running"
+        assert running["stage"] == "starting"
+        assert running["started_ts"] == reserved["started_ts"]
+        assert running["mode"] == "report"
+        assert running["source"] == "admin"
+
+    def test_restart_requeues_the_same_durable_reservation(self, tmp_path: Path) -> None:
+        db_file = _make_db(tmp_path)
+        reserve_pipeline_run(
+            run_id="pipe_reserved",
+            mode="report",
+            source="admin",
+            db_path=db_file,
+        )
+        calls: list[dict[str, Any]] = []
+
+        class Scheduler:
+            def add_job(self, func, **kwargs):
+                calls.append({"func": func, **kwargs})
+
+        result = queue_reserved_pipeline_run(Scheduler(), db_path=db_file)
+
+        assert result["scheduled"] is True
+        assert result["run_id"] == "pipe_reserved"
+        assert calls[0]["kwargs"] == {
+            "mode": "report",
+            "source": "admin",
+            "run_id": "pipe_reserved",
+        }
+        assert read_active_pipeline_run(db_path=db_file)["status"] == "queued"
 
 
 # ---------------------------------------------------------------------------
