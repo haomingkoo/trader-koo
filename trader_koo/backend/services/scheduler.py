@@ -171,18 +171,67 @@ def _release_update_lock(handle) -> None:
 # Daily update
 # ---------------------------------------------------------------------------
 
-def _run_daily_update(mode: str = "full", source: str = "scheduler") -> None:
+def _run_daily_update(
+    mode: str = "full",
+    source: str = "scheduler",
+    run_id: str | None = None,
+) -> None:
+    from trader_koo.backend.services.pipeline import (
+        finish_pipeline_run,
+        reserve_pipeline_run,
+    )
+
     mode_norm = _normalize_update_mode(mode) or "full"
+    pipeline_run_id = run_id or (
+        f"pipe_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+        f"_{secrets.token_hex(3)}"
+    )
+    if run_id is None and DB_PATH.exists():
+        try:
+            active = reserve_pipeline_run(
+                run_id=pipeline_run_id,
+                mode=mode_norm,
+                source=source,
+                db_path=DB_PATH,
+            )
+        except Exception as exc:
+            LOG.error("Failed to reserve scheduled pipeline run: %s", exc)
+            return
+        if active is not None:
+            _append_run_log(
+                "SKIP",
+                (
+                    "daily_update skipped because a durable run is active "
+                    f"source={source} mode={mode_norm} active_run_id={active.get('run_id')}"
+                ),
+            )
+            return
     lock_handle = _acquire_update_lock(mode_norm, source)
     if lock_handle is None:
+        if DB_PATH.exists():
+            finish_pipeline_run(
+                pipeline_run_id,
+                status="skipped",
+                error_message="update_lock_unavailable",
+                db_path=DB_PATH,
+            )
         return
     try:
-        _run_daily_update_unlocked(mode_norm, source)
+        _run_daily_update_unlocked(
+            mode_norm,
+            source,
+            pipeline_run_id=pipeline_run_id,
+        )
     finally:
         _release_update_lock(lock_handle)
 
 
-def _run_daily_update_unlocked(mode: str = "full", source: str = "scheduler") -> None:
+def _run_daily_update_unlocked(
+    mode: str = "full",
+    source: str = "scheduler",
+    *,
+    pipeline_run_id: str | None = None,
+) -> None:
     """Execute ``daily_update.sh`` with the given *mode*.
 
     Called by the APScheduler job or manually from the admin trigger
@@ -190,8 +239,8 @@ def _run_daily_update_unlocked(mode: str = "full", source: str = "scheduler") ->
     so that interrupted runs can be detected and resumed after restarts.
     """
     from trader_koo.backend.services.pipeline import (
-        create_pipeline_run,
         finish_pipeline_run,
+        start_pipeline_run,
         update_pipeline_stage,
     )
 
@@ -200,8 +249,9 @@ def _run_daily_update_unlocked(mode: str = "full", source: str = "scheduler") ->
     started = dt.datetime.now(dt.timezone.utc)
     rss_before = _current_rss_mb()
 
-    # Generate a unique run_id for pipeline tracking
-    pipeline_run_id = f"pipe_{started.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
+    pipeline_run_id = pipeline_run_id or (
+        f"pipe_{started.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
+    )
 
     _append_run_log(
         "SCHED",
@@ -216,16 +266,23 @@ def _run_daily_update_unlocked(mode: str = "full", source: str = "scheduler") ->
         RUN_LOG_PATH,
     )
 
-    # Record pipeline run in DB before starting
+    # Transition the durable reservation before starting the subprocess.
     try:
-        create_pipeline_run(
+        started_run = start_pipeline_run(
             run_id=pipeline_run_id,
             mode=mode_norm,
             source=source,
             db_path=DB_PATH,
         )
     except Exception as exc:
-        LOG.warning("Failed to create pipeline_runs record: %s", exc)
+        LOG.error("Failed to start pipeline_runs record: %s", exc)
+        return
+    if DB_PATH.exists() and not started_run:
+        LOG.warning(
+            "Pipeline run_id=%s was not queued and will not execute",
+            pipeline_run_id,
+        )
+        return
 
     # Determine which stages will run based on mode
     run_ingest = mode_norm == "full"

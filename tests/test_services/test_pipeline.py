@@ -116,6 +116,7 @@ class TestPipelineStatusSnapshot:
             "active",
             "stage",
             "latest_run",
+            "active_pipeline_run",
             "markers",
             "stage_line",
             "stage_line_ts",
@@ -139,6 +140,28 @@ class TestPipelineStatusSnapshot:
         result = pipeline_status_snapshot(log_lines=10)
 
         assert result["active"] is False
+
+    @patch(
+        "trader_koo.backend.services.pipeline.read_active_pipeline_run",
+        return_value={
+            "run_id": "pipe_live",
+            "status": "running",
+            "stage": "report",
+        },
+    )
+    @patch("trader_koo.backend.services.pipeline._tail_text_file", return_value=[])
+    @patch("trader_koo.backend.services.pipeline.read_latest_ingest_run", return_value=None)
+    def test_persisted_running_pipeline_is_authoritative(
+        self,
+        mock_run,
+        mock_tail,
+        mock_active,
+    ):
+        result = pipeline_status_snapshot(log_lines=10)
+
+        assert result["active"] is True
+        assert result["stage"] == "report"
+        assert result["active_pipeline_run"]["run_id"] == "pipe_live"
 
 
 class TestReconcileStaleRunningRuns:

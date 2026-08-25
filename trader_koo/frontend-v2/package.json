@@ -11,7 +11,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test:e2e": "playwright test",
-    "test": "node --experimental-strip-types --test src/lib/chart/buildEquityChartData.test.ts src/components/report/setupQualityView.test.ts",
+    "test": "node --experimental-strip-types --test src/lib/chart/buildEquityChartData.test.ts src/components/report/setupQualityView.test.ts src/api/triggerUpdate.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

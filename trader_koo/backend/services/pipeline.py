@@ -127,6 +127,97 @@ def create_pipeline_run(
         conn.close()
 
 
+def reserve_pipeline_run(
+    *,
+    run_id: str,
+    mode: str,
+    source: str,
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Atomically reserve a queued run, returning any existing active run."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"pipeline database does not exist: {path}")
+    now_iso = _now_iso_z()
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        ensure_pipeline_runs_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute(
+            """
+            SELECT *
+            FROM pipeline_runs
+            WHERE status IN ('queued', 'running')
+            ORDER BY started_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if active is not None:
+            conn.rollback()
+            return dict(active)
+        conn.execute(
+            """
+            INSERT INTO pipeline_runs
+                (run_id, started_ts, mode, source, status, stage, stage_started_ts)
+            VALUES (?, ?, ?, ?, 'queued', 'queued', ?)
+            """,
+            (run_id, now_iso, mode, source, now_iso),
+        )
+        conn.commit()
+        return None
+    finally:
+        conn.close()
+
+
+def start_pipeline_run(
+    *,
+    run_id: str,
+    mode: str,
+    source: str,
+    db_path: Path | None = None,
+) -> bool:
+    """Transition one reserved run to running, or create a direct worker run."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return False
+    now_iso = _now_iso_z()
+    conn = sqlite3.connect(str(path))
+    try:
+        ensure_pipeline_runs_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        updated = conn.execute(
+            """
+            UPDATE pipeline_runs
+            SET status = 'running', stage = 'starting', stage_started_ts = ?
+            WHERE run_id = ? AND status = 'queued'
+            """,
+            (now_iso, run_id),
+        ).rowcount
+        if updated:
+            conn.commit()
+            return True
+        existing = conn.execute(
+            "SELECT status FROM pipeline_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if existing is not None:
+            conn.rollback()
+            return False
+        conn.execute(
+            """
+            INSERT INTO pipeline_runs
+                (run_id, started_ts, mode, source, status, stage, stage_started_ts)
+            VALUES (?, ?, ?, ?, 'running', 'starting', ?)
+            """,
+            (run_id, now_iso, mode, source, now_iso),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 def update_pipeline_stage(
     run_id: str,
     stage: str,
@@ -218,6 +309,32 @@ def read_interrupted_pipeline_run(
             SELECT *
             FROM pipeline_runs
             WHERE status = 'running'
+            ORDER BY started_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def read_active_pipeline_run(
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Return the most recent queued or running pipeline reservation."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not table_exists(conn, "pipeline_runs"):
+            return None
+        row = conn.execute(
+            """
+            SELECT *
+            FROM pipeline_runs
+            WHERE status IN ('queued', 'running')
             ORDER BY started_ts DESC
             LIMIT 1
             """
@@ -536,6 +653,7 @@ def pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
     inferred = _infer_pipeline_from_log_tail(tail)
     last_completed = _infer_last_completed_event_from_tail(tail)
     latest_run = read_latest_ingest_run()
+    active_pipeline_run = read_active_pipeline_run()
     stage = inferred.get("stage", "unknown")
     active = bool(inferred.get("active"))
     stage_line = inferred.get("stage_line")
@@ -564,6 +682,10 @@ def pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
             stale_inference = True
             active = False
             stage = "idle"
+    if active_pipeline_run is not None:
+        active = True
+        stage = str(active_pipeline_run.get("stage") or "starting")
+        stale_inference = False
     if not active and stage != "stale_running":
         if last_completed is not None:
             stage = "idle"
@@ -575,6 +697,7 @@ def pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
         "active": active,
         "stage": stage,
         "latest_run": latest_run,
+        "active_pipeline_run": active_pipeline_run,
         "markers": inferred.get("marker_lines", []),
         "stage_line": stage_line,
         "stage_line_ts": stage_line_ts.replace(microsecond=0).isoformat() if stage_line_ts else None,
@@ -850,3 +973,38 @@ def queue_post_ingest_resume(
         ((candidate.get("latest_run") or {}).get("run_id") or "-"),
     )
     return {"scheduled": True, "job_id": job_id, **candidate}
+
+
+def queue_reserved_pipeline_run(
+    scheduler: BackgroundScheduler,
+    *,
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    """Requeue a durable manual reservation that survived an app restart."""
+    reserved = read_active_pipeline_run(db_path=db_path)
+    if reserved is None or reserved.get("status") != "queued":
+        return {"scheduled": False}
+    run_id = str(reserved["run_id"])
+    mode = str(reserved["mode"])
+    source = str(reserved["source"])
+    job_id = f"resume_reserved_{run_id}"
+    scheduler.add_job(
+        _run_daily_update,
+        trigger="date",
+        run_date=dt.datetime.now(dt.timezone.utc),
+        id=job_id,
+        kwargs={"mode": mode, "source": source, "run_id": run_id},
+    )
+    LOG.warning(
+        "Requeued reserved pipeline run_id=%s mode=%s source=%s",
+        run_id,
+        mode,
+        source,
+    )
+    return {
+        "scheduled": True,
+        "job_id": job_id,
+        "run_id": run_id,
+        "mode": mode,
+        "source": source,
+    }
