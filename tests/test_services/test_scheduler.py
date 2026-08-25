@@ -1,6 +1,8 @@
 """Unit tests for trader_koo.backend.services.scheduler."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from trader_koo.backend.services.scheduler import (
@@ -77,17 +79,19 @@ class TestCreateScheduler:
 
         assert scheduler.get_job("options_iv_snapshot") is None
 
-    def test_memory_cleanup_uses_runtime_modules(self, monkeypatch):
-        from trader_koo.backend.main import app
-
+    def test_memory_cleanup_uses_authenticator_interface(self):
         authenticator = AdminAuthenticator(
             AdminAuthConfig(api_key="x" * 32, failure_window_sec=10, block_sec=10)
         )
         authenticator._failures["expired"] = {"updated_ts": 0.0}
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                admin_authenticator=authenticator,
+                rate_limiter=None,
+            )
+        )
 
-        monkeypatch.setattr(app.state, "admin_authenticator", authenticator)
-
-        _run_memory_cleanup()
+        _run_memory_cleanup(app)
 
         assert authenticator._failures == {}
 

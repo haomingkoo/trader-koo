@@ -777,17 +777,19 @@ def _run_calibration_pulse(trigger: str = "scheduled") -> None:
         LOG.error("Calibration pulse failed: %s", exc)
 
 
-def _run_memory_cleanup() -> None:
+def _run_memory_cleanup(app_instance=None) -> None:
     """Every 10 min: prune expired entries from in-memory dicts.
 
     Prevents unbounded growth in:
     - Admin auth rate-limit state (brute-force IP tracking)
     - Rate limiter sliding window storage (per-IP request timestamps)
     """
-    from trader_koo.backend.main import app
     from trader_koo.middleware.auth import AdminAuthenticator
 
-    authenticator = getattr(app.state, "admin_authenticator", None)
+    if app_instance is None:
+        from trader_koo.backend.main import app as app_instance
+
+    authenticator = getattr(app_instance.state, "admin_authenticator", None)
     pruned_auth = (
         authenticator.cleanup_expired()
         if isinstance(authenticator, AdminAuthenticator)
@@ -798,7 +800,9 @@ def _run_memory_cleanup() -> None:
     pruned_rl = 0
     try:
         from trader_koo.ratelimit.service import RateLimiter
-        rate_limiter: RateLimiter | None = getattr(app.state, "rate_limiter", None)
+        rate_limiter: RateLimiter | None = getattr(
+            app_instance.state, "rate_limiter", None
+        )
         if rate_limiter is not None:
             pruned_rl = rate_limiter.cleanup_expired()
     except Exception as exc:
