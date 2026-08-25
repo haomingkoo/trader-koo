@@ -39,7 +39,11 @@ export function CryptoWsProvider({ children }: { children: ReactNode }) {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.symbol && typeof data.price === "number" && !data.type) {
+        if (
+          data.symbol
+          && typeof data.price === "number"
+          && (!data.type || data.type === "tick")
+        ) {
           setPrices((prev) => ({ ...prev, [data.symbol]: data as CryptoPrice }));
         }
         for (const fn of listenersRef.current) {
@@ -68,8 +72,16 @@ export function CryptoWsProvider({ children }: { children: ReactNode }) {
   }, [connect]);
 
   useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/crypto/prices")
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("crypto snapshot unavailable")))
+      .then((payload: { prices?: Record<string, CryptoPrice> }) => {
+        if (!cancelled && payload.prices) setPrices(payload.prices);
+      })
+      .catch(() => undefined);
     connect();
     return () => {
+      cancelled = true;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };

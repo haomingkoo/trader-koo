@@ -1297,7 +1297,7 @@ def run(args: argparse.Namespace) -> None:
     # Always include market context tickers regardless of mode.
     # Trinity: SPY (S&P 500), QQQ (Nasdaq), ^DJI (Dow) + VIX + 10yr yield + inverse VIX.
     # Shares the macro/sector context block with DEFAULT_SOFT_FAIL_TICKERS.
-    ALWAYS_FETCH = ["SPY", "QQQ", *_SHARED_CONTEXT_TICKERS]
+    ALWAYS_FETCH = ["SPY", "QQQ", *DEFAULT_SOFT_FAIL_TICKERS]
     for t in ALWAYS_FETCH:
         if t not in tickers:
             tickers.append(t)

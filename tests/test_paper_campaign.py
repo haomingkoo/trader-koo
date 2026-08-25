@@ -462,6 +462,40 @@ def test_lifecycle_is_idempotent_audited_atomic_and_reversible(monkeypatch):
         conn.execute("UPDATE paper_campaigns SET label='changed' WHERE campaign_id='paper-v1'")
 
 
+def test_observation_campaign_can_activate_from_canonical_sealed_report(monkeypatch):
+    conn = _db()
+    policy_hash = "a" * 64
+    conn.execute(
+        "UPDATE paper_campaigns SET policy_hash=? WHERE campaign_id='paper-v2'",
+        (policy_hash,),
+    )
+    conn.execute(
+        """INSERT INTO paper_decision_sets
+               (report_run_id,campaign_id,report_date,generated_ts,policy_version,
+                candidate_count,request_hash,candidates_hash,policy_hash,context_hash,
+                report_complete,is_canonical,status)
+           VALUES ('sealed-observation','paper-v2','2026-08-25','2026-08-25T22:00:00Z',
+                   'paper-campaign-v2.0',0,?,?,?,?,1,1,'sealed')""",
+        ("b" * 64, "c" * 64, policy_hash, "d" * 64),
+    )
+    conn.commit()
+    monkeypatch.setattr(
+        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
+        lambda conn: None,
+    )
+
+    result = transition_campaign(
+        conn,
+        campaign_id="paper-v2",
+        action="activate",
+        actor="alice",
+        reason="start prospective paper observation",
+        idempotency_key="activate-observation-001",
+    )
+
+    assert result["to_status"] == "active"
+
+
 def test_decision_sets_preserve_duplicate_ranks_empty_partial_and_retry_identity():
     conn = _db()
     rows = [_candidate("DUP", tier="F"), _candidate("DUP", tier="F"), "bad-row"]

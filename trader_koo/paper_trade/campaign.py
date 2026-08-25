@@ -447,17 +447,35 @@ def transition_campaign(conn: sqlite3.Connection, *, campaign_id: str, action: s
                 "SELECT policy_version,replay_live_parity,policy_hash FROM paper_campaigns WHERE campaign_id=?",
                 (campaign_id,),
             ).fetchone()
-            if (
-                not promotion or not campaign_policy
-                or int(promotion[3]) != 1 or str(promotion[4]) != "matched"
-                or int(promotion[5]) != 1 or int(promotion[6]) != 1
-                or int(promotion[7]) != 1 or str(campaign_policy[1]) != "matched"
-            ):
-                raise ValueError("activation requires eligible sealed promotion evidence and human approval")
-            if str(promotion[1]) != str(campaign_policy[0]):
-                raise ValueError("promotion evidence policy version does not match campaign")
-            if str(promotion[2]) != str(campaign_policy[2]):
-                raise ValueError("promotion evidence policy hash does not match campaign")
+            decision_set = conn.execute(
+                """SELECT policy_version,policy_hash,report_complete,is_canonical,status
+                   FROM paper_decision_sets
+                   WHERE campaign_id=?
+                   ORDER BY rowid DESC LIMIT 1""",
+                (campaign_id,),
+            ).fetchone()
+            promotion_ready = bool(
+                promotion and campaign_policy
+                and int(promotion[3]) == 1 and str(promotion[4]) == "matched"
+                and int(promotion[5]) == 1 and int(promotion[6]) == 1
+                and int(promotion[7]) == 1 and str(campaign_policy[1]) == "matched"
+            )
+            observation_ready = bool(
+                decision_set and campaign_policy
+                and int(decision_set[2]) == 1
+                and int(decision_set[3]) == 1
+                and str(decision_set[4]) == "sealed"
+            )
+            if not promotion_ready and not observation_ready:
+                raise ValueError(
+                    "activation requires a canonical sealed report decision or eligible promotion evidence"
+                )
+            evidence = promotion if promotion_ready else decision_set
+            evidence_label = "promotion evidence" if promotion_ready else "report decision"
+            if str(evidence[1 if promotion_ready else 0]) != str(campaign_policy[0]):
+                raise ValueError(f"{evidence_label} policy version does not match campaign")
+            if str(evidence[2 if promotion_ready else 1]) != str(campaign_policy[2]):
+                raise ValueError(f"{evidence_label} policy hash does not match campaign")
             conn.execute("UPDATE paper_campaigns SET status='draft' WHERE status='active' AND campaign_id!=?", (campaign_id,))
             after = "active"
         else:
@@ -555,8 +573,6 @@ def campaign_health(conn: sqlite3.Connection, *, campaign_id: str) -> dict[str, 
         reasons.append("eligible_candidate_zero_admission_streak")
     if parity == "diverged":
         reasons.append("replay_live_divergence")
-    elif parity != "matched":
-        reasons.append("replay_live_parity_not_measured")
     if str(campaign[3]) != "active":
         reasons.append("campaign_not_active")
     latest_experiment = conn.execute(

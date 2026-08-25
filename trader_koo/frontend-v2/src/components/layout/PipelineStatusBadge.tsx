@@ -20,7 +20,7 @@ function PipelineDot({ state }: { state: StageState }) {
   );
 }
 
-function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_run" | "errors">) {
+function derivePipelineStates(data: PipelineStatus) {
   const stage = (data.pipeline?.stage ?? "idle").toLowerCase();
   const runStatus = (data.latest_run?.status ?? "").toLowerCase();
   const lastCompletedStage = (data.pipeline?.last_completed_stage ?? "").toLowerCase();
@@ -103,6 +103,10 @@ function derivePipelineStates(data: Pick<PipelineStatus, "pipeline" | "latest_ru
     }
   }
 
+  if (!pipelineActive && data.freshness?.report_fresh === false) {
+    report = "error";
+  }
+
   return { ingest, yolo, report };
 }
 
@@ -136,12 +140,18 @@ export default function PipelineStatusBadge({
       <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
         Pipeline
       </span>
-      <div className="flex items-center gap-1" aria-label="Pipeline status: Ingest, YOLO, Report">
-        <PipelineDot state={states.ingest} />
+      <div className="flex items-center gap-1.5" aria-label="Pipeline status: Ingest, YOLO, Report">
+        <span className="flex items-center gap-1 text-[9px] text-[var(--muted)]">
+          <PipelineDot state={states.ingest} /> Ingest
+        </span>
         <span className="text-[var(--line)]" aria-hidden="true">&rarr;</span>
-        <PipelineDot state={states.yolo} />
+        <span className="flex items-center gap-1 text-[9px] text-[var(--muted)]">
+          <PipelineDot state={states.yolo} /> YOLO
+        </span>
         <span className="text-[var(--line)]" aria-hidden="true">&rarr;</span>
-        <PipelineDot state={states.report} />
+        <span className="flex items-center gap-1 text-[9px] text-[var(--muted)]">
+          <PipelineDot state={states.report} /> Report
+        </span>
       </div>
     </div>
   );
