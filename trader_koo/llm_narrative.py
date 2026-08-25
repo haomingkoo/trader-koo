@@ -13,6 +13,7 @@ from typing import Any
 from trader_koo.llm_health import (
     llm_disable_seconds_on_fail,
     llm_health_summary,
+    llm_health_summary_readonly,
     note_llm_failure,
     note_llm_success,
     note_llm_token_usage,
@@ -209,13 +210,14 @@ def llm_ready() -> bool:
     return False
 
 
-def llm_status() -> dict[str, Any]:
+def _llm_status(*, readonly: bool) -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
     runtime_disabled = _runtime_disabled_now(now)
     provider = _llm_provider()
     health = {}
     try:
-        health = llm_health_summary(_default_db_path(), recent_limit=10)
+        health_reader = llm_health_summary_readonly if readonly else llm_health_summary
+        health = health_reader(_default_db_path(), recent_limit=10)
     except Exception:
         health = {}
     base = {
@@ -241,6 +243,15 @@ def llm_status() -> dict[str, Any]:
         base["has_deployment"] = bool(cfg["deployment"])
         base["api_version"] = cfg["api_version"]
     return base
+
+
+def llm_status() -> dict[str, Any]:
+    return _llm_status(readonly=False)
+
+
+def llm_status_readonly() -> dict[str, Any]:
+    """Return status metadata without initializing database schema."""
+    return _llm_status(readonly=True)
 
 
 def _compact_text(value: Any, *, max_chars: int) -> str:

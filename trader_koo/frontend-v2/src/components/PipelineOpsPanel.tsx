@@ -398,10 +398,10 @@ function StatusSection({ data, state }: { data: PipelineStatus; state: PipelineS
       <div className="rounded-md border border-[var(--border)] px-3 py-2 text-xs">
         <div className="flex flex-wrap gap-x-4 gap-y-1">
           <span>
-            Price basis verified: <strong>{data.price_basis.verified_tickers}</strong>
+            Persisted price revisions verified: <strong>{data.price_basis.verified_tickers}</strong>
           </span>
           <span className={data.price_basis.unresolved_tickers > 0 ? "text-[var(--red)]" : "text-[var(--green)]"}>
-            Unresolved: <strong>{data.price_basis.unresolved_tickers}</strong>
+            Unresolved or unsealed: <strong>{data.price_basis.unresolved_tickers}</strong>
           </span>
         </div>
         {data.price_basis.bases.map((basis, index) => (

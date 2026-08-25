@@ -5,6 +5,7 @@ import datetime as dt
 import logging
 import os
 import resource
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,9 @@ from trader_koo.backend.services.pipeline import (
     post_ingest_resume_candidate,
     set_cached_status,
 )
-from trader_koo.backend.services.report_loader import (
-    is_report_fresh,
-    latest_daily_report_json,
-)
-from trader_koo.db.price_contract import research_eligible_tickers
-from trader_koo.llm_narrative import llm_status
+from trader_koo.backend.services.report_loader import is_report_fresh
+from trader_koo.llm_narrative import llm_status_readonly
+from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
 router = APIRouter()
@@ -127,6 +125,45 @@ def _max_rss_mb() -> float | None:
         return rss_kb / 1024.0
     except Exception:
         return None
+
+
+def _persisted_price_revision_summary(
+    conn: sqlite3.Connection,
+    *,
+    tracked_tickers: int,
+) -> dict[str, Any]:
+    """Read recorded revision seals without re-hashing price history."""
+    summary: dict[str, Any] = {
+        "verified_tickers": 0,
+        "unresolved_tickers": max(0, tracked_tickers),
+        "revision_tickers": 0,
+        "missing_revision_tickers": max(0, tracked_tickers),
+        "verification_mode": "persisted_revision_seal",
+        "bases": [],
+    }
+    if not table_exists(conn, "price_series_revisions"):
+        return summary
+    rows = conn.execute(
+        """SELECT adjustment_basis, adjustment_version, status AS basis_status,
+                  COUNT(*) AS ticker_count
+           FROM price_series_revisions
+           GROUP BY adjustment_basis, adjustment_version, status"""
+    ).fetchall()
+    bases = [dict(row) for row in rows]
+    revision_tickers = sum(int(row["ticker_count"] or 0) for row in bases)
+    verified_tickers = sum(
+        int(row["ticker_count"] or 0)
+        for row in bases
+        if row["basis_status"] == "verified"
+    )
+    return {
+        **summary,
+        "verified_tickers": verified_tickers,
+        "unresolved_tickers": max(0, tracked_tickers - verified_tickers),
+        "revision_tickers": revision_tickers,
+        "missing_revision_tickers": max(0, tracked_tickers - revision_tickers),
+        "bases": bases,
+    }
 
 
 def _sanitize_status_run(row: dict[str, Any] | None, *, expose_internal: bool) -> dict[str, Any] | None:
@@ -401,33 +438,22 @@ def status() -> dict[str, Any]:
         fund_age_hours = hours_since(latest_fund_snapshot, now)
         opt_age_hours = hours_since(latest_opt_snapshot, now)
 
-        price_basis = {
-            "verified_tickers": 0,
-            "unresolved_tickers": int(counts["tracked_tickers"] if counts else 0),
-            "bases": [],
-        }
-        price_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(price_daily)").fetchall()
-        }
-        if {"adjustment_basis", "adjustment_version", "basis_status"}.issubset(price_columns):
-            basis_rows = conn.execute(
-                """
-                SELECT adjustment_basis, adjustment_version, basis_status,
-                       COUNT(DISTINCT ticker) AS ticker_count
-                FROM price_daily
-                GROUP BY adjustment_basis, adjustment_version, basis_status
-                """
-            ).fetchall()
-            price_basis["bases"] = [dict(row) for row in basis_rows]
-            price_basis["verified_tickers"] = len(research_eligible_tickers(conn))
-            price_basis["unresolved_tickers"] = max(
-                0,
-                int(counts["tracked_tickers"] if counts else 0)
-                - int(price_basis["verified_tickers"]),
-            )
+        price_basis = _persisted_price_revision_summary(
+            conn,
+            tracked_tickers=int(counts["tracked_tickers"] if counts else 0),
+        )
 
         # Report freshness
-        _, report_payload = latest_daily_report_json(REPORT_DIR)
+        try:
+            resolved_report = resolve_published_report(
+                conn,
+                report_dir=REPORT_DIR,
+                require_current=True,
+            )
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            LOG.warning("Failed to verify current report for status: %s", exc)
+            resolved_report = None
+        report_payload = resolved_report[1] if resolved_report is not None else None
         report_generated_ts_str = (report_payload or {}).get("generated_ts")
         report_generated_ts = parse_iso_utc(report_generated_ts_str)
         report_age_hours = (
@@ -473,11 +499,12 @@ def status() -> dict[str, Any]:
                 latest_error_message = str(latest_failed.get("error_message") or "").strip() or None
                 latest_error_ts = latest_failed.get("finished_ts") or latest_failed.get("started_ts")
 
-        pipeline_snap = pipeline_status_snapshot(log_lines=60)
+        pipeline_snap = pipeline_status_snapshot(log_lines=60, latest_run=latest_run)
         resume_candidate = post_ingest_resume_candidate(
             latest_run=latest_run,
             pipeline_active=bool(pipeline_snap.get("active")),
             now_utc=now,
+            latest_report_payload=report_payload,
         )
         pipeline_active = bool(pipeline_snap.get("active"))
         pipeline_stage = pipeline_snap.get("stage") or "unknown"
@@ -491,7 +518,7 @@ def status() -> dict[str, Any]:
         if resume_candidate:
             warnings.append("post-ingest yolo/report recovery recommended")
 
-        llm_meta = llm_status()
+        llm_meta = llm_status_readonly()
         llm_health_data = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
         if llm_meta.get("enabled"):
             if not llm_meta.get("ready"):
@@ -592,7 +619,7 @@ def status() -> dict[str, Any]:
             },
         }
         response_payload = _sanitize_status_payload(payload, expose_internal=EXPOSE_STATUS_INTERNAL)
-        set_cached_status(now, response_payload)
+        set_cached_status(dt.datetime.now(dt.timezone.utc), response_payload)
         return response_payload
     finally:
         conn.close()

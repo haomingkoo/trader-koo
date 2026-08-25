@@ -402,67 +402,101 @@ def note_llm_token_usage(
         conn.close()
 
 
+def _llm_health_summary_from_conn(
+    conn: sqlite3.Connection,
+    *,
+    recent_limit: int,
+) -> dict[str, Any]:
+    limit = max(1, min(200, int(recent_limit)))
+    rows = conn.execute(
+        """
+        SELECT
+            outcome,
+            COUNT(*) AS count
+        FROM llm_health_events
+        GROUP BY outcome
+        """
+    ).fetchall()
+    counts = {str(r["outcome"] or ""): int(r["count"] or 0) for r in rows}
+    recent_rows = conn.execute(
+        """
+        SELECT event_ts, outcome, source, ticker, reason, error_class, details
+        FROM llm_health_events
+        ORDER BY event_ts DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    recent = [dict(r) for r in recent_rows]
+
+    raw_consec = _state_get(conn, "consecutive_failures") or "0"
+    try:
+        consecutive = max(0, int(raw_consec))
+    except ValueError:
+        consecutive = 0
+
+    last_success_ts = _state_get(conn, "last_success_ts")
+    last_failure_ts = _state_get(conn, "last_failure_ts")
+    last_failure_reason = _state_get(conn, "last_failure_reason")
+    last_error_class = _state_get(conn, "last_error_class")
+    last_error_details = _state_get(conn, "last_error_details")
+    threshold = llm_degraded_threshold()
+    degraded = consecutive >= threshold and bool(last_failure_ts)
+
+    return {
+        "degraded": degraded,
+        "degraded_threshold": threshold,
+        "consecutive_failures": consecutive,
+        "last_success_ts": last_success_ts,
+        "last_failure_ts": last_failure_ts,
+        "last_failure_reason": last_failure_reason,
+        "last_error_class": last_error_class,
+        "last_error_details": last_error_details,
+        "counts": {
+            "success": int(counts.get("success") or 0),
+            "failure": int(counts.get("failure") or 0),
+            "other": sum(v for k, v in counts.items() if k not in {"success", "failure"}),
+            "total": sum(counts.values()),
+        },
+        "recent_events": recent,
+    }
+
+
 def llm_health_summary(
     db_path: Path,
     *,
     recent_limit: int = 25,
 ) -> dict[str, Any]:
     ensure_llm_health_schema(db_path)
-    limit = max(1, min(200, int(recent_limit)))
     conn = _connect(db_path)
     try:
-        rows = conn.execute(
-            """
-            SELECT
-                outcome,
-                COUNT(*) AS count
-            FROM llm_health_events
-            GROUP BY outcome
-            """
-        ).fetchall()
-        counts = {str(r["outcome"] or ""): int(r["count"] or 0) for r in rows}
-        recent_rows = conn.execute(
-            """
-            SELECT event_ts, outcome, source, ticker, reason, error_class, details
-            FROM llm_health_events
-            ORDER BY event_ts DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        recent = [dict(r) for r in recent_rows]
+        return _llm_health_summary_from_conn(conn, recent_limit=recent_limit)
+    finally:
+        conn.close()
 
-        raw_consec = _state_get(conn, "consecutive_failures") or "0"
-        try:
-            consecutive = max(0, int(raw_consec))
-        except ValueError:
-            consecutive = 0
 
-        last_success_ts = _state_get(conn, "last_success_ts")
-        last_failure_ts = _state_get(conn, "last_failure_ts")
-        last_failure_reason = _state_get(conn, "last_failure_reason")
-        last_error_class = _state_get(conn, "last_error_class")
-        last_error_details = _state_get(conn, "last_error_details")
-        threshold = llm_degraded_threshold()
-        degraded = consecutive >= threshold and bool(last_failure_ts)
-
-        return {
-            "degraded": degraded,
-            "degraded_threshold": threshold,
-            "consecutive_failures": consecutive,
-            "last_success_ts": last_success_ts,
-            "last_failure_ts": last_failure_ts,
-            "last_failure_reason": last_failure_reason,
-            "last_error_class": last_error_class,
-            "last_error_details": last_error_details,
-            "counts": {
-                "success": int(counts.get("success") or 0),
-                "failure": int(counts.get("failure") or 0),
-                "other": sum(v for k, v in counts.items() if k not in {"success", "failure"}),
-                "total": sum(counts.values()),
-            },
-            "recent_events": recent,
+def llm_health_summary_readonly(
+    db_path: Path,
+    *,
+    recent_limit: int = 25,
+) -> dict[str, Any]:
+    """Read LLM health without creating files, tables, or indexes."""
+    if not db_path.is_file():
+        return {}
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        required = {"llm_health_events", "llm_health_state"}
+        present = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?)",
+                tuple(sorted(required)),
+            )
         }
+        if present != required:
+            return {}
+        return _llm_health_summary_from_conn(conn, recent_limit=recent_limit)
     finally:
         conn.close()
 

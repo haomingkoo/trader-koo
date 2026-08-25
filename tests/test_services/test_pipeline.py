@@ -14,6 +14,7 @@ from trader_koo.backend.services.pipeline import (
     invalidate_status_cache,
     parse_log_line_ts_utc,
     pipeline_status_snapshot,
+    post_ingest_resume_candidate,
     reconcile_stale_running_runs,
     set_cached_status,
 )
@@ -162,6 +163,43 @@ class TestPipelineStatusSnapshot:
         assert result["active"] is True
         assert result["stage"] == "report"
         assert result["active_pipeline_run"]["run_id"] == "pipe_live"
+
+    @patch("trader_koo.backend.services.pipeline._tail_text_file", return_value=[])
+    @patch("trader_koo.backend.services.pipeline.read_active_pipeline_run", return_value=None)
+    @patch("trader_koo.backend.services.pipeline.read_latest_ingest_run")
+    def test_uses_supplied_latest_run_without_duplicate_db_read(
+        self,
+        mock_run,
+        mock_active,
+        mock_tail,
+    ):
+        latest_run = {"run_id": "run-1", "status": "ok"}
+
+        result = pipeline_status_snapshot(log_lines=10, latest_run=latest_run)
+
+        assert result["latest_run"] == latest_run
+        mock_run.assert_not_called()
+
+
+def test_resume_candidate_uses_supplied_report_without_duplicate_load() -> None:
+    now = dt.datetime.now(dt.timezone.utc)
+    latest_run = {
+        "run_id": "run-1",
+        "status": "ok",
+        "finished_ts": (now - dt.timedelta(minutes=5)).isoformat(),
+    }
+    latest_report = {"generated_ts": now.isoformat()}
+
+    with patch("trader_koo.backend.services.pipeline.latest_daily_report_json") as loader:
+        result = post_ingest_resume_candidate(
+            latest_run=latest_run,
+            pipeline_active=False,
+            now_utc=now,
+            latest_report_payload=latest_report,
+        )
+
+    assert result is None
+    loader.assert_not_called()
 
 
 class TestReconcileStaleRunningRuns:
