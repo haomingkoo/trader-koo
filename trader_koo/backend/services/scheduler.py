@@ -15,7 +15,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 try:
     import fcntl
@@ -784,27 +784,20 @@ def _run_memory_cleanup() -> None:
     - Admin auth rate-limit state (brute-force IP tracking)
     - Rate limiter sliding window storage (per-IP request timestamps)
     """
-    import time as _time
+    from trader_koo.backend.main import app
+    from trader_koo.middleware.auth import AdminAuthenticator
 
-    from trader_koo.backend.main import (
-        _ADMIN_AUTH_LOCK,
-        _ADMIN_AUTH_STATE,
-        _prune_admin_auth_state,
+    authenticator = getattr(app.state, "admin_authenticator", None)
+    pruned_auth = (
+        authenticator.cleanup_expired()
+        if isinstance(authenticator, AdminAuthenticator)
+        else 0
     )
-
-    # Prune admin auth state
-    pruned_auth = 0
-    with _ADMIN_AUTH_LOCK:
-        before = len(_ADMIN_AUTH_STATE)
-        _prune_admin_auth_state(_time.time())
-        pruned_auth = before - len(_ADMIN_AUTH_STATE)
 
     # Prune rate limiter storage
     pruned_rl = 0
     try:
         from trader_koo.ratelimit.service import RateLimiter
-        from trader_koo.backend.main import app
-
         rate_limiter: RateLimiter | None = getattr(app.state, "rate_limiter", None)
         if rate_limiter is not None:
             pruned_rl = rate_limiter.cleanup_expired()

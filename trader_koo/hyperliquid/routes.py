@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
@@ -23,6 +24,32 @@ from trader_koo.hyperliquid.tracker import (
 
 LOG = logging.getLogger(__name__)
 router = APIRouter(tags=["hyperliquid"])
+
+
+def _study_evidence(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    """Describe why a counter-trade simulation is not validated evidence."""
+    reasons = ["hash_bound_provenance_missing", "not_preregistered"]
+    backtest = payload.get("backtest")
+    if isinstance(backtest, dict):
+        for value in backtest.values():
+            if not isinstance(value, dict):
+                continue
+            dates = [
+                str(point.get("date") or "")
+                for point in value.get("equity_curve") or []
+                if isinstance(point, dict)
+            ]
+            if dates != sorted(dates):
+                reasons.append("equity_curve_not_chronological")
+                break
+    date_range = (payload.get("overview") or {}).get("date_range") or {}
+    return {
+        "status": "unvalidated_retrospective",
+        "source": source,
+        "data_start": date_range.get("start"),
+        "data_end": date_range.get("end"),
+        "reasons": reasons,
+    }
 
 
 @router.get("/api/hyperliquid/wallets")
@@ -300,21 +327,31 @@ def collect_fill_history(label: str, days: int = 120) -> dict[str, Any]:
 def get_counter_trade_study(label: str) -> dict[str, Any]:
     """Counter-trade study analysis for a tracked wallet.
 
-    Serves pre-computed study from static JSON (full S3 dataset).
-    Falls back to live computation if static file not found.
+    Serves a pre-computed study when one exists; otherwise computes from the
+    live database. The response labels retrospective simulations as unvalidated.
 
     Research only. Not financial advice.
     """
-    import json
-    from pathlib import Path
-
     # Serve pre-computed study (full 579K fill dataset)
     static_path = Path(__file__).parent / f"{label}_study.json"
     if static_path.exists():
         try:
-            return json.loads(static_path.read_text())
-        except Exception:
-            pass
+            payload = json.loads(static_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            LOG.error("Static Hyperliquid study is unreadable: %s", exc)
+            return {
+                "ok": False,
+                "error": "study_artifact_invalid",
+                "wallet": label,
+            }
+        if not isinstance(payload, dict):
+            return {
+                "ok": False,
+                "error": "study_artifact_invalid",
+                "wallet": label,
+            }
+        payload["study_evidence"] = _study_evidence(payload, source="static_artifact")
+        return payload
 
     # Fallback: compute live from DB
     from trader_koo.hyperliquid.study import compute_study
@@ -323,6 +360,8 @@ def get_counter_trade_study(label: str) -> dict[str, Any]:
     conn = get_conn()
     try:
         ensure_fills_table(conn)
-        return compute_study(conn, wallet=label)
+        payload = compute_study(conn, wallet=label)
+        payload["study_evidence"] = _study_evidence(payload, source="live_database")
+        return payload
     finally:
         conn.close()

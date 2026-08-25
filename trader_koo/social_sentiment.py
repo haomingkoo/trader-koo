@@ -13,9 +13,7 @@ import copy
 import datetime as dt
 import json
 import logging
-import math
 import os
-import re
 import threading
 import urllib.parse
 import urllib.request
@@ -25,7 +23,6 @@ LOG = logging.getLogger(__name__)
 
 _DEFAULT_TICKERS = ("SPY", "QQQ", "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "AMD", "GME")
 _DEFAULT_CACHE_TTL_SEC = 900
-_DEFAULT_POST_LIMIT = 30
 
 _cache_lock = threading.Lock()
 _cache_expires_at: dt.datetime | None = None
@@ -62,10 +59,6 @@ def _request_timeout_sec() -> int:
 
 def _cache_ttl_sec() -> int:
     return _int_env("TRADER_KOO_SOCIAL_SENTIMENT_CACHE_TTL_SEC", _DEFAULT_CACHE_TTL_SEC, lo=60, hi=3600)
-
-
-def _post_limit() -> int:
-    return _int_env("TRADER_KOO_SOCIAL_POST_LIMIT", _DEFAULT_POST_LIMIT, lo=10, hi=50)
 
 
 def _iso_utc(value: dt.datetime) -> str:
@@ -181,8 +174,6 @@ def _fetch_stocktwits_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
                 if len(posts) < 6:
                     body = str(msg.get("body") or "").strip()
                     created = str(msg.get("created_at") or "").strip() or None
-                    user = msg.get("user") or {}
-                    username = str(user.get("username") or "").strip() if isinstance(user, dict) else None
                     posts.append({
                         "title": body[:120] if body else f"${ticker} — {basic}",
                         "subreddit": f"StockTwits/${ticker}",

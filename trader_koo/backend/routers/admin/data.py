@@ -18,15 +18,13 @@ from trader_koo.audit.api import (
     get_audit_summary,
     query_audit_logs,
 )
-from trader_koo.audit.export import get_exporter_from_env
-from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
-
+from trader_koo.audit.export import export_logs_to_local
 from trader_koo.backend.routers.admin._shared import (
     LOG_DIR,
     PROJECT_DIR,
     get_audit_logger,
 )
-
+from trader_koo.backend.services.database import DB_PATH
 from trader_koo.scripts.cleanup_storage import run_cleanup
 
 router = APIRouter(tags=["admin", "admin-data"])
@@ -450,9 +448,8 @@ def admin_audit_logs_external_export(
 ) -> dict[str, Any]:
     """Export audit logs to external storage."""
     audit_logger = get_audit_logger()
-    exporter = get_exporter_from_env()
     try:
-        result = exporter.export_logs(
+        result = export_logs_to_local(
             audit_logger,
             start_date=start_date,
             end_date=end_date,

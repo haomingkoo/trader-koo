@@ -92,4 +92,5 @@ The paper trade system was audited by a 7-agent expert panel (Quant Trader, ML E
 
 ## [1.0.0] - 2026-03-22
 
-Initial versioned release. See `CODEX_REVIEW.md` for the 112-commit session audit.
+Initial versioned release. The original session audit remains available in Git
+history.

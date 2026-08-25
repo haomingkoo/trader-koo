@@ -5,18 +5,15 @@ VIX/options/crypto views, actionable Telegram alerts, and a paper-trading audit
 trail.
 
 [Live app](https://trader.kooexperience.com) |
-[Demo script](docs/demo.md) |
-[Proof of real data](docs/proof.md) |
-[Model versioning](docs/model-versioning.md) |
-[Architecture](ARCHITECTURE.md)
+[Architecture](ARCHITECTURE.md) |
+[Research status](RESEARCH_STATUS.md) |
+[Deployment](DEPLOYMENT.md)
 
 ![CI](https://github.com/haomingkoo/trader-koo/actions/workflows/ci.yml/badge.svg)
 ![Python >=3.11](https://img.shields.io/badge/Python-%3E%3D3.11-blue)
 ![React 19](https://img.shields.io/badge/React-19-61DAFB)
 ![FastAPI](https://img.shields.io/badge/FastAPI-backend-009688)
 ![License](https://img.shields.io/badge/License-MIT-green)
-
-![Trader Koo product preview](docs/assets/social-preview.svg)
 
 > Trader Koo is research software. It keeps paper trading separate from real
 > execution and shows source freshness so users can judge the data behind each
@@ -60,8 +57,6 @@ npm run dev
 
 Open the URL printed by Vite, usually `http://127.0.0.1:5173`.
 
-For a guided walkthrough, use [docs/demo.md](docs/demo.md).
-
 ## Real vs Simulated
 
 | Area | Status | Notes |
@@ -78,7 +73,7 @@ If a provider is unavailable, the app should show a degraded, stale, or
 missing-provider state. That makes the data quality visible instead of hiding it
 behind a polished answer.
 
-## Reproduce the Locked Baseline
+## Run the Locked Baseline
 
 The primary descriptive baseline enters only at the immediate next market
 session open and exits at the exact tenth-session close. It includes adverse
@@ -100,7 +95,8 @@ must be from the same snapshot or the run fails closed.
 Alternative holding periods are diagnostics and require
 `--diagnostic-holding-sessions`; diagnostic runs cannot consume the sealed
 held-out window. The Paper Trades page shows the latest hash-verified artifact
-and its causal limitations. A backtest never activates a paper campaign.
+and its causal limitations. A backtest never activates a paper campaign. See
+[RESEARCH_STATUS.md](RESEARCH_STATUS.md) before making any performance claim.
 
 ## Product Tour
 
@@ -175,10 +171,8 @@ npm run build --prefix trader_koo/frontend-v2
 
 The current repo also keeps proof-oriented docs:
 
-- [docs/proof.md](docs/proof.md) - source boundaries and verification evidence.
-- [docs/model-versioning.md](docs/model-versioning.md) - model promotion gates,
-  candidate runs, and paper-trade policy versions.
-- [docs/demo.md](docs/demo.md) - 5-minute product walkthrough.
+- [RESEARCH_STATUS.md](RESEARCH_STATUS.md) - current evidence and claim limits.
+- [DEPLOYMENT.md](DEPLOYMENT.md) - exact-SHA release and rollback contract.
 - [SECURITY.md](SECURITY.md) - security policy and reporting path.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - local development and PR expectations.
 

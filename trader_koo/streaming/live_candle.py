@@ -1,8 +1,8 @@
 """Session-aware live candle aggregator for equities.
 
-Receives live ticks from Finnhub and maintains a "forming" 1-min candle
-per symbol. When a candle closes (on minute boundary), it is finalized
-and the next one starts.
+Receives live ticks from Finnhub and maintains one forming session candle
+per symbol for the daily chart. The candle starts at the first observed tick
+and accumulates until the process or explicit test state is reset.
 
 Usage:
     from trader_koo.streaming.live_candle import update_tick, get_forming_candle
@@ -44,11 +44,6 @@ _lock = threading.Lock()
 _candles: dict[str, FormingCandle] = {}
 
 
-def _floor_to_minute(ts: dt.datetime) -> dt.datetime:
-    """Floor a datetime to the start of its minute."""
-    return ts.replace(second=0, microsecond=0)
-
-
 def update_tick(
     symbol: str,
     *,
@@ -56,11 +51,7 @@ def update_tick(
     volume: int,
     timestamp: dt.datetime,
 ) -> None:
-    """Ingest a single trade tick and update the forming candle.
-
-    If the tick belongs to a new minute, the old candle is discarded
-    (it is now "closed") and a fresh candle begins.
-    """
+    """Ingest one trade tick into the symbol's forming session candle."""
     with _lock:
         existing = _candles.get(symbol)
 
@@ -89,8 +80,8 @@ def update_tick(
 def get_forming_candle(symbol: str) -> dict[str, Any] | None:
     """Return the current forming candle for *symbol* as a dict.
 
-    Returns ``None`` if there is no live data or the candle is stale
-    (more than 2 minutes old).
+    Returns ``None`` if there is no live data or the candle has received no
+    tick for more than five minutes.
     """
     sym = symbol.upper()
     now = dt.datetime.now(dt.timezone.utc)

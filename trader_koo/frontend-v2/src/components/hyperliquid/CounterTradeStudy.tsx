@@ -197,6 +197,13 @@ interface StudyData {
     normal: { count: number; win_rate_pct: number; avg_pnl: number } | Record<string, never>;
   };
   backtest: Record<string, BacktestStrategy | EquityPoint[]>;
+  study_evidence?: {
+    status: "unvalidated_retrospective" | "validated";
+    source: string;
+    data_start?: string | null;
+    data_end?: string | null;
+    reasons: string[];
+  };
   strategy: {
     name: string;
     description: string;
@@ -273,7 +280,8 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
   if (!data?.ok) return null;
 
   const theme = getPlotlyColors();
-  const { overview, notional_analysis, duration_analysis, coin_analysis, monthly_analysis, tilt_analysis, backtest, strategy } = data;
+  const { overview, notional_analysis, duration_analysis, coin_analysis, monthly_analysis, tilt_analysis, backtest, strategy, study_evidence } = data;
+  const showBacktest = study_evidence?.status === "validated";
 
   return (
     <div className="space-y-6">
@@ -284,6 +292,14 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-3 text-xs text-[var(--amber)]">
         <strong>Research Study</strong> - {strategy.disclaimer}
       </div>
+
+      {study_evidence?.status === "unvalidated_retrospective" && (
+        <div className="rounded-lg border border-[var(--red)]/30 bg-[var(--red)]/5 px-4 py-3 text-xs text-[var(--red)]">
+          <strong>Unvalidated retrospective simulation.</strong>{" "}
+          Return, drawdown, and significance claims are hidden. Data ends {study_evidence.data_end ?? "at an unknown date"};
+          the artifact is not preregistered or hash-bound.
+        </div>
+      )}
 
       {/* Title + Overview */}
       <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">
@@ -460,7 +476,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       )}
 
       {/* Strategy Comparison Table */}
-      {backtest ? (() => {
+      {showBacktest && backtest ? (() => {
         const stratKeys = Object.keys(backtest).filter((key) => isBacktestStrategy(backtest[key]));
         if (!stratKeys.length) return null;
         const strats = stratKeys.map((key) => ({ key, strategy: backtest[key] as BacktestStrategy }));
@@ -503,7 +519,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       })() : null}
 
       {/* Backtest Equity Curve */}
-      {backtest ? (() => {
+      {showBacktest && backtest ? (() => {
         const selected = preferredBacktestStrategy(backtest);
         if (!selected) return null;
         const { key, strategy: strat } = selected;
@@ -828,7 +844,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
       )}
 
       {/* Statistical Review - Critic Panel */}
-      {(() => {
+      {showBacktest ? (() => {
         const selected = preferredBacktestStrategy(backtest);
         const recStats = selected?.strategy ?? null;
         const trades = recStats?.trades ?? 0;
@@ -973,7 +989,7 @@ export default function CounterTradeStudy({ wallet }: { wallet: string }) {
             </div>
           </div>
         );
-      })()}
+      })() : null}
 
       {/* Key Findings */}
       <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-6">

@@ -4,9 +4,11 @@ from __future__ import annotations
 import pytest
 
 from trader_koo.backend.services.scheduler import (
+    _run_memory_cleanup,
     _normalize_update_mode,
     create_scheduler,
 )
+from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
 
 
 class TestCreateScheduler:
@@ -74,6 +76,20 @@ class TestCreateScheduler:
         scheduler = create_scheduler()
 
         assert scheduler.get_job("options_iv_snapshot") is None
+
+    def test_memory_cleanup_uses_runtime_modules(self, monkeypatch):
+        from trader_koo.backend.main import app
+
+        authenticator = AdminAuthenticator(
+            AdminAuthConfig(api_key="x" * 32, failure_window_sec=10, block_sec=10)
+        )
+        authenticator._failures["expired"] = {"updated_ts": 0.0}
+
+        monkeypatch.setattr(app.state, "admin_authenticator", authenticator)
+
+        _run_memory_cleanup()
+
+        assert authenticator._failures == {}
 
     def test_monitor_intervals_can_be_overridden(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
