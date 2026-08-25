@@ -9,7 +9,7 @@ Public API
 ``snapshot_polymarket(db_path) -> int``
 ``detect_polymarket_spikes(db_path, lookback_hours, threshold_pct) -> list[dict]``
 ``detect_crypto_spikes(db_path, lookback_hours) -> list[dict]``
-``send_spike_alerts(db_path, report_dir) -> int``
+``send_spike_alerts(db_path) -> int``
 ``ensure_polymarket_schema(conn) -> None``
 """
 from __future__ import annotations
@@ -23,6 +23,9 @@ from typing import Any
 from urllib.parse import quote
 
 LOG = logging.getLogger("trader_koo.notifications.market_monitor")
+
+POLYMARKET_MIN_ALERT_VOLUME_USD = 25_000.0
+POLYMARKET_MAX_SNAPSHOT_AGE_MINUTES = 15
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +142,10 @@ def detect_polymarket_spikes(
     db_path: Path,
     lookback_hours: int = 6,
     threshold_pct: float = 5.0,
+    *,
+    min_volume_usd: float = POLYMARKET_MIN_ALERT_VOLUME_USD,
+    max_snapshot_age_minutes: int = POLYMARKET_MAX_SNAPSHOT_AGE_MINUTES,
+    now_utc: dt.datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Compare current probabilities to ``lookback_hours`` ago.
 
@@ -150,7 +157,7 @@ def detect_polymarket_spikes(
     try:
         ensure_polymarket_schema(conn)
 
-        now = dt.datetime.now(dt.timezone.utc)
+        now = (now_utc or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)
         cutoff = (now - dt.timedelta(hours=lookback_hours)).isoformat()
 
         # Get latest snapshot per market
@@ -166,6 +173,23 @@ def detect_polymarket_spikes(
         if not latest_rows:
             return []
 
+        latest_ts_raw = str(latest_rows[0]["snapshot_ts"] or "")
+        try:
+            latest_ts = dt.datetime.fromisoformat(latest_ts_raw.replace("Z", "+00:00"))
+            if latest_ts.tzinfo is None:
+                latest_ts = latest_ts.replace(tzinfo=dt.timezone.utc)
+            latest_ts = latest_ts.astimezone(dt.timezone.utc)
+        except ValueError:
+            LOG.warning("Polymarket spike detection skipped: invalid latest snapshot timestamp")
+            return []
+        snapshot_age = (now - latest_ts).total_seconds()
+        if snapshot_age < -300 or snapshot_age > max_snapshot_age_minutes * 60:
+            LOG.warning(
+                "Polymarket spike detection skipped: latest snapshot is stale (%s)",
+                latest_ts_raw,
+            )
+            return []
+
         spikes: list[dict[str, Any]] = []
         for row in latest_rows:
             slug = row["event_slug"]
@@ -174,14 +198,17 @@ def detect_polymarket_spikes(
             volume = row["volume"]
             title = row["event_title"]
 
-            # Find the oldest snapshot within lookback window for this market
+            if volume is None or float(volume) < min_volume_usd:
+                continue
+
+            # Find the closest snapshot at or before the lookback cutoff.
             old_row = conn.execute(
                 """
                 SELECT probability, snapshot_ts
                 FROM polymarket_snapshots
                 WHERE event_slug = ? AND market_question = ?
                       AND snapshot_ts <= ?
-                ORDER BY snapshot_ts ASC
+                ORDER BY snapshot_ts DESC
                 LIMIT 1
                 """,
                 (slug, question, cutoff),
@@ -366,7 +393,7 @@ def _html(value: Any) -> str:
     return escape(str(value), quote=False)
 
 
-def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
+def send_spike_alerts(db_path: Path) -> int:
     """Run both spike detectors and send Telegram alerts.
 
     Returns the total number of alerts sent.
@@ -398,11 +425,24 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
     except Exception:
         pass
 
-    def _should_alert(key: str, direction: str, new_prob: float) -> bool:
+    def _should_alert(
+        key: str,
+        direction: str,
+        new_prob: float,
+        *,
+        legacy_key: str | None = None,
+    ) -> bool:
         """Only alert if direction changed or prob moved 5+ pts since last alert."""
+        keys = (key, legacy_key) if legacy_key and legacy_key != key else (key, key)
         row = conn_cd.execute(
-            "SELECT direction, last_prob FROM spike_alert_cooldown WHERE event_key = ?",
-            (key,),
+            """
+            SELECT direction, last_prob
+            FROM spike_alert_cooldown
+            WHERE event_key IN (?, ?)
+            ORDER BY CASE WHEN event_key = ? THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (*keys, key),
         ).fetchone()
         if row is None:
             return True  # never alerted
@@ -413,13 +453,25 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             return True  # moved another 5+ pts
         return False  # same direction, small move — skip
 
-    def _mark_alerted(key: str, direction: str, prob: float) -> None:
+    def _mark_alerted(
+        key: str,
+        direction: str,
+        prob: float,
+        *,
+        legacy_key: str | None = None,
+    ) -> None:
         now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
         conn_cd.execute(
             "INSERT OR REPLACE INTO spike_alert_cooldown VALUES (?, ?, ?, ?)",
             (key, direction, prob, now_iso),
         )
-        conn_cd.commit()
+        if legacy_key and legacy_key != key:
+            conn_cd.execute(
+                "DELETE FROM spike_alert_cooldown WHERE event_key = ?",
+                (legacy_key,),
+            )
+
+    pending_cooldowns: list[tuple[str, str, float, str | None]] = []
 
     # Polymarket spikes
     try:
@@ -429,9 +481,10 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             question = str(spike.get("question") or spike.get("event_title") or "?")
             direction = spike.get("direction", "up")
             new_p = spike.get("new_prob", 0)
-            key = f"{slug}:{question[:60]}"
+            key = f"polymarket:{slug}:{question}"
+            legacy_key = f"{slug}:{question[:60]}"
 
-            if not _should_alert(key, direction, new_p):
+            if not _should_alert(key, direction, new_p, legacy_key=legacy_key):
                 continue  # already alerted, same direction, small move
 
             arrow = "\u2B06\uFE0F" if direction == "up" else "\u2B07\uFE0F"
@@ -445,7 +498,7 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
                 f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | {vol}"
                 f"{link_html}"
             )
-            _mark_alerted(key, direction, new_p)
+            pending_cooldowns.append((key, direction, new_p, legacy_key))
     except Exception as exc:
         LOG.error("Polymarket spike alerting failed: %s", exc)
 
@@ -468,11 +521,9 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
             if oi_chg is not None and spike.get("oi_spike"):
                 parts.append(f"OI {oi_chg:+.0f}%")
             all_lines.append(" | ".join(parts))
-            _mark_alerted(key, direction, new_price)
+            pending_cooldowns.append((key, direction, new_price, None))
     except Exception as exc:
         LOG.error("Crypto spike alerting failed: %s", exc)
-
-    conn_cd.close()
 
     # Send ONE compiled message (HTML for clickable links)
     if all_lines:
@@ -482,10 +533,19 @@ def send_spike_alerts(db_path: Path, report_dir: Path) -> int:
         footer = '\n\n<a href="https://trader.kooexperience.com/markets">View all on Dashboard</a>'
         msg = f"{header}\n{body}{footer}"
         if send_message(msg, parse_mode="HTML"):
+            for key, direction, value, legacy_key in pending_cooldowns:
+                _mark_alerted(
+                    key,
+                    direction,
+                    value,
+                    legacy_key=legacy_key,
+                )
+            conn_cd.commit()
             alerts_sent = len(all_lines)
         else:
             LOG.warning("Failed to send compiled spike alert")
 
+    conn_cd.close()
     LOG.info("Spike alerts: %d events in %d messages", alerts_sent, 1 if all_lines else 0)
     return alerts_sent
 

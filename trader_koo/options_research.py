@@ -665,6 +665,7 @@ def build_options_premium_proxy(
     *,
     limit: int = OPTIONS_PREMIUM_DEFAULT_LIMIT,
     sort_by: str = OPTIONS_PREMIUM_DEFAULT_SORT_BY,
+    snapshot_ts: str | None = None,
 ) -> dict[str, Any]:
     """Return a dashboard-ready options premium proxy from local snapshots.
 
@@ -733,12 +734,16 @@ def build_options_premium_proxy(
     expiration_select = "o.expiration AS expiration," if has_expiration else ""
     expiration_expr = "COUNT(DISTINCT b.expiration)" if has_expiration else "NULL"
 
+    latest_cte = (
+        "SELECT DISTINCT ticker, ? AS snapshot_ts FROM options_iv WHERE snapshot_ts = ?"
+        if snapshot_ts
+        else "SELECT ticker, MAX(snapshot_ts) AS snapshot_ts FROM options_iv GROUP BY ticker"
+    )
+    query_params: tuple[Any, ...] = (snapshot_ts, snapshot_ts) if snapshot_ts else ()
     rows = conn.execute(
         f"""
         WITH latest AS (
-            SELECT ticker, MAX(snapshot_ts) AS snapshot_ts
-            FROM options_iv
-            GROUP BY ticker
+            {latest_cte}
         ),
         history AS (
             SELECT ticker, COUNT(DISTINCT snapshot_ts) AS historical_snapshots
@@ -779,6 +784,7 @@ def build_options_premium_proxy(
         LEFT JOIN history h ON b.ticker = h.ticker
         GROUP BY b.ticker, b.snapshot_ts, h.historical_snapshots
         """,
+        query_params,
     ).fetchall()
 
     output_rows: list[dict[str, Any]] = []
