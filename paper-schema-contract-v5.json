@@ -1,0 +1,1674 @@
+{
+  "contract_id": "paper-schema-contract-v5",
+  "contract_state": "frozen",
+  "source_schema_version": 4,
+  "target_schema_version": 5,
+  "runtime_effect": "none",
+  "tables": [
+    {
+      "name": "bot_versions",
+      "disposition": "retained",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "bot_version"
+        ]
+      ],
+      "normalized_sql_sha256": "69f5a5a2eee386df5db716318658bcdc3d2dfe1bf4a23e35a0814245aa6c648c"
+    },
+    {
+      "name": "paper_campaign_approvals",
+      "disposition": "retained",
+      "primary_key": [
+        "approval_id"
+      ],
+      "unique_keys": [
+        [
+          "artifact_hash"
+        ]
+      ],
+      "normalized_sql_sha256": "1a8969990a805d4cb38fd92998a4e9f780792d4c76bd3465369b5918a26b4838"
+    },
+    {
+      "name": "paper_campaign_audit",
+      "disposition": "retained",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "idempotency_key"
+        ]
+      ],
+      "normalized_sql_sha256": "ad4977c43ed5098e6f9d193200e2b84cec034d218fdf9adbbb85cc60aa0bc23f"
+    },
+    {
+      "name": "paper_campaign_experiments",
+      "disposition": "retained",
+      "primary_key": [
+        "experiment_id"
+      ],
+      "unique_keys": [
+        [
+          "evidence_hash"
+        ]
+      ],
+      "normalized_sql_sha256": "62ac09646acc00f4d4d9e93aac88b5ce6f166d91d18f5251624d6bd47b44602e"
+    },
+    {
+      "name": "paper_campaign_preregistrations",
+      "disposition": "retained",
+      "primary_key": [
+        "preregistration_id"
+      ],
+      "unique_keys": [
+        [
+          "artifact_hash"
+        ]
+      ],
+      "normalized_sql_sha256": "a83fdb58e9d2ebbf852c27abd7c0276d3b9dbb19d99513ba0e9c6578953a23e4"
+    },
+    {
+      "name": "paper_campaigns",
+      "disposition": "retained",
+      "primary_key": [
+        "campaign_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "80ba1aa26c2078da7f678c4603447b37393a565acf8172617de7413a1734334c"
+    },
+    {
+      "name": "paper_candidate_decisions",
+      "disposition": "retained",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "report_run_id",
+          "campaign_id",
+          "candidate_rank"
+        ]
+      ],
+      "normalized_sql_sha256": "909117a2c4962b4be316d84ba23edaabd7bba5e879b5b64a64210714edf81d9d"
+    },
+    {
+      "name": "paper_decision_sets",
+      "disposition": "retained",
+      "primary_key": [
+        "report_run_id",
+        "campaign_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "74f7f19c0f076e67f0c07f0708f72bed4806007e78468d7b683e6a5ea028da93"
+    },
+    {
+      "name": "paper_order_events",
+      "disposition": "retained",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "order_id",
+          "event_type"
+        ]
+      ],
+      "normalized_sql_sha256": "3e07f324f12bccdfcdb52d15c05b1b95ed9f7d120d0c93c0c435e1e3df43ab6e"
+    },
+    {
+      "name": "paper_pending_orders",
+      "disposition": "retained",
+      "primary_key": [
+        "order_id"
+      ],
+      "unique_keys": [
+        [
+          "report_run_id",
+          "campaign_id",
+          "candidate_rank"
+        ]
+      ],
+      "normalized_sql_sha256": "4878d4463d40596ec3f3400273be4647b293fbf7cee60fa9ed95dcd7b2e13588"
+    },
+    {
+      "name": "paper_portfolio_snapshots",
+      "disposition": "changed",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "campaign_id",
+          "snapshot_date"
+        ]
+      ],
+      "changes": [
+        "canonical_integer_primary_key",
+        "campaign_id_required_without_default",
+        "campaign_snapshot_unique_key_only",
+        "retain_legacy_snapshot_ts_and_total_unrealized_pnl_pct"
+      ],
+      "normalized_sql_sha256": "e315813bfcee65fb28a5c659331c80496984f881b0a1f036ba4d29edd5bd818a"
+    },
+    {
+      "name": "paper_shadow_decision_sets",
+      "disposition": "retained",
+      "primary_key": [
+        "report_run_id",
+        "policy_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "6c43a66e9ea6945803d83189a2cd0845ae89dfec1c209d3b9ec3e3279ccc00d4"
+    },
+    {
+      "name": "paper_shadow_decisions",
+      "disposition": "retained",
+      "primary_key": [
+        "decision_id"
+      ],
+      "unique_keys": [
+        [
+          "report_run_id",
+          "policy_id",
+          "candidate_rank"
+        ]
+      ],
+      "normalized_sql_sha256": "bc6818c3f0f7b577d28b8d4295fc9eb58237df76e5fbcd5f36afe3f47893138c"
+    },
+    {
+      "name": "paper_shadow_outcomes",
+      "disposition": "retained",
+      "primary_key": [
+        "outcome_id"
+      ],
+      "unique_keys": [
+        [
+          "decision_id"
+        ]
+      ],
+      "normalized_sql_sha256": "2097f6183f834865b3a7b9f3d0e86e2b759c8fc56d1cfcbe22fc1708c7125825"
+    },
+    {
+      "name": "paper_shadow_policies",
+      "disposition": "retained",
+      "primary_key": [
+        "policy_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "2d6586386db2b2e289a5fbed0f619533c012dc6b9c75a331bc05008c6f07d81f"
+    },
+    {
+      "name": "paper_trade_annotations",
+      "disposition": "retained",
+      "primary_key": [
+        "trade_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "0b14b028f99cf8506b25786826c6e1822aedc1f35c5c4785f7a50df53ccfa3d1"
+    },
+    {
+      "name": "paper_trade_events",
+      "disposition": "retained",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "trade_id",
+          "event_type",
+          "event_date",
+          "payload_hash"
+        ]
+      ],
+      "normalized_sql_sha256": "c01b134b88610a4577ba1335d9b99f81d16ac77ba301bcaf745ed7c49672381c"
+    },
+    {
+      "name": "paper_trade_reflections",
+      "disposition": "retained",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "trade_id"
+        ]
+      ],
+      "normalized_sql_sha256": "df74f7a8b421ba9c3c5ece7a38e9b8b6e292c1962d8cf0bebfc3507a39188a82"
+    },
+    {
+      "name": "paper_trade_schema_meta",
+      "disposition": "changed",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [],
+      "changes": [
+        "schema_version_5",
+        "contract_id",
+        "schema_fingerprint"
+      ],
+      "normalized_sql_sha256": "b6f154039ac0a03ada8fc7aa8a5fa6b74c9ac990886ba0d8de68d192fa1ff800"
+    },
+    {
+      "name": "paper_trades",
+      "disposition": "changed",
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "campaign_id",
+          "report_date",
+          "ticker",
+          "direction"
+        ]
+      ],
+      "changes": [
+        "campaign_id_required_without_default",
+        "campaign_trade_unique_key_only",
+        "campaign_foreign_key",
+        "report_run_foreign_key"
+      ],
+      "normalized_sql_sha256": "cd51fdba6f053e29b9a282d2e56e30abd8aa870278be933cb2aa3695d999781f"
+    },
+    {
+      "name": "report_admission_attempts",
+      "disposition": "dependency_retained",
+      "primary_key": [
+        "attempt_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "df2b8736d88efd026f6420b23eff7a0d48ae5e4a28e76156efa33a2495579972"
+    },
+    {
+      "name": "report_run_decisions",
+      "disposition": "dependency_retained",
+      "primary_key": [
+        "run_id",
+        "ticker"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "5c2b69c57a1a00617b7e91417498f6234cfcb9e55f29e18647580beeedf6cbf9"
+    },
+    {
+      "name": "report_runs",
+      "disposition": "dependency_retained",
+      "primary_key": [
+        "run_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "54ac7357853fc0a01ef501ff1d6398b5d40b80d18f04b1486c040a25d2b62d96"
+    },
+    {
+      "name": "report_schema_migrations",
+      "disposition": "dependency_retained",
+      "primary_key": [
+        "migration"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "1c9c74a939ab1d72ed9b43457f8b2572d4ee47bfaf890fb22a41bb98581ea6e1"
+    },
+    {
+      "name": "schema_migrations",
+      "disposition": "retained",
+      "primary_key": [
+        "migration_id"
+      ],
+      "unique_keys": [],
+      "normalized_sql_sha256": "8ce63f2b66acc5a2592b5f1283e00a57b6ed6f728f1d4a4ea0ce365babfc38f0"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_bot_versions_status",
+      "table": "bot_versions",
+      "disposition": "retained",
+      "unique": false,
+      "columns": [
+        "status",
+        "created_ts"
+      ]
+    },
+    {
+      "name": "idx_candidate_decisions_campaign_report",
+      "table": "paper_candidate_decisions",
+      "disposition": "retained",
+      "unique": false,
+      "columns": [
+        "campaign_id",
+        "report_date",
+        "report_run_id",
+        "candidate_rank"
+      ]
+    },
+    {
+      "name": "idx_one_active_paper_campaign",
+      "table": "paper_campaigns",
+      "disposition": "retained",
+      "unique": true,
+      "columns": [
+        "status"
+      ],
+      "where": "status='active'"
+    },
+    {
+      "name": "idx_paper_portfolio_campaign_date",
+      "table": "paper_portfolio_snapshots",
+      "disposition": "retained",
+      "unique": true,
+      "columns": [
+        "campaign_id",
+        "snapshot_date"
+      ]
+    },
+    {
+      "name": "idx_paper_portfolio_date",
+      "table": "paper_portfolio_snapshots",
+      "disposition": "retained",
+      "unique": false,
+      "columns": [
+        "snapshot_date"
+      ]
+    },
+    {
+      "name": "idx_paper_portfolio_legacy_compat",
+      "table": "paper_portfolio_snapshots",
+      "disposition": "removed",
+      "unique": true,
+      "columns": [
+        "snapshot_date"
+      ]
+    },
+    {
+      "name": "idx_paper_reflections_ticker",
+      "table": "paper_trade_reflections",
+      "disposition": "retained",
+      "unique": false,
+      "columns": [
+        "ticker",
+        "exit_date"
+      ]
+    },
+    {
+      "name": "idx_paper_reflections_trade",
+      "table": "paper_trade_reflections",
+      "disposition": "retained",
+      "unique": false,
+      "columns": [
+        "trade_id"
+      ]
+    },
+    {
+      "name": "idx_paper_trade_events_timeline",
+      "table": "paper_trade_events",
+      "disposition": "retained",
+      "unique": false,
+      "columns": [
+        "trade_id",
+        "event_date",
+        "id"
+      ]
+    },
+    {
+      "name": "idx_paper_trades_campaign_unique",
+      "table": "paper_trades",
+      "disposition": "retained",
+      "unique": true,
+      "columns": [
+        "campaign_id",
+        "report_date",
+        "ticker",
+        "direction"
+      ]
+    },
+    {
+      "name": "idx_paper_trades_family",
+      "table": "paper_trades",
+      "disposition": "changed",
+      "unique": false,
+      "columns": [
+        "campaign_id",
+        "setup_family",
+        "direction",
+        "status"
+      ]
+    },
+    {
+      "name": "idx_paper_trades_legacy_compat",
+      "table": "paper_trades",
+      "disposition": "removed",
+      "unique": true,
+      "columns": [
+        "report_date",
+        "ticker",
+        "direction"
+      ]
+    },
+    {
+      "name": "idx_paper_trades_report_run",
+      "table": "paper_trades",
+      "disposition": "retained",
+      "unique": false,
+      "columns": [
+        "report_run_id"
+      ]
+    },
+    {
+      "name": "idx_paper_trades_status",
+      "table": "paper_trades",
+      "disposition": "changed",
+      "unique": false,
+      "columns": [
+        "campaign_id",
+        "status",
+        "entry_date"
+      ]
+    },
+    {
+      "name": "idx_paper_trades_ticker",
+      "table": "paper_trades",
+      "disposition": "changed",
+      "unique": false,
+      "columns": [
+        "campaign_id",
+        "ticker",
+        "status"
+      ]
+    },
+    {
+      "name": "idx_report_admission_attempts_run",
+      "table": "report_admission_attempts",
+      "disposition": "dependency_retained",
+      "unique": false,
+      "columns": [
+        "run_id",
+        "attempt_id"
+      ]
+    },
+    {
+      "name": "idx_report_runs_canonical_generation",
+      "table": "report_runs",
+      "disposition": "dependency_retained",
+      "unique": true,
+      "columns": [
+        "generation_key"
+      ],
+      "where": "is_generation_canonical=1 AND generation_key IS NOT NULL"
+    },
+    {
+      "name": "idx_report_runs_published",
+      "table": "report_runs",
+      "disposition": "dependency_retained",
+      "unique": false,
+      "columns": [
+        "status",
+        "generated_ts",
+        "published_ts DESC",
+        "run_id DESC"
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "name": "paper_campaign_approvals_no_delete",
+      "table": "paper_campaign_approvals",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "efefdde1c877603dc624a1314d275f9dae1ff507cb4fb7efd6d7c136f66a4ca7"
+    },
+    {
+      "name": "paper_campaign_approvals_no_update",
+      "table": "paper_campaign_approvals",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "60fa948d430dc09380f55a28a11faa1419b4a5c998ef1bddc99454d9fce302fd"
+    },
+    {
+      "name": "paper_campaign_audit_no_delete",
+      "table": "paper_campaign_audit",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "6dd99aafc06520ee40e6e4eacfebf4249af29d32c78d2daf8b18e7223f64d022"
+    },
+    {
+      "name": "paper_campaign_audit_no_update",
+      "table": "paper_campaign_audit",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "f8942c00643173c6965f3fe23148e8e422638b1b1d0cfc419e968aaf28c76783"
+    },
+    {
+      "name": "paper_campaign_experiments_no_delete",
+      "table": "paper_campaign_experiments",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "e1c7b7fb3bfe1edda97e02e5e3c02f42a90e669e286c0397624ed9bd9f83ee84"
+    },
+    {
+      "name": "paper_campaign_experiments_no_update",
+      "table": "paper_campaign_experiments",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "1daa5195cae0ac3a18e60dae0d480f432b8fd8caf96e62afe886f1252e9d2c4c"
+    },
+    {
+      "name": "paper_campaign_preregistrations_no_delete",
+      "table": "paper_campaign_preregistrations",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "85a1cafd7a743608f1e0e3b4ef288740d3bbe1c802fd4cc1948513c574b176b9"
+    },
+    {
+      "name": "paper_campaign_preregistrations_no_update",
+      "table": "paper_campaign_preregistrations",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "f950d74985ca684594cb9d7ae9e8c9cde3a4a567e1b7c35e78d87a922acbb2e1"
+    },
+    {
+      "name": "paper_candidate_decisions_no_delete",
+      "table": "paper_candidate_decisions",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "71ac7b26208961c1bc8560e508a0a6d7db5bbdadd2e205cf88f25669f8f2d17d"
+    },
+    {
+      "name": "paper_candidate_decisions_no_insert_after_seal",
+      "table": "paper_candidate_decisions",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "7761c2fef7115a5198bd1cdbeccbec6c29daa41d5e501ee038f599990102cb02"
+    },
+    {
+      "name": "paper_candidate_decisions_no_update",
+      "table": "paper_candidate_decisions",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "d122c9ea2b82314473fb6eec62eafc95234e99dd58132917bde4c9d380e96084"
+    },
+    {
+      "name": "paper_decision_sets_no_delete",
+      "table": "paper_decision_sets",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "43109d9f3f0f0b85a510aba5375f053ebfbf203a74f8648ddc016a4b41cc7c8c"
+    },
+    {
+      "name": "paper_decision_sets_no_update",
+      "table": "paper_decision_sets",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "06652f3f34f56cd3d0cdd250bcd2e87d2ea8428bcdfbe48169f46e5151901b1a"
+    },
+    {
+      "name": "paper_order_events_no_delete",
+      "table": "paper_order_events",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "dbfa3251269396db4eb29c78bf00ba20b2784f6c48fd075ac6e8dce404266050"
+    },
+    {
+      "name": "paper_order_events_no_update",
+      "table": "paper_order_events",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "767f5bdb71effbf6f5b9ee216077fb8f2d9ecf723d36ddb6c8cc960b915552c3"
+    },
+    {
+      "name": "paper_pending_orders_immutable_payload",
+      "table": "paper_pending_orders",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "0b4f40bf950a3e1f9c72d1fa694e871f0cec1353e63fda7108374827dd25bf68"
+    },
+    {
+      "name": "paper_pending_orders_no_delete",
+      "table": "paper_pending_orders",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "a4af5f3c2dbc15c22791a973534ef378460a477e2bf4b55593574a5d23aab7b0"
+    },
+    {
+      "name": "paper_pending_orders_terminal_transition",
+      "table": "paper_pending_orders",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "a2498da70376a28c9d4302608c77e92edd670d8035055875b4070e8aa37c695e"
+    },
+    {
+      "name": "paper_pending_orders_valid_insert",
+      "table": "paper_pending_orders",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "642afd0396f8aabff137b22c4cd5f52e21516e85ee60c30c1ab81d6ac4bc3b05"
+    },
+    {
+      "name": "paper_shadow_decisions_no_delete",
+      "table": "paper_shadow_decisions",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "c4c52ad649ffc6f649c8a5232c32b631e9f9d0ce5e669b5d89f412905f4d4542"
+    },
+    {
+      "name": "paper_shadow_decisions_no_insert_after_seal",
+      "table": "paper_shadow_decisions",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "960ad4f7b5e469c120925387bf7f361d5660b711a86e4b445a3378bb6982aad0"
+    },
+    {
+      "name": "paper_shadow_decisions_no_update",
+      "table": "paper_shadow_decisions",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "f89d43d8fe8dd92d8f111a586bf7c30724c1e228e568545231959164eb7e668a"
+    },
+    {
+      "name": "paper_shadow_outcomes_no_delete",
+      "table": "paper_shadow_outcomes",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "972163e1cde23f724173c180c2cd3ac76aa59180c189f41cb4b0ce359d15099e"
+    },
+    {
+      "name": "paper_shadow_outcomes_no_update",
+      "table": "paper_shadow_outcomes",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "d9f7b712fa1b95539d13dc136639a7bd54c8c37e3167caea4fb5a2b4c4b4bbdb"
+    },
+    {
+      "name": "paper_shadow_policies_no_delete",
+      "table": "paper_shadow_policies",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "b762a6ba3e383b3d607698b30e269aa3c427122cfe0c989f1590c970d777ed68"
+    },
+    {
+      "name": "paper_shadow_policies_no_update",
+      "table": "paper_shadow_policies",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "1672fab7a57c9495b7ffb9de5d800d76ed969439dbd7464a84113a3b2955ee9a"
+    },
+    {
+      "name": "paper_shadow_sets_no_delete",
+      "table": "paper_shadow_decision_sets",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "d61e3c5ee7a775962ef92231118d1ca5e41c39d4eaafcd806d0777c275fd77b4"
+    },
+    {
+      "name": "paper_shadow_sets_no_update",
+      "table": "paper_shadow_decision_sets",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "7bd4238d9a7b8152f465b8c0b8aeed999a4cb4421225bea51848728aa1f3dc2a"
+    },
+    {
+      "name": "paper_trade_events_no_delete",
+      "table": "paper_trade_events",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "1a842a85cba9634868cfe46297c34106bed5946e6d9feef359ea197a88280d36"
+    },
+    {
+      "name": "paper_trade_events_no_update",
+      "table": "paper_trade_events",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "c3c28def04f480acb84e3b160b139faf52985df28487633fa058313745db7c9c"
+    },
+    {
+      "name": "paper_trades_immutable_lineage",
+      "table": "paper_trades",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "00b60f82295b8816b51176f064be657560bbafc221ffd55bce8141af20fe5cb1"
+    },
+    {
+      "name": "paper_trades_require_canonical_run",
+      "table": "paper_trades",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "ff5967bd1aeab1325492179f7991785ab039d078136475857ffd649d05df28fd"
+    },
+    {
+      "name": "paper_v1_campaign_no_delete",
+      "table": "paper_campaigns",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "6603d638ef082ec281da835589c61bb5074cac723323a8074ee1e624b0eae22c"
+    },
+    {
+      "name": "paper_v1_campaign_no_update",
+      "table": "paper_campaigns",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "f3e2a435e1d23dfbe81709fb3715df9003bc1aeb33376e8e8a27ec79cbc7fcc0"
+    },
+    {
+      "name": "paper_v1_trades_no_delete",
+      "table": "paper_trades",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "8e24495dfbf9f59eaf905c4bfe84b4fead892891be3ebb43a703f30a38dfdb59"
+    },
+    {
+      "name": "paper_v1_trades_no_insert",
+      "table": "paper_trades",
+      "disposition": "retained_exact",
+      "normalized_sql_sha256": "03ea15051fbbc878efdafd8d0b29ec5e09ae8e105811f721dc5c101365cd9631"
+    },
+    {
+      "name": "paper_v1_trades_no_update",
+      "table": "paper_trades",
+      "disposition": "changed",
+      "target_rule": "reject every update whose OLD.campaign_id is paper-v1",
+      "normalized_sql_sha256": "162663bbb919bcc63b493538d5c2efb4ebf12d340fdcaebe74c33e4e9b79754f"
+    },
+    {
+      "name": "report_admission_attempts_no_delete",
+      "table": "report_admission_attempts",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "211ef2a65f870433a4ae2fb2edae708b272f069e8301e4a2faa197e57078d99e"
+    },
+    {
+      "name": "report_admission_attempts_no_update",
+      "table": "report_admission_attempts",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "b361d181b337f2e77e5000d40d07b714ef48c3d86dbdaa77c8d10c273582c52f"
+    },
+    {
+      "name": "report_admission_attempts_valid_insert",
+      "table": "report_admission_attempts",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "b8397ea479fe3d734236de5cdbaea6f3c4ce41c8406d4d7467d019247a09823c"
+    },
+    {
+      "name": "report_run_decisions_immutable_delete",
+      "table": "report_run_decisions",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "e24263ce7b697e494ce058758e5c2148cc4d6c5fff040d6836f0ca49abc4c092"
+    },
+    {
+      "name": "report_run_decisions_immutable_update",
+      "table": "report_run_decisions",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "31b279715d3bd2b9c1325fa45c1925e907780339a0e94f9fa24e23898471a2ad"
+    },
+    {
+      "name": "report_run_decisions_parent_started",
+      "table": "report_run_decisions",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "7fe03a24c73e807bb7981f6b4722e8632a1ebca0131310a4d94492a51ed6c6e2"
+    },
+    {
+      "name": "report_runs_failed_immutable",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "554cd51012c01feb353746d0665424ae5f53fa8bb67b7f4ca7c51516ba0009ec"
+    },
+    {
+      "name": "report_runs_immutable_delete",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "855df64645382db9f66634ca40a2828476187adb19ea381462cf0b5c789b31c2"
+    },
+    {
+      "name": "report_runs_pointer_transition",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "91f9ff5efc44945d84c9c48e27e26fd7ef29e755edccfd22edcdc6857b6541eb"
+    },
+    {
+      "name": "report_runs_snapshot_immutable",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "4e0eba5b129aaf30ebd1598435d006bef5fa7151e2b61c4aa93d2a4116f5b010"
+    },
+    {
+      "name": "report_runs_started_identity_immutable",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "a1a6849097c965bbc1d689947c996e2349ad1ddc34e7047117f10e05c2bcdfa3"
+    },
+    {
+      "name": "report_runs_started_insert_only",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "70238865b843ef479147e7c168f354210bc8c68cf78733235edfba8d2a7b7589"
+    },
+    {
+      "name": "report_runs_terminal_evidence",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "6d3d1d3c3ee191139b3f76922d3a0788d7797157b7103b960fa37f4f0caa093b"
+    },
+    {
+      "name": "report_runs_valid_transition",
+      "table": "report_runs",
+      "disposition": "dependency_retained_exact",
+      "normalized_sql_sha256": "48f43000542e50637aa903e1801d880d51e06347a445b95f03f8d529031d46a1"
+    }
+  ],
+  "foreign_keys": {
+    "required": [
+      {
+        "table": "paper_campaign_approvals",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "parent_column": "campaign_id"
+      },
+      {
+        "table": "paper_campaign_approvals",
+        "column": "experiment_id",
+        "parent_table": "paper_campaign_experiments",
+        "parent_column": "experiment_id"
+      },
+      {
+        "table": "paper_campaign_audit",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "parent_column": "campaign_id"
+      },
+      {
+        "table": "paper_campaign_experiments",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "parent_column": "campaign_id"
+      },
+      {
+        "table": "paper_campaign_experiments",
+        "column": "preregistration_id",
+        "parent_table": "paper_campaign_preregistrations",
+        "parent_column": "preregistration_id"
+      },
+      {
+        "table": "paper_campaign_preregistrations",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "parent_column": "campaign_id"
+      },
+      {
+        "table": "paper_order_events",
+        "column": "order_id",
+        "parent_table": "paper_pending_orders",
+        "parent_column": "order_id"
+      },
+      {
+        "table": "paper_pending_orders",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "parent_column": "campaign_id"
+      },
+      {
+        "table": "paper_portfolio_snapshots",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "parent_column": "campaign_id",
+        "disposition": "added"
+      },
+      {
+        "table": "paper_shadow_decisions",
+        "column": "policy_id",
+        "parent_table": "paper_shadow_policies",
+        "parent_column": "policy_id"
+      },
+      {
+        "table": "paper_shadow_outcomes",
+        "column": "decision_id",
+        "parent_table": "paper_shadow_decisions",
+        "parent_column": "decision_id"
+      },
+      {
+        "table": "paper_trade_annotations",
+        "column": "trade_id",
+        "parent_table": "paper_trades",
+        "parent_column": "id"
+      },
+      {
+        "table": "paper_trade_events",
+        "column": "trade_id",
+        "parent_table": "paper_trades",
+        "parent_column": "id"
+      },
+      {
+        "table": "paper_trades",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "parent_column": "campaign_id",
+        "disposition": "added"
+      },
+      {
+        "table": "paper_trades",
+        "column": "report_run_id",
+        "parent_table": "report_runs",
+        "parent_column": "run_id",
+        "disposition": "required_after_optional_v4"
+      },
+      {
+        "table": "report_admission_attempts",
+        "column": "run_id",
+        "parent_table": "report_runs",
+        "parent_column": "run_id"
+      },
+      {
+        "table": "report_run_decisions",
+        "column": "run_id",
+        "parent_table": "report_runs",
+        "parent_column": "run_id"
+      },
+      {
+        "table": "report_runs",
+        "column": "superseded_by_run_id",
+        "parent_table": "report_runs",
+        "parent_column": "run_id"
+      }
+    ],
+    "actions": {
+      "on_update": "NO ACTION",
+      "on_delete": "NO ACTION",
+      "match": "NONE"
+    },
+    "intentionally_absent": [
+      {
+        "table": "paper_candidate_decisions",
+        "column": "report_run_id",
+        "parent_table": "report_runs",
+        "reason": "immutable ledger; orphan check is an integrity invariant"
+      },
+      {
+        "table": "paper_candidate_decisions",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "reason": "immutable ledger; orphan check is an integrity invariant"
+      },
+      {
+        "table": "paper_decision_sets",
+        "column": "report_run_id",
+        "parent_table": "report_runs",
+        "reason": "immutable ledger; orphan check is an integrity invariant"
+      },
+      {
+        "table": "paper_decision_sets",
+        "column": "campaign_id",
+        "parent_table": "paper_campaigns",
+        "reason": "immutable ledger; orphan check is an integrity invariant"
+      },
+      {
+        "table": "paper_pending_orders",
+        "column": "report_run_id",
+        "parent_table": "report_runs",
+        "reason": "avoid an unrelated pending-order rebuild; orphan check remains mandatory"
+      },
+      {
+        "table": "paper_shadow_decisions",
+        "column": "report_run_id",
+        "parent_table": "report_runs",
+        "reason": "shadow ledger remains non-trading and immutable"
+      },
+      {
+        "table": "paper_shadow_decision_sets",
+        "column": "report_run_id",
+        "parent_table": "report_runs",
+        "reason": "shadow ledger remains non-trading and immutable"
+      },
+      {
+        "table": "paper_shadow_decision_sets",
+        "column": "policy_id",
+        "parent_table": "paper_shadow_policies",
+        "reason": "shadow ledger remains non-trading and immutable"
+      },
+      {
+        "table": "paper_trade_reflections",
+        "column": "trade_id",
+        "parent_table": "paper_trades",
+        "reason": "legacy reflections are preserved; orphan check remains mandatory"
+      }
+    ]
+  },
+  "defaults": [
+    {
+      "table": "bot_versions",
+      "column": "strategy_kind",
+      "accepted_sql": [
+        "'paper_rules'"
+      ]
+    },
+    {
+      "table": "bot_versions",
+      "column": "status",
+      "accepted_sql": [
+        "'active'"
+      ]
+    },
+    {
+      "table": "bot_versions",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_campaign_approvals",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_campaign_audit",
+      "column": "request_hash",
+      "accepted_sql": [
+        "''"
+      ]
+    },
+    {
+      "table": "paper_campaign_audit",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_campaign_experiments",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_campaign_preregistrations",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_campaigns",
+      "column": "policy_hash",
+      "accepted_sql": [
+        "''"
+      ]
+    },
+    {
+      "table": "paper_campaigns",
+      "column": "zero_admission_streak_limit",
+      "accepted_sql": [
+        "3"
+      ]
+    },
+    {
+      "table": "paper_campaigns",
+      "column": "replay_live_parity",
+      "accepted_sql": [
+        "'not_measured'"
+      ]
+    },
+    {
+      "table": "paper_campaigns",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_campaigns",
+      "column": "updated_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP",
+        null
+      ],
+      "legacy_variant": true
+    },
+    {
+      "table": "paper_candidate_decisions",
+      "column": "tradeability",
+      "accepted_sql": [
+        "'not_actionable'"
+      ]
+    },
+    {
+      "table": "paper_candidate_decisions",
+      "column": "inputs_json",
+      "accepted_sql": [
+        "'{}'"
+      ]
+    },
+    {
+      "table": "paper_candidate_decisions",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_decision_sets",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_order_events",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_pending_orders",
+      "column": "status",
+      "accepted_sql": [
+        "'pending'"
+      ]
+    },
+    {
+      "table": "paper_pending_orders",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "campaign_id",
+      "accepted_sql": [
+        null
+      ],
+      "changed_from": [
+        "'paper-v1'",
+        "'paper-v2'"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "open_trades",
+      "accepted_sql": [
+        "0"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "closed_trades_total",
+      "accepted_sql": [
+        "0"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "wins",
+      "accepted_sql": [
+        "0"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "losses",
+      "accepted_sql": [
+        "0"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "equity_index",
+      "accepted_sql": [
+        "100.0"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP",
+        null
+      ],
+      "legacy_variant": true
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "legacy_unreconciled_count",
+      "accepted_sql": [
+        "0"
+      ]
+    },
+    {
+      "table": "paper_portfolio_snapshots",
+      "column": "accounting_breaks_json",
+      "accepted_sql": [
+        "'[]'"
+      ]
+    },
+    {
+      "table": "paper_shadow_decision_sets",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_shadow_decisions",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_shadow_outcomes",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_trade_annotations",
+      "column": "notes",
+      "accepted_sql": [
+        "''"
+      ]
+    },
+    {
+      "table": "paper_trade_annotations",
+      "column": "actor",
+      "accepted_sql": [
+        "'user'"
+      ]
+    },
+    {
+      "table": "paper_trade_annotations",
+      "column": "updated_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_trade_events",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_trade_reflections",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    },
+    {
+      "table": "paper_trades",
+      "column": "campaign_id",
+      "accepted_sql": [
+        null
+      ],
+      "changed_from": [
+        "'paper-v1'",
+        "'paper-v2'"
+      ]
+    },
+    {
+      "table": "paper_trades",
+      "column": "status",
+      "accepted_sql": [
+        "'open'",
+        null
+      ],
+      "legacy_variant": true
+    },
+    {
+      "table": "paper_trades",
+      "column": "created_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP",
+        null
+      ],
+      "legacy_variant": true
+    },
+    {
+      "table": "paper_trades",
+      "column": "updated_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP",
+        null
+      ],
+      "legacy_variant": true
+    },
+    {
+      "table": "paper_trades",
+      "column": "accounting_status",
+      "accepted_sql": [
+        "'legacy_unreconciled'"
+      ]
+    },
+    {
+      "table": "paper_trades",
+      "column": "notes",
+      "accepted_sql": [
+        "''"
+      ]
+    },
+    {
+      "table": "report_runs",
+      "column": "is_generation_canonical",
+      "accepted_sql": [
+        "0"
+      ]
+    },
+    {
+      "table": "report_runs",
+      "column": "publication_verified",
+      "accepted_sql": [
+        "0"
+      ]
+    },
+    {
+      "table": "schema_migrations",
+      "column": "applied_ts",
+      "accepted_sql": [
+        "CURRENT_TIMESTAMP"
+      ]
+    }
+  ],
+  "legacy_reads": [
+    {
+      "id": "legacy_trade_projection",
+      "table": "paper_trades",
+      "columns": [
+        "report_date",
+        "ticker",
+        "direction",
+        "status"
+      ],
+      "required": true
+    },
+    {
+      "id": "legacy_snapshot_projection",
+      "table": "paper_portfolio_snapshots",
+      "columns": [
+        "snapshot_date",
+        "open_trades",
+        "equity_index"
+      ],
+      "required": true
+    },
+    {
+      "id": "frozen_v1_campaign_projection",
+      "table": "paper_trades",
+      "columns": [
+        "campaign_id",
+        "status",
+        "pnl_pct"
+      ],
+      "predicate": "campaign_id='paper-v1'",
+      "required": true
+    },
+    {
+      "id": "legacy_snapshot_extension_projection",
+      "table": "paper_portfolio_snapshots",
+      "columns": [
+        "snapshot_ts",
+        "total_unrealized_pnl_pct"
+      ],
+      "required": true
+    },
+    {
+      "id": "retired_image_write_shape",
+      "required": false,
+      "reason": "v5 begins only after old-image rollback retirement"
+    }
+  ],
+  "legacy_readers": [
+    {
+      "reader": "trader_koo.notifications.morning_summary._fetch_paper_trade_stats",
+      "current_semantics": "all campaigns",
+      "v5_semantics": "paper-v2 only",
+      "disposition": "changed_before_activation"
+    },
+    {
+      "reader": "trader_koo.notifications.morning_summary._fetch_open_positions",
+      "current_semantics": "all campaigns",
+      "v5_semantics": "paper-v2 only",
+      "disposition": "changed_before_activation"
+    },
+    {
+      "reader": "trader_koo.ml.drift_detection.detect_ml_drift",
+      "current_semantics": "all campaigns",
+      "v5_semantics": "paper-v2 only",
+      "disposition": "changed_before_activation"
+    },
+    {
+      "reader": "trader_koo.paper_trade.critic._check_portfolio_concentration",
+      "current_semantics": "optional all-campaign fallback",
+      "v5_semantics": "campaign_id is required",
+      "disposition": "changed_before_activation"
+    },
+    {
+      "reader": "trader_koo.paper_trade.critic._check_family_edge",
+      "current_semantics": "optional all-campaign fallback",
+      "v5_semantics": "campaign_id is required",
+      "disposition": "changed_before_activation"
+    },
+    {
+      "reader": "trader_koo.paper_trade.critic._check_rolling_expectancy",
+      "current_semantics": "optional all-campaign fallback",
+      "v5_semantics": "campaign_id is required",
+      "disposition": "changed_before_activation"
+    },
+    {
+      "reader": "trader_koo.report.calibration_pulse._recent_family_returns",
+      "current_semantics": "all campaigns",
+      "v5_semantics": "paper-v2 only",
+      "disposition": "changed_before_activation"
+    }
+  ],
+  "collision_rules": [
+    {
+      "code": "duplicate_campaign_trade_key",
+      "table": "paper_trades",
+      "columns": [
+        "campaign_id",
+        "report_date",
+        "ticker",
+        "direction"
+      ],
+      "resolution": "abort"
+    },
+    {
+      "code": "duplicate_campaign_snapshot_key",
+      "table": "paper_portfolio_snapshots",
+      "columns": [
+        "campaign_id",
+        "snapshot_date"
+      ],
+      "resolution": "abort"
+    },
+    {
+      "code": "missing_trade_campaign",
+      "table": "paper_trades",
+      "columns": [
+        "campaign_id"
+      ],
+      "resolution": "abort"
+    },
+    {
+      "code": "unknown_trade_campaign",
+      "table": "paper_trades",
+      "columns": [
+        "campaign_id"
+      ],
+      "resolution": "abort"
+    },
+    {
+      "code": "missing_snapshot_campaign",
+      "table": "paper_portfolio_snapshots",
+      "columns": [
+        "campaign_id"
+      ],
+      "resolution": "abort"
+    },
+    {
+      "code": "unknown_snapshot_campaign",
+      "table": "paper_portfolio_snapshots",
+      "columns": [
+        "campaign_id"
+      ],
+      "resolution": "abort"
+    },
+    {
+      "code": "orphan_trade_report_run",
+      "table": "paper_trades",
+      "columns": [
+        "report_run_id"
+      ],
+      "resolution": "abort_non_null"
+    },
+    {
+      "code": "invalid_v2_trade_lineage",
+      "table": "paper_trades",
+      "columns": [
+        "report_run_id",
+        "ticker"
+      ],
+      "resolution": "abort"
+    },
+    {
+      "code": "snapshot_id_collision",
+      "table": "paper_portfolio_snapshots",
+      "columns": [
+        "id"
+      ],
+      "resolution": "preserve_existing_then_allocate_in_snapshot_date_campaign_order"
+    },
+    {
+      "code": "invalid_legacy_order_hash",
+      "table": "paper_pending_orders",
+      "columns": [
+        "order_hash",
+        "status",
+        "resolved_ts"
+      ],
+      "resolution": "allow_only_legacy_unsealed_cancelled_resolved"
+    },
+    {
+      "code": "orphan_logical_relation",
+      "table": "multiple",
+      "columns": [],
+      "resolution": "abort_using_integrity_invariants"
+    },
+    {
+      "code": "v4_contract_drift",
+      "table": "multiple",
+      "columns": [],
+      "resolution": "abort_before_migration"
+    }
+  ],
+  "integrity_invariants": [
+    {
+      "id": "sqlite_integrity",
+      "expected": "PRAGMA integrity_check returns exactly ok"
+    },
+    {
+      "id": "declared_foreign_keys",
+      "expected": "PRAGMA foreign_key_check returns zero rows"
+    },
+    {
+      "id": "source_contract",
+      "expected": "exact v4 expand contract passes before migration"
+    },
+    {
+      "id": "migration_identity",
+      "expected": "required v4 and v5 migration identifiers exist exactly once"
+    },
+    {
+      "id": "row_counts",
+      "expected": "all retained table row counts are unchanged"
+    },
+    {
+      "id": "primary_keys",
+      "expected": "all existing primary keys are unchanged"
+    },
+    {
+      "id": "table_content",
+      "expected": "canonical primary-key-ordered content hashes are unchanged except declared schema backfills"
+    },
+    {
+      "id": "sqlite_sequence",
+      "expected": "sequences do not move backwards and unchanged tables retain their values"
+    },
+    {
+      "id": "accounting",
+      "expected": "paper-v2 accounting invariants have zero breaks"
+    },
+    {
+      "id": "legacy_v1",
+      "expected": "paper-v1 rows remain frozen and readable"
+    },
+    {
+      "id": "report_admission",
+      "expected": "report admission ledger contract passes"
+    },
+    {
+      "id": "logical_foreign_keys",
+      "expected": "every intentionally absent logical relation has zero orphan rows"
+    },
+    {
+      "id": "v2_trade_lineage",
+      "expected": "every v2 trade points to a canonical verified published run with an accepted ticker"
+    },
+    {
+      "id": "legacy_pending_orders",
+      "expected": "legacy-unsealed hashes occur only on cancelled resolved orders"
+    },
+    {
+      "id": "schema_objects",
+      "expected": "table, index, trigger, foreign-key, default, and legacy-read matrices match this contract"
+    },
+    {
+      "id": "schema_fingerprint",
+      "expected": "computed semantic fingerprint equals the frozen value"
+    }
+  ],
+  "migration_ids": {
+    "required_source": [
+      "paper_campaign_v1_backfill_20260822",
+      "paper_campaign_v2_inactive_governed_20260823"
+    ],
+    "required_report_dependency": [
+      "admission-ledger-contract-v5"
+    ],
+    "target": "paper_schema_contract_v5_20260826"
+  },
+  "fingerprint_policy": {
+    "fingerprint_id": "paper-schema-v5-semantic-sha256",
+    "algorithm": "sha256",
+    "serialization": "UTF-8 JSON with sort_keys=true, separators comma and colon, ensure_ascii=true",
+    "scope_rule": "all named objects in the payload; reject unexpected governed table names and every unexpected index or trigger whose tbl_name is governed, including report dependencies, bot_versions, and schema_migrations; reject same-name malformed objects; ignore SQLite root pages, sqlite_sequence row values, and sqlite_autoindex names",
+    "canonical_redactions": [
+      {
+        "section": "fixtures",
+        "database_id": "exact_v5_target",
+        "field": "sha256",
+        "replacement": "<exact-v5-target-fixture-sha256>"
+      }
+    ]
+  },
+  "fingerprint": {
+    "payload_sections": [
+      "contract_id",
+      "contract_state",
+      "source_schema_version",
+      "target_schema_version",
+      "tables",
+      "indexes",
+      "triggers",
+      "foreign_keys",
+      "defaults",
+      "legacy_reads",
+      "legacy_readers",
+      "collision_rules",
+      "integrity_invariants",
+      "migration_ids",
+      "fixtures",
+      "release_interlocks",
+      "fingerprint_policy"
+    ],
+    "expected_sha256": "82bbb2248f0b4a1d3f0cb2f5c5af60322e2f17a1f401ce5036c18578812d1191"
+  },
+  "fixtures": {
+    "path": "tests/fixtures/paper_schema_v5_contract_cases.json",
+    "sha256": "e752d0697c17c649e6e2cc3850a09619cbc4a1f1bca647f6b2f1fdd07aba76ba",
+    "databases": [
+      {
+        "id": "fresh_v4",
+        "path": "tests/fixtures/paper_schema_v4_fresh.sql",
+        "sha256": "879de2363145c867666ba2b2c1dbb5ee88d014ead81e23f0befa7f0093e6feed"
+      },
+      {
+        "id": "production_like_legacy_v4",
+        "path": "tests/fixtures/paper_schema_v4_legacy_production_like.sql",
+        "sha256": "96f28740b72ad47cc722b098b236a5ea68cc087401ca83d6b1e5bc95c7fbc00a"
+      },
+      {
+        "id": "exact_v5_target",
+        "path": "tests/fixtures/paper_schema_v5_target.sql",
+        "sha256": "ef602f0c4928859ad0b43e4f57fe332f44331678584c0847379e90c2b348c605"
+      }
+    ]
+  },
+  "release_interlocks": {
+    "pr1_changes_runtime": false,
+    "automatic_v4_to_v5_migration_allowed": false,
+    "activation_requires_exact_v5_verifier": true,
+    "write_enablement_is_separate_transition": true,
+    "human_activation_is_separate_transition": true
+  }
+}
