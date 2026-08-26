@@ -29,7 +29,7 @@ function DebateRolesInline({
         onClick={() => setExpanded((current) => !current)}
         className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] hover:text-[var(--blue)] transition-colors"
       >
-        {expanded ? "Hide" : "Show"} debate ({roles.length} roles)
+        {expanded ? "Hide" : "Show"} rule review ({roles.length} lenses)
       </button>
       {expanded && (
         <div className="mt-2 space-y-2">
@@ -224,7 +224,7 @@ export default function ChartCommentarySidebar({
                   : "red"
             }
           >
-            DEBATE {debateState.toUpperCase()}
+            RULE REVIEW {debateState.toUpperCase()}
             {agreementScore != null && ` ${agreementScore.toFixed(0)}%`}
           </Badge>
         )}
