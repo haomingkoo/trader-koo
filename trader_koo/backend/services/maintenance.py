@@ -1,8 +1,8 @@
 """Durable writer quiescence for offline paper-schema maintenance.
 
 The recovery record is a sidecar database, so restoring the live database
-cannot erase the interlock. This module never migrates; its explicit restore
-helper preserves the failed live database before installing a verified backup.
+cannot erase the interlock. Explicit offline helpers either migrate a verified
+copy or preserve the failed live database before installing its named backup.
 """
 from __future__ import annotations
 
@@ -21,7 +21,11 @@ from typing import Any, Callable, Literal
 
 from starlette.responses import JSONResponse
 
-from trader_koo.paper_trade.schema_v5_migration import _logical_database_hash
+from trader_koo.paper_trade.schema_v5_migration import (
+    PaperSchemaV5MigrationError,
+    _logical_database_hash,
+    migrate_paper_schema_v4_to_v5,
+)
 from trader_koo.paper_trade.schema_v5_verifier import verify_paper_schema_v5
 from trader_koo.scripts.backup_db import DEFAULT_BACKUP_DIR, backup_database, backup_path_by_name, list_backups
 
@@ -33,7 +37,8 @@ CREATE TABLE IF NOT EXISTS maintenance_runs (
  source_path TEXT, source_device INTEGER, source_inode INTEGER, logical_cohort_sha256 TEXT,
  backup_dir TEXT, backup_name TEXT, backup_sha256 TEXT, backup_size_bytes INTEGER,
  retained_backups_json TEXT NOT NULL DEFAULT '[]', decision TEXT, decision_reason TEXT,
- decided_ts TEXT, resolved_ts TEXT, migration_receipt_json TEXT,
+ decided_ts TEXT, resolved_ts TEXT, migration_plan_json TEXT,
+ migration_receipt_json TEXT,
  restore_plan_json TEXT, restore_receipt_json TEXT,
  error_code TEXT, evidence_json TEXT NOT NULL DEFAULT '{}'
 )
@@ -137,6 +142,13 @@ def _connect(db_path: Path) -> sqlite3.Connection:
         conn = sqlite3.connect(str(path), timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute(_DDL)
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(maintenance_runs)")
+        }
+        if "migration_plan_json" not in columns:
+            conn.execute(
+                "ALTER TABLE maintenance_runs ADD COLUMN migration_plan_json TEXT"
+            )
         conn.commit()
         return conn
     except sqlite3.DatabaseError as exc:
@@ -247,6 +259,173 @@ def _hash(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _canonical_hash(value: Any) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _campaign_state_evidence(conn: sqlite3.Connection) -> dict[str, Any]:
+    v1_count, v1_unreconciled = conn.execute(
+        "SELECT COUNT(*),COALESCE(SUM(accounting_status='legacy_unreconciled'),0) "
+        "FROM paper_trades WHERE campaign_id='paper-v1'"
+    ).fetchone()
+    states = {
+        str(campaign_id): str(state)
+        for campaign_id, state in conn.execute(
+            "SELECT campaign_id,status FROM paper_campaigns "
+            "WHERE campaign_id IN ('paper-v1','paper-v2') ORDER BY campaign_id"
+        )
+    }
+    return {
+        "v1_trade_count": int(v1_count),
+        "v1_legacy_unreconciled_count": int(v1_unreconciled),
+        "v1_snapshot_count": int(conn.execute(
+            "SELECT COUNT(*) FROM paper_portfolio_snapshots "
+            "WHERE campaign_id='paper-v1'"
+        ).fetchone()[0]),
+        "v2_trade_count": int(conn.execute(
+            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id='paper-v2'"
+        ).fetchone()[0]),
+        "campaign_states": states,
+    }
+
+
+def _hashed_record(payload: dict[str, Any], field: str) -> dict[str, Any]:
+    result = dict(payload)
+    result[field] = _canonical_hash(payload)
+    return result
+
+
+def _require_hashed_record(
+    value: Any, *, field: str, error_code: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise MaintenanceError(error_code)
+    expected = value.get(field)
+    payload = {key: item for key, item in value.items() if key != field}
+    if not isinstance(expected, str) or expected != _canonical_hash(payload):
+        raise MaintenanceError(error_code)
+    return value
+
+
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
+
+
+def _campaign_evidence_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "v1_trade_count", "v1_legacy_unreconciled_count",
+        "v1_snapshot_count", "v2_trade_count", "campaign_states",
+    }:
+        return False
+    if any(
+        not isinstance(value.get(field), int) or value[field] < 0
+        for field in (
+            "v1_trade_count", "v1_legacy_unreconciled_count",
+            "v1_snapshot_count", "v2_trade_count",
+        )
+    ):
+        return False
+    return isinstance(value.get("campaign_states"), dict) and all(
+        isinstance(key, str) and isinstance(item, str)
+        for key, item in value["campaign_states"].items()
+    )
+
+
+def _migration_plan(current: dict[str, Any], *, required: bool) -> dict[str, Any] | None:
+    raw = current.get("migration_plan_json")
+    if not raw:
+        if required:
+            raise MaintenanceError("migration_plan_required")
+        return None
+    try:
+        plan = _require_hashed_record(
+            json.loads(str(raw)), field="plan_sha256",
+            error_code="migration_plan_invalid",
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MaintenanceError("migration_plan_invalid") from exc
+    if set(plan) != {
+        "run_id", "backup_name", "backup_sha256", "source_path",
+        "source_device", "source_inode", "source_cohort_sha256",
+        "target_applied_ts", "expected_target_logical_sha256", "contract_id",
+        "schema_fingerprint", "campaign_evidence", "created_ts",
+        "plan_sha256",
+    }:
+        raise MaintenanceError("migration_plan_invalid")
+    expected = {
+        "run_id": current["run_id"],
+        "backup_name": current["backup_name"],
+        "backup_sha256": current["backup_sha256"],
+        "source_path": current["source_path"],
+        "source_device": current["source_device"],
+        "source_inode": current["source_inode"],
+        "source_cohort_sha256": current["logical_cohort_sha256"],
+    }
+    if any(plan.get(key) != value for key, value in expected.items()):
+        raise MaintenanceError("migration_plan_binding_mismatch")
+    for field in ("target_applied_ts", "contract_id", "created_ts"):
+        if not isinstance(plan.get(field), str) or not plan[field]:
+            raise MaintenanceError("migration_plan_invalid")
+    if any(not _is_sha256(plan.get(field)) for field in (
+        "backup_sha256", "source_cohort_sha256", "expected_target_logical_sha256",
+        "schema_fingerprint", "plan_sha256",
+    )) or not _campaign_evidence_valid(plan.get("campaign_evidence")):
+        raise MaintenanceError("migration_plan_invalid")
+    return plan
+
+
+def _migration_receipt(
+    current: dict[str, Any], plan: dict[str, Any], *, required: bool,
+) -> dict[str, Any] | None:
+    raw = current.get("migration_receipt_json")
+    if not raw:
+        if required:
+            raise MaintenanceError("migration_receipt_required")
+        return None
+    try:
+        receipt = _require_hashed_record(
+            json.loads(str(raw)), field="receipt_sha256",
+            error_code="migration_receipt_invalid",
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MaintenanceError("migration_receipt_invalid") from exc
+    if set(receipt) != {
+        "run_id", "plan_sha256", "target_logical_sha256", "contract_id",
+        "schema_fingerprint", "campaign_evidence", "target_device",
+        "target_inode", "migration_status", "verified_ts", "receipt_sha256",
+    }:
+        raise MaintenanceError("migration_receipt_invalid")
+    expected = {
+        "run_id": current["run_id"],
+        "plan_sha256": plan["plan_sha256"],
+        "target_logical_sha256": plan["expected_target_logical_sha256"],
+        "contract_id": plan["contract_id"],
+        "schema_fingerprint": plan["schema_fingerprint"],
+        "campaign_evidence": plan["campaign_evidence"],
+    }
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        raise MaintenanceError("migration_receipt_mismatch")
+    if not isinstance(receipt.get("target_device"), int) or not isinstance(
+        receipt.get("target_inode"), int,
+    ):
+        raise MaintenanceError("migration_receipt_mismatch")
+    if receipt.get("migration_status") not in {"migrated", "recovered_commit"}:
+        raise MaintenanceError("migration_receipt_invalid")
+    if not isinstance(receipt.get("verified_ts"), str) or not receipt["verified_ts"]:
+        raise MaintenanceError("migration_receipt_invalid")
+    if any(not _is_sha256(receipt.get(field)) for field in (
+        "receipt_sha256", "plan_sha256", "target_logical_sha256",
+        "schema_fingerprint",
+    )) or not _campaign_evidence_valid(receipt.get("campaign_evidence")):
+        raise MaintenanceError("migration_receipt_invalid")
+    return receipt
 
 
 def _fsync_file_and_parent(path: Path) -> None:
@@ -360,6 +539,225 @@ def quiesce_backup(db_path: Path, *, run_id: str, boot_id: str, backup_dir: Path
         with _connect(db_path) as conn:
             conn.execute("UPDATE maintenance_runs SET state='draining',error_code=? WHERE run_id=?",
                          (exc.code, run_id)); conn.commit(); _fsync(db_path, conn)
+        raise
+    finally:
+        lease.close()
+    return status(db_path, run_id)
+
+
+def migrate_verified_copy(
+    db_path: Path,
+    *,
+    run_id: str,
+    inject_failure_at: str | None = None,
+    fault: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Migrate one quiesced copy and fsync a receipt for completion review."""
+    current = status(db_path, run_id)
+    if current["state"] != "decision_required" or current.get("decision") != "complete":
+        raise MaintenanceError("complete_decision_required")
+    backup_dir = Path(str(current.get("backup_dir") or ""))
+    named = backup_path_by_name(str(current.get("backup_name") or ""), backup_dir)
+    if named is None or _hash(named) != current.get("backup_sha256"):
+        raise MaintenanceError("recovery_backup_invalid")
+    if _backup_logical_hash(named) != current.get("logical_cohort_sha256"):
+        raise MaintenanceError("backup_cohort_mismatch")
+
+    lease = acquire_lease(
+        db_path, exclusive=True, timeout_sec=int(current["drain_timeout_sec"]),
+    )
+    try:
+        if db_path.is_symlink() or not db_path.is_file():
+            raise MaintenanceError("unsafe_database_source")
+        source = db_path.resolve(strict=True)
+        source_stat = source.stat()
+        if (source_stat.st_dev, source_stat.st_ino) != (
+            current.get("source_device"), current.get("source_inode"),
+        ):
+            raise MaintenanceError("database_source_replaced")
+
+        plan = _migration_plan(current, required=False)
+        if plan is None:
+            with tempfile.TemporaryDirectory(prefix="paper-v5-rehearsal-") as tmp_dir:
+                rehearsal_path = Path(tmp_dir) / "copied-production.db"
+                with gzip.open(named, "rb") as backup, rehearsal_path.open("wb") as target:
+                    shutil.copyfileobj(backup, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                with sqlite3.connect(str(rehearsal_path)) as rehearsal:
+                    source_evidence = _campaign_state_evidence(rehearsal)
+                    result = migrate_paper_schema_v4_to_v5(
+                        rehearsal,
+                        expected_source_logical_sha256=current["logical_cohort_sha256"],
+                        target_applied_ts=current["requested_ts"],
+                    )
+                    if result.get("status") != "migrated":
+                        raise MaintenanceError("rehearsal_migration_not_fresh")
+                    verified = verify_paper_schema_v5(rehearsal)
+                    target_evidence = _campaign_state_evidence(rehearsal)
+                    if target_evidence != source_evidence:
+                        raise MaintenanceError("rehearsal_preservation_mismatch")
+                    expected_target = _logical_database_hash(rehearsal)
+            plan = _hashed_record({
+                "run_id": run_id,
+                "backup_name": current["backup_name"],
+                "backup_sha256": current["backup_sha256"],
+                "source_path": str(source),
+                "source_device": source_stat.st_dev,
+                "source_inode": source_stat.st_ino,
+                "source_cohort_sha256": current["logical_cohort_sha256"],
+                "target_applied_ts": current["requested_ts"],
+                "expected_target_logical_sha256": expected_target,
+                "contract_id": verified["contract_id"],
+                "schema_fingerprint": verified["schema_fingerprint"],
+                "campaign_evidence": source_evidence,
+                "created_ts": _now(),
+            }, "plan_sha256")
+            with _connect(db_path) as state:
+                changed = state.execute(
+                    "UPDATE maintenance_runs SET migration_plan_json=?,error_code=NULL "
+                    "WHERE run_id=? AND state='decision_required' AND decision='complete' "
+                    "AND migration_plan_json IS NULL",
+                    (json.dumps(plan, sort_keys=True), run_id),
+                ).rowcount
+                if changed != 1:
+                    state.rollback()
+                    raise MaintenanceError("migration_plan_state_changed")
+                state.commit()
+                _fsync(db_path, state)
+            if fault:
+                fault("after_plan")
+
+        current = status(db_path, run_id)
+        plan = _migration_plan(current, required=True)
+        assert plan is not None
+        existing_receipt = _migration_receipt(current, plan, required=False)
+
+        with sqlite3.connect(str(source), timeout=0) as live:
+            opened_stat = source.stat()
+            if (opened_stat.st_dev, opened_stat.st_ino) != (
+                current["source_device"], current["source_inode"],
+            ):
+                raise MaintenanceError("database_source_replaced")
+            live_hash = _logical_database_hash(live)
+            migrated_fresh = live_hash == current["logical_cohort_sha256"]
+            recovered_commit = live_hash == plan["expected_target_logical_sha256"]
+            if existing_receipt is not None:
+                if not recovered_commit:
+                    raise MaintenanceError("migration_receipt_mismatch")
+                verified = verify_paper_schema_v5(live)
+                if (
+                    verified["contract_id"] != existing_receipt["contract_id"]
+                    or verified["schema_fingerprint"]
+                    != existing_receipt["schema_fingerprint"]
+                ):
+                    raise MaintenanceError("migration_receipt_mismatch")
+                final_stat = source.stat()
+                if (final_stat.st_dev, final_stat.st_ino) != (
+                    existing_receipt["target_device"],
+                    existing_receipt["target_inode"],
+                ):
+                    raise MaintenanceError("database_source_replaced")
+                with _connect(db_path) as state:
+                    state.execute(
+                        "UPDATE maintenance_runs SET error_code=NULL WHERE run_id=? "
+                        "AND migration_receipt_json=?",
+                        (run_id, current["migration_receipt_json"]),
+                    )
+                    state.commit()
+                    _fsync(db_path, state)
+                return status(db_path, run_id)
+            if migrated_fresh:
+                result = migrate_paper_schema_v4_to_v5(
+                    live,
+                    inject_failure_at=inject_failure_at,
+                    expected_source_logical_sha256=current["logical_cohort_sha256"],
+                    target_applied_ts=plan["target_applied_ts"],
+                )
+                if result.get("status") != "migrated":
+                    raise MaintenanceError("live_migration_not_fresh")
+                if fault:
+                    fault("after_migration_commit")
+            elif not recovered_commit:
+                raise MaintenanceError("live_cohort_not_planned")
+
+            checkpoint = live.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is None or int(checkpoint[0]) != 0:
+                raise MaintenanceError("migration_wal_reader_active")
+            migrated_stat = source.stat()
+            if (migrated_stat.st_dev, migrated_stat.st_ino) != (
+                current["source_device"], current["source_inode"],
+            ):
+                raise MaintenanceError("database_source_replaced")
+            verified = verify_paper_schema_v5(live)
+            target_hash = _logical_database_hash(live)
+            if target_hash != plan["expected_target_logical_sha256"]:
+                raise MaintenanceError("migration_target_mismatch")
+            campaign_evidence = _campaign_state_evidence(live)
+            if campaign_evidence != plan["campaign_evidence"]:
+                raise MaintenanceError("migration_preservation_mismatch")
+            receipt = _hashed_record({
+                "run_id": run_id,
+                "plan_sha256": plan["plan_sha256"],
+                "target_logical_sha256": target_hash,
+                "contract_id": verified["contract_id"],
+                "schema_fingerprint": verified["schema_fingerprint"],
+                "campaign_evidence": campaign_evidence,
+                "target_device": migrated_stat.st_dev,
+                "target_inode": migrated_stat.st_ino,
+                "migration_status": "recovered_commit" if recovered_commit else "migrated",
+                "verified_ts": _now(),
+            }, "receipt_sha256")
+            _begin_exclusive(live, "migration_receipt_authority_unavailable")
+            if _logical_database_hash(live) != target_hash:
+                raise MaintenanceError("verified_database_changed")
+            receipt_stat = source.stat()
+            if (receipt_stat.st_dev, receipt_stat.st_ino) != (
+                migrated_stat.st_dev, migrated_stat.st_ino,
+            ):
+                raise MaintenanceError("database_source_replaced")
+            if fault:
+                fault("before_receipt")
+            receipt_stat = source.stat()
+            if (receipt_stat.st_dev, receipt_stat.st_ino) != (
+                migrated_stat.st_dev, migrated_stat.st_ino,
+            ):
+                raise MaintenanceError("database_source_replaced")
+            with _connect(db_path) as state:
+                changed = state.execute(
+                    "UPDATE maintenance_runs SET migration_receipt_json=?,error_code=NULL "
+                    "WHERE run_id=? AND state='decision_required' AND decision='complete' "
+                    "AND migration_plan_json=? AND migration_receipt_json IS NULL",
+                    (json.dumps(receipt, sort_keys=True), run_id,
+                     json.dumps(plan, sort_keys=True)),
+                ).rowcount
+                if changed != 1:
+                    state.rollback()
+                    raise MaintenanceError("migration_receipt_state_changed")
+                state.commit()
+                _fsync(db_path, state)
+            live.rollback()
+        if fault:
+            fault("after_receipt")
+    except PaperSchemaV5MigrationError as exc:
+        code = str(exc.diagnostics[0].get("code", "migration_failed"))
+        wrapped = MaintenanceError(code)
+        with _connect(db_path) as state:
+            state.execute(
+                "UPDATE maintenance_runs SET error_code=? WHERE run_id=?",
+                (wrapped.code, run_id),
+            )
+            state.commit()
+            _fsync(db_path, state)
+        raise wrapped from exc
+    except MaintenanceError as exc:
+        with _connect(db_path) as state:
+            state.execute(
+                "UPDATE maintenance_runs SET error_code=? WHERE run_id=?",
+                (exc.code, run_id),
+            )
+            state.commit()
+            _fsync(db_path, state)
         raise
     finally:
         lease.close()
@@ -509,16 +907,30 @@ def verify_resolution(db_path: Path, *, run_id: str) -> dict[str, Any]:
         named = backup_path_by_name(str(current.get("backup_name") or ""), backup_dir)
         if named is None or _hash(named) != current.get("backup_sha256"):
             raise MaintenanceError("recovery_backup_invalid")
+        if _backup_logical_hash(named) != current.get("logical_cohort_sha256"):
+            raise MaintenanceError("backup_cohort_mismatch")
         with sqlite3.connect(str(source), timeout=0) as conn:
             if current.get("decision") == "complete":
-                receipt = json.loads(current.get("migration_receipt_json") or "{}")
-                if not receipt or receipt.get("source_cohort_sha256") != current.get("logical_cohort_sha256"):
+                if not current.get("migration_receipt_json"):
                     raise MaintenanceError("migration_receipt_required")
+                plan = _migration_plan(current, required=True)
+                assert plan is not None
+                receipt = _migration_receipt(current, plan, required=True)
+                assert receipt is not None
                 verified = verify_paper_schema_v5(conn)
                 verified_hash = _logical_database_hash(conn)
                 if (
-                    receipt.get("target_logical_sha256") != verified_hash
-                    or receipt.get("schema_fingerprint") != verified["schema_fingerprint"]
+                    verified_hash != plan["expected_target_logical_sha256"]
+                    or receipt["contract_id"] != verified["contract_id"]
+                    or receipt["schema_fingerprint"] != verified["schema_fingerprint"]
+                ):
+                    raise MaintenanceError("migration_receipt_mismatch")
+                campaign_evidence = _campaign_state_evidence(conn)
+                if campaign_evidence != receipt["campaign_evidence"]:
+                    raise MaintenanceError("migration_receipt_mismatch")
+                target_stat = source.stat()
+                if (target_stat.st_dev, target_stat.st_ino) != (
+                    receipt["target_device"], receipt["target_inode"],
                 ):
                     raise MaintenanceError("migration_receipt_mismatch")
                 _begin_exclusive(conn, "resolution_sqlite_authority_unavailable")
@@ -541,8 +953,15 @@ def verify_resolution(db_path: Path, *, run_id: str) -> dict[str, Any]:
             else:
                 raise MaintenanceError("recovery_decision_required")
             with _connect(db_path) as state:
-                state.execute("UPDATE maintenance_runs SET state='resolved',resolved_ts=?,error_code=NULL WHERE run_id=?",
-                              (_now(), run_id)); state.commit(); _fsync(db_path, state)
+                changed = state.execute(
+                    "UPDATE maintenance_runs SET state='resolved',resolved_ts=?,error_code=NULL "
+                    "WHERE run_id=? AND state='decision_required' AND decision=?",
+                    (_now(), run_id, current.get("decision")),
+                ).rowcount
+                if changed != 1:
+                    state.rollback()
+                    raise MaintenanceError("resolution_state_changed")
+                state.commit(); _fsync(db_path, state)
             conn.rollback()
     finally:
         lease.close()

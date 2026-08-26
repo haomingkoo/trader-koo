@@ -167,6 +167,32 @@ the live database and named backup both match the recorded cohort for `restore`.
 Step 12 creates no migration receipt, so `complete` remains interlocked until a
 later exclusive migration wrapper supplies that evidence.
 
+### Step 13: NON-PRODUCTION COPIED DATABASE ONLY
+
+The following contraction command is not eligible for the production Railway
+volume during step 12. Run it only against the named non-production copied
+database after its maintenance request, restart, quiescence, and backup:
+
+```text
+python -m trader_koo.scripts.paper_schema_maintenance decide --run-id RUN_ID --decision complete --reason "COPIED DATABASE REHEARSAL APPROVED"
+python -m trader_koo.scripts.paper_schema_maintenance migrate-copy --run-id RUN_ID
+python -m trader_koo.scripts.paper_schema_maintenance verify-resolution --run-id RUN_ID
+```
+
+`migrate-copy` is that step-13 wrapper. It requires the already recorded
+`complete` decision, holds the whole-process exclusive lease, and first migrates
+the named backup as a copied-production rehearsal. It fsyncs a hash-bound plan,
+then invokes the same migration on the live copy; the migration owns an SQLite
+exclusive transaction and compares the source cohort before any DDL. Exact-v5
+verification and the deterministic target hash must match the rehearsal before
+the wrapper fsyncs its receipt. A commit-before-receipt restart can recover only
+the exact planned target; an unrelated v5 database is rejected. This command
+does not enable paper writes or activate Campaign v2. Run this sequence only in
+the named non-production copied-database environment for step 13; production
+migration remains ineligible until the explicit rollback-retirement and
+production-migration approval in step 15. Write enablement and activation remain
+separate decisions under steps 16-17.
+
 The current dark-deploy workflow deliberately resets writes to paused on every
 release. Before the first activation, the contract-aware workflow must be changed
 to capture, audit, preserve, and verify the approved write-gate state across
