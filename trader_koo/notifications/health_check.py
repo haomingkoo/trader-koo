@@ -67,6 +67,8 @@ def check_all_sites() -> list[dict[str, Any]]:
                 "ok": False,
                 "elapsed_ms": round(elapsed_ms),
                 "error": str(exc)[:100],
+                "error_type": type(exc).__name__,
+                "timed_out": isinstance(exc, httpx.TimeoutException),
             })
             LOG.warning("Health check FAIL: %s — %s", name, exc)
 
@@ -112,23 +114,65 @@ def run_health_check(*, now_monotonic: float | None = None) -> None:
 
 def _send_health_alert(failures: list[dict], all_results: list[dict]) -> bool:
     """Send Telegram alert for site failures."""
-    lines = ["<b>HEALTH CHECK FAILED</b>", ""]
+    ok_count = sum(1 for result in all_results if result["ok"])
+    current_failures = [result for result in all_results if not result["ok"]]
+    affected_names = ", ".join(
+        escape(str(result.get("name", "?")), quote=False)
+        for result in failures
+    )
+    current_failure_names = ", ".join(
+        escape(str(result.get("name", "?")), quote=False)
+        for result in current_failures
+    )
+    heading = (
+        "HEALTH CHECK PARTIAL FAILURE"
+        if ok_count > 0
+        else "HEALTH CHECK FAILED"
+    )
+    lines = [
+        f"<b>{heading}</b>",
+        f"Affected: {len(failures)}/{len(all_results)} checks ({affected_names})",
+        "",
+    ]
+    if len(current_failures) != len(failures):
+        lines.insert(
+            2,
+            f"Current failures: {len(current_failures)}/{len(all_results)} checks "
+            f"({current_failure_names})",
+        )
 
     for f in failures:
         status = f.get("status", 0)
         error = f.get("error", "")
         count = _failure_counts.get(f["name"], 0)
         name = escape(str(f.get("name", "?")), quote=False)
+        url = escape(str(f.get("url", "unknown")), quote=False)
+        elapsed_ms = max(0, int(f.get("elapsed_ms", 0) or 0))
+        elapsed = (
+            f"{elapsed_ms / 1000:.1f}s"
+            if elapsed_ms >= 1000
+            else f"{elapsed_ms}ms"
+        )
+        lines.append(f"  <b>{name}</b>")
+        lines.append(f"  URL/path: <code>{url}</code>")
         if status > 0:
-            lines.append(f"  {name}: HTTP {status} ({count} consecutive)")
-        else:
             lines.append(
-                f"  {name}: {escape(str(error), quote=False)} ({count} consecutive)"
+                f"  Result: HTTP {status} after {elapsed} ({count} consecutive)"
+            )
+        elif f.get("timed_out"):
+            lines.append(
+                f"  Result: timeout after {elapsed} "
+                f"(limit {TIMEOUT_SEC}s; {count} consecutive)"
+            )
+        else:
+            error_type = escape(str(f.get("error_type") or "request error"), quote=False)
+            lines.append(
+                f"  Result: {error_type} after {elapsed}: "
+                f"{escape(str(error), quote=False)} ({count} consecutive)"
             )
 
-    ok_count = sum(1 for r in all_results if r["ok"])
     lines.append("")
-    lines.append(f"{ok_count}/{len(all_results)} sites healthy")
+    lines.append(f"Healthy: {ok_count}/{len(all_results)} checks")
 
     text = "\n".join(lines)
 
