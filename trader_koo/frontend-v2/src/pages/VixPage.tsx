@@ -19,14 +19,17 @@ export default function VixPage() {
     document.title = "VIX \u2014 Trader Koo";
   }, []);
 
-  const { data, isLoading, error } = useReport();
+  const { data, error } = useReport();
   const {
     data: metricsData,
     isLoading: metricsLoading,
     error: metricsError,
   } = useVixMetrics();
 
-  if (isLoading || metricsLoading) return <Spinner className="mt-12" />;
+  // The compact daily report is still materially heavier than the live VIX
+  // snapshot. Do not hide available volatility metrics while regime evidence
+  // is loading; the page upgrades itself when the sealed report arrives.
+  if (metricsLoading) return <Spinner className="mt-12" />;
   if (error && !metricsData?.ok) {
     return (
       <div className="mt-12 text-center text-sm text-[var(--red)]">
