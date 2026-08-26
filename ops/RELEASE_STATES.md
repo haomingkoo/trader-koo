@@ -101,6 +101,10 @@ destructive parent-table rebuild on the live volume.
     caller; the activation interlock remains unconditional.
 11. Implement the phase-aware initializer as another change, proving it operates
     safely on both v4 expand and v5 contract states.
+    `ensure_paper_trade_schema` keeps v4 expand-compatible, verifies exact v5,
+    rejects ambiguous phases, and never calls the offline contraction migration.
+    Its runtime cache is schema/identity scoped; fresh data-integrity claims use
+    the uncached verifier at release and maintenance gates.
 12. Implement the writer-quiescence control and recovery drills separately,
     including active-transaction detection, timeouts, abort criteria, backup
     retention, restore evidence, and the restore-versus-complete decision point.
