@@ -121,7 +121,8 @@ destructive parent-table rebuild on the live volume.
     API, background workers, schema no-op behavior, and rollback drill. Only
     after that checkpoint and explicit rollback-retirement approval may the
     operator quiesce every v4 writer, take a named backup, migrate under a
-    maintenance boundary, then restart and verify that same image on v5.
+    maintenance boundary with the explicit `migrate-production` command below,
+    then restart and verify that same image on v5.
 16. In another audited configuration transition, enable paper writes and verify
     the API reports `write_state=enabled`.
 17. Only then accept the separate human Campaign v2 activation request and
@@ -199,6 +200,50 @@ the named non-production copied-database environment for step 13; production
 migration remains ineligible until the explicit rollback-retirement and
 production-migration approval in step 15. Write enablement and activation remain
 separate decisions under steps 16-17.
+
+### Step 15: APPROVED PRODUCTION MIGRATION ONLY
+
+This boundary is ineligible until the phase-aware image has passed its production
+v4 checkpoint and the old-image rollback window has an explicit approval record.
+The authenticated maintenance request must establish the durable production
+purpose and bind that approval, the deployed release, and the paused write gate:
+
+```json
+{
+  "reason": "schema v5 production migration after rollback retirement",
+  "timeout_sec": 60,
+  "idempotency_key": "UNIQUE_APPROVED_REQUEST",
+  "purpose": "production-migration",
+  "approval_ref": "APPROVAL_REFERENCE",
+  "expected_release_sha": "40_LOWERCASE_HEX_RELEASE_SHA",
+  "expected_write_gate": "0"
+}
+```
+
+After `POST /api/admin/maintenance/request` succeeds, perform a real process
+restart into maintenance-only mode. In the protected Railway SSH session use the
+deployed virtual environment explicitly; this CLI intentionally imports its
+database path from the dependency-light configuration module rather than the
+pandas-backed API database service:
+
+```text
+/opt/venv/bin/python -m trader_koo.scripts.paper_schema_maintenance status --run-id RUN_ID
+/opt/venv/bin/python -m trader_koo.scripts.paper_schema_maintenance quiesce-backup --run-id RUN_ID
+/opt/venv/bin/python -m trader_koo.scripts.paper_schema_maintenance decide --run-id RUN_ID --decision complete --reason "APPROVAL_REFERENCE: rollback retired and production migration approved"
+/opt/venv/bin/python -m trader_koo.scripts.paper_schema_maintenance migrate-production --run-id RUN_ID --approval-ref "APPROVAL_REFERENCE" --expected-release-sha 40_LOWERCASE_HEX_RELEASE_SHA --expected-backup-sha256 SHA_FROM_QUIESCE_STATUS
+/opt/venv/bin/python -m trader_koo.scripts.paper_schema_maintenance verify-resolution --run-id RUN_ID
+```
+
+`migrate-production` reuses the step-13 migration engine but admits it only when
+the durable request purpose is production, the structured approval and release
+match exactly, `TRADER_KOO_PAPER_TRADE_ENABLED` is explicitly `0`, the running
+release SHA and named backup hash match, the configured live database path is
+the migration target, and Campaign v2 is still `draft`. The hashed plan and
+receipt bind those inputs and exact pre/post trade, campaign, and campaign-audit
+row evidence. A retry must present the same authorization. `migrate-copy`
+refuses a production runtime and cannot satisfy a production-purpose request.
+Restart the real service only after `verify-resolution` succeeds. Write
+enablement and Campaign v2 activation remain separate steps 16 and 17.
 
 The production-faithful journey test accepts either an immutable gzip backup or
 a raw SQLite source. Raw sources are snapshotted through SQLite's read-only

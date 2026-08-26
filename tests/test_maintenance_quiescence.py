@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from trader_koo.backend.services.maintenance import (
@@ -413,6 +413,28 @@ def test_admin_request_returns_durable_run_when_scheduler_pause_fails(
     assert result["scheduler_warning"] == "scheduler_pause_failed_restart_required"
     assert result["maintenance"]["run_id"].startswith("maint_")
     assert status(db)["writers_blocked"] is True
+
+
+def test_admin_request_rejects_copied_rehearsal_on_deployed_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trader_koo.backend.routers.admin import maintenance as route
+
+    db = tmp_path / "live.db"; _live_db(db)
+    monkeypatch.setattr(route, "DB_PATH", db)
+    monkeypatch.setenv("TRADER_KOO_GIT_SHA", "a" * 40)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        boot_id="boot-before", maintenance_mode=False,
+    )))
+    body = route.MaintenanceRequest(
+        reason="copied production rehearsal", timeout_sec=1,
+        idempotency_key="request-copy", purpose="copied-rehearsal",
+    )
+    with pytest.raises(HTTPException) as raised:
+        route.request_database_maintenance(request, body)
+    assert raised.value.status_code == 409
+    assert raised.value.detail == "copied_rehearsal_production_refused"
+    assert status(db)["state"] == "idle"
 
 
 def test_lease_timeout_persists_fail_closed_error(tmp_path: Path) -> None:
