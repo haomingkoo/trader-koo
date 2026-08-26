@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PipelineStatus } from "../api/types.ts";
-import { derivePipelineState } from "./pipelineState.ts";
+import { derivePipelineState, priceBasisStatusCopy } from "./pipelineState.ts";
 
 function status(overrides: Partial<PipelineStatus>): PipelineStatus {
   return {
@@ -43,4 +43,36 @@ test("operational warnings remain visible after a completed ingest", () => {
   });
 
   assert.equal(derivePipelineState(data), "warning");
+});
+
+test("price basis copy distinguishes canonical seals from retained history", () => {
+  const priceBasis = {
+    cohort_available: true,
+    cohort_source: "latest_canonical_sp500_price_ingest",
+    cohort_run_id: "run-1",
+    cohort_finished_ts: "2026-08-26T00:00:00Z",
+    cohort_tickers: 536,
+    verified_tickers: 495,
+    unresolved_tickers: 41,
+    bases: [],
+    retained_history: {
+      ticker_count: 552,
+      verified_tickers: 495,
+      unresolved_tickers: 57,
+      revision_tickers: 537,
+      missing_revision_tickers: 15,
+      bases: [],
+    },
+  } as PipelineStatus["price_basis"];
+
+  assert.deepEqual(priceBasisStatusCopy(priceBasis), {
+    cohort: "Current canonical cohort with verified persisted seals: 495 / 536",
+    unresolved: "Current unresolved or unsealed: 41",
+    retained: "Retained history: 552 symbols · 15 missing seal(s)",
+  });
+  assert.deepEqual(priceBasisStatusCopy({ ...priceBasis, cohort_available: false }), {
+    cohort: "Current canonical cohort seal status unavailable",
+    unresolved: "Current unresolved count unavailable",
+    retained: "Retained history: 552 symbols · 15 missing seal(s)",
+  });
 });

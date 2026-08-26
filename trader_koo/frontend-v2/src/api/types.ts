@@ -57,6 +57,11 @@ export interface PipelineStatus {
     report_fresh: boolean;
   };
   price_basis: {
+    cohort_available: boolean;
+    cohort_source: string;
+    cohort_run_id: string | null;
+    cohort_finished_ts: string | null;
+    cohort_tickers: number;
     verified_tickers: number;
     unresolved_tickers: number;
     revision_tickers?: number;
@@ -68,6 +73,19 @@ export interface PipelineStatus {
       basis_status: string | null;
       ticker_count: number;
     }>;
+    retained_history: {
+      ticker_count: number;
+      verified_tickers: number;
+      unresolved_tickers: number;
+      revision_tickers: number;
+      missing_revision_tickers: number;
+      bases: Array<{
+        adjustment_basis: string | null;
+        adjustment_version: string | null;
+        basis_status: string | null;
+        ticker_count: number;
+      }>;
+    };
   };
   errors: {
     failed_runs_7d: number;

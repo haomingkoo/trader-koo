@@ -87,7 +87,8 @@ def _create_test_db() -> sqlite3.Connection:
             tickers_total INTEGER DEFAULT 0,
             tickers_ok INTEGER DEFAULT 0,
             tickers_failed INTEGER DEFAULT 0,
-            error_message TEXT
+            error_message TEXT,
+            args_json TEXT
         );
 
         CREATE TABLE ingest_ticker_status (
