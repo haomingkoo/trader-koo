@@ -50,6 +50,47 @@ class TestDailyReportEndpoint:
             "generation_key": "daily:2026-08-22T12:00:00Z",
             "canonical_generation": True,
         }
+        assert (
+            response.json()["latest"]["signals"]["regime_context"]["source"]
+            == "not_recorded"
+        )
+
+    def test_daily_report_labels_only_a_usable_live_regime_patch(self, test_app):
+        sealed = {
+            "generated_ts": "2026-08-22T12:00:00Z",
+            "signals": {
+                "regime_context": {
+                    "ma_matrix": [],
+                    "comparison": {},
+                }
+            },
+        }
+        live = {
+            "source": "price_daily:^VIX",
+            "asof_date": "2026-08-25",
+            "vix": {"ticker": "^VIX", "close": 15.45},
+            "ma_matrix": [{"metric": "Close vs MA20"}],
+            "comparison": {"series": [{"ticker": "^VIX"}]},
+        }
+        with (
+            patch(
+                "trader_koo.backend.services.report_loader.latest_daily_report_json",
+                return_value=(None, sealed),
+            ),
+            patch(
+                "trader_koo.backend.routers.report.pipeline_status_snapshot",
+                return_value={"active": False, "stage": "idle", "latest_run": None},
+            ),
+            patch(
+                "trader_koo.backend.routers.report._report_build_regime_context",
+                return_value=live,
+            ),
+        ):
+            response = test_app.get("/api/daily-report")
+
+        regime = response.json()["latest"]["signals"]["regime_context"]
+        assert regime["source"] == "regime_context_live_patch:price_daily:^VIX"
+        assert regime["asof_date"] == "2026-08-25"
 
     @patch(
         "trader_koo.backend.services.report_loader.latest_daily_report_json",

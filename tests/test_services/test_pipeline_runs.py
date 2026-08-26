@@ -21,6 +21,7 @@ from trader_koo.backend.services.pipeline import (
     finish_pipeline_run,
     queue_reserved_pipeline_run,
     read_active_pipeline_run,
+    read_latest_completed_pipeline_run,
     read_interrupted_pipeline_run,
     reserve_pipeline_run,
     start_pipeline_run,
@@ -212,6 +213,33 @@ class TestPipelineReservation:
             "run_id": "pipe_reserved",
         }
         assert read_active_pipeline_run(db_path=db_file)["status"] == "queued"
+
+
+def test_read_latest_completed_pipeline_run_ignores_active_rows(tmp_path: Path) -> None:
+    db_file = _make_db(tmp_path)
+    conn = sqlite3.connect(str(db_file))
+    conn.executescript(
+        """
+        INSERT INTO pipeline_runs
+            (run_id, started_ts, finished_ts, mode, source, status, stage,
+             ingest_ok, yolo_ok, report_ok)
+        VALUES
+            ('older', '2026-08-25T20:00:00Z', '2026-08-25T21:00:00Z',
+             'full', 'scheduler', 'ok', 'done', 1, 1, 1),
+            ('newer', '2026-08-25T22:00:00Z', '2026-08-25T23:00:00Z',
+             'report', 'admin', 'failed', 'done', 0, 0, 0),
+            ('active', '2026-08-26T00:00:00Z', NULL,
+             'full', 'scheduler', 'running', 'report', 1, 1, 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    latest = read_latest_completed_pipeline_run(db_file)
+
+    assert latest is not None
+    assert latest["run_id"] == "newer"
+    assert latest["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------

@@ -346,6 +346,33 @@ def read_active_pipeline_run(
         conn.close()
 
 
+def read_latest_completed_pipeline_run(
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Return the latest durably finished pipeline run."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not table_exists(conn, "pipeline_runs"):
+            return None
+        row = conn.execute(
+            """
+            SELECT *
+            FROM pipeline_runs
+            WHERE finished_ts IS NOT NULL
+              AND status NOT IN ('queued', 'running')
+            ORDER BY finished_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def count_resume_attempts(
     run_id: str,
     *,
@@ -645,6 +672,41 @@ def _infer_last_completed_event_from_tail(tail: list[str]) -> dict[str, Any] | N
     return best
 
 
+def _completed_event_from_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Translate a persisted pipeline run into the public completion shape."""
+    if not run or not run.get("finished_ts"):
+        return None
+    if run.get("report_ok"):
+        stage = "report"
+    elif run.get("yolo_ok"):
+        stage = "yolo"
+    elif run.get("ingest_ok"):
+        stage = "ingest"
+    else:
+        stage = str(run.get("mode") or "pipeline")
+    return {
+        "stage": stage,
+        "status": str(run.get("status") or "unknown"),
+        "line": f"pipeline_runs:{run.get('run_id')}",
+        "ts": str(run["finished_ts"]),
+    }
+
+
+def _newest_completed_event(
+    log_event: dict[str, Any] | None,
+    persisted_event: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if log_event is None:
+        return persisted_event
+    if persisted_event is None:
+        return log_event
+    log_ts = parse_iso_utc(log_event.get("ts"))
+    persisted_ts = parse_iso_utc(persisted_event.get("ts"))
+    if persisted_ts is not None and (log_ts is None or persisted_ts >= log_ts):
+        return persisted_event
+    return log_event
+
+
 # ---------------------------------------------------------------------------
 # Pipeline snapshot
 # ---------------------------------------------------------------------------
@@ -653,13 +715,20 @@ def pipeline_status_snapshot(
     log_lines: int = 160,
     *,
     latest_run: dict[str, Any] | None | object = _LATEST_RUN_UNSET,
+    latest_completed_run: dict[str, Any] | None | object = _LATEST_RUN_UNSET,
 ) -> dict[str, Any]:
     """Build the full pipeline-status dict from log tails + DB run data."""
     tail = _tail_text_file(RUN_LOG_PATH, lines=log_lines, max_bytes=256_000)
     inferred = _infer_pipeline_from_log_tail(tail)
-    last_completed = _infer_last_completed_event_from_tail(tail)
+    log_completed = _infer_last_completed_event_from_tail(tail)
     if latest_run is _LATEST_RUN_UNSET:
         latest_run = read_latest_ingest_run()
+    if latest_completed_run is _LATEST_RUN_UNSET:
+        latest_completed_run = read_latest_completed_pipeline_run()
+    last_completed = _newest_completed_event(
+        log_completed,
+        _completed_event_from_run(latest_completed_run),
+    )
     active_pipeline_run = read_active_pipeline_run()
     stage = inferred.get("stage", "unknown")
     active = bool(inferred.get("active"))
@@ -694,8 +763,7 @@ def pipeline_status_snapshot(
         stage = str(active_pipeline_run.get("stage") or "starting")
         stale_inference = False
     if not active and stage != "stale_running":
-        if last_completed is not None:
-            stage = "idle"
+        stage = "idle"
         stage_line = None
         stage_line_ts = None
         stage_age_sec = None

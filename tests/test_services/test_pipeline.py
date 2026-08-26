@@ -138,9 +138,37 @@ class TestPipelineStatusSnapshot:
     @patch("trader_koo.backend.services.pipeline._tail_text_file", return_value=[])
     @patch("trader_koo.backend.services.pipeline.read_latest_ingest_run", return_value=None)
     def test_inactive_when_no_logs(self, mock_run, mock_tail):
-        result = pipeline_status_snapshot(log_lines=10)
+        result = pipeline_status_snapshot(log_lines=10, latest_completed_run=None)
 
         assert result["active"] is False
+        assert result["stage"] == "idle"
+
+    @patch("trader_koo.backend.services.pipeline._tail_text_file", return_value=[])
+    @patch("trader_koo.backend.services.pipeline.read_active_pipeline_run", return_value=None)
+    def test_uses_durable_completion_when_deploy_clears_log_tail(
+        self,
+        mock_active,
+        mock_tail,
+    ):
+        result = pipeline_status_snapshot(
+            log_lines=10,
+            latest_run={"run_id": "ingest-1", "status": "ok"},
+            latest_completed_run={
+                "run_id": "pipeline-1",
+                "mode": "full",
+                "status": "ok",
+                "finished_ts": "2026-08-25T23:54:08Z",
+                "ingest_ok": 1,
+                "yolo_ok": 1,
+                "report_ok": 1,
+            },
+        )
+
+        assert result["active"] is False
+        assert result["stage"] == "idle"
+        assert result["last_completed_stage"] == "report"
+        assert result["last_completed_status"] == "ok"
+        assert result["last_completed_ts"] == "2026-08-25T23:54:08Z"
 
     @patch(
         "trader_koo.backend.services.pipeline.read_active_pipeline_run",
