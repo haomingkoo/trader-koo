@@ -18,6 +18,7 @@ from collections import defaultdict
 from typing import Any
 
 from trader_koo.ml.features import ML_CONTEXT_TICKERS
+from trader_koo.research.challenger_preregistration import frozen_preregistration
 from trader_koo.research.next_open_baseline import (
     BaselineConfig,
     ExecutionDecision,
@@ -25,7 +26,10 @@ from trader_koo.research.next_open_baseline import (
     canonical_json_bytes,
     simulate_portfolio,
 )
-
+from trader_koo.research.universe_membership import (
+    VerifiedMembership,
+    load_verified_membership,
+)
 
 def daily_returns(values: list[float]) -> list[float]:
     return [after / before - 1 for before, after in zip(values, values[1:]) if before > 0]
@@ -134,7 +138,19 @@ def holm_adjust(p_values: dict[str, float]) -> dict[str, float]:
     return {name: adjusted[name] for name in sorted(adjusted)}
 
 
-def _market(conn: Any) -> tuple[list[str], dict[str, list[SessionPrice]]]:
+def _validate_preregistration(preregistration: dict[str, Any]) -> tuple[str, str]:
+    dataset_hash = str(preregistration.get("dataset_hash") or "")
+    membership_sha256 = str(preregistration.get("membership_sha256") or "")
+    canonical = frozen_preregistration(dataset_hash, membership_sha256)
+    if len(dataset_hash) != 64 or len(membership_sha256) != 64 or preregistration != canonical:
+        raise ValueError("challenger preregistration contract invalid")
+    return str(canonical["universe_id"]), membership_sha256
+
+
+def _market(
+    conn: Any,
+    universe_id: str,
+) -> tuple[list[str], dict[str, list[SessionPrice]], VerifiedMembership]:
     by_ticker: dict[str, list[SessionPrice]] = defaultdict(list)
     for ticker, date, open_, close, volume in conn.execute(
         """SELECT ticker,date,open,close,volume FROM price_daily
@@ -147,7 +163,10 @@ def _market(conn: Any) -> tuple[list[str], dict[str, list[SessionPrice]]]:
             name, str(date), float(open_), float(close), volume=float(volume)
         ))
     sessions = [row.date for row in by_ticker.get("SPY", [])]
-    return sessions, dict(by_ticker)
+    membership = load_verified_membership(
+        conn, universe_id, required_membership_dates(sessions),
+    )
+    return sessions, dict(by_ticker), membership
 
 
 def _period_ends(sessions: list[str], period: str) -> list[str]:
@@ -162,6 +181,11 @@ def _period_ends(sessions: list[str], period: str) -> list[str]:
     return sorted(groups.values())
 
 
+def required_membership_dates(sessions: list[str]) -> list[str]:
+    """Return every date where a constituent-aware challenger forms a signal."""
+    return sorted(set(_period_ends(sessions, "month")) | set(_period_ends(sessions, "week")))
+
+
 def _capacity(rows: list[SessionPrice], signal_date: str) -> float:
     prior = [row.close * float(row.volume or 0) for row in rows if row.date <= signal_date][-20:]
     return statistics.median(prior) * .01 if prior else 0.0
@@ -172,11 +196,11 @@ def _decisions(
     sessions: list[str],
     by_ticker: dict[str, list[SessionPrice]],
     allowed_dates: set[str],
+    membership: VerifiedMembership,
 ) -> list[ExecutionDecision]:
     session_index = {date: index for index, date in enumerate(sessions)}
     monthly = _period_ends(sessions, "month")
     signals = monthly if challenger in {"C1", "C3"} else _period_ends(sessions, "week")
-    tradable = {name: rows for name, rows in by_ticker.items() if name != "SPY"}
     decisions: list[ExecutionDecision] = []
     for signal_date in signals:
         if signal_date not in allowed_dates or session_index[signal_date] + 1 >= len(sessions):
@@ -193,6 +217,11 @@ def _decisions(
         if exit_index >= len(sessions) or sessions[exit_index] not in allowed_dates:
             continue
         exit_date = sessions[exit_index]
+        active_members = membership.members_on(signal_date)
+        tradable = {
+            name: rows for name, rows in by_ticker.items()
+            if name != "SPY" and name in active_members
+        }
         history = {
             ticker: [row for row in rows if row.date <= signal_date]
             for ticker, rows in tradable.items()
@@ -257,11 +286,12 @@ def _execute(
     challenger: str,
     sessions: list[str],
     by_ticker: dict[str, list[SessionPrice]],
+    membership: VerifiedMembership,
     allowed_dates: list[str],
     cost_bps: float,
 ) -> dict[str, Any]:
     allowed = set(allowed_dates)
-    decisions = _decisions(challenger, sessions, by_ticker, allowed)
+    decisions = _decisions(challenger, sessions, by_ticker, allowed, membership)
     prices = [row for rows in by_ticker.values() for row in rows if row.date in allowed]
     config = BaselineConfig(
         initial_capital=1_000_000,
@@ -406,6 +436,7 @@ def _consume_holdout(
     selected: str,
     sessions: list[str],
     by_ticker: dict[str, list[SessionPrice]],
+    membership: VerifiedMembership,
     heldout: list[str],
 ) -> dict[str, Any]:
     """Durably log access before reading, and return the sealed result on retry."""
@@ -453,8 +484,12 @@ def _consume_holdout(
         spec.get("one_way_cost_scenarios_bps")
         or [cost, spec.get("stress_cost_bps", cost * 2)]
     ))
-    selection_run = _execute(selected, sessions, by_ticker, heldout, cost)
-    stress_run = _execute(selected, sessions, by_ticker, heldout, stress_cost)
+    selection_run = _execute(
+        selected, sessions, by_ticker, membership, heldout, cost,
+    )
+    stress_run = _execute(
+        selected, sessions, by_ticker, membership, heldout, stress_cost,
+    )
     metrics = selection_run["metrics"]
     stress_metrics = stress_run["metrics"]
     gate_reasons = []
@@ -506,7 +541,10 @@ def execute_validation_tournament(
     consume_heldout: bool = False,
 ) -> dict[str, Any]:
     """Run development-informed chronological validation without held-out access."""
-    sessions, by_ticker = _market(conn)
+    universe_id, expected_membership_sha256 = _validate_preregistration(preregistration)
+    sessions, by_ticker, membership = _market(conn, universe_id)
+    if membership.contract["membership_sha256"] != expected_membership_sha256:
+        raise ValueError("point-in-time membership changed after preregistration")
     first, second = int(len(sessions) * .6), int(len(sessions) * .8)
     purge = int(preregistration["selection"]["purge_sessions"])
     development = sessions[:max(0, first - purge)]
@@ -523,7 +561,9 @@ def execute_validation_tournament(
             cost, float(spec.get("stress_cost_bps", cost * 2)),
         ]
         scenario_runs = {
-            float(value): _execute(name, sessions, by_ticker, validation, float(value))
+            float(value): _execute(
+                name, sessions, by_ticker, membership, validation, float(value),
+            )
             for value in sorted(set(scenario_costs))
         }
         base = scenario_runs[cost]
@@ -541,7 +581,9 @@ def execute_validation_tournament(
             "training_end": part[0],
             "validation_start": part[0],
             "validation_end": part[-1],
-            "metrics": _execute(name, sessions, by_ticker, part, cost)["metrics"],
+            "metrics": _execute(
+                name, sessions, by_ticker, membership, part, cost,
+            )["metrics"],
         } for part in fold_ranges]
         positive_pct = (
             sum(
@@ -593,7 +635,7 @@ def execute_validation_tournament(
     )
     heldout_result = (
         _consume_holdout(
-            conn, preregistration, selected, sessions, by_ticker, heldout
+            conn, preregistration, selected, sessions, by_ticker, membership, heldout
         )
         if selected and consume_heldout else None
     )

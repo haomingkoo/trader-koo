@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import math
 import sqlite3
@@ -24,6 +25,10 @@ from trader_koo.research.challenger_tournament import (
 )
 from trader_koo.research.challenger_executor import execute_validation_tournament
 from trader_koo.research.next_open_baseline import SessionPrice
+from trader_koo.research.universe_membership import (
+    MembershipContractError,
+    load_verified_membership,
+)
 
 
 def _unverified_dataset(rows: list[tuple[object, ...]]) -> sqlite3.Connection:
@@ -33,6 +38,95 @@ def _unverified_dataset(rows: list[tuple[object, ...]]) -> sqlite3.Connection:
     )
     conn.executemany("INSERT INTO price_daily VALUES (?,?,?,?,?)", rows)
     return conn
+
+
+def _hash(value: object) -> str:
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
+def _add_membership(
+    conn: sqlite3.Connection,
+    signal_dates: list[str],
+    members: list[str] | dict[str, list[str]],
+) -> None:
+    conn.executescript("""
+        CREATE TABLE universe_membership_snapshots (
+            universe_id TEXT NOT NULL,
+            signal_date TEXT NOT NULL,
+            member_count INTEGER NOT NULL,
+            members_sha256 TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_asof TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            evidence_sha256 TEXT NOT NULL,
+            status TEXT NOT NULL,
+            PRIMARY KEY (universe_id, signal_date)
+        );
+        CREATE TABLE universe_membership_history (
+            universe_id TEXT NOT NULL,
+            signal_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            PRIMARY KEY (universe_id, signal_date, ticker)
+        );
+    """)
+    for signal_date in signal_dates:
+        date_members = members[signal_date] if isinstance(members, dict) else members
+        members_hash = _hash(sorted(date_members))
+        evidence = {
+            "schema_version": "point-in-time-membership-evidence-v1",
+            "universe_id": "sp500",
+            "signal_date": signal_date,
+            "member_count": len(date_members),
+            "members_sha256": members_hash,
+            "source": "test-fixture",
+            "source_asof": signal_date,
+            "retrieved_at": f"{signal_date}T23:59:59+00:00",
+            "artifact_sha256": _hash(["artifact", signal_date]),
+        }
+        conn.execute(
+            "INSERT INTO universe_membership_snapshots VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "sp500", signal_date, len(date_members), members_hash,
+                "test-fixture", signal_date,
+                json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+                _hash(evidence), "verified",
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO universe_membership_history VALUES (?,?,?)",
+            [("sp500", signal_date, ticker) for ticker in date_members],
+        )
+
+
+def _reseal_membership_date(
+    conn: sqlite3.Connection,
+    signal_date: str,
+    members: list[str],
+) -> None:
+    members_hash = _hash(sorted(members))
+    evidence = {
+        "schema_version": "point-in-time-membership-evidence-v1",
+        "universe_id": "sp500",
+        "signal_date": signal_date,
+        "member_count": len(members),
+        "members_sha256": members_hash,
+        "source": "test-fixture",
+        "source_asof": signal_date,
+        "retrieved_at": f"{signal_date}T23:59:59+00:00",
+        "artifact_sha256": _hash(["artifact", signal_date]),
+    }
+    conn.execute(
+        """UPDATE universe_membership_snapshots
+              SET member_count=?,members_sha256=?,evidence_json=?,evidence_sha256=?
+            WHERE universe_id='sp500' AND signal_date=?""",
+        (
+            len(members), members_hash,
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+            _hash(evidence), signal_date,
+        ),
+    )
 
 
 def _qualified_executor_fixture() -> sqlite3.Connection:
@@ -54,7 +148,29 @@ def _qualified_executor_fixture() -> sqlite3.Connection:
             )
             rows.append((ticker, date, close * .9995, close, 5_000_000))
     conn.executemany("INSERT INTO price_daily VALUES (?,?,?,?,?)", rows)
+    _add_membership(
+        conn,
+        executor.required_membership_dates(dates),
+        [f"T{index:02d}" for index in range(15)],
+    )
     return conn
+
+
+def _frozen_preregistration(
+    conn: sqlite3.Connection,
+    dataset_hash: str = "d" * 64,
+) -> dict[str, object]:
+    sessions = [
+        str(row[0]) for row in conn.execute(
+            "SELECT date FROM price_daily WHERE ticker='SPY' ORDER BY date"
+        )
+    ]
+    membership = load_verified_membership(
+        conn, "sp500", executor.required_membership_dates(sessions),
+    )
+    return frozen_preregistration(
+        dataset_hash, membership.contract["membership_sha256"],
+    )
 
 
 def _passing_executor_result() -> dict[str, object]:
@@ -75,8 +191,8 @@ def _passing_executor_result() -> dict[str, object]:
 
 
 def test_preregistration_freezes_exactly_three_config_hashes() -> None:
-    first = frozen_preregistration("d" * 64)
-    second = frozen_preregistration("d" * 64)
+    first = frozen_preregistration("d" * 64, "e" * 64)
+    second = frozen_preregistration("d" * 64, "e" * 64)
 
     assert first == second
     assert set(first["challengers"]) == {"C1", "C2", "C3"}
@@ -114,6 +230,8 @@ def test_tournament_loader_rejects_a_different_implementation(tmp_path) -> None:
     loaded = experiment_results._load_tournament(path)
 
     assert loaded["available"] is False
+    assert loaded["status"] == "historical_implementation_mismatch"
+    assert loaded["schema_version"] == "challenger-tournament-v1"
     assert loaded["warnings"] == ["tournament_implementation_hash_mismatch"]
 
 
@@ -131,7 +249,34 @@ def test_tournament_loader_rejects_a_different_implementation_manifest(tmp_path)
     loaded = experiment_results._load_tournament(path)
 
     assert loaded["available"] is False
+    assert loaded["status"] == "historical_implementation_mismatch"
+    assert loaded["schema_version"] == "challenger-tournament-v1"
     assert loaded["warnings"] == ["tournament_implementation_manifest_mismatch"]
+
+
+def test_stale_tournament_cannot_expose_a_winner_or_heldout_result(tmp_path) -> None:
+    body = {
+        "schema_version": "challenger-tournament-v1",
+        "implementation_sha256": "0" * 64,
+        "implementation_manifest": {"schema_version": "stale"},
+        "status": "sealed_heldout_complete",
+        "challenger_results": {
+            "C1": {"status": "validation_complete", "metrics": {"sharpe": 9.0}},
+        },
+        "selected_challenger": "C1",
+        "sealed_heldout": {"accessed": True, "result": {"eligible": True}},
+    }
+    artifact = {**body, "artifact_sha256": tournament._sha256(body)}
+    path = tmp_path / "stale-winner.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    loaded = experiment_results._load_tournament(path)
+
+    assert loaded["available"] is False
+    assert loaded["status"] == "historical_implementation_mismatch"
+    assert loaded["challenger_results"] == {}
+    assert loaded["selected_challenger"] is None
+    assert loaded["sealed_heldout"] == {"accessed": False, "access_log": []}
 
 
 def test_chronological_split_purges_and_embargoes_holding_overlap() -> None:
@@ -264,6 +409,214 @@ def test_dataset_hash_binds_exact_market_rows_independent_of_insert_order() -> N
     assert changed["dataset_sha256"] != first["dataset_sha256"]
 
 
+def test_membership_contract_is_order_stable_and_rejects_manifest_drift() -> None:
+    dates = ["2026-01-30", "2026-02-27"]
+    first = sqlite3.connect(":memory:")
+    second = sqlite3.connect(":memory:")
+    _add_membership(first, dates, ["AAA", "BBB"])
+    _add_membership(second, list(reversed(dates)), ["BBB", "AAA"])
+
+    left = load_verified_membership(first, "sp500", dates)
+    right = load_verified_membership(second, "sp500", list(reversed(dates)))
+
+    assert left.contract == right.contract
+    second.execute(
+        "UPDATE universe_membership_snapshots SET member_count=3 WHERE signal_date=?",
+        (dates[0],),
+    )
+    with pytest.raises(MembershipContractError, match="manifest_invalid"):
+        load_verified_membership(second, "sp500", dates)
+
+
+def test_membership_rejects_future_source_asof_and_forged_receipt() -> None:
+    signal_date = "2020-01-31"
+    conn = sqlite3.connect(":memory:")
+    _add_membership(conn, [signal_date], ["AAA"])
+    evidence = json.loads(conn.execute(
+        "SELECT evidence_json FROM universe_membership_snapshots"
+    ).fetchone()[0])
+    evidence["source_asof"] = "2026-08-26"
+    conn.execute(
+        """UPDATE universe_membership_snapshots
+              SET source_asof=?,evidence_json=?,evidence_sha256=?""",
+        (
+            evidence["source_asof"],
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+            _hash(evidence),
+        ),
+    )
+
+    with pytest.raises(MembershipContractError, match="manifest_invalid"):
+        load_verified_membership(conn, "sp500", [signal_date])
+
+    evidence["source_asof"] = signal_date
+    conn.execute(
+        """UPDATE universe_membership_snapshots
+              SET source_asof=?,evidence_json=?,evidence_sha256=?""",
+        (
+            signal_date,
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+            "f" * 64,
+        ),
+    )
+    with pytest.raises(MembershipContractError, match="manifest_invalid"):
+        load_verified_membership(conn, "sp500", [signal_date])
+
+
+def test_temp_tables_cannot_shadow_main_membership() -> None:
+    signal_date = "2026-01-30"
+    conn = sqlite3.connect(":memory:")
+    _add_membership(conn, [signal_date], ["AAA"])
+    conn.executescript("""
+        CREATE TEMP TABLE universe_membership_snapshots AS
+            SELECT * FROM main.universe_membership_snapshots;
+        CREATE TEMP TABLE universe_membership_history AS
+            SELECT * FROM main.universe_membership_history;
+        UPDATE universe_membership_history SET ticker='BBB';
+    """)
+
+    verified = load_verified_membership(conn, "sp500", [signal_date])
+
+    assert verified.members_on(signal_date) == {"AAA"}
+
+
+def test_dataset_hash_binds_verified_membership_rows() -> None:
+    rows = [
+        ("SPY", "2026-01-30", 100, 100, 1_000_000),
+        ("AAA", "2026-01-30", 20, 20, 1_000_000),
+        ("SPY", "2026-02-27", 101, 101, 1_000_000),
+        ("AAA", "2026-02-27", 21, 21, 1_000_000),
+    ]
+    conn = _unverified_dataset(rows)
+    dates = executor.required_membership_dates(["2026-01-30", "2026-02-27"])
+    _add_membership(conn, dates, ["AAA"])
+    first = dataset_audit(conn)
+
+    changed_date = dates[0]
+    conn.execute(
+        "INSERT INTO universe_membership_history VALUES ('sp500',?,'BBB')",
+        (changed_date,),
+    )
+    _reseal_membership_date(conn, changed_date, ["AAA", "BBB"])
+    changed = dataset_audit(conn)
+
+    assert first["membership_contract"]["eligible"] is True
+    assert changed["membership_contract"]["eligible"] is True
+    assert (
+        first["membership_contract"]["membership_sha256"]
+        != changed["membership_contract"]["membership_sha256"]
+    )
+    assert first["dataset_sha256"] != changed["dataset_sha256"]
+
+
+def test_executor_filters_future_constituents_at_each_signal_date(monkeypatch) -> None:
+    sessions: list[str] = []
+    day = dt.date(2025, 1, 1)
+    while len(sessions) < 400:
+        if day.weekday() < 5:
+            sessions.append(day.isoformat())
+        day += dt.timedelta(days=1)
+    membership_dates = executor.required_membership_dates(sessions)
+    march_2026 = "2026-03"
+    members = {
+        date: (["AAA", "BBB"] if date.startswith(march_2026) else ["AAA"])
+        for date in membership_dates
+    }
+    conn = sqlite3.connect(":memory:")
+    _add_membership(conn, membership_dates, members)
+    verified = load_verified_membership(conn, "sp500", membership_dates)
+    by_ticker = {
+        ticker: [SessionPrice(ticker, date, 100, 100, volume=1_000_000) for date in sessions]
+        for ticker in ("SPY", "AAA", "BBB")
+    }
+
+    def select_every_member(history):
+        return {
+            "scores": {ticker: 1.0 for ticker in history},
+            "weights_pct": {ticker: 10.0 for ticker in history},
+        }
+
+    monkeypatch.setattr(executor, "c1_signal", select_every_member)
+    decisions = executor._decisions(
+        "C1", sessions, by_ticker, set(sessions), verified,
+    )
+
+    assert not any(
+        row.ticker == "BBB" and row.signal_date < "2026-03-01"
+        for row in decisions
+    )
+    assert any(
+        row.ticker == "BBB" and row.signal_date.startswith(march_2026)
+        for row in decisions
+    )
+
+
+def test_direct_executor_call_cannot_bypass_missing_membership() -> None:
+    conn = _unverified_dataset([])
+    conn.executemany(
+        "INSERT INTO price_daily VALUES (?,?,?,?,?)",
+        [
+            ("SPY", "2026-01-01", 100, 100, 1_000_000),
+            ("SPY", "2026-01-02", 101, 101, 1_000_000),
+        ],
+    )
+
+    with pytest.raises(MembershipContractError, match="schema_unavailable"):
+        execute_validation_tournament(
+            conn, frozen_preregistration("d" * 64, "e" * 64),
+        )
+
+
+def test_executor_rejects_membership_changed_after_preregistration() -> None:
+    conn = _qualified_executor_fixture()
+    preregistration = _frozen_preregistration(conn)
+    signal_date = executor.required_membership_dates([
+        str(row[0]) for row in conn.execute(
+            "SELECT date FROM price_daily WHERE ticker='SPY' ORDER BY date"
+        )
+    ])[0]
+    members = [
+        str(row[0]) for row in conn.execute(
+            """SELECT ticker FROM universe_membership_history
+                 WHERE universe_id='sp500' AND signal_date=? ORDER BY ticker""",
+            (signal_date,),
+        )
+    ]
+    conn.execute(
+        "INSERT INTO universe_membership_history VALUES ('sp500',?,'ZZZ')",
+        (signal_date,),
+    )
+    _reseal_membership_date(conn, signal_date, [*members, "ZZZ"])
+
+    with pytest.raises(ValueError, match="changed after preregistration"):
+        execute_validation_tournament(conn, preregistration)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("universe_id",), "fake"),
+        (("challengers", "C1", "one_way_cost_bps"), 0),
+        (("selection", "purge_sessions"), 0),
+    ],
+)
+def test_executor_rejects_rehashed_changes_to_frozen_contract(path, value) -> None:
+    conn = _qualified_executor_fixture()
+    changed = json.loads(json.dumps(_frozen_preregistration(conn)))
+    target = changed
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    body = {
+        key: item for key, item in changed.items()
+        if key != "preregistration_sha256"
+    }
+    changed["preregistration_sha256"] = tournament._sha256(body)
+
+    with pytest.raises(ValueError, match="preregistration contract invalid"):
+        execute_validation_tournament(conn, changed)
+
+
 def test_dataset_audit_excludes_non_tradable_negative_yield_context() -> None:
     audit = dataset_audit(_unverified_dataset([
         ("SPY", "2020-03-19", 100, 101, 1_000_000),
@@ -365,9 +718,8 @@ def test_eligible_data_runs_sealed_validation_without_touching_holdout(monkeypat
 
 
 def test_validation_executor_runs_all_challengers_on_canonical_ledger() -> None:
-    result = execute_validation_tournament(
-        _qualified_executor_fixture(), frozen_preregistration("d" * 64)
-    )
+    conn = _qualified_executor_fixture()
+    result = execute_validation_tournament(conn, _frozen_preregistration(conn))
 
     assert set(result["challenger_results"]) == {"C1", "C2", "C3"}
     assert result["sealed_heldout"]["accessed"] is False
@@ -405,7 +757,15 @@ def test_executor_fails_closed_when_strategy_and_spy_marks_are_not_date_aligned(
     )
 
     with pytest.raises(ValueError, match="date-aligned"):
-        executor._execute("C3", sessions, {"SPY": spy}, sessions, 1.0)
+        membership = sqlite3.connect(":memory:")
+        membership_dates = executor.required_membership_dates(sessions)
+        _add_membership(membership, membership_dates, ["AAA"])
+        verified = load_verified_membership(
+            membership, "sp500", membership_dates,
+        )
+        executor._execute(
+            "C3", sessions, {"SPY": spy}, verified, sessions, 1.0,
+        )
 
 
 def test_selected_challenger_consumes_heldout_once_and_replays_stored_result(
@@ -418,7 +778,7 @@ def test_selected_challenger_consumes_heldout_once_and_replays_stored_result(
         return _passing_executor_result()
 
     monkeypatch.setattr(executor, "_execute", passing_run)
-    preregistration = frozen_preregistration("d" * 64)
+    preregistration = _frozen_preregistration(conn)
     first = execute_validation_tournament(
         conn, preregistration, consume_heldout=True
     )
@@ -436,7 +796,7 @@ def test_selected_challenger_consumes_heldout_once_and_replays_stored_result(
 
     with pytest.raises(ValueError, match="already consumed by different evidence"):
         execute_validation_tournament(
-            conn, frozen_preregistration("e" * 64), consume_heldout=True
+            conn, _frozen_preregistration(conn, "e" * 64), consume_heldout=True
         )
     with pytest.raises(sqlite3.IntegrityError, match="access is immutable"):
         conn.execute("UPDATE challenger_holdout_access SET challenger='C1'")
@@ -455,7 +815,7 @@ def test_crash_after_access_log_permanently_fails_closed(monkeypatch) -> None:
         return _passing_executor_result()
 
     monkeypatch.setattr(executor, "_execute", crash_on_first_heldout)
-    preregistration = frozen_preregistration("d" * 64)
+    preregistration = _frozen_preregistration(conn)
     with pytest.raises(RuntimeError, match="simulated heldout executor crash"):
         execute_validation_tournament(
             conn, preregistration, consume_heldout=True
