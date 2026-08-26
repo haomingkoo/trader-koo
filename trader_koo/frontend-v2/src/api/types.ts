@@ -54,6 +54,9 @@ export interface PipelineStatus {
   price_basis: {
     verified_tickers: number;
     unresolved_tickers: number;
+    revision_tickers?: number;
+    missing_revision_tickers?: number;
+    verification_mode?: string;
     bases: Array<{
       adjustment_basis: string | null;
       adjustment_version: string | null;

@@ -47,6 +47,8 @@ REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
 PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
 INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STALE_MIN", "75")))
+_LATEST_RUN_UNSET = object()
+_LATEST_REPORT_UNSET = object()
 
 
 def _env_flag(name: str, default: str) -> bool:
@@ -647,12 +649,17 @@ def _infer_last_completed_event_from_tail(tail: list[str]) -> dict[str, Any] | N
 # Pipeline snapshot
 # ---------------------------------------------------------------------------
 
-def pipeline_status_snapshot(log_lines: int = 160) -> dict[str, Any]:
+def pipeline_status_snapshot(
+    log_lines: int = 160,
+    *,
+    latest_run: dict[str, Any] | None | object = _LATEST_RUN_UNSET,
+) -> dict[str, Any]:
     """Build the full pipeline-status dict from log tails + DB run data."""
     tail = _tail_text_file(RUN_LOG_PATH, lines=log_lines, max_bytes=256_000)
     inferred = _infer_pipeline_from_log_tail(tail)
     last_completed = _infer_last_completed_event_from_tail(tail)
-    latest_run = read_latest_ingest_run()
+    if latest_run is _LATEST_RUN_UNSET:
+        latest_run = read_latest_ingest_run()
     active_pipeline_run = read_active_pipeline_run()
     stage = inferred.get("stage", "unknown")
     active = bool(inferred.get("active"))
@@ -869,6 +876,7 @@ def post_ingest_resume_candidate(
     latest_run: dict[str, Any] | None = None,
     pipeline_active: bool | None = None,
     now_utc: dt.datetime | None = None,
+    latest_report_payload: dict[str, Any] | None | object = _LATEST_REPORT_UNSET,
 ) -> dict[str, Any] | None:
     """Evaluate whether a post-ingest resume (yolo+report) should run."""
     if not AUTO_RESUME_POST_INGEST:
@@ -889,7 +897,10 @@ def post_ingest_resume_candidate(
     if pipeline_active:
         return None
 
-    _, latest_payload = latest_daily_report_json(REPORT_DIR)
+    if latest_report_payload is _LATEST_REPORT_UNSET:
+        _, latest_payload = latest_daily_report_json(REPORT_DIR)
+    else:
+        latest_payload = latest_report_payload
     generated_ts = parse_iso_utc((latest_payload or {}).get("generated_ts")) if latest_payload else None
     if generated_ts is not None and generated_ts >= (run_finished_ts - dt.timedelta(seconds=60)):
         return None
