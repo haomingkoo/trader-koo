@@ -684,7 +684,13 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
                 validation_result.errors or list(evaluation["errors"])
             ),
         )
-        _set_runtime_disable()
+        # A structurally invalid response can indicate a provider/model contract
+        # failure, so retain the circuit breaker for that case. A schema-valid
+        # response that fails semantic guardrails is an expected bounded
+        # rejection: record it and use the deterministic baseline without
+        # disabling unrelated LLM contributions for the rest of the report.
+        if not validation_result.is_valid:
+            _set_runtime_disable()
         LOG.warning("LLM output rejected; using deterministic baseline. Errors: %s", "; ".join(
             validation_result.errors or list(evaluation["errors"])
         ))
