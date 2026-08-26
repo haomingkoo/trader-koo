@@ -550,7 +550,10 @@ def _verify_paper_schema_v5(
     transaction_before = conn.in_transaction
     changes_before = conn.total_changes
     schema_version_before = int(conn.execute("PRAGMA schema_version").fetchone()[0])
-    data_version_before = int(conn.execute("PRAGMA data_version").fetchone()[0])
+    # Do not use PRAGMA data_version as a self-mutation guard. SQLite changes
+    # it when another connection commits, including unrelated live-market
+    # writes, while total_changes and transaction/schema state describe this
+    # verifier connection.
     contract, target_path = _load_contract(Path(contract_path))
     temp_diagnostics = _temp_shadow_diagnostics(conn, contract)
     if temp_diagnostics:
@@ -570,7 +573,6 @@ def _verify_paper_schema_v5(
         or conn.total_changes != changes_before
         or int(conn.execute("PRAGMA schema_version").fetchone()[0])
         != schema_version_before
-        or int(conn.execute("PRAGMA data_version").fetchone()[0]) != data_version_before
     ):
         diagnostics.append({"code": "verifier_changed_connection_state"})
     if diagnostics:

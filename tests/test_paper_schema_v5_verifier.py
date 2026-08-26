@@ -63,6 +63,40 @@ def test_exact_v5_fixture_returns_the_recomputed_frozen_fingerprint_read_only() 
     assert not conn.in_transaction
 
 
+def test_unrelated_external_write_is_not_reported_as_verifier_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRAGMA data_version tracks other connections, not verifier writes."""
+    from trader_koo.paper_trade import schema_v5_verifier as verifier
+
+    db_path = tmp_path / "live.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        (FIXTURES / "paper_schema_v5_target.sql").read_text(encoding="utf-8")
+    )
+    conn.execute("CREATE TABLE runtime_heartbeat(id INTEGER PRIMARY KEY)")
+    conn.commit()
+    changes_before = conn.total_changes
+    original = verifier._identity_diagnostics
+
+    def write_from_other_connection(*args, **kwargs):
+        diagnostics = original(*args, **kwargs)
+        writer = sqlite3.connect(db_path)
+        writer.execute("INSERT INTO runtime_heartbeat DEFAULT VALUES")
+        writer.commit()
+        writer.close()
+        return diagnostics
+
+    monkeypatch.setattr(verifier, "_identity_diagnostics", write_from_other_connection)
+
+    result = verify_paper_schema_v5(conn)
+
+    assert result["status"] == "verified"
+    assert conn.total_changes == changes_before
+    assert not conn.in_transaction
+    conn.close()
+
+
 def test_migrated_production_like_fixture_passes_exact_verification() -> None:
     conn = _connect_fixture("paper_schema_v4_legacy_production_like.sql")
     migrate_paper_schema_v4_to_v5(conn)
