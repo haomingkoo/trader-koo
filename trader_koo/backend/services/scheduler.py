@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - production/runtime is Unix-like
     fcntl = None
 
 from trader_koo.backend.services.report_loader import _tail_text_file
+from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
 from trader_koo.config import (
     DEFAULT_DB_PATH,
     DEFAULT_LOG_DIR,
@@ -176,10 +177,22 @@ def _run_daily_update(
     source: str = "scheduler",
     run_id: str | None = None,
 ) -> None:
+    from trader_koo.backend.services.maintenance import MaintenanceError, writers_blocked
     from trader_koo.backend.services.pipeline import (
         finish_pipeline_run,
         reserve_pipeline_run,
     )
+
+    try:
+        maintenance_blocked = writers_blocked(DB_PATH)
+    except MaintenanceError as exc:
+        maintenance_blocked = True
+        LOG.error("daily_update fail-closed on maintenance state: %s", exc.code)
+    if maintenance_blocked:
+        _append_run_log(
+            "SKIP", f"daily_update blocked by maintenance intent source={source} mode={mode}",
+        )
+        return
 
     mode_norm = _normalize_update_mode(mode) or "full"
     pipeline_run_id = run_id or (
@@ -299,7 +312,10 @@ def _run_daily_update_unlocked(
     env = os.environ.copy()
     env["TRADER_KOO_UPDATE_MODE"] = mode_norm
     env["TRADER_KOO_PIPELINE_RUN_ID"] = pipeline_run_id
-    result = subprocess.run(["bash", str(script)], capture_output=False, env=env)
+    result = subprocess.run(
+        ["bash", str(script)], capture_output=False, env=env,
+        pass_fds=inherited_writer_lease_fds(),
+    )
     elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     rss_after = _current_rss_mb()
     delta = (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None
@@ -456,6 +472,7 @@ def _run_weekly_yolo() -> None:
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
+            pass_fds=inherited_writer_lease_fds(),
         )
     elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     rss_after = _current_rss_mb()
@@ -495,6 +512,7 @@ def _run_weekly_yolo() -> None:
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
+            pass_fds=inherited_writer_lease_fds(),
         )
     if report_result.returncode == 0:
         _append_run_log("WEEKLY", "Report regeneration completed")
@@ -584,6 +602,7 @@ def _run_options_iv_snapshot(options_config: "OptionsConfig | None" = None) -> N
             stdout=run_log,
             stderr=subprocess.STDOUT,
             text=True,
+            pass_fds=inherited_writer_lease_fds(),
         )
     elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     if result.returncode == 0:

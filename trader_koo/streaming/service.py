@@ -37,6 +37,8 @@ MAX_WS_SUBSCRIBERS = 50
 
 # Staleness monitoring
 _staleness_thread: threading.Thread | None = None
+_WRITER_DRAIN_TIMEOUT_SEC = 5.0
+_staleness_stop_event = threading.Event()
 _staleness_running = False
 _STALENESS_CHECK_INTERVAL_SEC = 60
 _STALENESS_THRESHOLD_SEC = 300  # 5 minutes
@@ -115,7 +117,8 @@ def _broadcast_tick(tick: dict) -> None:
 def _staleness_loop() -> None:
     """Background thread: check equity WS staleness every 60 seconds."""
     while _staleness_running:
-        time.sleep(_STALENESS_CHECK_INTERVAL_SEC)
+        if _staleness_stop_event.wait(_STALENESS_CHECK_INTERVAL_SEC):
+            break
         if not _staleness_running or _client is None:
             break
         last_msg = _client.last_message_at
@@ -168,6 +171,7 @@ def start_equity_feed(api_key: str) -> None:
         on_tick=_broadcast_tick,
     )
     _client.start()
+    _staleness_stop_event.clear()
 
     # Start staleness monitor
     _staleness_running = True
@@ -184,9 +188,13 @@ def stop_equity_feed() -> None:
     """Gracefully stop the Finnhub WebSocket feed."""
     global _client, _staleness_running, _staleness_thread
     _staleness_running = False
-    if _client is None:
-        return
-    _client.stop()
+    _staleness_stop_event.set()
+    if _client is not None:
+        _client.stop()
+    if _staleness_thread is not None and _staleness_thread is not threading.current_thread():
+        _staleness_thread.join(timeout=_WRITER_DRAIN_TIMEOUT_SEC)
+        if _staleness_thread.is_alive():
+            raise RuntimeError("equity writer thread did not drain")
     _client = None
     _staleness_thread = None
     LOG.info("Equity feed stopped")

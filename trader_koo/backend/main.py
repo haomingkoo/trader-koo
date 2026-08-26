@@ -17,6 +17,7 @@ import os
 import sqlite3
 import sys
 import threading
+import secrets
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -57,6 +58,12 @@ from trader_koo.ratelimit.integration import initialize_rate_limiting
 from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.frontend_routes import SPA_ROUTE_PATHS
 from trader_koo.backend.services.scheduler import create_scheduler
+from trader_koo.backend.services.maintenance import (
+    acquire_lease,
+    writers_blocked,
+    MaintenanceError,
+    MaintenanceInterlockMiddleware,
+)
 from trader_koo.backend.services.pipeline import (
     AUTO_RESUME_INTERRUPTED_PIPELINE,
     determine_resume_mode,
@@ -163,7 +170,7 @@ def _record_admin_auth_attempt(**payload: Any) -> None:
 # Scheduler
 # ---------------------------------------------------------------------------
 
-_scheduler = create_scheduler()
+_scheduler = None
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -172,6 +179,36 @@ _scheduler = create_scheduler()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global _scheduler
+    boot_id = secrets.token_hex(16)
+    _app.state.boot_id = boot_id
+    try:
+        maintenance_boot = writers_blocked(DB_PATH)
+    except MaintenanceError as exc:
+        maintenance_boot = True
+        _app.state.maintenance_state_error = exc.code
+    if maintenance_boot:
+        _app.state.maintenance_mode = True
+        LOG.warning("Maintenance-only boot: normal routes and every writer remain stopped")
+        yield
+        return
+    writer_lease = acquire_lease(DB_PATH, exclusive=False)
+    _app.state.writer_lease = writer_lease
+    os.environ["TRADER_KOO_WRITER_LEASE_FD"] = str(writer_lease.fileno())
+    try:
+        intent_won_race = writers_blocked(DB_PATH)
+    except MaintenanceError as exc:
+        intent_won_race = True
+        _app.state.maintenance_state_error = exc.code
+    if intent_won_race:
+        writer_lease.close()
+        os.environ.pop("TRADER_KOO_WRITER_LEASE_FD", None)
+        _app.state.maintenance_mode = True
+        LOG.warning("Maintenance intent won startup race; entering maintenance-only boot")
+        yield
+        return
+    _app.state.maintenance_mode = False
+    _scheduler = create_scheduler()
     # Validate configuration at startup
     try:
         config = validate_config()
@@ -424,9 +461,21 @@ async def lifespan(_app: FastAPI):
         except Exception as exc:
             LOG.debug("Bot handler shutdown: %s", exc)
 
+    cancelled_tasks = [task for task in (_alert_task, _bot_task) if task is not None]
+    if cancelled_tasks:
+        await asyncio.gather(*cancelled_tasks, return_exceptions=True)
+
     stop_equity_feed()
     stop_crypto_feed()
-    _scheduler.shutdown(wait=False)
+    # Do not release the whole-process writer lease while a scheduler job may
+    # still be using the database.  Platform force-kill remains fail-closed:
+    # inherited writer children retain the lease until they exit.
+    _scheduler.shutdown(wait=True)
+    # Intentionally retain the shared lease until OS process exit. Admin
+    # endpoints can own daemon writer threads that are not part of APScheduler;
+    # closing here would create a gap before those threads are terminated.
+    # Maintenance therefore requires a real process restart, not an in-process
+    # lifespan recycle.
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +535,7 @@ app.add_middleware(AuditMiddleware, db_path=DB_PATH)
 from trader_koo.ratelimit.middleware import RateLimitMiddleware
 
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(MaintenanceInterlockMiddleware, db_path=DB_PATH)
 
 
 # ---------------------------------------------------------------------------

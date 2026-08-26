@@ -26,6 +26,7 @@ from trader_koo.backend.services.report_loader import (
     daily_report_response,
 )
 from trader_koo.backend.services.scheduler import _run_daily_update
+from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
 from trader_koo.report.market_context import (
     _build_regime_context as _report_build_regime_context,
 )
@@ -289,7 +290,7 @@ def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
     ]
 
     def _run() -> None:
-        subprocess.run(cmd, capture_output=False)
+        subprocess.run(cmd, capture_output=False, pass_fds=inherited_writer_lease_fds())
 
     _shared._yolo_seed_thread = threading.Thread(target=_run, daemon=True)
     _shared._yolo_seed_thread.start()
