@@ -137,6 +137,45 @@ def test_v4_contract_scope_rejects_unexpected_governed_objects(sql: str) -> None
     assert _logical_database_hash(conn) == before
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "snapshot_date TEXT NOT NULL UNIQUE",
+            "snapshot_date TEXT NOT NULL",
+        ),
+        (
+            "campaign_id TEXT NOT NULL DEFAULT 'paper-v1', starting_capital REAL",
+            "campaign_id TEXT NOT NULL DEFAULT 'paper-v2', starting_capital REAL",
+        ),
+        (
+            "direction TEXT NOT NULL CHECK (direction IN ('long', 'short'))",
+            "direction TEXT NOT NULL CHECK (direction IN ('long', 'short', 'flat'))",
+        ),
+        (
+            "report_run_id TEXT,\n            campaign_id TEXT NOT NULL DEFAULT 'paper-v1'",
+            "campaign_id TEXT NOT NULL DEFAULT 'paper-v1',\n            report_run_id TEXT",
+        ),
+    ],
+)
+def test_deployed_v4_signature_drift_is_rejected_without_mutation(
+    old: str, new: str,
+) -> None:
+    sql = (FIXTURES / "paper_schema_v4_deployed.sql").read_text(encoding="utf-8")
+    assert old in sql
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(sql.replace(old, new, 1))
+    before = _logical_database_hash(conn)
+
+    with pytest.raises(PaperSchemaV5MigrationError) as raised:
+        migrate_paper_schema_v4_to_v5(conn)
+
+    assert {item["code"] for item in raised.value.diagnostics} == {
+        "v4_contract_drift"
+    }
+    assert _logical_database_hash(conn) == before
+
+
 def _schema_objects(conn: sqlite3.Connection) -> list[tuple[str, str, str, str]]:
     return [
         (
@@ -152,7 +191,11 @@ def _schema_objects(conn: sqlite3.Connection) -> list[tuple[str, str, str, str]]
 
 @pytest.mark.parametrize(
     "fixture",
-    ["paper_schema_v4_fresh.sql", "paper_schema_v4_legacy_production_like.sql"],
+    [
+        "paper_schema_v4_fresh.sql",
+        "paper_schema_v4_legacy_production_like.sql",
+        "paper_schema_v4_deployed.sql",
+    ],
 )
 def test_migration_reaches_the_exact_frozen_v5_schema(fixture: str) -> None:
     conn = _connect_fixture(fixture)
@@ -222,6 +265,69 @@ def test_production_like_rows_ids_sequences_and_legacy_reads_are_preserved() -> 
         "SELECT snapshot_date,open_trades,equity_index "
         "FROM paper_portfolio_snapshots"
     ).fetchone() == (snapshot_before[0], snapshot_before[1], 100.0)
+
+
+def test_deployed_v4_rows_and_autoincrement_sequences_are_preserved() -> None:
+    conn = _connect_fixture("paper_schema_v4_deployed.sql")
+    trade_before = conn.execute(
+        "SELECT id,report_date,ticker,direction,status,campaign_id,"
+        "accounting_status,entry_price,current_price,quantity,entry_notional,"
+        "entry_commission FROM paper_trades"
+    ).fetchone()
+    snapshot_before = conn.execute(
+        "SELECT id,snapshot_date,campaign_id,legacy_unreconciled_count,"
+        "starting_capital,cash,equity "
+        "FROM paper_portfolio_snapshots"
+    ).fetchone()
+    sequences_before = dict(conn.execute(
+        "SELECT name,seq FROM sqlite_sequence"
+    ))
+
+    migrate_paper_schema_v4_to_v5(conn)
+
+    assert conn.execute(
+        "SELECT id,report_date,ticker,direction,status,campaign_id,"
+        "accounting_status,entry_price,current_price,quantity,entry_notional,"
+        "entry_commission FROM paper_trades"
+    ).fetchone() == trade_before
+    assert conn.execute(
+        "SELECT id,snapshot_date,campaign_id,legacy_unreconciled_count,"
+        "starting_capital,cash,equity "
+        "FROM paper_portfolio_snapshots"
+    ).fetchone() == snapshot_before
+    assert dict(conn.execute(
+        "SELECT name,seq FROM sqlite_sequence"
+    )) == sequences_before == {
+        "paper_trades": 101,
+        "paper_portfolio_snapshots": 201,
+    }
+    # The sequence probe is not an admission path; lineage behavior is covered
+    # separately. Remove only that insert guard so SQLite allocates the next ID.
+    conn.execute("DROP TRIGGER paper_trades_require_canonical_run")
+    next_trade = conn.execute(
+        "INSERT INTO paper_trades "
+        "(report_date,ticker,direction,entry_price,entry_date,campaign_id) "
+        "VALUES ('2026-08-26','NEXT','long',100.0,'2026-08-26','paper-v2')"
+    )
+    next_snapshot = conn.execute(
+        "INSERT INTO paper_portfolio_snapshots (snapshot_date,campaign_id) "
+        "VALUES ('2026-08-26','paper-v2')"
+    )
+    assert next_trade.lastrowid == 102
+    assert next_snapshot.lastrowid == 202
+
+
+def test_deployed_v4_failure_restores_exact_source_state() -> None:
+    conn = _connect_fixture("paper_schema_v4_deployed.sql")
+    before = _logical_database_hash(conn)
+
+    with pytest.raises(PaperSchemaV5MigrationError) as raised:
+        migrate_paper_schema_v4_to_v5(conn, inject_failure_at="before_commit")
+
+    assert raised.value.diagnostics == ({
+        "code": "injected_failure", "failure_point": "before_commit",
+    },)
+    assert _logical_database_hash(conn) == before
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,13 @@
       "expected": "migratable_with_declared_backfills"
     },
     {
+      "id": "deployed_v4",
+      "source_fixture": "paper_schema_v4_deployed.sql",
+      "target_fixture": "paper_schema_v5_target.sql",
+      "source_facts": {"paper_v1_trades": 1, "legacy_snapshots": 1},
+      "expected": "migratable_with_declared_backfills"
+    },
+    {
       "id": "duplicate_campaign_trade_key",
       "setup_sql": [
         "CREATE TABLE paper_campaigns(campaign_id TEXT PRIMARY KEY)",

@@ -1641,11 +1641,11 @@
       "release_interlocks",
       "fingerprint_policy"
     ],
-    "expected_sha256": "82bbb2248f0b4a1d3f0cb2f5c5af60322e2f17a1f401ce5036c18578812d1191"
+    "expected_sha256": "e2e4a70dcb7aad49d47e9e585b1d1ab0c75942f6edf4845a3e7f4fd404bc9ac0"
   },
   "fixtures": {
     "path": "tests/fixtures/paper_schema_v5_contract_cases.json",
-    "sha256": "e752d0697c17c649e6e2cc3850a09619cbc4a1f1bca647f6b2f1fdd07aba76ba",
+    "sha256": "8861b597d0b6c8bf657197068ec1cf43dedeeb1b4cde683318108f6581c3d64d",
     "databases": [
       {
         "id": "fresh_v4",
@@ -1658,9 +1658,14 @@
         "sha256": "96f28740b72ad47cc722b098b236a5ea68cc087401ca83d6b1e5bc95c7fbc00a"
       },
       {
+        "id": "deployed_v4",
+        "path": "tests/fixtures/paper_schema_v4_deployed.sql",
+        "sha256": "a0bb9b937e78d604bd3df3a67c9b9a11928f2791525b38cedab5fb4093bc8252"
+      },
+      {
         "id": "exact_v5_target",
         "path": "tests/fixtures/paper_schema_v5_target.sql",
-        "sha256": "ef602f0c4928859ad0b43e4f57fe332f44331678584c0847379e90c2b348c605"
+        "sha256": "14d98c450be92369cbbd9d4c145756e04174b3dc4a79d50667592a4e9ef53ca1"
       }
     ]
   },

@@ -77,6 +77,23 @@ def test_migrated_production_like_fixture_passes_exact_verification() -> None:
     ).fetchone() == (42,)
 
 
+def test_migrated_deployed_v4_fixture_passes_exact_verification() -> None:
+    conn = _connect_fixture("paper_schema_v4_deployed.sql")
+    migrate_paper_schema_v4_to_v5(conn)
+    before = _logical_database_hash(conn)
+
+    result = verify_paper_schema_v5(conn)
+
+    assert result["schema_fingerprint"] == FROZEN_SEMANTIC_FINGERPRINT
+    assert _logical_database_hash(conn) == before
+    assert conn.execute(
+        "SELECT id,campaign_id FROM paper_trades"
+    ).fetchone() == (101, "paper-v1")
+    assert conn.execute(
+        "SELECT id,campaign_id FROM paper_portfolio_snapshots"
+    ).fetchone() == (201, "paper-v1")
+
+
 def test_preexisting_transaction_is_rejected_without_altering_it() -> None:
     conn = _connect_fixture()
     conn.execute("BEGIN")
@@ -362,11 +379,11 @@ def test_temp_table_cannot_shadow_invalid_main_campaign_data() -> None:
     },)
 
 
-def test_identity_tuple_must_match_exactly_and_activation_stays_closed() -> None:
+def test_previous_fingerprint_is_rejected_and_activation_stays_closed() -> None:
     conn = _connect_fixture()
     conn.execute(
         "UPDATE paper_trade_schema_meta SET schema_fingerprint=? WHERE id=1",
-        ("0" * 64,),
+        ("82bbb2248f0b4a1d3f0cb2f5c5af60322e2f17a1f401ce5036c18578812d1191",),
     )
     conn.commit()
 
