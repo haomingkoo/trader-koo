@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import os
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -27,6 +28,9 @@ ROOT = Path(__file__).parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "paper_schema_v4_legacy_production_like.sql"
 WORKER = ROOT / "tests" / "fixtures" / "paper_v5_journey_worker.py"
 API_KEY = "copied-database-rehearsal-key-0001"
+# A test-process watchdog, not a maintenance lock/drain timeout. Large external
+# copies can spend minutes compressing and verifying the named rollback backup.
+REHEARSAL_COMMAND_TIMEOUT_SEC = 10 * 60
 
 
 def _fresh_v4(path: Path) -> None:
@@ -182,6 +186,94 @@ def _request(
         return exc.code, json.loads(exc.read())
 
 
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # macOS can report EPERM for a just-emptied process group. Every member
+        # of this dedicated session was launched by the current test user, so
+        # a live member would remain signalable.
+        return False
+    return True
+
+
+def _stop_process_group(
+    process: subprocess.Popen,
+    *,
+    term_timeout_sec: float = 20,
+    kill_timeout_sec: float = 10,
+) -> dict[str, float | bool]:
+    """Stop the local server's container-like process group, including children."""
+    started = time.monotonic()
+    process_group_id = process.pid
+    escalated = False
+    if _process_group_exists(process_group_id):
+        os.killpg(process_group_id, signal.SIGTERM)
+    term_deadline = time.monotonic() + term_timeout_sec
+    while _process_group_exists(process_group_id) and time.monotonic() < term_deadline:
+        process.poll()
+        time.sleep(0.05)
+    if _process_group_exists(process_group_id):
+        escalated = True
+        os.killpg(process_group_id, signal.SIGKILL)
+        kill_deadline = time.monotonic() + kill_timeout_sec
+        while _process_group_exists(process_group_id) and time.monotonic() < kill_deadline:
+            process.poll()
+            time.sleep(0.05)
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("server process group leader did not exit") from exc
+    if _process_group_exists(process_group_id):
+        raise AssertionError("server process group still exists after bounded shutdown")
+    return {
+        "elapsed_sec": round(time.monotonic() - started, 3),
+        "escalated": escalated,
+    }
+
+
+def test_server_group_shutdown_reaps_inherited_lease_child(tmp_path: Path) -> None:
+    db_path = tmp_path / "paper.db"
+    lease = acquire_lease(db_path, exclusive=False)
+    ready = tmp_path / "child-ready"
+    child_code = (
+        "import signal,time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    )
+    leader_code = (
+        "import subprocess,sys,time; "
+        "fd=int(sys.argv[1]); ready=sys.argv[2]; "
+        "subprocess.Popen([sys.executable,'-c',sys.argv[3]],pass_fds=(fd,)); "
+        "open(ready,'w').write('ready'); time.sleep(60)"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", leader_code, str(lease.fileno()), str(ready), child_code],
+        pass_fds=(lease.fileno(),),
+        start_new_session=True,
+    )
+    lease.close()
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+        with pytest.raises(MaintenanceError, match="writer_lease_timeout"):
+            acquire_lease(db_path, exclusive=True, timeout_sec=0.1)
+
+        shutdown = _stop_process_group(
+            process, term_timeout_sec=0.1, kill_timeout_sec=2
+        )
+        assert shutdown["escalated"] is True
+        exclusive = acquire_lease(db_path, exclusive=True, timeout_sec=0.2)
+        exclusive.close()
+    finally:
+        if _process_group_exists(process.pid):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=2)
+
+
 @contextlib.contextmanager
 def _server(tmp_path: Path, db_path: Path, *, writes: bool):
     port = _free_port()
@@ -205,6 +297,7 @@ def _server(tmp_path: Path, db_path: Path, *, writes: bool):
             [sys.executable, "-m", "uvicorn", "trader_koo.backend.main:app",
              "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
             cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         try:
             deadline = time.monotonic() + 25
@@ -221,12 +314,13 @@ def _server(tmp_path: Path, db_path: Path, *, writes: bool):
                 raise AssertionError(f"server did not become healthy: {log_path.read_text(errors='replace')}")
             yield port, env
         finally:
-            process.terminate()
-            try:
-                process.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=10)
+            shutdown = _stop_process_group(process)
+            log.write(
+                ("\nrehearsal_process_group_shutdown=" + json.dumps(shutdown) + "\n").encode()
+            )
+            log.flush()
+            lease = acquire_lease(db_path, exclusive=True, timeout_sec=2)
+            lease.close()
 
 
 def _cli(db_path: Path, backup_dir: Path, action: str, run_id: str, *extra: str) -> dict:
@@ -237,7 +331,8 @@ def _cli(db_path: Path, backup_dir: Path, action: str, run_id: str, *extra: str)
     ]
     result = subprocess.run(
         command, cwd=ROOT, check=True, text=True, capture_output=True,
-        env={**os.environ, "PYTHONPATH": str(ROOT)}, timeout=30,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        timeout=REHEARSAL_COMMAND_TIMEOUT_SEC,
     )
     return json.loads(result.stdout)
 
