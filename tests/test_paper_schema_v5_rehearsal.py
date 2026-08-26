@@ -16,6 +16,7 @@ from trader_koo.backend.services.maintenance import (
     MaintenanceError,
     decide,
     migrate_verified_copy,
+    migrate_verified_production,
     quiesce_backup,
     request_maintenance,
     state_path,
@@ -98,12 +99,16 @@ def _add_reconciled_v2_trade(path: Path) -> None:
         conn.commit()
 
 
-def _prepared(tmp_path: Path, *, decide_complete: bool = True) -> Path:
+def _prepared(
+    tmp_path: Path, *, decide_complete: bool = True,
+    purpose: str = "copied-rehearsal",
+) -> Path:
     db = tmp_path / "copied-production.db"
     _production_copy(db)
     request_maintenance(
         db, run_id="rehearsal-1", boot_id="writer-boot",
         reason="copied production schema v5 rehearsal", timeout_sec=1,
+        purpose=purpose,
     )
     quiesce_backup(
         db, run_id="rehearsal-1", boot_id="maintenance-boot",
@@ -182,6 +187,7 @@ def test_reconciled_v2_accounting_survives_copy_rehearsal(tmp_path: Path) -> Non
     request_maintenance(
         db, run_id="rehearsal-1", boot_id="writer-boot",
         reason="v2 accounting rehearsal", timeout_sec=1,
+        purpose="copied-rehearsal",
     )
     quiesce_backup(
         db, run_id="rehearsal-1", boot_id="maintenance-boot",
@@ -397,6 +403,305 @@ def test_offline_cli_runs_the_same_protected_wrapper(
     assert output["migration_receipt_json"]
 
 
+def _production_migrate(
+    db: Path,
+    *,
+    approval_ref: str = "change-approval-2026-08-26",
+    release_sha: str = "a" * 40,
+    backup_sha256: str | None = None,
+    configured_db_path: Path | None = None,
+    environment: dict[str, str] | None = None,
+    fault=None,
+) -> dict:
+    current = status(db, "rehearsal-1")
+    return migrate_verified_production(
+        db,
+        run_id="rehearsal-1",
+        approval_ref=approval_ref,
+        expected_release_sha=release_sha,
+        expected_backup_sha256=backup_sha256 or current["backup_sha256"],
+        configured_db_path=configured_db_path or db,
+        environment=environment or {
+            "TRADER_KOO_GIT_SHA": release_sha,
+            "TRADER_KOO_PAPER_TRADE_ENABLED": "0",
+        },
+        fault=fault,
+    )
+
+
+def _production_prepared(tmp_path: Path) -> Path:
+    db = tmp_path / "copied-production.db"
+    _production_copy(db)
+    request_maintenance(
+        db, run_id="rehearsal-1", boot_id="writer-boot",
+        reason="approved production schema v5 migration", timeout_sec=1,
+        purpose="production-migration",
+        approval_ref="change-approval-2026-08-26",
+        expected_release_sha="a" * 40,
+        expected_write_gate="0",
+    )
+    quiesce_backup(
+        db, run_id="rehearsal-1", boot_id="maintenance-boot",
+        backup_dir=tmp_path / "backups",
+    )
+    decide(
+        db, run_id="rehearsal-1", decision="complete",
+        reason="rollback retired under change-approval-2026-08-26",
+    )
+    return db
+
+
+def test_production_purpose_requires_structured_durable_intent(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "production-intent.db"
+    _production_copy(db)
+    with pytest.raises(MaintenanceError, match="production_approval_invalid"):
+        request_maintenance(
+            db, run_id="production-1", boot_id="writer-boot",
+            reason="production migration request", timeout_sec=1,
+            purpose="production-migration",
+        )
+    first = request_maintenance(
+        db, run_id="production-1", boot_id="writer-boot",
+        reason="production migration request", timeout_sec=1,
+        purpose="production-migration", approval_ref="approval-1",
+        expected_release_sha="a" * 40, expected_write_gate="0",
+    )
+    intent = json.loads(first["migration_intent_json"])
+    assert intent["approval_ref"] == "approval-1"
+    with pytest.raises(MaintenanceError, match="maintenance_idempotency_conflict"):
+        request_maintenance(
+            db, run_id="production-1", boot_id="writer-boot",
+            reason="production migration request", timeout_sec=1,
+            purpose="production-migration", approval_ref="approval-2",
+            expected_release_sha="a" * 40, expected_write_gate="0",
+        )
+
+
+def test_production_migration_binds_authorization_to_plan_and_receipt(
+    tmp_path: Path,
+) -> None:
+    db = _production_prepared(tmp_path)
+    result = _production_migrate(db)
+    plan = json.loads(result["migration_plan_json"])
+    receipt = json.loads(result["migration_receipt_json"])
+
+    assert plan["authorization"] == {
+        "scope": "production",
+        "approval_ref": "change-approval-2026-08-26",
+        "release_sha": "a" * 40,
+        "write_gate": "0",
+        "backup_sha256": result["backup_sha256"],
+        "intent_sha256": plan["authorization"]["intent_sha256"],
+        "authorization_sha256": plan["authorization"]["authorization_sha256"],
+    }
+    assert receipt["authorization_sha256"] == (
+        plan["authorization"]["authorization_sha256"]
+    )
+    assert verify_resolution(db, run_id="rehearsal-1")["state"] == "resolved"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"approval_ref": "   "}, "production_approval_invalid"),
+        ({"release_sha": "not-a-sha"}, "production_release_sha_invalid"),
+        ({"backup_sha256": "0" * 64}, "production_backup_sha_mismatch"),
+        ({"environment": {"TRADER_KOO_PAPER_TRADE_ENABLED": "0"}},
+         "production_release_sha_mismatch"),
+        ({"environment": {"TRADER_KOO_GIT_SHA": "a" * 40}},
+         "production_write_gate_not_paused"),
+    ],
+)
+def test_production_migration_authorization_fails_before_plan(
+    tmp_path: Path, overrides: dict, error: str,
+) -> None:
+    db = _production_prepared(tmp_path)
+    source_hash = _logical_hash(db)
+    with pytest.raises(MaintenanceError, match=error):
+        _production_migrate(db, **overrides)
+    assert _logical_hash(db) == source_hash
+    assert not status(db, "rehearsal-1")["migration_plan_json"]
+
+
+def test_production_migration_rejects_wrong_database_path(tmp_path: Path) -> None:
+    db = _production_prepared(tmp_path)
+    other = tmp_path / "other.db"
+    other.touch()
+    with pytest.raises(MaintenanceError, match="production_database_path_mismatch"):
+        _production_migrate(db, configured_db_path=other)
+    assert not status(db, "rehearsal-1")["migration_plan_json"]
+
+
+def test_production_migration_requires_draft_campaign_without_mutation(
+    tmp_path: Path,
+) -> None:
+    db = _production_prepared(tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE paper_campaigns SET status='active' WHERE campaign_id='paper-v2'"
+        )
+        conn.commit()
+    before = _logical_hash(db)
+    with pytest.raises(MaintenanceError, match="production_campaign_not_draft"):
+        _production_migrate(db)
+    assert _logical_hash(db) == before
+    assert not status(db, "rehearsal-1")["migration_plan_json"]
+
+
+def test_production_migration_retry_requires_same_authorization(tmp_path: Path) -> None:
+    db = _production_prepared(tmp_path)
+    first = _production_migrate(db)
+    assert _production_migrate(db)["migration_receipt_json"] == first["migration_receipt_json"]
+    with pytest.raises(MaintenanceError, match="production_intent_mismatch"):
+        _production_migrate(
+            db, release_sha="b" * 40,
+            environment={
+                "TRADER_KOO_GIT_SHA": "b" * 40,
+                "TRADER_KOO_PAPER_TRADE_ENABLED": "0",
+            },
+        )
+
+
+def test_production_plan_cannot_detach_from_durable_intent(tmp_path: Path) -> None:
+    db = _production_prepared(tmp_path)
+    _production_migrate(db)
+    sidecar = state_path(db)
+    with sqlite3.connect(sidecar) as state:
+        plan = json.loads(state.execute(
+            "SELECT migration_plan_json FROM maintenance_runs "
+            "WHERE run_id='rehearsal-1'"
+        ).fetchone()[0])
+        plan["authorization"]["approval_ref"] = "detached-approval"
+        _rehash(plan["authorization"], "authorization_sha256")
+        _rehash(plan, "plan_sha256")
+        state.execute(
+            "UPDATE maintenance_runs SET migration_plan_json=? "
+            "WHERE run_id='rehearsal-1'", (json.dumps(plan, sort_keys=True),),
+        )
+        state.commit()
+    with pytest.raises(MaintenanceError, match="migration_plan_binding_mismatch"):
+        verify_resolution(db, run_id="rehearsal-1")
+
+
+def test_production_plan_cannot_relabel_itself_as_rehearsal(tmp_path: Path) -> None:
+    db = _production_prepared(tmp_path)
+    _production_migrate(db)
+    sidecar = state_path(db)
+    with sqlite3.connect(sidecar) as state:
+        plan = json.loads(state.execute(
+            "SELECT migration_plan_json FROM maintenance_runs "
+            "WHERE run_id='rehearsal-1'"
+        ).fetchone()[0])
+        plan["authorization"] = {
+            "scope": "copied-rehearsal",
+            "authorization_sha256": hashlib.sha256(json.dumps(
+                {"scope": "copied-rehearsal"}, sort_keys=True,
+                separators=(",", ":"), ensure_ascii=True,
+            ).encode()).hexdigest(),
+        }
+        _rehash(plan, "plan_sha256")
+        state.execute(
+            "UPDATE maintenance_runs SET migration_plan_json=? "
+            "WHERE run_id='rehearsal-1'", (json.dumps(plan, sort_keys=True),),
+        )
+        state.commit()
+    with pytest.raises(MaintenanceError, match="migration_plan_binding_mismatch"):
+        verify_resolution(db, run_id="rehearsal-1")
+
+
+def test_completed_rehearsal_plan_cannot_fallback_to_recovery_purpose(
+    tmp_path: Path,
+) -> None:
+    db = _prepared(tmp_path)
+    migrate_verified_copy(db, run_id="rehearsal-1")
+    sidecar = state_path(db)
+    with sqlite3.connect(sidecar) as state:
+        plan = json.loads(state.execute(
+            "SELECT migration_plan_json FROM maintenance_runs "
+            "WHERE run_id='rehearsal-1'"
+        ).fetchone()[0])
+        plan["maintenance_purpose"] = "recovery"
+        _rehash(plan, "plan_sha256")
+        state.execute(
+            "UPDATE maintenance_runs SET purpose='recovery',migration_plan_json=? "
+            "WHERE run_id='rehearsal-1'", (json.dumps(plan, sort_keys=True),),
+        )
+        state.commit()
+    with pytest.raises(MaintenanceError, match="migration_plan_binding_mismatch"):
+        verify_resolution(db, run_id="rehearsal-1")
+
+
+def test_copy_adapter_refuses_production_purpose(tmp_path: Path) -> None:
+    db = _production_prepared(tmp_path)
+    with pytest.raises(MaintenanceError, match="migration_purpose_mismatch"):
+        migrate_verified_copy(db, run_id="rehearsal-1")
+    assert not status(db, "rehearsal-1")["migration_plan_json"]
+
+
+def test_copy_adapter_refuses_production_runtime_even_with_rehearsal_purpose(
+    tmp_path: Path,
+) -> None:
+    db = _prepared(tmp_path)
+    with pytest.raises(MaintenanceError, match="copied_rehearsal_production_refused"):
+        migrate_verified_copy(
+            db, run_id="rehearsal-1",
+            environment={"TRADER_KOO_GIT_SHA": "a" * 40},
+        )
+    assert not status(db, "rehearsal-1")["migration_plan_json"]
+
+
+def test_production_cli_uses_dependency_light_configured_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from trader_koo.scripts import paper_schema_maintenance as cli
+
+    db = _production_prepared(tmp_path)
+    backup_sha = status(db, "rehearsal-1")["backup_sha256"]
+    monkeypatch.setattr(cli, "DB_PATH", db)
+    monkeypatch.setenv("TRADER_KOO_GIT_SHA", "a" * 40)
+    monkeypatch.setenv("TRADER_KOO_PAPER_TRADE_ENABLED", "0")
+    monkeypatch.setattr(sys, "argv", [
+        "paper_schema_maintenance", "migrate-production",
+        "--run-id", "rehearsal-1",
+        "--approval-ref", "change-approval-2026-08-26",
+        "--expected-release-sha", "a" * 40,
+        "--expected-backup-sha256", backup_sha,
+    ])
+    cli.main()
+    assert json.loads(capsys.readouterr().out)["migration_receipt_json"]
+
+
+def test_maintenance_cli_does_not_import_pandas_database_service() -> None:
+    script = (
+        "import sys; import trader_koo.scripts.paper_schema_maintenance; "
+        "assert 'trader_koo.backend.services.database' not in sys.modules"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_production_migration_recovers_commit_with_same_authorization(
+    tmp_path: Path,
+) -> None:
+    db = _production_prepared(tmp_path)
+
+    def crash(boundary: str) -> None:
+        if boundary == "after_migration_commit":
+            raise RuntimeError("injected commit crash")
+
+    with pytest.raises(RuntimeError, match="injected commit crash"):
+        _production_migrate(db, fault=crash)
+    recovered = _production_migrate(db)
+    assert json.loads(recovered["migration_receipt_json"])["migration_status"] == (
+        "recovered_commit"
+    )
+
+
 def test_restart_recognizes_v5_but_first_admission_remains_interlocked(
     tmp_path: Path,
 ) -> None:
@@ -462,6 +767,7 @@ def test_wal_reader_blocks_receipt_then_retry_recovers_planned_target(
     request_maintenance(
         db, run_id="rehearsal-1", boot_id="writer-boot",
         reason="WAL copied production rehearsal", timeout_sec=1,
+        purpose="copied-rehearsal",
     )
     quiesce_backup(
         db, run_id="rehearsal-1", boot_id="maintenance-boot",

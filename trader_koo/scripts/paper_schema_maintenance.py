@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 from pathlib import Path
 
-from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.services.maintenance import (
-    decide, migrate_verified_copy, quiesce_backup, restore_backup, status,
+    decide, migrate_verified_copy, migrate_verified_production, quiesce_backup,
+    restore_backup, status,
     verify_resolution,
 )
+from trader_koo.config import DEFAULT_DB_PATH, env_path
 from trader_koo.scripts.backup_db import DEFAULT_BACKUP_DIR
+
+DB_PATH = env_path("TRADER_KOO_DB_PATH", DEFAULT_DB_PATH)
 
 
 def main() -> None:
@@ -25,7 +29,7 @@ def main() -> None:
     parser.add_argument(
         "action", choices=(
             "status", "quiesce-backup", "decide", "migrate-copy",
-            "restore-backup", "verify-resolution",
+            "migrate-production", "restore-backup", "verify-resolution",
         ),
     )
     parser.add_argument("--db-path", type=Path, default=DB_PATH)
@@ -34,6 +38,9 @@ def main() -> None:
     parser.add_argument("--boot-id", default=secrets.token_hex(16))
     parser.add_argument("--decision", choices=("restore", "complete"))
     parser.add_argument("--reason")
+    parser.add_argument("--approval-ref")
+    parser.add_argument("--expected-release-sha")
+    parser.add_argument("--expected-backup-sha256")
     args = parser.parse_args()
     if args.action == "status":
         result = status(args.db_path, args.run_id)
@@ -52,6 +59,24 @@ def main() -> None:
         result = restore_backup(args.db_path, run_id=args.run_id)
     elif args.action == "migrate-copy":
         result = migrate_verified_copy(args.db_path, run_id=args.run_id)
+    elif args.action == "migrate-production":
+        if not (
+            args.approval_ref and args.expected_release_sha
+            and args.expected_backup_sha256
+        ):
+            parser.error(
+                "--approval-ref, --expected-release-sha, and "
+                "--expected-backup-sha256 are required"
+            )
+        result = migrate_verified_production(
+            args.db_path,
+            run_id=args.run_id,
+            approval_ref=args.approval_ref,
+            expected_release_sha=args.expected_release_sha,
+            expected_backup_sha256=args.expected_backup_sha256,
+            configured_db_path=DB_PATH,
+            environment=os.environ,
+        )
     else:
         result = verify_resolution(args.db_path, run_id=args.run_id)
     print(json.dumps(result, indent=2, sort_keys=True))

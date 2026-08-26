@@ -17,7 +17,7 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Mapping
 
 from starlette.responses import JSONResponse
 
@@ -34,11 +34,13 @@ _DDL = """
 CREATE TABLE IF NOT EXISTS maintenance_runs (
  run_id TEXT PRIMARY KEY, state TEXT NOT NULL, requested_ts TEXT NOT NULL,
  requested_boot_id TEXT NOT NULL, reason TEXT NOT NULL, drain_timeout_sec INTEGER NOT NULL,
+ purpose TEXT NOT NULL DEFAULT 'recovery',
  source_path TEXT, source_device INTEGER, source_inode INTEGER, logical_cohort_sha256 TEXT,
  backup_dir TEXT, backup_name TEXT, backup_sha256 TEXT, backup_size_bytes INTEGER,
  retained_backups_json TEXT NOT NULL DEFAULT '[]', decision TEXT, decision_reason TEXT,
  decided_ts TEXT, resolved_ts TEXT, migration_plan_json TEXT,
  migration_receipt_json TEXT,
+ migration_intent_json TEXT,
  restore_plan_json TEXT, restore_receipt_json TEXT,
  decision_history_json TEXT NOT NULL DEFAULT '[]',
  error_code TEXT, evidence_json TEXT NOT NULL DEFAULT '{}'
@@ -155,6 +157,15 @@ def _connect(db_path: Path) -> sqlite3.Connection:
                 "ALTER TABLE maintenance_runs ADD COLUMN decision_history_json "
                 "TEXT NOT NULL DEFAULT '[]'"
             )
+        if "purpose" not in columns:
+            conn.execute(
+                "ALTER TABLE maintenance_runs ADD COLUMN purpose TEXT NOT NULL "
+                "DEFAULT 'recovery'"
+            )
+        if "migration_intent_json" not in columns:
+            conn.execute(
+                "ALTER TABLE maintenance_runs ADD COLUMN migration_intent_json TEXT"
+            )
         conn.commit()
         return conn
     except sqlite3.DatabaseError as exc:
@@ -233,23 +244,59 @@ def writers_blocked(db_path: Path) -> bool:
     return bool(status(db_path)["writers_blocked"])
 
 
-def request_maintenance(db_path: Path, *, run_id: str, boot_id: str, reason: str, timeout_sec: int) -> dict[str, Any]:
+def request_maintenance(
+    db_path: Path, *, run_id: str, boot_id: str, reason: str,
+    timeout_sec: int, purpose: str = "recovery",
+    approval_ref: str | None = None,
+    expected_release_sha: str | None = None,
+    expected_write_gate: str | None = None,
+) -> dict[str, Any]:
     """Persist and fsync intent before any drain/restart begins."""
+    if purpose not in {"recovery", "copied-rehearsal", "production-migration"}:
+        raise MaintenanceError("maintenance_purpose_invalid")
+    intent: dict[str, Any] | None = None
+    if purpose == "production-migration":
+        normalized_approval = str(approval_ref or "").strip()
+        release_sha = str(expected_release_sha or "")
+        if not normalized_approval or len(normalized_approval) > 240:
+            raise MaintenanceError("production_approval_invalid")
+        if not (
+            len(release_sha) == 40
+            and all(character in "0123456789abcdef" for character in release_sha)
+        ):
+            raise MaintenanceError("production_release_sha_invalid")
+        if expected_write_gate != "0":
+            raise MaintenanceError("production_write_gate_not_paused")
+        intent = _hashed_record({
+            "scope": "production",
+            "approval_ref": normalized_approval,
+            "release_sha": release_sha,
+            "write_gate": "0",
+        }, "intent_sha256")
+    elif any(value is not None for value in (
+        approval_ref, expected_release_sha, expected_write_gate,
+    )):
+        raise MaintenanceError("maintenance_authorization_not_allowed")
+    intent_json = json.dumps(intent, sort_keys=True) if intent else None
     with _connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute("SELECT 1 FROM maintenance_runs WHERE run_id=?", (run_id,)).fetchone()
         if existing:
             row = conn.execute("SELECT * FROM maintenance_runs WHERE run_id=?", (run_id,)).fetchone()
-            if (row["requested_boot_id"], row["reason"], row["drain_timeout_sec"]) != (
-                boot_id, reason.strip(), timeout_sec,
+            if (
+                row["requested_boot_id"], row["reason"], row["drain_timeout_sec"],
+                row["purpose"], row["migration_intent_json"],
+            ) != (
+                boot_id, reason.strip(), timeout_sec, purpose, intent_json,
             ):
                 conn.rollback(); raise MaintenanceError("maintenance_idempotency_conflict")
         else:
             if conn.execute("SELECT 1 FROM maintenance_runs WHERE state IN ('draining','backup_verified','decision_required')").fetchone():
                 conn.rollback(); raise MaintenanceError("maintenance_already_active")
             conn.execute(
-                "INSERT INTO maintenance_runs(run_id,state,requested_ts,requested_boot_id,reason,drain_timeout_sec) "
-                "VALUES(?,'draining',?,?,?,?)", (run_id, _now(), boot_id, reason.strip(), timeout_sec),
+                "INSERT INTO maintenance_runs(run_id,state,requested_ts,requested_boot_id,reason,drain_timeout_sec,purpose,migration_intent_json) "
+                "VALUES(?,'draining',?,?,?,?,?,?)",
+                (run_id, _now(), boot_id, reason.strip(), timeout_sec, purpose, intent_json),
             )
         conn.commit(); _fsync(db_path, conn)
         marker = _required_marker(db_path)
@@ -286,6 +333,17 @@ def _campaign_state_evidence(conn: sqlite3.Connection) -> dict[str, Any]:
             "WHERE campaign_id IN ('paper-v1','paper-v2') ORDER BY campaign_id"
         )
     }
+    def rows_hash(table: str, columns: tuple[str, ...] | None = None) -> str:
+        selected = columns or tuple(
+            str(row[1]) for row in conn.execute(f"PRAGMA table_info('{table}')")
+        )
+        projection = ",".join(f'"{column}"' for column in selected)
+        return _canonical_hash([
+            list(selected),
+            [list(row) for row in conn.execute(
+                f'SELECT {projection} FROM "{table}" ORDER BY rowid'
+            )],
+        ])
     return {
         "v1_trade_count": int(v1_count),
         "v1_legacy_unreconciled_count": int(v1_unreconciled),
@@ -297,6 +355,12 @@ def _campaign_state_evidence(conn: sqlite3.Connection) -> dict[str, Any]:
             "SELECT COUNT(*) FROM paper_trades WHERE campaign_id='paper-v2'"
         ).fetchone()[0]),
         "campaign_states": states,
+        "paper_trades_rows_sha256": rows_hash("paper_trades", (
+            "id", "report_run_id", "campaign_id", "ticker", "status",
+            "quantity", "entry_notional", "realized_pnl_usd", "accounting_status",
+        )),
+        "campaign_rows_sha256": rows_hash("paper_campaigns"),
+        "campaign_audit_rows_sha256": rows_hash("paper_campaign_audit"),
     }
 
 
@@ -328,6 +392,8 @@ def _campaign_evidence_valid(value: Any) -> bool:
     if not isinstance(value, dict) or set(value) != {
         "v1_trade_count", "v1_legacy_unreconciled_count",
         "v1_snapshot_count", "v2_trade_count", "campaign_states",
+        "paper_trades_rows_sha256", "campaign_rows_sha256",
+        "campaign_audit_rows_sha256",
     }:
         return False
     if any(
@@ -338,10 +404,68 @@ def _campaign_evidence_valid(value: Any) -> bool:
         )
     ):
         return False
-    return isinstance(value.get("campaign_states"), dict) and all(
+    return (
+        all(_is_sha256(value.get(field)) for field in (
+            "paper_trades_rows_sha256", "campaign_rows_sha256",
+            "campaign_audit_rows_sha256",
+        ))
+        and isinstance(value.get("campaign_states"), dict) and all(
         isinstance(key, str) and isinstance(item, str)
         for key, item in value["campaign_states"].items()
+        )
     )
+
+
+def _migration_authorization_valid(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        authorization = _require_hashed_record(
+            value, field="authorization_sha256",
+            error_code="migration_authorization_invalid",
+        )
+    except MaintenanceError:
+        return False
+    if authorization.get("scope") == "copied-rehearsal":
+        return set(authorization) == {"scope", "authorization_sha256"}
+    return (
+        set(authorization) == {
+            "scope", "approval_ref", "release_sha", "write_gate",
+            "backup_sha256", "intent_sha256", "authorization_sha256",
+        }
+        and authorization.get("scope") == "production"
+        and isinstance(authorization.get("approval_ref"), str)
+        and bool(authorization["approval_ref"])
+        and isinstance(authorization.get("release_sha"), str)
+        and len(authorization["release_sha"]) == 40
+        and all(character in "0123456789abcdef" for character in authorization["release_sha"])
+        and authorization.get("write_gate") == "0"
+        and _is_sha256(authorization.get("backup_sha256"))
+        and _is_sha256(authorization.get("intent_sha256"))
+    )
+
+
+def _production_intent(current: dict[str, Any]) -> dict[str, Any]:
+    try:
+        intent = _require_hashed_record(
+            json.loads(str(current.get("migration_intent_json") or "")),
+            field="intent_sha256", error_code="production_intent_invalid",
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MaintenanceError("production_intent_invalid") from exc
+    if set(intent) != {
+        "scope", "approval_ref", "release_sha", "write_gate", "intent_sha256",
+    } or not (
+        intent.get("scope") == "production"
+        and isinstance(intent.get("approval_ref"), str)
+        and bool(intent["approval_ref"])
+        and isinstance(intent.get("release_sha"), str)
+        and len(intent["release_sha"]) == 40
+        and all(character in "0123456789abcdef" for character in intent["release_sha"])
+        and intent.get("write_gate") == "0"
+    ):
+        raise MaintenanceError("production_intent_invalid")
+    return intent
 
 
 def _migration_plan(current: dict[str, Any], *, required: bool) -> dict[str, Any] | None:
@@ -360,8 +484,9 @@ def _migration_plan(current: dict[str, Any], *, required: bool) -> dict[str, Any
     if set(plan) != {
         "run_id", "backup_name", "backup_sha256", "source_path",
         "source_device", "source_inode", "source_cohort_sha256",
+        "maintenance_purpose",
         "target_applied_ts", "expected_target_logical_sha256", "contract_id",
-        "schema_fingerprint", "campaign_evidence", "created_ts",
+        "schema_fingerprint", "campaign_evidence", "authorization", "created_ts",
         "plan_sha256",
     }:
         raise MaintenanceError("migration_plan_invalid")
@@ -373,6 +498,7 @@ def _migration_plan(current: dict[str, Any], *, required: bool) -> dict[str, Any
         "source_device": current["source_device"],
         "source_inode": current["source_inode"],
         "source_cohort_sha256": current["logical_cohort_sha256"],
+        "maintenance_purpose": current["purpose"],
     }
     if any(plan.get(key) != value for key, value in expected.items()):
         raise MaintenanceError("migration_plan_binding_mismatch")
@@ -382,8 +508,25 @@ def _migration_plan(current: dict[str, Any], *, required: bool) -> dict[str, Any
     if any(not _is_sha256(plan.get(field)) for field in (
         "backup_sha256", "source_cohort_sha256", "expected_target_logical_sha256",
         "schema_fingerprint", "plan_sha256",
-    )) or not _campaign_evidence_valid(plan.get("campaign_evidence")):
+    )) or not _campaign_evidence_valid(plan.get("campaign_evidence")) or not (
+        _migration_authorization_valid(plan.get("authorization"))
+    ):
         raise MaintenanceError("migration_plan_invalid")
+    expected_scope = {
+        "production-migration": "production",
+        "copied-rehearsal": "copied-rehearsal",
+    }.get(current["purpose"])
+    if expected_scope is None or plan["authorization"].get("scope") != expected_scope:
+        raise MaintenanceError("migration_plan_binding_mismatch")
+    if plan["authorization"].get("scope") == "production":
+        intent = _production_intent(current)
+        bound_fields = ("approval_ref", "release_sha", "write_gate", "intent_sha256")
+        if (
+            plan["authorization"].get("backup_sha256") != current["backup_sha256"]
+            or {key: plan["authorization"].get(key) for key in bound_fields}
+            != {key: intent.get(key) for key in bound_fields}
+        ):
+            raise MaintenanceError("migration_plan_binding_mismatch")
     return plan
 
 
@@ -405,7 +548,8 @@ def _migration_receipt(
     if set(receipt) != {
         "run_id", "plan_sha256", "target_logical_sha256", "contract_id",
         "schema_fingerprint", "campaign_evidence", "target_device",
-        "target_inode", "migration_status", "verified_ts", "receipt_sha256",
+        "target_inode", "migration_status", "authorization_sha256",
+        "verified_ts", "receipt_sha256",
     }:
         raise MaintenanceError("migration_receipt_invalid")
     expected = {
@@ -415,6 +559,7 @@ def _migration_receipt(
         "contract_id": plan["contract_id"],
         "schema_fingerprint": plan["schema_fingerprint"],
         "campaign_evidence": plan["campaign_evidence"],
+        "authorization_sha256": plan["authorization"]["authorization_sha256"],
     }
     if any(receipt.get(key) != value for key, value in expected.items()):
         raise MaintenanceError("migration_receipt_mismatch")
@@ -428,7 +573,7 @@ def _migration_receipt(
         raise MaintenanceError("migration_receipt_invalid")
     if any(not _is_sha256(receipt.get(field)) for field in (
         "receipt_sha256", "plan_sha256", "target_logical_sha256",
-        "schema_fingerprint",
+        "schema_fingerprint", "authorization_sha256",
     )) or not _campaign_evidence_valid(receipt.get("campaign_evidence")):
         raise MaintenanceError("migration_receipt_invalid")
     return receipt
@@ -561,15 +706,26 @@ def quiesce_backup(db_path: Path, *, run_id: str, boot_id: str, backup_dir: Path
     return status(db_path, run_id)
 
 
-def migrate_verified_copy(
+def _migrate_verified(
     db_path: Path,
     *,
     run_id: str,
+    authorization: dict[str, Any],
     inject_failure_at: str | None = None,
     fault: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Migrate one quiesced copy and fsync a receipt for completion review."""
+    requested_authorization = authorization
+    if not _migration_authorization_valid(requested_authorization):
+        raise MaintenanceError("migration_authorization_invalid")
     current = status(db_path, run_id)
+    expected_purpose = (
+        "production-migration"
+        if requested_authorization["scope"] == "production"
+        else "copied-rehearsal"
+    )
+    if current.get("purpose") != expected_purpose:
+        raise MaintenanceError("migration_purpose_mismatch")
     if current["state"] != "decision_required" or current.get("decision") != "complete":
         raise MaintenanceError("complete_decision_required")
     named = _validated_backup(current)
@@ -617,11 +773,13 @@ def migrate_verified_copy(
                 "source_device": source_stat.st_dev,
                 "source_inode": source_stat.st_ino,
                 "source_cohort_sha256": current["logical_cohort_sha256"],
+                "maintenance_purpose": current["purpose"],
                 "target_applied_ts": current["requested_ts"],
                 "expected_target_logical_sha256": expected_target,
                 "contract_id": verified["contract_id"],
                 "schema_fingerprint": verified["schema_fingerprint"],
                 "campaign_evidence": source_evidence,
+                "authorization": requested_authorization,
                 "created_ts": _now(),
             }, "plan_sha256")
             with _connect(db_path) as state:
@@ -642,6 +800,8 @@ def migrate_verified_copy(
         current = status(db_path, run_id)
         plan = _migration_plan(current, required=True)
         assert plan is not None
+        if plan["authorization"] != requested_authorization:
+            raise MaintenanceError("migration_authorization_mismatch")
         existing_receipt = _migration_receipt(current, plan, required=False)
 
         with sqlite3.connect(str(source), timeout=0) as live:
@@ -714,6 +874,7 @@ def migrate_verified_copy(
                 "contract_id": verified["contract_id"],
                 "schema_fingerprint": verified["schema_fingerprint"],
                 "campaign_evidence": campaign_evidence,
+                "authorization_sha256": plan["authorization"]["authorization_sha256"],
                 "target_device": migrated_stat.st_dev,
                 "target_inode": migrated_stat.st_ino,
                 "migration_status": "recovered_commit" if recovered_commit else "migrated",
@@ -773,6 +934,93 @@ def migrate_verified_copy(
     finally:
         lease.close()
     return status(db_path, run_id)
+
+
+def migrate_verified_copy(
+    db_path: Path,
+    *,
+    run_id: str,
+    inject_failure_at: str | None = None,
+    fault: Callable[[str], None] | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Run the copied-database rehearsal; refuse a deployed production process."""
+    runtime = os.environ if environment is None else environment
+    if (
+        runtime.get("TRADER_KOO_GIT_SHA")
+        or str(runtime.get("RAILWAY_ENVIRONMENT_NAME") or "").lower() == "production"
+    ):
+        raise MaintenanceError("copied_rehearsal_production_refused")
+    authorization = _hashed_record(
+        {"scope": "copied-rehearsal"}, "authorization_sha256",
+    )
+    return _migrate_verified(
+        db_path,
+        run_id=run_id,
+        authorization=authorization,
+        inject_failure_at=inject_failure_at,
+        fault=fault,
+    )
+
+
+def migrate_verified_production(
+    db_path: Path,
+    *,
+    run_id: str,
+    approval_ref: str,
+    expected_release_sha: str,
+    expected_backup_sha256: str,
+    configured_db_path: Path,
+    environment: Mapping[str, str],
+    fault: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Admit an explicitly approved production run to the shared migration engine."""
+    normalized_approval = approval_ref.strip()
+    if not normalized_approval or len(normalized_approval) > 240:
+        raise MaintenanceError("production_approval_invalid")
+    if not (
+        len(expected_release_sha) == 40
+        and all(character in "0123456789abcdef" for character in expected_release_sha)
+    ):
+        raise MaintenanceError("production_release_sha_invalid")
+    if not _is_sha256(expected_backup_sha256):
+        raise MaintenanceError("production_backup_sha_invalid")
+    try:
+        if db_path.resolve(strict=True) != configured_db_path.resolve(strict=True):
+            raise MaintenanceError("production_database_path_mismatch")
+    except FileNotFoundError as exc:
+        raise MaintenanceError("production_database_path_mismatch") from exc
+    if environment.get("TRADER_KOO_GIT_SHA") != expected_release_sha:
+        raise MaintenanceError("production_release_sha_mismatch")
+    if environment.get("TRADER_KOO_PAPER_TRADE_ENABLED") != "0":
+        raise MaintenanceError("production_write_gate_not_paused")
+    current = status(db_path, run_id)
+    if current.get("backup_sha256") != expected_backup_sha256:
+        raise MaintenanceError("production_backup_sha_mismatch")
+    intent = _production_intent(current)
+    if intent != {
+        "scope": "production",
+        "approval_ref": normalized_approval,
+        "release_sha": expected_release_sha,
+        "write_gate": "0",
+        "intent_sha256": intent.get("intent_sha256"),
+    }:
+        raise MaintenanceError("production_intent_mismatch")
+    with sqlite3.connect(str(db_path), timeout=0) as conn:
+        pre_migration_evidence = _campaign_state_evidence(conn)
+    if pre_migration_evidence["campaign_states"].get("paper-v2") != "draft":
+        raise MaintenanceError("production_campaign_not_draft")
+    authorization = _hashed_record({
+        "scope": "production",
+        "approval_ref": normalized_approval,
+        "release_sha": expected_release_sha,
+        "write_gate": "0",
+        "backup_sha256": expected_backup_sha256,
+        "intent_sha256": intent["intent_sha256"],
+    }, "authorization_sha256")
+    return _migrate_verified(
+        db_path, run_id=run_id, authorization=authorization, fault=fault,
+    )
 
 
 def decide(db_path: Path, *, run_id: str, decision: Literal["restore", "complete"], reason: str) -> dict[str, Any]:

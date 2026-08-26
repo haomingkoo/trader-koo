@@ -399,6 +399,7 @@ def _request_maintenance(port: int, key: str) -> str:
         "reason": "non-production copied-database schema rehearsal",
         "timeout_sec": 10,
         "idempotency_key": key,
+        "purpose": "copied-rehearsal",
     }
     assert _request(port, "/api/admin/maintenance/request", payload=payload)[0] == 401
     code, body = _request(
