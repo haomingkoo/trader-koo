@@ -433,9 +433,9 @@ const PIPELINE_STEPS: PipelineStep[] = [
   },
   {
     icon: MessageSquare,
-    label: "Debate Engine",
+    label: "Rule Review",
     description:
-      "5 specialist analysts (trend, momentum, valuation, pattern, risk) evaluate each setup. Arbiter synthesizes consensus.",
+      "Five deterministic lenses review trend, momentum, valuation, pattern, and risk. Their rule consensus is not a model call.",
   },
   {
     icon: ShieldCheck,
@@ -947,14 +947,14 @@ export default function MethodologyPage() {
       </section>
 
       {/* ============================================================ */}
-      {/* Section 4: Multi-Angle Debate Engine                          */}
+      {/* Section 4: Multi-Angle Rule Review                            */}
       {/* ============================================================ */}
       <section className="py-20 border-t border-[var(--line)]">
         <SectionHeading
           step={4}
           icon={MessageSquare}
-          title="Multi-Angle Debate Engine"
-          subtitle="Five bounded analysis roles produce structured views. Deterministic consensus and risk rules remain authoritative; a role is not proof of a live model call."
+          title="Multi-Angle Rule Review"
+          subtitle="Five deterministic rule lenses produce structured views. Optional LLM narrative rewriting is separately attributed and cannot change scores, gates, or trades."
         />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mt-8">
           <AnalystCard
@@ -1000,10 +1000,10 @@ export default function MethodologyPage() {
               Arbiter: Deterministic Consensus
             </div>
             <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-              The arbiter computes an agreement score across all five analysts.
+              The arbiter computes an agreement score across all five rule lenses.
               Primary disagreements are surfaced explicitly. When disagreement is
               high, conviction is automatically downgraded regardless of
-              individual analyst confidence.
+              any individual lens confidence.
             </p>
           </VizPanel>
         </Reveal>
@@ -1088,7 +1088,7 @@ export default function MethodologyPage() {
                 </span>
               </div>
               <p className="text-xs leading-relaxed text-[var(--muted)]">
-                Setup passes all gates (pattern + ML filter + debate consensus +
+                Setup passes all gates (pattern + ML filter + rule consensus +
                 risk checks) and a paper trade is opened at the next-day open
                 with realistic slippage and commission costs.
               </p>
@@ -1119,7 +1119,7 @@ export default function MethodologyPage() {
             <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
               Daily mark-to-market updates equity curve, unrealized P&amp;L,
               R-multiple, and Sharpe ratio. Every trade records the full decision
-              audit trail: which analysts voted, debate consensus score, risk
+              audit trail: which rule lenses agreed, rule consensus score, risk
               gate results, and portfolio context at entry.
             </p>
           </VizPanel>
@@ -1186,7 +1186,7 @@ export default function MethodologyPage() {
             <TimelineStep
               time="22:10 UTC"
               label="Report Generation"
-              detail="Setup rankings, risk filters, macro context, multi-angle debate for top setups. ML scoring and meta-label filtering."
+              detail="Setup rankings, risk filters, macro context, and multi-angle rule review for top setups. ML observation scores are recorded but do not gate trades."
               delay={200}
             />
             <TimelineStep

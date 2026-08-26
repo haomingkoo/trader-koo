@@ -2,6 +2,11 @@ import { Link } from "react-router-dom";
 import type { ReportSuggestions } from "../../api/types";
 import Badge from "../ui/Badge";
 import { formatReportNumber } from "./reportShared";
+import {
+  hasResolvedProbability,
+  presentSuggestionReason,
+  presentSuggestionRisk,
+} from "./suggestionPresentation";
 
 function actionVariant(action: string) {
   const value = action.toLowerCase();
@@ -40,10 +45,10 @@ export default function SuggestionSection({
     <section className="space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-[var(--text)]">Top Suggestions</h3>
+          <h3 className="text-sm font-semibold text-[var(--text)]">Research Watchlist</h3>
           <p className="text-xs text-[var(--muted)]">
-            Research only, not financial advice. Compressed from setup quality, calibration, news,
-            options, and debate evidence.
+            Research only, not financial advice. Compressed from setup quality, outcome history,
+            news, options, and deterministic rule evidence.
           </p>
         </div>
         <Badge variant="muted">{items.length} shown</Badge>
@@ -73,10 +78,12 @@ export default function SuggestionSection({
 
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
               <div>
-                <div className="text-[var(--muted)]">Probability</div>
+                <div className="text-[var(--muted)]">
+                  {hasResolvedProbability(item) ? "Probability" : "Validation"}
+                </div>
                 <div className="font-semibold tabular-nums text-[var(--text)]">
-                  {item.probability_pct == null
-                    ? "\u2014"
+                  {!hasResolvedProbability(item)
+                    ? "Uncalibrated"
                     : `${formatReportNumber(item.probability_pct, 1)}%`}
                 </div>
               </div>
@@ -91,7 +98,7 @@ export default function SuggestionSection({
             <ul className="mt-3 space-y-1.5">
               {item.why.slice(0, 3).map((reason) => (
                 <li key={reason} className="text-xs text-[var(--text)]">
-                  {reason}
+                  {presentSuggestionReason(reason, item.sample_size)}
                 </li>
               ))}
             </ul>
@@ -102,7 +109,7 @@ export default function SuggestionSection({
             </div>
 
             <div className="mt-2 text-xs text-[var(--muted)]">
-              Risk: {item.risk}
+              Risk: {presentSuggestionRisk(item.risk)}
             </div>
 
             {item.data_gaps.length > 0 && (

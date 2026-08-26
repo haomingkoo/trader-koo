@@ -118,7 +118,7 @@ export default function PaperTradePage() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <div className="font-semibold text-[var(--text)]">1. Signal Generation</div>
-              <p className="mt-1">Every market night, the pipeline scans 500+ S&P tickers for technical setups using YOLOv8 pattern detection, support/resistance levels, and multi-angle debate scoring.</p>
+              <p className="mt-1">Every market night, the pipeline scans 500+ S&P tickers for technical setups using YOLOv8 pattern detection, support/resistance levels, and deterministic multi-angle rule scoring.</p>
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">2. ML Observation</div>
@@ -126,7 +126,7 @@ export default function PaperTradePage() {
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">3. Critic Review</div>
-              <p className="mt-1">A 9-check critic layer plays devil&apos;s advocate: conviction grade, debate strength, risk/reward, regime alignment, portfolio concentration, VIX environment, caution flags, rolling expectancy, and family edge. All checks must pass.</p>
+              <p className="mt-1">A 9-check critic layer plays devil&apos;s advocate: conviction grade, rule-consensus strength, risk/reward, regime alignment, portfolio concentration, VIX environment, caution flags, rolling expectancy, and family edge. All checks must pass.</p>
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">4. Position Management</div>

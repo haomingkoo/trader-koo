@@ -710,7 +710,7 @@ export function PaperTradeDecisionFlow({
           label="2. Gate"
           title="Critic review"
           value="9 checks"
-          detail="Conviction, debate agreement, regime fit, concentration, VIX, caution flags, expectancy, and family edge are reviewed."
+          detail="Conviction, rule consensus, regime fit, concentration, VIX, caution flags, expectancy, and family edge are reviewed."
         />
         <FlowStep
           label="3. Risk"
