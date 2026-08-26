@@ -32,42 +32,99 @@ def _stamp(offset_seconds: int) -> str:
     ).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _seed_prices(conn: sqlite3.Connection, report_date: str, next_date: str) -> str:
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS price_daily (
-               ticker TEXT NOT NULL,date TEXT NOT NULL,open REAL,high REAL,low REAL,
-               close REAL,volume REAL,data_source TEXT,fetch_timestamp TEXT,
-               adjustment_basis TEXT,adjustment_version TEXT,basis_status TEXT,
-               unresolved_reason TEXT,UNIQUE(ticker,date)
-           )"""
-    )
-    rows = [
-        ("JRN", report_date, 99.0, 101.0, 98.0, 100.0, 2_000_000),
-        ("JRN", next_date, 101.0, 104.0, 100.0, 103.0, 2_100_000),
-        ("SPY", report_date, 500.0, 502.0, 498.0, 501.0, 10_000_000),
-        ("SPY", next_date, 502.0, 505.0, 501.0, 504.0, 10_100_000),
-    ]
-    conn.executemany(
-        """INSERT OR REPLACE INTO price_daily
-           (ticker,date,open,high,low,close,volume,data_source,fetch_timestamp,
-            adjustment_basis,adjustment_version,basis_status,unresolved_reason)
-           VALUES (?,?,?,?,?,?,?,'copied-db-fixture',?,
-                   'split_adjusted_price_only','journey-v1','verified',NULL)""",
-        [(*row, _stamp(-10)) for row in rows],
-    )
-    ensure_price_series_revision_schema(conn)
-    for ticker in ("JRN", "SPY"):
-        record_price_series_revision(
-            conn, ticker,
-            evidence={"provider": "copied-db-fixture", "vendor_action_ledger_checked": True,
-                      "vendor_action_ledger": []},
-            fetch_timestamp=_stamp(-10),
-        )
-    conn.commit()
+def _price_contract(
+    conn: sqlite3.Connection,
+    report_date: str,
+    next_date: str,
+) -> dict[str, object]:
+    expected_dates = conn.execute(
+        "SELECT date FROM price_daily WHERE ticker='JRN' ORDER BY date"
+    ).fetchall()
+    if expected_dates != [(report_date,), (next_date,)]:
+        raise RuntimeError("copied fixture JRN price preparation is missing")
+    spy_open = conn.execute(
+        "SELECT open FROM price_daily WHERE ticker='SPY' AND date=?",
+        (next_date,),
+    ).fetchone()
+    if spy_open is None or spy_open[0] is None or float(spy_open[0]) <= 0:
+        raise RuntimeError("copied fixture SPY next-session open is missing")
     contract = research_price_contract(conn, ["JRN", "SPY"])
     if not contract.get("eligible"):
         raise RuntimeError("copied fixture price contract is not eligible")
-    return str(contract["revision"])
+    return contract
+
+
+def _prepare_prices(
+    conn: sqlite3.Connection,
+    report_date: str,
+    next_date: str,
+) -> dict[str, object]:
+    if conn.execute(
+        "SELECT 1 FROM price_daily WHERE ticker='JRN' LIMIT 1"
+    ).fetchone() is not None:
+        raise RuntimeError("copied fixture ticker JRN already exists")
+    spy_contract = research_price_contract(conn, ["SPY"])
+    if not spy_contract.get("eligible"):
+        raise RuntimeError("copied fixture requires an eligible existing SPY series")
+    if conn.execute(
+        "SELECT 1 FROM price_daily WHERE ticker='SPY' AND date=?",
+        (next_date,),
+    ).fetchone() is not None:
+        raise RuntimeError("copied fixture SPY append date already exists")
+    basis = str(spy_contract["basis"])
+    version = str(spy_contract["version"])
+    rows = [
+        ("JRN", report_date, 99.0, 101.0, 98.0, 100.0, 2_000_000),
+        ("JRN", next_date, 101.0, 104.0, 100.0, 103.0, 2_100_000),
+        ("SPY", next_date, 502.0, 505.0, 501.0, 504.0, 10_100_000),
+    ]
+    conn.executemany(
+        """INSERT INTO price_daily
+           (ticker,date,open,high,low,close,volume,data_source,fetch_timestamp,
+            adjustment_basis,adjustment_version,basis_status,unresolved_reason)
+           VALUES (?,?,?,?,?,?,?,'copied-db-fixture',?,?,?,'verified',NULL)""",
+        [(*row, _stamp(-10), basis, version) for row in rows],
+    )
+    ensure_price_series_revision_schema(conn)
+    record_price_series_revision(
+        conn,
+        "JRN",
+        evidence={
+            "provider": "copied-db-fixture",
+            "vendor_action_ledger_checked": True,
+            "vendor_action_ledger": [],
+        },
+        fetch_timestamp=_stamp(-10),
+    )
+    spy_evidence_row = conn.execute(
+        "SELECT evidence_json FROM price_series_revisions WHERE ticker='SPY'"
+    ).fetchone()
+    try:
+        spy_evidence = json.loads(str(spy_evidence_row[0]))
+    except (TypeError, ValueError, IndexError) as exc:
+        raise RuntimeError("copied fixture SPY revision evidence is malformed") from exc
+    if not isinstance(spy_evidence, dict):
+        raise RuntimeError("copied fixture SPY revision evidence is malformed")
+    spy_evidence["non_production_rehearsal_append"] = {
+        "date": next_date,
+        "provider": "copied-db-fixture",
+    }
+    record_price_series_revision(
+        conn,
+        "SPY",
+        evidence=spy_evidence,
+        fetch_timestamp=_stamp(-10),
+    )
+    conn.commit()
+    contract = research_price_contract(conn, ["JRN"])
+    combined = research_price_contract(conn, ["JRN", "SPY"])
+    if not contract.get("eligible") or not combined.get("eligible"):
+        raise RuntimeError("copied fixture price preparation is not eligible")
+    return {
+        "candidate_revision": contract["revision"],
+        "execution_revision": combined["revision"],
+        "spy_appended_date": next_date,
+    }
 
 
 def main() -> None:
@@ -78,6 +135,7 @@ def main() -> None:
     parser.add_argument("--lease-ready", type=Path)
     parser.add_argument("--lease-release", type=Path)
     parser.add_argument("--lease-only", action="store_true")
+    parser.add_argument("--prepare-prices", action="store_true")
     args = parser.parse_args()
 
     lease = acquire_lease(args.db_path, exclusive=False)
@@ -94,7 +152,12 @@ def main() -> None:
     report_date = now.date().isoformat()
     next_date = next_scheduled_session_after(report_date)
     conn = sqlite3.connect(args.db_path)
-    revision = _seed_prices(conn, report_date, next_date)
+    if args.prepare_prices:
+        print(json.dumps(_prepare_prices(conn, report_date, next_date)))
+        conn.close()
+        lease.close()
+        return
+    price_contract = _price_contract(conn, report_date, next_date)
     started_ts, generated_ts, completed_ts = _stamp(-3), _stamp(-2), _stamp(-1)
     run_id = start_report_run(
         conn, report_kind="daily", configuration={"journey": "copied-database"},
@@ -115,7 +178,7 @@ def main() -> None:
         "ok": True, "generated_ts": generated_ts, "warnings": [],
         "meta": {
             "report_kind": "daily",
-            "price_basis": {"revision": revision},
+            "price_basis": price_contract,
         },
         "latest_data": {"price_date": report_date},
         "signals": {

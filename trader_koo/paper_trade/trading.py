@@ -804,7 +804,7 @@ def _create_paper_trades_from_report(
     config: PaperTradeConfig,
     report_run_id: str | None = None,
     schema_ready: bool = False,
-    expected_price_revision: str | None = None,
+    expected_price_contract: dict[str, Any] | None = None,
 ) -> int:
     """Atomically persist one report's trades and sealed decision ledger."""
     if not report_date:
@@ -815,13 +815,19 @@ def _create_paper_trades_from_report(
     if not str(report_run_id or "").strip():
         raise ValueError("paper-trade creation requires canonical report-run lineage")
     lineage = _require_published_canonical_report(conn, str(report_run_id))
-    if expected_price_revision is not None:
-        current_price_contract = research_price_contract(conn)
-        if (
-            not current_price_contract.get("eligible")
-            or current_price_contract.get("revision") != expected_price_revision
-        ):
-            return 0
+    if expected_price_contract is not None:
+        from trader_koo.db.report_price_contract import require_expected_price_contract
+
+        setup_tickers = {
+            str(row.get("ticker") or "").strip().upper()
+            for row in setup_rows
+            if isinstance(row, dict) and str(row.get("ticker") or "").strip()
+        }
+        require_expected_price_contract(
+            conn,
+            expected_price_contract,
+            required_tickers=[*sorted(setup_tickers), "SPY"],
+        )
     _advance_paper_book(conn, config=config, through_date=report_date)
     resolve_breadth_shadow_outcomes(
         conn, through_date=report_date, base_config=config
@@ -843,7 +849,6 @@ def _create_paper_trades_from_report(
             generated_ts=generated_ts,
             config=config,
             report_run_id=report_run_id,
-            expected_price_revision=expected_price_revision,
         )
     except Exception:
         conn.execute("ROLLBACK TO paper_report_admission")
@@ -861,7 +866,6 @@ def _create_paper_trades_from_report_in_transaction(
     generated_ts: str,
     config: PaperTradeConfig,
     report_run_id: str | None = None,
-    expected_price_revision: str | None = None,
 ) -> int:
     """Create paper trades from qualifying daily report setups."""
     if not report_date:
@@ -1724,7 +1728,7 @@ def create_paper_trades_from_report(
     config: PaperTradeConfig,
     report_run_id: str | None = None,
     schema_ready: bool = False,
-    expected_price_revision: str | None = None,
+    expected_price_contract: dict[str, Any] | None = None,
 ) -> int:
     if not schema_ready and not conn.in_transaction:
         # Exact-v5 verification is intentionally outside caller-owned
@@ -1741,7 +1745,7 @@ def create_paper_trades_from_report(
             config=config,
             report_run_id=report_run_id,
             schema_ready=schema_ready,
-            expected_price_revision=expected_price_revision,
+            expected_price_contract=expected_price_contract,
         ),
     )
 

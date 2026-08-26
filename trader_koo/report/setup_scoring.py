@@ -1634,7 +1634,7 @@ def _persist_setup_call_candidates(
     asof_date: str | None,
     setup_rows: list[dict[str, Any]],
     report_run_id: str | None = None,
-    expected_price_revision: str | None = None,
+    expected_price_contract: dict[str, Any] | None = None,
 ) -> int:
     if not asof_date:
         return 0
@@ -1654,14 +1654,21 @@ def _persist_setup_call_candidates(
             f"setup-call creation requires canonical published report run {report_run_id}"
         )
     from trader_koo.db.price_contract import research_price_contract
+    from trader_koo.db.report_price_contract import require_expected_price_contract
 
-    if expected_price_revision is not None:
-        current = research_price_contract(conn)
-        if (
-            not current["eligible"]
-            or current.get("revision") != expected_price_revision
-        ):
-            return 0
+    expected_tickers: set[str] | None = None
+    if expected_price_contract is not None:
+        required_tickers = [
+            str(row.get("ticker") or "").strip().upper()
+            for row in setup_rows
+            if isinstance(row, dict) and str(row.get("ticker") or "").strip()
+        ]
+        current = require_expected_price_contract(
+            conn,
+            expected_price_contract,
+            required_tickers=[*required_tickers, "SPY"],
+        )
+        expected_tickers = set(current["ticker_contracts"])
     inserted = 0
     for row in (setup_rows or [])[:SETUP_EVAL_TRACK_LIMIT]:
         if not isinstance(row, dict):
@@ -1676,11 +1683,8 @@ def _persist_setup_call_candidates(
         ).fetchone()
         if member is None:
             raise ValueError(f"{ticker} is not an accepted decision in report run {report_run_id}")
-        if (
-            expected_price_revision is not None
-            and not research_price_contract(conn, [ticker])["eligible"]
-        ):
-            continue
+        if expected_tickers is not None and not research_price_contract(conn, [ticker])["eligible"]:
+            raise ValueError(f"{ticker} is not research eligible")
         direction = _setup_call_direction(row)
         if direction not in {"long", "short"}:
             continue
