@@ -1069,7 +1069,7 @@ def admit_published_report(
     calls = trades = 0
     failure_code = "admission_setup_persistence_failed"
     try:
-        conn.execute("BEGIN")
+        conn.execute("BEGIN IMMEDIATE")
         lineage = _require_published_canonical_report(conn, run_id)
         # Artifact-derived preparation belongs to setup persistence. Once
         # lineage is valid, every non-lineage failure has a documented phase.

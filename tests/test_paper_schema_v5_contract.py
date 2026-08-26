@@ -332,6 +332,11 @@ def test_retained_trigger_definitions_are_exactly_frozen() -> None:
     assert sql_hash(actual[changed["name"]]) != changed["normalized_sql_sha256"]
 
 
-def test_activation_interlock_remains_unconditional() -> None:
-    with pytest.raises(ValueError, match="activation interlock"):
-        require_contracted_paper_schema(None)  # type: ignore[arg-type]
+def test_activation_requires_the_exact_v5_contract() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        (ROOT / "tests/fixtures/paper_schema_v5_target.sql").read_text(encoding="utf-8")
+    )
+    assert require_contracted_paper_schema(conn)["contract_id"] == (
+        "paper-schema-contract-v5"
+    )

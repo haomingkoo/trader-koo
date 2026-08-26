@@ -145,6 +145,13 @@ the bounded exclusive-lease acquisition fails closed and remains retryable.
 After the maintenance-only restart, use Railway SSH into that volume-backed
 instance (no additional application token is introduced):
 
+The recovery decision is normally final. While the run is still
+`decision_required`, an exact `complete` decision may be escalated once to
+`restore` if migration or post-commit verification fails. The sidecar preserves
+both decisions in its logical audit history; retrying the same restore is
+idempotent. `restore` cannot change back to `complete`, and a resolved run cannot
+change either decision.
+
 ```text
 python -m trader_koo.scripts.paper_schema_maintenance status
 python -m trader_koo.scripts.paper_schema_maintenance quiesce-backup --run-id RUN_ID
@@ -192,6 +199,25 @@ the named non-production copied-database environment for step 13; production
 migration remains ineligible until the explicit rollback-retirement and
 production-migration approval in step 15. Write enablement and activation remain
 separate decisions under steps 16-17.
+
+The production-faithful journey test accepts either an immutable gzip backup or
+a raw SQLite source. Raw sources are snapshotted through SQLite's read-only
+backup API, so the source is never mutated and a WAL database is not copied as
+inconsistent bytes. Run it against a fresh non-production copy with an explicit
+new evidence path:
+
+```text
+TRADER_KOO_V5_REHEARSAL_SOURCE=/path/to/fresh-v4.db.gz \
+TRADER_KOO_V5_REHEARSAL_EVIDENCE=/path/to/new-paper-v5-evidence.json \
+python -m pytest -q tests/test_paper_schema_v5_full_journey.py::test_copied_v4_migrate_activate_admit_restart_and_persist
+```
+
+The test starts real application processes, uses the existing API key boundary,
+runs the maintenance CLI, restarts with writes paused and then enabled, admits a
+canonical report, performs the authenticated activation and retry, and verifies
+restart persistence. The fsynced evidence file contains only hashes, counts,
+contract identity, and newly created run/trade/audit identifiers; it excludes
+the API key and database contents. It is created with fail-if-exists semantics.
 
 The current dark-deploy workflow deliberately resets writes to paused on every
 release. Before the first activation, the contract-aware workflow must be changed

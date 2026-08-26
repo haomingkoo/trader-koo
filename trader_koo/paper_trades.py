@@ -164,11 +164,20 @@ def mark_to_market(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 def fill_pending_paper_orders(
-    conn: sqlite3.Connection, *, through_date: str | None = None
+    conn: sqlite3.Connection,
+    *,
+    through_date: str | None = None,
+    schema_ready: bool = False,
 ) -> dict[str, int]:
     require_paper_trade_writes()
+    if not schema_ready:
+        if conn.in_transaction:
+            raise RuntimeError(
+                "pending-order fill requires schema verification before transaction"
+            )
+        ensure_paper_trade_schema(conn)
     return _fill_pending_paper_orders_impl(
-        conn, config=_build_config(), through_date=through_date
+        conn, config=_build_config(), through_date=through_date, schema_ready=True,
     )
 
 

@@ -27,12 +27,84 @@ class PaperSchemaInitializationError(RuntimeError):
         ))
 
 
-def require_contracted_paper_schema(conn: sqlite3.Connection) -> None:
-    """Block activation until a separately audited release enables it."""
-    del conn
-    raise ValueError(
-        "activation interlock: contracted paper-schema activation is not enabled"
+def require_contracted_paper_schema(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Return exact contract identity after the public read-only verifier passes."""
+    from trader_koo.paper_trade.schema_v5_verifier import (
+        PaperSchemaV5VerificationError,
+        verify_paper_schema_v5,
     )
+
+    main_path = _resolve_main_db_path(conn)
+    try:
+        before_stat = os.stat(main_path) if main_path else None
+    except OSError as exc:
+        raise ValueError(
+            "activation interlock: paper-schema path is unavailable"
+        ) from exc
+    try:
+        verified = verify_paper_schema_v5(conn)
+    except PaperSchemaV5VerificationError as exc:
+        raise ValueError("activation interlock: exact paper-schema v5 required") from exc
+    try:
+        after_stat = os.stat(main_path) if main_path else None
+    except OSError as exc:
+        raise ValueError(
+            "activation interlock: paper-schema path is unavailable"
+        ) from exc
+    if before_stat is not None and (
+        after_stat is None
+        or (after_stat.st_dev, after_stat.st_ino)
+        != (before_stat.st_dev, before_stat.st_ino)
+    ):
+        raise ValueError("activation interlock: paper-schema path changed during verification")
+    return verified
+
+
+def _paper_schema_path_pin(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Pin the open main database to its configured on-disk path."""
+    main_path = _resolve_main_db_path(conn)
+    try:
+        current = os.stat(main_path) if main_path else None
+    except OSError as exc:
+        raise ValueError(
+            "activation interlock: paper-schema path is unavailable"
+        ) from exc
+    return {
+        "main_path": main_path,
+        "device": current.st_dev if current is not None else None,
+        "inode": current.st_ino if current is not None else None,
+    }
+
+
+def _require_paper_schema_path_pin(pin: dict[str, Any]) -> None:
+    """Reject a replaced or unlinked configured database path."""
+    if pin["main_path"]:
+        try:
+            current = os.stat(pin["main_path"])
+        except OSError as exc:
+            raise ValueError(
+                "activation interlock: paper-schema path is unavailable"
+            ) from exc
+        if (current.st_dev, current.st_ino) != (pin["device"], pin["inode"]):
+            raise ValueError("activation interlock: paper-schema path changed before write lock")
+
+
+def _verify_contracted_paper_schema_in_transaction(
+    conn: sqlite3.Connection, pin: dict[str, Any],
+) -> dict[str, Any]:
+    """Authorize activation on the caller's locked transaction snapshot."""
+    from trader_koo.paper_trade.schema_v5_verifier import (
+        PaperSchemaV5VerificationError,
+        _verify_paper_schema_v5_in_transaction,
+    )
+
+    _require_paper_schema_path_pin(pin)
+    try:
+        verified = _verify_paper_schema_v5_in_transaction(conn)
+    except PaperSchemaV5VerificationError as exc:
+        raise ValueError("activation interlock: exact paper-schema v5 required") from exc
+    _require_paper_schema_path_pin(pin)
+    return verified
 
 
 def _resolve_main_db_path(conn: sqlite3.Connection) -> str:

@@ -103,6 +103,40 @@ def _insert_offsetting_v2_trade(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def test_v4_contract_scope_allows_unrelated_application_objects() -> None:
+    conn = _connect_fixture("paper_schema_v4_fresh.sql")
+    conn.execute("CREATE TABLE price_fixture(id INTEGER PRIMARY KEY)")
+    conn.execute("CREATE INDEX idx_price_fixture ON price_fixture(id)")
+    conn.execute("INSERT INTO price_fixture VALUES (7)")
+    conn.commit()
+
+    assert migrate_paper_schema_v4_to_v5(conn)["status"] == "migrated"
+    assert conn.execute("SELECT id FROM price_fixture").fetchall() == [(7,)]
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_price_fixture'"
+    ).fetchone() == (1,)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE paper_bypass(id INTEGER PRIMARY KEY)",
+        "CREATE INDEX unexpected_governed_index ON paper_trades(ticker)",
+        "CREATE TRIGGER unexpected_governed_trigger AFTER INSERT ON paper_trades BEGIN SELECT 1; END",
+    ],
+)
+def test_v4_contract_scope_rejects_unexpected_governed_objects(sql: str) -> None:
+    conn = _connect_fixture("paper_schema_v4_fresh.sql")
+    conn.execute(sql)
+    before = _logical_database_hash(conn)
+
+    with pytest.raises(PaperSchemaV5MigrationError) as raised:
+        migrate_paper_schema_v4_to_v5(conn)
+
+    assert {item["code"] for item in raised.value.diagnostics} == {"v4_contract_drift"}
+    assert _logical_database_hash(conn) == before
+
+
 def _schema_objects(conn: sqlite3.Connection) -> list[tuple[str, str, str, str]]:
     return [
         (
@@ -412,8 +446,7 @@ def test_exact_v5_identity_is_an_explicit_noop_not_runtime_verification() -> Non
 
     assert result["status"] == "already_v5_identity_only"
     assert _logical_database_hash(conn) == before
-    with pytest.raises(ValueError, match="activation interlock"):
-        require_contracted_paper_schema(conn)
+    assert require_contracted_paper_schema(conn)["contract_id"] == "paper-schema-contract-v5"
 
 
 def test_migration_supports_the_application_row_factory() -> None:

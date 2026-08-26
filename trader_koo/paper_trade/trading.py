@@ -238,7 +238,7 @@ def _advance_paper_book(
         return
     for session_date in sessions:
         fill_pending_paper_orders(
-            conn, config=config, through_date=session_date,
+            conn, config=config, through_date=session_date, schema_ready=True,
         )
         _mark_to_market(conn, config=config, through_date=session_date)
 
@@ -1726,6 +1726,11 @@ def create_paper_trades_from_report(
     schema_ready: bool = False,
     expected_price_revision: str | None = None,
 ) -> int:
+    if not schema_ready and not conn.in_transaction:
+        # Exact-v5 verification is intentionally outside caller-owned
+        # transactions; the mutation below then owns one consistent snapshot.
+        ensure_paper_trade_schema(conn)
+        schema_ready = True
     return _run_owned_transaction(
         conn,
         lambda: _create_paper_trades_from_report(
@@ -1746,9 +1751,15 @@ def fill_pending_paper_orders(
     *,
     config: PaperTradeConfig,
     through_date: str | None = None,
+    schema_ready: bool = False,
 ) -> dict[str, int]:
     """Resolve pending signals only from a real later-session open."""
-    ensure_paper_trade_schema(conn)
+    if not schema_ready:
+        if conn.in_transaction:
+            raise RuntimeError(
+                "pending-order fill requires schema verification before transaction"
+            )
+        ensure_paper_trade_schema(conn)
     resolved = {"filled": 0, "rejected": 0, "still_pending": 0}
     rows = conn.execute(
         """SELECT order_id,report_run_id,report_date,generated_ts,campaign_id,
@@ -2089,7 +2100,6 @@ def _mark_to_market(
     through_date: str | None = None,
 ) -> dict[str, Any]:
     """Update all open paper trades with latest prices."""
-    ensure_paper_trade_schema(conn)
 
     from trader_koo.report.runs import verified_report_run_ids
 
@@ -2184,6 +2194,9 @@ def mark_to_market(
     *,
     config: PaperTradeConfig,
 ) -> dict[str, Any]:
+    if conn.in_transaction:
+        raise RuntimeError("mark-to-market requires a clean transaction boundary")
+    ensure_paper_trade_schema(conn)
     return _run_owned_transaction(conn, lambda: _mark_to_market(conn, config=config))
 
 

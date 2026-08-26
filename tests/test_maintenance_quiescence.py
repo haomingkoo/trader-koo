@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import json
 import os
 import sqlite3
 import subprocess
@@ -486,6 +487,82 @@ def test_decision_without_verified_backup_rejects(tmp_path: Path) -> None:
     with pytest.raises(MaintenanceError, match="verified_backup_required"):
         decide(db, run_id="maint-test", decision="complete", reason="not backed up")
 
+
+def test_complete_decision_can_escalate_once_to_audited_restore(tmp_path: Path) -> None:
+    db = tmp_path / "live.db"; backups = tmp_path / "backups"
+    _live_db(db); _request(db)
+    quiesce_backup(db, run_id="maint-test", boot_id="boot-after", backup_dir=backups)
+    first = decide(db, run_id="maint-test", decision="complete", reason="migrate copy")
+    retry = decide(db, run_id="maint-test", decision="complete", reason="migrate copy")
+    assert retry["decision_history_json"] == first["decision_history_json"]
+
+    recovered = decide(
+        db, run_id="maint-test", decision="restore", reason="target verification failed",
+    )
+    history = json.loads(recovered["decision_history_json"])
+    assert [item["decision"] for item in history] == ["complete", "restore"]
+    assert history[-1]["kind"] == "recovery_after_complete"
+    retry = decide(
+        db, run_id="maint-test", decision="restore", reason="target verification failed",
+    )
+    assert retry["decision_history_json"] == recovered["decision_history_json"]
+    with pytest.raises(MaintenanceError, match="recovery_decision_conflict"):
+        decide(db, run_id="maint-test", decision="complete", reason="reverse recovery")
+
+
+def test_recovery_decision_rejects_malformed_history_and_invalid_backup(tmp_path: Path) -> None:
+    db = tmp_path / "live.db"; backups = tmp_path / "backups"
+    _live_db(db); _request(db)
+    backed = quiesce_backup(
+        db, run_id="maint-test", boot_id="boot-after", backup_dir=backups,
+    )
+    decide(db, run_id="maint-test", decision="complete", reason="migrate copy")
+    sidecar = state_path(db)
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute(
+            "UPDATE maintenance_runs SET decision_history_json='{}' WHERE run_id='maint-test'"
+        )
+        conn.commit()
+    with pytest.raises(MaintenanceError, match="maintenance_state_invalid"):
+        decide(db, run_id="maint-test", decision="restore", reason="recover")
+    assert status(db, "maint-test")["decision"] == "complete"
+    with sqlite3.connect(sidecar) as conn:
+        conn.execute(
+            "UPDATE maintenance_runs SET decision_history_json='[]' WHERE run_id='maint-test'"
+        )
+        conn.commit()
+    (backups / backed["backup_name"]).unlink()
+    with pytest.raises(MaintenanceError, match="recovery_backup_invalid"):
+        decide(db, run_id="maint-test", decision="restore", reason="recover")
+    assert status(db, "maint-test")["decision"] == "complete"
+
+
+def test_concurrent_decisions_preserve_one_canonical_history(tmp_path: Path) -> None:
+    db = tmp_path / "live.db"; backups = tmp_path / "backups"
+    _live_db(db); _request(db)
+    quiesce_backup(db, run_id="maint-test", boot_id="boot-after", backup_dir=backups)
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def choose(reason: str) -> None:
+        barrier.wait()
+        try:
+            decide(db, run_id="maint-test", decision="complete", reason=reason)
+            outcomes.append("accepted")
+        except MaintenanceError as exc:
+            outcomes.append(exc.code)
+
+    threads = [threading.Thread(target=choose, args=(reason,)) for reason in ("choice-a", "choice-b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(outcomes) == ["accepted", "recovery_decision_conflict"]
+    current = status(db, "maint-test")
+    history = json.loads(current["decision_history_json"])
+    assert len(history) == 1
+    assert history[0]["reason"] == current["decision_reason"]
 
 def test_complete_resolution_rejects_v4_and_stays_blocked(tmp_path: Path) -> None:
     db = tmp_path / "live.db"; _live_db(db); _request(db)

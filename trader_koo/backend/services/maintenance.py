@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS maintenance_runs (
  decided_ts TEXT, resolved_ts TEXT, migration_plan_json TEXT,
  migration_receipt_json TEXT,
  restore_plan_json TEXT, restore_receipt_json TEXT,
+ decision_history_json TEXT NOT NULL DEFAULT '[]',
  error_code TEXT, evidence_json TEXT NOT NULL DEFAULT '{}'
 )
 """
@@ -148,6 +149,11 @@ def _connect(db_path: Path) -> sqlite3.Connection:
         if "migration_plan_json" not in columns:
             conn.execute(
                 "ALTER TABLE maintenance_runs ADD COLUMN migration_plan_json TEXT"
+            )
+        if "decision_history_json" not in columns:
+            conn.execute(
+                "ALTER TABLE maintenance_runs ADD COLUMN decision_history_json "
+                "TEXT NOT NULL DEFAULT '[]'"
             )
         conn.commit()
         return conn
@@ -452,6 +458,16 @@ def _backup_logical_hash(path: Path) -> str:
             return _logical_database_hash(conn)
 
 
+def _validated_backup(current: dict[str, Any]) -> Path:
+    backup_dir = Path(str(current.get("backup_dir") or ""))
+    named = backup_path_by_name(str(current.get("backup_name") or ""), backup_dir)
+    if named is None or _hash(named) != current.get("backup_sha256"):
+        raise MaintenanceError("recovery_backup_invalid")
+    if _backup_logical_hash(named) != current.get("logical_cohort_sha256"):
+        raise MaintenanceError("backup_cohort_mismatch")
+    return named
+
+
 def quiesce_backup(db_path: Path, *, run_id: str, boot_id: str, backup_dir: Path = DEFAULT_BACKUP_DIR) -> dict[str, Any]:
     """Offline helper: exclusive process lease, bounded DB probe, fresh backup."""
     current = status(db_path, run_id)
@@ -556,12 +572,7 @@ def migrate_verified_copy(
     current = status(db_path, run_id)
     if current["state"] != "decision_required" or current.get("decision") != "complete":
         raise MaintenanceError("complete_decision_required")
-    backup_dir = Path(str(current.get("backup_dir") or ""))
-    named = backup_path_by_name(str(current.get("backup_name") or ""), backup_dir)
-    if named is None or _hash(named) != current.get("backup_sha256"):
-        raise MaintenanceError("recovery_backup_invalid")
-    if _backup_logical_hash(named) != current.get("logical_cohort_sha256"):
-        raise MaintenanceError("backup_cohort_mismatch")
+    named = _validated_backup(current)
 
     lease = acquire_lease(
         db_path, exclusive=True, timeout_sec=int(current["drain_timeout_sec"]),
@@ -767,17 +778,60 @@ def migrate_verified_copy(
 def decide(db_path: Path, *, run_id: str, decision: Literal["restore", "complete"], reason: str) -> dict[str, Any]:
     """Record the choice; this alone never clears the writer interlock."""
     with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM maintenance_runs WHERE run_id=?", (run_id,)).fetchone()
         if row is None: raise MaintenanceError("maintenance_run_not_found")
         if row["state"] not in {"backup_verified", "decision_required"} or not (
             row["backup_name"] and row["backup_sha256"] and row["logical_cohort_sha256"]
         ):
             raise MaintenanceError("verified_backup_required")
-        if row["decision"] and (row["decision"] != decision or row["decision_reason"] != reason.strip()):
+        current = dict(row)
+        _validated_backup(current)
+        normalized_reason = reason.strip()
+        recovery = row["decision"] == "complete" and decision == "restore"
+        try:
+            history = json.loads(str(row["decision_history_json"] or "[]"))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise MaintenanceError("maintenance_state_invalid") from exc
+        if not isinstance(history, list):
+            raise MaintenanceError("maintenance_state_invalid")
+        if row["decision"] and not history:
+            history.append({
+                "decision": str(row["decision"]),
+                "reason": str(row["decision_reason"] or ""),
+                "decided_ts": str(row["decided_ts"] or ""),
+                "kind": "initial",
+            })
+        elif row["decision"]:
+            latest = history[-1] if history else None
+            if not isinstance(latest, dict) or (
+                latest.get("decision"), latest.get("reason"), latest.get("decided_ts")
+            ) != (row["decision"], row["decision_reason"], row["decided_ts"]):
+                raise MaintenanceError("maintenance_state_invalid")
+        elif history:
+            raise MaintenanceError("maintenance_state_invalid")
+        idempotent = (
+            row["decision"] == decision and row["decision_reason"] == normalized_reason
+        )
+        if row["decision"] and not recovery and not idempotent:
             raise MaintenanceError("recovery_decision_conflict")
-        conn.execute("UPDATE maintenance_runs SET state='decision_required',decision=?,decision_reason=?,decided_ts=? WHERE run_id=?",
-                     (decision, reason.strip(), _now(), run_id))
-        conn.commit(); _fsync(db_path, conn)
+        if idempotent:
+            conn.rollback()
+        else:
+            decided_ts = _now()
+            history.append({
+                "decision": decision,
+                "reason": normalized_reason,
+                "decided_ts": decided_ts,
+                "kind": "recovery_after_complete" if recovery else "initial",
+            })
+            conn.execute(
+                "UPDATE maintenance_runs SET state='decision_required',decision=?,"
+                "decision_reason=?,decided_ts=?,decision_history_json=? WHERE run_id=?",
+                (decision, normalized_reason, decided_ts,
+                 json.dumps(history, sort_keys=True, separators=(",", ":")), run_id),
+            )
+            conn.commit(); _fsync(db_path, conn)
     return status(db_path, run_id)
 
 
@@ -789,10 +843,7 @@ def restore_backup(
     current = status(db_path, run_id)
     if current.get("decision") != "restore" or current["state"] != "decision_required":
         raise MaintenanceError("restore_decision_required")
-    backup_dir = Path(str(current.get("backup_dir") or ""))
-    named = backup_path_by_name(str(current.get("backup_name") or ""), backup_dir)
-    if named is None or _hash(named) != current.get("backup_sha256"):
-        raise MaintenanceError("recovery_backup_invalid")
+    named = _validated_backup(current)
     lease = acquire_lease(db_path, exclusive=True, timeout_sec=int(current["drain_timeout_sec"]))
     failed_path = db_path.with_name(f"{db_path.name}.pre_restore_{run_id}")
     temp_path: Path | None = None
@@ -903,12 +954,7 @@ def verify_resolution(db_path: Path, *, run_id: str) -> dict[str, Any]:
     lease = acquire_lease(db_path, exclusive=True, timeout_sec=int(current["drain_timeout_sec"]))
     try:
         source = db_path.resolve(strict=True)
-        backup_dir = Path(str(current.get("backup_dir") or ""))
-        named = backup_path_by_name(str(current.get("backup_name") or ""), backup_dir)
-        if named is None or _hash(named) != current.get("backup_sha256"):
-            raise MaintenanceError("recovery_backup_invalid")
-        if _backup_logical_hash(named) != current.get("logical_cohort_sha256"):
-            raise MaintenanceError("backup_cohort_mismatch")
+        named = _validated_backup(current)
         with sqlite3.connect(str(source), timeout=0) as conn:
             if current.get("decision") == "complete":
                 if not current.get("migration_receipt_json"):

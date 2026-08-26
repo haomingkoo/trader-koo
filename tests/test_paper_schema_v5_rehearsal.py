@@ -166,8 +166,9 @@ def test_copied_production_rehearsal_preserves_v1_and_paused_v2(
             "WHERE campaign_id='paper-v1'"
         ).fetchone() == (42, 42)
         ensure_paper_trade_schema(conn)
-        with pytest.raises(ValueError, match="activation interlock"):
-            require_contracted_paper_schema(conn)
+        assert require_contracted_paper_schema(conn)["contract_id"] == (
+            "paper-schema-contract-v5"
+        )
 
     resolved = verify_resolution(db, run_id="rehearsal-1")
     assert resolved["state"] == "resolved"
@@ -408,20 +409,15 @@ from trader_koo.paper_trade.schema_v5_verifier import verify_paper_schema_v5
 with sqlite3.connect(sys.argv[1]) as conn:
     ensure_paper_trade_schema(conn)
     verify_paper_schema_v5(conn)
-    try:
-        require_contracted_paper_schema(conn)
-    except ValueError as exc:
-        assert 'activation interlock' in str(exc)
-    else:
-        raise AssertionError('first admission unexpectedly enabled')
-print('v5_restart_verified_admission_blocked')
+    assert require_contracted_paper_schema(conn)['contract_id'] == 'paper-schema-contract-v5'
+print('v5_restart_verified_activation_eligible')
 """
     completed = subprocess.run(
         [sys.executable, "-c", script, str(db)],
         check=False, capture_output=True, text=True,
     )
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == "v5_restart_verified_admission_blocked"
+    assert completed.stdout.strip() == "v5_restart_verified_activation_eligible"
 
 
 def test_crash_after_durable_receipt_reuses_identical_receipt(tmp_path: Path) -> None:

@@ -398,8 +398,19 @@ def transition_campaign(conn: sqlite3.Connection, *, campaign_id: str, action: s
         raise ValueError("action must be activate or rollback")
     if not actor.strip() or not reason.strip() or not idempotency_key.strip():
         raise ValueError("actor, reason, and idempotency_key are required")
+    schema_pin = None
+    if action == "activate":
+        from trader_koo.paper_trade.schema import _paper_schema_path_pin
+
+        schema_pin = _paper_schema_path_pin(conn)
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if schema_pin is not None:
+            from trader_koo.paper_trade.schema import (
+                _verify_contracted_paper_schema_in_transaction,
+            )
+
+            _verify_contracted_paper_schema_in_transaction(conn, schema_pin)
         # Recheck only after acquiring the write lock so concurrent retries
         # resolve to the same canonical audit fact instead of racing its insert.
         request_hash = canonical_hash({
@@ -423,9 +434,6 @@ def transition_campaign(conn: sqlite3.Connection, *, campaign_id: str, action: s
             raise ValueError(f"unknown campaign {campaign_id}")
         before = str(row[0])
         if action == "activate":
-            from trader_koo.paper_trade.schema import require_contracted_paper_schema
-
-            require_contracted_paper_schema(conn)
             if before == "frozen":
                 raise ValueError("frozen campaigns cannot be reactivated")
             promotion = conn.execute(
@@ -487,6 +495,10 @@ def transition_campaign(conn: sqlite3.Connection, *, campaign_id: str, action: s
             "INSERT INTO paper_campaign_audit (campaign_id,action,actor,reason,idempotency_key,request_hash,from_status,to_status) VALUES (?,?,?,?,?,?,?,?)",
             (campaign_id,action,actor,reason,idempotency_key,request_hash,before,after),
         )
+        if schema_pin is not None:
+            from trader_koo.paper_trade.schema import _require_paper_schema_path_pin
+
+            _require_paper_schema_path_pin(schema_pin)
         conn.commit()
     except Exception:
         conn.rollback()
