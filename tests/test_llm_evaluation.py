@@ -229,6 +229,13 @@ def test_cache_hit_is_traced_and_failure_restores_baseline(tmp_path, monkeypatch
         "risk_note": "Risk-free.",
         "intent": expected_intent,
     }, {"model": "gpt-fixture", "deployment": "fixture"}))
+    runtime_disable_calls = 0
+
+    def disable_runtime():
+        nonlocal runtime_disable_calls
+        runtime_disable_calls += 1
+
+    monkeypatch.setattr(llm_narrative, "_set_runtime_disable", disable_runtime)
     output = llm_narrative.maybe_rewrite_setup_copy(row, source="semantic-failure")
 
     assert output == {
@@ -239,6 +246,7 @@ def test_cache_hit_is_traced_and_failure_restores_baseline(tmp_path, monkeypatch
     failed = observability_summary(db_path)["traces"][0]
     assert failed["terminal_status"] == "fallback"
     assert failed["fallback_reason"] == "semantic_grounding_failed"
+    assert runtime_disable_calls == 0
 
 
 def test_unsafe_evidence_never_calls_provider(tmp_path, monkeypatch) -> None:
