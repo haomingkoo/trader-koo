@@ -634,7 +634,13 @@ def test_copied_v4_restore_path_recovers_named_backup_cohort(tmp_path: Path) -> 
         with sqlite3.connect(db_path) as damaged:
             damaged.execute("DROP INDEX idx_paper_trades_report_run")
             damaged.commit()
-        damaged_hash = _sha256(db_path)
+            damaged_logical_hash = _logical_database_hash(damaged)
+            assert damaged.execute(
+                "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
+            ).fetchone() == (5,)
+            assert damaged.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='idx_paper_trades_report_run'"
+            ).fetchone() is None
         _cli(db_path, backup_dir, "decide", run_id, "--decision", "restore",
              "--reason", "verifier-invalid post-commit copy requires rollback")
         restored = _cli(db_path, backup_dir, "restore-backup", run_id)
@@ -648,8 +654,25 @@ def test_copied_v4_restore_path_recovers_named_backup_cohort(tmp_path: Path) -> 
         assert conn.execute(
             "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
         ).fetchone() == (4,)
-    assert db_path.with_name(f"{db_path.name}.pre_restore_{run_id}").is_file()
-    assert _sha256(db_path.with_name(f"{db_path.name}.pre_restore_{run_id}")) == damaged_hash
+    failed_path = db_path.with_name(f"{db_path.name}.pre_restore_{run_id}")
+    assert failed_path.is_file()
+    immutable_uri = f"{failed_path.resolve().as_uri()}?mode=ro&immutable=1"
+    with sqlite3.connect(immutable_uri, uri=True) as failed:
+        assert _logical_database_hash(failed) == damaged_logical_hash
+        assert failed.execute(
+            "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
+        ).fetchone() == (5,)
+        assert failed.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='idx_paper_trades_report_run'"
+        ).fetchone() is None
+    restore_plan = json.loads(restored["restore_plan_json"])
+    restore_receipt = json.loads(restored["restore_receipt_json"])
+    assert _sha256(failed_path) == restore_plan["live_sha256"]
+    assert restore_receipt["failed_live_sha256"] == restore_plan["live_sha256"]
+    assert restore_receipt["failed_live_inode"] == restore_plan["live_inode"]
+    assert restore_receipt["failed_live_inode"] == failed_path.stat().st_ino
+    assert not list(tmp_path.glob(f".{db_path.name}.restore-*-wal"))
+    assert not list(tmp_path.glob(f".{db_path.name}.restore-*-shm"))
     assert _sha256(source) == source_evidence["source_sha256"]
 
     with _server(tmp_path, db_path, writes=False) as (port, _):

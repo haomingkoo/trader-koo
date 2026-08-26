@@ -613,6 +613,8 @@ def test_restore_is_resumable_at_each_durable_boundary(tmp_path: Path, stage: st
     receipt = __import__("json").loads(recovered["restore_receipt_json"])
     assert Path(receipt["failed_live_path"]).is_file()
     assert all(Path(path).is_file() for path in receipt["preserved_sidecars"])
+    assert not list(tmp_path.glob(f".{db.name}.restore-*-wal"))
+    assert not list(tmp_path.glob(f".{db.name}.restore-*-shm"))
 
 
 def test_maintenance_boot_touches_no_live_database_or_writers(
