@@ -111,27 +111,48 @@ jobs:
       - name: Record previous verified deployment
         id: previous
         run: |
+          umask 077
           railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-deployments.json
+          railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-variables.json
+          paper_trade_enabled=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/previous-variables.json)
           deployment_id=$(jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty' /tmp/previous-deployments.json)
           curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/previous-release.json
           release_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
           curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
+          jq -e '.ok == true' /tmp/previous-paper-summary.json > /dev/null
           campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
+          observed_write_state=$(jq -r '.campaign_health.write_state // "absent"' /tmp/previous-paper-summary.json)
           case "$campaign_status" in active|draft|frozen|absent) ;; *) exit 1 ;; esac
+          if [ "$paper_trade_enabled" = "1" ]; then
+            expected_write_state=enabled
+          else
+            expected_write_state=paused
+          fi
+          if [ "$campaign_status" = "absent" ]; then
+            test "$observed_write_state" = "absent"
+            test "$paper_trade_enabled" = "0"
+          else
+            test "$observed_write_state" = "$expected_write_state"
+          fi
           test -n "$deployment_id"
           test -n "$release_sha"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
           echo "campaign_status=$campaign_status" >> "$GITHUB_OUTPUT"
+          echo "campaign_write_state=$expected_write_state" >> "$GITHUB_OUTPUT"
+          echo "paper_trade_enabled=$paper_trade_enabled" >> "$GITHUB_OUTPUT"
 
       - name: Bind release identity without starting a second deployment
-        run: >-
-          railway variable set
-          "TRADER_KOO_GIT_SHA=${RELEASE_SHA}"
-          "TRADER_KOO_PAPER_TRADE_ENABLED=0"
-          --skip-deploys
-          --service "$RAILWAY_SERVICE"
+        run: |
+          railway variable set \
+          "TRADER_KOO_GIT_SHA=${RELEASE_SHA}" \
+          "TRADER_KOO_PAPER_TRADE_ENABLED=${{ steps.previous.outputs.paper_trade_enabled }}" \
+          --skip-deploys \
+          --service "$RAILWAY_SERVICE" \
           --environment "$RAILWAY_ENVIRONMENT"
+          umask 077
+          railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/bound-variables.json
+          test "$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/bound-variables.json)" = "${{ steps.previous.outputs.paper_trade_enabled }}"
 
       - name: Upload dark release and wait for Railway health gate
         run: >-
@@ -149,13 +170,30 @@ jobs:
           test "$deployment_id" != "${{ steps.previous.outputs.id }}"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
 
+      - name: Verify deployed Railway write gate
+        id: deployed_config
+        run: |
+          umask 077
+          railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/deployed-variables.json
+          observed=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/deployed-variables.json)
+          test "$observed" = "${{ steps.previous.outputs.paper_trade_enabled }}"
+          echo "paper_trade_enabled=$observed" >> "$GITHUB_OUTPUT"
+
       - name: Verify API contracts and exact commit
-        run: >-
-          python -m trader_koo.scripts.verify_deployment
-          --base-url "$BASE_URL"
-          --expected-sha "$RELEASE_SHA"
-          --api-key "$ADMIN_API_KEY"
-          --expected-campaign-status "${{ steps.previous.outputs.campaign_status }}"
+        id: verified
+        run: |
+          umask 077
+          python -m trader_koo.scripts.verify_deployment \
+          --base-url "$BASE_URL" \
+          --expected-sha "$RELEASE_SHA" \
+          --api-key "$ADMIN_API_KEY" \
+          --expected-campaign-status "${{ steps.previous.outputs.campaign_status }}" \
+          --expected-campaign-write-state "${{ steps.previous.outputs.campaign_write_state }}" \
+          > release-evidence/deployment-verification.json
+          observed_write_state=$(jq -er '.observed_campaign_write_state | select(. == "enabled" or . == "paused")' release-evidence/deployment-verification.json)
+          observed_status=$(jq -er '.observed_campaign_status | select(. == "active" or . == "draft" or . == "frozen")' release-evidence/deployment-verification.json)
+          echo "campaign_write_state=$observed_write_state" >> "$GITHUB_OUTPUT"
+          echo "campaign_status=$observed_status" >> "$GITHUB_OUTPUT"
 
       - name: Verify production Chromium journeys
         working-directory: trader_koo/frontend-v2
@@ -191,6 +229,22 @@ jobs:
                 "${BASE_URL}/api/paper-trades/summary" \
                 > /tmp/rollback-paper-summary.json
               jq -e '.ok == true' /tmp/rollback-paper-summary.json > /dev/null
+              observed_status=$(jq -r '.campaign_health.status // "absent"' /tmp/rollback-paper-summary.json)
+              expected_status="${{ steps.previous.outputs.campaign_status }}"
+              if [ "$expected_status" = "absent" ]; then
+                test "$observed_status" = "draft"
+              else
+                test "$observed_status" = "$expected_status"
+              fi
+              observed_write_state=$(jq -er '.campaign_health.write_state | select(. == "enabled" or . == "paused")' /tmp/rollback-paper-summary.json)
+              test "$observed_write_state" = "${{ steps.previous.outputs.campaign_write_state }}"
+              umask 077
+              railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-variables.json
+              observed_gate=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/rollback-variables.json)
+              test "$observed_gate" = "${{ steps.previous.outputs.paper_trade_enabled }}"
+              echo "observed_campaign_status=$observed_status" >> "$GITHUB_OUTPUT"
+              echo "observed_write_state=$observed_write_state" >> "$GITHUB_OUTPUT"
+              echo "paper_trade_enabled=$observed_gate" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ]; then
@@ -205,15 +259,23 @@ jobs:
         run: |
           mkdir -p release-evidence
           jq -n \
-            --arg schema "dark-deploy-manifest-v1" \
+            --arg schema "dark-deploy-manifest-v2" \
             --arg git_sha "$RELEASE_SHA" \
             --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
             --arg previous_git_sha "${{ steps.previous.outputs.sha }}" \
             --arg expected_campaign_status "${{ steps.previous.outputs.campaign_status }}" \
+            --arg expected_campaign_write_state "${{ steps.previous.outputs.campaign_write_state }}" \
+            --arg previous_paper_trade_enabled "${{ steps.previous.outputs.paper_trade_enabled }}" \
+            --arg deployed_paper_trade_enabled "${{ steps.deployed_config.outputs.paper_trade_enabled }}" \
+            --arg deployed_campaign_write_state "${{ steps.verified.outputs.campaign_write_state }}" \
+            --arg deployed_campaign_status "${{ steps.verified.outputs.campaign_status }}" \
+            --arg rollback_campaign_status "${{ steps.rollback.outputs.observed_campaign_status }}" \
+            --arg rollback_campaign_write_state "${{ steps.rollback.outputs.observed_write_state }}" \
+            --arg rollback_paper_trade_enabled "${{ steps.rollback.outputs.paper_trade_enabled }}" \
             --arg dark_deployment_id "${{ steps.deployed.outputs.id }}" \
             --arg rollback_deployment_id "${{ steps.rollback.outputs.id }}" \
             --arg job_status "${{ job.status }}" \
-            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, verification_status: $job_status, campaign_activation_invoked: false}' \
+            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, expected_campaign_write_state: $expected_campaign_write_state, previous_paper_trade_enabled: $previous_paper_trade_enabled, deployed_paper_trade_enabled: $deployed_paper_trade_enabled, deployed_campaign_status: $deployed_campaign_status, deployed_campaign_write_state: $deployed_campaign_write_state, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, rollback_campaign_status: $rollback_campaign_status, rollback_campaign_write_state: $rollback_campaign_write_state, rollback_paper_trade_enabled: $rollback_paper_trade_enabled, verification_status: $job_status, campaign_activation_invoked: false}' \
             > release-evidence/deployment-manifest.json
 
       - name: Upload deployment evidence

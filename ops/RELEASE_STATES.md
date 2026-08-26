@@ -219,11 +219,11 @@ restart persistence. The fsynced evidence file contains only hashes, counts,
 contract identity, and newly created run/trade/audit identifiers; it excludes
 the API key and database contents. It is created with fail-if-exists semantics.
 
-The current dark-deploy workflow deliberately resets writes to paused on every
-release. Before the first activation, the contract-aware workflow must be changed
-to capture, audit, preserve, and verify the approved write-gate state across
-deploy and rollback. An active campaign with `write_state=paused` is visibly
-non-operational and fails campaign health until writes are deliberately restored.
+The dark-deploy workflow captures the explicit Railway write gate and requires it
+to match the live API state before upload. It preserves and verifies that same
+state after deploy and rollback; missing, malformed, or inconsistent state fails
+closed. An active campaign with `write_state=paused` remains visibly unhealthy
+until a separate audited configuration transition enables writes.
 
 Configure the `production-dark` GitHub environment with required reviewers,
 the non-secret target variables `TRADER_KOO_PRODUCTION_URL`,
