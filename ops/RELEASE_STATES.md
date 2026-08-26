@@ -90,7 +90,9 @@ destructive parent-table rebuild on the live volume.
    must name every retained, removed, and changed table, index, trigger, foreign
    key, default, legacy read shape, collision rule, integrity check, and schema
    fingerprint. The current v4 image rejects Campaign v2 activation because
-   this contract and verifier do not exist yet.
+   the verifier does not exist yet. The frozen specification is
+   `paper-schema-contract-v5.json`; `ops/PAPER_SCHEMA_V5_CONTRACT.md` records its
+   scope and deliberately deferred implementation steps.
 9. Implement and review the migration against the frozen contract fixtures.
 10. Implement and review the exact verifier and schema fingerprint separately.
 11. Implement the phase-aware initializer as another change, proving it operates

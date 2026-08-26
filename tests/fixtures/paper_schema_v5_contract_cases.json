@@ -1,0 +1,129 @@
+{
+  "fixture_set": "paper-schema-v5-contract-cases-v1",
+  "cases": [
+    {
+      "id": "fresh_v4",
+      "source_fixture": "paper_schema_v4_fresh.sql",
+      "target_fixture": "paper_schema_v5_target.sql",
+      "expected": "migratable"
+    },
+    {
+      "id": "production_like_legacy_v4",
+      "source_fixture": "paper_schema_v4_legacy_production_like.sql",
+      "target_fixture": "paper_schema_v5_target.sql",
+      "source_facts": {"paper_v1_trades": 42, "legacy_snapshots": 1},
+      "expected": "migratable_with_declared_backfills"
+    },
+    {
+      "id": "duplicate_campaign_trade_key",
+      "setup_sql": [
+        "CREATE TABLE paper_campaigns(campaign_id TEXT PRIMARY KEY)",
+        "CREATE TABLE paper_trades(id INTEGER PRIMARY KEY,campaign_id TEXT,report_date TEXT,ticker TEXT,direction TEXT)",
+        "INSERT INTO paper_campaigns VALUES ('paper-v2')",
+        "INSERT INTO paper_trades VALUES (1,'paper-v2','2026-08-25','DUP','long')",
+        "INSERT INTO paper_trades VALUES (2,'paper-v2','2026-08-25','DUP','long')"
+      ],
+      "expected_error": "duplicate_campaign_trade_key"
+    },
+    {
+      "id": "duplicate_campaign_snapshot_key",
+      "setup_sql": [
+        "CREATE TABLE paper_campaigns(campaign_id TEXT PRIMARY KEY)",
+        "CREATE TABLE paper_portfolio_snapshots(id INTEGER PRIMARY KEY,campaign_id TEXT,snapshot_date TEXT)",
+        "INSERT INTO paper_campaigns VALUES ('paper-v2')",
+        "INSERT INTO paper_portfolio_snapshots VALUES (1,'paper-v2','2026-08-25')",
+        "INSERT INTO paper_portfolio_snapshots VALUES (2,'paper-v2','2026-08-25')"
+      ],
+      "expected_error": "duplicate_campaign_snapshot_key"
+    },
+    {
+      "id": "missing_or_unknown_campaign",
+      "setup_sql": [
+        "CREATE TABLE paper_campaigns(campaign_id TEXT PRIMARY KEY)",
+        "CREATE TABLE paper_trades(id INTEGER PRIMARY KEY,campaign_id TEXT)",
+        "CREATE TABLE paper_portfolio_snapshots(id INTEGER PRIMARY KEY,campaign_id TEXT)",
+        "INSERT INTO paper_campaigns VALUES ('paper-v2')",
+        "INSERT INTO paper_trades VALUES (1,NULL)",
+        "INSERT INTO paper_trades VALUES (2,'unknown')",
+        "INSERT INTO paper_portfolio_snapshots VALUES (1,NULL)",
+        "INSERT INTO paper_portfolio_snapshots VALUES (2,'unknown')"
+      ],
+      "expected_errors": ["missing_trade_campaign", "unknown_trade_campaign", "missing_snapshot_campaign", "unknown_snapshot_campaign"]
+    },
+    {
+      "id": "orphan_trade_report",
+      "setup_sql": [
+        "CREATE TABLE report_runs(run_id TEXT PRIMARY KEY)",
+        "CREATE TABLE paper_trades(id INTEGER PRIMARY KEY,report_run_id TEXT)",
+        "INSERT INTO paper_trades VALUES (1,'missing-run')"
+      ],
+      "expected_error": "orphan_trade_report_run"
+    },
+    {
+      "id": "invalid_v2_lineage",
+      "setup_sql": [
+        "CREATE TABLE report_runs(run_id TEXT PRIMARY KEY,status TEXT,publication_verified INTEGER,is_generation_canonical INTEGER)",
+        "CREATE TABLE report_run_decisions(run_id TEXT,ticker TEXT,decision TEXT)",
+        "CREATE TABLE paper_trades(id INTEGER PRIMARY KEY,campaign_id TEXT,report_run_id TEXT,ticker TEXT)",
+        "INSERT INTO report_runs VALUES ('unverified','completed',0,0)",
+        "INSERT INTO report_run_decisions VALUES ('unverified','BAD','rejected')",
+        "INSERT INTO paper_trades VALUES (1,'paper-v2','unverified','BAD')"
+      ],
+      "expected_error": "invalid_v2_trade_lineage"
+    },
+    {
+      "id": "legacy_cancelled_order",
+      "setup_sql": [
+        "CREATE TABLE paper_pending_orders(order_id TEXT PRIMARY KEY,order_hash TEXT,status TEXT,resolved_ts TEXT)",
+        "INSERT INTO paper_pending_orders VALUES ('legacy','legacy-unsealed','cancelled','2026-08-25T00:00:00Z')"
+      ],
+      "expected": "preserved"
+    },
+    {
+      "id": "invalid_legacy_order",
+      "setup_sql": [
+        "CREATE TABLE paper_pending_orders(order_id TEXT PRIMARY KEY,order_hash TEXT,status TEXT,resolved_ts TEXT)",
+        "INSERT INTO paper_pending_orders VALUES ('legacy','legacy-unsealed','pending',NULL)"
+      ],
+      "expected_error": "invalid_legacy_order_hash"
+    },
+    {
+      "id": "logical_orphan",
+      "setup_sql": [
+        "CREATE TABLE paper_trades(id INTEGER PRIMARY KEY)",
+        "CREATE TABLE paper_trade_reflections(id INTEGER PRIMARY KEY,trade_id INTEGER)",
+        "INSERT INTO paper_trade_reflections VALUES (1,999)"
+      ],
+      "expected_error": "orphan_logical_relation"
+    },
+    {
+      "id": "same_name_malformed_object",
+      "setup_sql": [
+        "CREATE TABLE paper_trades(id INTEGER PRIMARY KEY,campaign_id TEXT)",
+        "CREATE INDEX idx_paper_trades_status ON paper_trades(campaign_id)"
+      ],
+      "expected_error": "v4_contract_drift"
+    },
+    {
+      "id": "interrupted_rebuild",
+      "source_fixture": "paper_schema_v4_legacy_production_like.sql",
+      "fault_points": ["after_rename", "after_copy", "after_validation", "before_commit"],
+      "expected": "original_v4_restored"
+    },
+    {
+      "id": "exact_v5",
+      "source_fixture": "paper_schema_v5_target.sql",
+      "expected": "verified_idempotent_noop"
+    }
+  ],
+  "success_evidence": [
+    "integrity_check_ok",
+    "foreign_key_check_empty",
+    "retained_row_counts_equal",
+    "existing_primary_keys_equal",
+    "content_hashes_equal_except_declared_backfills",
+    "accounting_breaks_empty",
+    "legacy_reads_pass",
+    "fingerprint_matches"
+  ]
+}
