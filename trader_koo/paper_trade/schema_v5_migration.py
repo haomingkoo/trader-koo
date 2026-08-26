@@ -544,15 +544,34 @@ def _copy_rebuilt_table(
     source_columns = _table_columns(conn, source)
     target_columns = _table_columns(conn, table)
     copied = [column for column in target_columns if column in source_columns]
-    projection = ",".join(_quote(column) for column in copied)
+    target_projection = list(copied)
+    source_projection = [_quote(column) for column in copied]
+    # Accepted legacy rows predate these target timestamps. Letting SQLite
+    # evaluate CURRENT_TIMESTAMP makes copied rehearsal and live migration
+    # cohorts differ. Derive every introduced timestamp from retained row data.
+    introduced_timestamps = {
+        "paper_trades": {
+            "created_ts": "report_date || 'T00:00:00Z'",
+            "updated_ts": "report_date || 'T00:00:00Z'",
+        },
+        "paper_portfolio_snapshots": {
+            "created_ts": "COALESCE(snapshot_ts,snapshot_date || 'T00:00:00Z')",
+        },
+    }
+    for column, expression in introduced_timestamps.get(table, {}).items():
+        if column not in source_columns:
+            target_projection.append(column)
+            source_projection.append(expression)
+    targets = ",".join(_quote(column) for column in target_projection)
+    sources = ",".join(source_projection)
     ordering = (
         "snapshot_date,campaign_id"
         if table == "paper_portfolio_snapshots" and "id" not in source_columns
         else "rowid"
     )
     conn.execute(
-        f"INSERT INTO {_quote(table)} ({projection}) "
-        f"SELECT {projection} FROM {_quote(source)} ORDER BY {ordering}"
+        f"INSERT INTO {_quote(table)} ({targets}) "
+        f"SELECT {sources} FROM {_quote(source)} ORDER BY {ordering}"
     )
 
 
@@ -647,6 +666,8 @@ def migrate_paper_schema_v4_to_v5(
     *,
     contract_path: Path = DEFAULT_CONTRACT_PATH,
     inject_failure_at: str | None = None,
+    expected_source_logical_sha256: str | None = None,
+    target_applied_ts: str | None = None,
 ) -> dict[str, Any]:
     """Run the explicit maintenance migration; never called by startup."""
     if conn.in_transaction:
@@ -677,26 +698,20 @@ def migrate_paper_schema_v4_to_v5(
             "SELECT 1 FROM schema_migrations WHERE migration_id=?",
             (contract["migration_ids"]["target"],),
         ).fetchone():
+            if expected_source_logical_sha256 is not None:
+                raise PaperSchemaV5MigrationError([{
+                    "code": "target_identity_requires_recovery_plan",
+                }])
             return {
                 "status": "already_v5_identity_only",
                 "contract_id": contract["contract_id"],
                 "schema_fingerprint": expected[2],
             }
 
-    diagnostics = _source_contract_diagnostics(conn, contract, fixtures)
-    if diagnostics:
-        raise PaperSchemaV5MigrationError(diagnostics)
-
-    before_state = _table_state(conn, contract)
-    logical_before = _logical_database_hash(conn)
-    sequences_before = {
-        str(name): int(value)
-        for name, value in conn.execute("SELECT name,seq FROM sqlite_sequence")
-    }
-    snapshot_had_id = "id" in _table_columns(conn, "paper_portfolio_snapshots")
-    target_conn = _fixture_connection(fixtures["exact_v5_target"])
     foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
     legacy_alter = int(conn.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    logical_before: str | None = None
+    target_conn: sqlite3.Connection | None = None
 
     def inject(point: str) -> None:
         if inject_failure_at == point:
@@ -707,7 +722,35 @@ def migrate_paper_schema_v4_to_v5(
     try:
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("PRAGMA legacy_alter_table=ON")
-        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+        except sqlite3.OperationalError as exc:
+            raise PaperSchemaV5MigrationError([{
+                "code": "exclusive_transaction_unavailable",
+            }]) from exc
+        diagnostics = _source_contract_diagnostics(conn, contract, fixtures)
+        if diagnostics:
+            raise PaperSchemaV5MigrationError(diagnostics)
+
+        before_state = _table_state(conn, contract)
+        logical_before = _logical_database_hash(conn)
+        if (
+            expected_source_logical_sha256 is not None
+            and logical_before != expected_source_logical_sha256
+        ):
+            raise PaperSchemaV5MigrationError([{
+                "code": "source_cohort_mismatch",
+                "expected": expected_source_logical_sha256,
+                "actual": logical_before,
+            }])
+        sequences_before = {
+            str(name): int(value)
+            for name, value in conn.execute("SELECT name,seq FROM sqlite_sequence")
+        }
+        snapshot_had_id = "id" in _table_columns(
+            conn, "paper_portfolio_snapshots",
+        )
+        target_conn = _fixture_connection(fixtures["exact_v5_target"])
         for table in (
             "paper_trades", "paper_portfolio_snapshots", "paper_trade_schema_meta",
         ):
@@ -745,10 +788,16 @@ def migrate_paper_schema_v4_to_v5(
                 "AND tbl_name=? AND sql IS NOT NULL ORDER BY type,name", (table,),
             ):
                 conn.execute(str(sql))
-        conn.execute(
-            "INSERT INTO schema_migrations(migration_id) VALUES (?)",
-            (contract["migration_ids"]["target"],),
-        )
+        if target_applied_ts is None:
+            conn.execute(
+                "INSERT INTO schema_migrations(migration_id) VALUES (?)",
+                (contract["migration_ids"]["target"],),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO schema_migrations(migration_id,applied_ts) VALUES (?,?)",
+                (contract["migration_ids"]["target"], target_applied_ts),
+            )
         _restore_changed_sequences(
             conn, sequences_before, snapshot_had_id=snapshot_had_id,
         )
@@ -802,13 +851,14 @@ def migrate_paper_schema_v4_to_v5(
         conn.commit()
     except Exception as exc:
         conn.rollback()
-        if _logical_database_hash(conn) != logical_before:
+        if logical_before is not None and _logical_database_hash(conn) != logical_before:
             raise PaperSchemaV5MigrationError([{
                 "code": "rollback_not_logically_identical",
             }]) from exc
         raise
     finally:
-        target_conn.close()
+        if target_conn is not None:
+            target_conn.close()
         conn.execute(f"PRAGMA legacy_alter_table={legacy_alter}")
         conn.execute(f"PRAGMA foreign_keys={foreign_keys}")
 
