@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import json
 import math
 import statistics
 from collections.abc import Iterable
@@ -18,6 +17,13 @@ from typing import Any
 from trader_koo.db.price_contract import research_price_contract
 from trader_koo.ml.features import ML_CONTEXT_TICKERS
 from trader_koo.report.runs import current_code_version
+from trader_koo.research.challenger_preregistration import (
+    CHALLENGERS,
+    MAX_HOLDING_SESSIONS,
+    SCHEMA_VERSION,
+    UNIVERSE_ID,
+    frozen_preregistration,
+)
 from trader_koo.research.challenger_executor import (
     c1_signal,
     c2_signal,
@@ -25,16 +31,21 @@ from trader_koo.research.challenger_executor import (
     daily_returns,
     execute_validation_tournament,
     holm_adjust,
+    required_membership_dates,
 )
 from trader_koo.research.next_open_baseline import canonical_json_bytes
+from trader_koo.research.universe_membership import (
+    MembershipContractError,
+    load_verified_membership,
+)
 
-SCHEMA_VERSION = "challenger-tournament-v1"
-MAX_HOLDING_SESSIONS = 21
 IMPLEMENTATION_PATH = Path(__file__)
 REPOSITORY_ROOT = IMPLEMENTATION_PATH.parents[2]
 IMPLEMENTATION_PATHS = (
     "trader_koo/research/challenger_tournament.py",
+    "trader_koo/research/challenger_preregistration.py",
     "trader_koo/research/challenger_executor.py",
+    "trader_koo/research/universe_membership.py",
     "trader_koo/research/next_open_baseline.py",
     "trader_koo/db/price_contract.py",
     "trader_koo/ml/features.py",
@@ -43,45 +54,6 @@ IMPLEMENTATION_ENVIRONMENT_PATHS = (
     "pyproject.toml",
     "requirements.txt",
 )
-
-CHALLENGERS: dict[str, dict[str, Any]] = {
-    "C1": {
-        "name": "long_only_12_1_cross_sectional_momentum",
-        "signal": "adjusted_close_t_minus_21 / adjusted_close_t_minus_252 - 1",
-        "schedule": "month_end_signal_next_open_rebalance",
-        "selection": "top_quintile_max_20",
-        "weighting": "inverse_63_session_volatility_10_pct_name_cap",
-        "long_only": True,
-        "leverage": False,
-        "one_way_cost_bps": 10,
-        "stress_cost_bps": 20,
-    },
-    "C2": {
-        "name": "liquid_large_cap_five_session_residual_reversal",
-        "signal": "five_session_return_minus_prior_126_session_spy_beta_times_spy_return",
-        "schedule": "week_end_signal_next_open_entry_five_session_hold",
-        "selection": "bottom_decile_max_20",
-        "weighting": "equal_weight_10_pct_name_cap",
-        "minimum_median_20_session_dollar_volume": 50_000_000,
-        "maximum_adv_pct": 1,
-        "one_way_cost_scenarios_bps": [10, 25, 50],
-        "selection_cost_bps": 25,
-        "edge_must_survive_bps": 25,
-        "long_only": True,
-        "leverage": False,
-    },
-    "C3": {
-        "name": "volatility_managed_spy_core",
-        "signal": "min(1, 10_pct_annual_volatility / prior_20_session_realized_volatility)",
-        "trend_gate": "prior_126_session_spy_return_positive_else_cash",
-        "schedule": "month_end_decision_next_open_rebalance",
-        "long_only": True,
-        "leverage": False,
-        "one_way_cost_bps": 1,
-        "stress_cost_bps": 2,
-    },
-}
-
 
 def _sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
@@ -96,7 +68,7 @@ def _implementation_manifest() -> dict[str, Any]:
         }
 
     return {
-        "schema_version": "challenger-implementation-v1",
+        "schema_version": "challenger-implementation-v2",
         "python_requires": ">=3.11",
         "source_files": hashes(IMPLEMENTATION_PATHS),
         "environment_files": hashes(IMPLEMENTATION_ENVIRONMENT_PATHS),
@@ -107,46 +79,6 @@ def _implementation_manifest() -> dict[str, Any]:
 def _implementation_hash() -> str:
     """Hash the declared signal, execution, data-gate, and runtime closure."""
     return _sha256(_implementation_manifest())
-
-
-def frozen_preregistration(dataset_hash: str) -> dict[str, Any]:
-    """Return the complete selection contract frozen before validation."""
-    config_hashes = {name: _sha256(spec) for name, spec in CHALLENGERS.items()}
-    body = {
-        "schema_version": SCHEMA_VERSION,
-        "dataset_hash": dataset_hash,
-        "challengers": json.loads(canonical_json_bytes(CHALLENGERS)),
-        "config_hashes": config_hashes,
-        "selection": {
-            "candidates": ["C1", "C2", "C3"],
-            "development_pct": 60,
-            "validation_pct": 20,
-            "sealed_heldout_pct": 20,
-            "purge_sessions": MAX_HOLDING_SESSIONS,
-            "embargo_sessions": MAX_HOLDING_SESSIONS,
-            "validation": "expanding_walk_forward",
-            "multiple_testing": "holm_three_challengers",
-            "winner_count_max": 1,
-            "heldout_reuse": False,
-            "automatic_promotion": False,
-        },
-        "historical_shadow_gate": {
-            "minimum_years": 5,
-            "minimum_volatility_regimes": 3,
-            "positive_net_active_return_fold_pct": 70,
-            "double_cost_net_return_minimum": 0,
-            "maximum_profit_concentration_pct": 50,
-            "maximum_adv_pct": 1,
-            "maximum_drawdown_pct": 25,
-            "holm_adjusted_p_value_max": .05,
-            "risk_rule_required": True,
-        },
-        "prohibited": [
-            "technical_or_candlestick_weights", "llm_weights", "deep_ml",
-            "covariance_optimization", "broad_parameter_grids", "equity_shorts",
-        ],
-    }
-    return {**body, "preregistration_sha256": _sha256(body)}
 
 
 def chronological_split(sessions: Iterable[str]) -> dict[str, Any]:
@@ -244,8 +176,27 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
     end = end_date.isoformat() if end_date else None
     ticker_names = sorted(tickers)
     ticker_count = len(ticker_names)
+    membership_contract: dict[str, Any]
+    research_tickers = ticker_names
     try:
-        contract = research_price_contract(conn, ticker_names)
+        membership = load_verified_membership(
+            conn,
+            UNIVERSE_ID,
+            required_membership_dates([
+                date.isoformat() for date, _close in sorted(spy_prices)
+            ]),
+        )
+        membership_contract = {"eligible": True, **membership.contract}
+        research_tickers = sorted(set(membership.tickers) | {"SPY"})
+    except MembershipContractError as exc:
+        reasons.append(exc.code)
+        membership_contract = {
+            "eligible": False,
+            "universe_id": UNIVERSE_ID,
+            "reason": exc.code,
+        }
+    try:
+        contract = research_price_contract(conn, research_tickers)
     except Exception as exc:
         contract = {
             "eligible": False, "basis": "unknown", "status": "unresolved",
@@ -284,26 +235,16 @@ def dataset_audit(conn: Any) -> dict[str, Any]:
         })
     if regime_count < 3:
         reasons.append("fewer_than_three_volatility_regimes")
-    membership_table = next((
-        name for name in ("index_membership_history", "universe_membership_history")
-        if _table_exists(conn, name)
-    ), None)
-    universe = "point_in_time_membership" if membership_table else "fixed_universe_survivor_study"
-    if membership_table is None:
-        reasons.append("point_in_time_universe_membership_required")
-    else:
-        # Detection alone is not evidence that every historical signal was
-        # filtered through the table. Keep validation sealed until the executor
-        # implements and tests that date-aware membership join.
-        reasons.append("point_in_time_universe_membership_enforcement_unimplemented")
     snapshot = {
         "price_start": start, "price_end": end, "years": years,
         "ticker_count": ticker_count, "row_count": row_count,
         "market_rows_sha256": market_rows_hasher.hexdigest(),
         "excluded_context_row_count": excluded_context_rows,
         "volatility_regime_count": regime_count,
-        "price_contract": contract, "universe_treatment": universe,
-        "membership_table": membership_table,
+        "price_contract": contract,
+        "universe_treatment": "point_in_time_membership",
+        "membership_contract": membership_contract,
+        "research_ticker_count": len(research_tickers),
     }
     return {
         **snapshot,
@@ -321,7 +262,8 @@ def run_challenger_tournament(
     """Attempt exactly C1-C3, leaving sealed validation untouched on bad data."""
     audit = dataset_audit(conn)
     preregistration = frozen_preregistration(
-        str(audit.get("dataset_sha256") or _sha256(audit))
+        str(audit.get("dataset_sha256") or _sha256(audit)),
+        (audit.get("membership_contract") or {}).get("membership_sha256"),
     )
     if not audit["eligible"]:
         results = {

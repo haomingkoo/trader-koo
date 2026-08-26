@@ -22,6 +22,46 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
+def _historical_tournament(payload: dict[str, Any], warning: str, path: Path) -> dict[str, Any]:
+    results = payload.get("challenger_results")
+    heldout = payload.get("sealed_heldout")
+    safe_blocked = (
+        payload.get("status") == "blocked_before_validation"
+        and payload.get("selected_challenger") is None
+        and isinstance(heldout, dict)
+        and heldout.get("accessed") is False
+        and isinstance(results, dict)
+        and set(results) == {"C1", "C2", "C3"}
+        and all(
+            isinstance(result, dict)
+            and result.get("status") == "failed_data_gate"
+            and result.get("metrics") is None
+            for result in results.values()
+        )
+    )
+    return {
+        "available": False,
+        "artifact_path": str(path),
+        "schema_version": payload.get("schema_version"),
+        "code_sha": payload.get("code_sha"),
+        "implementation_sha256": payload.get("implementation_sha256"),
+        "implementation_manifest": payload.get("implementation_manifest"),
+        "artifact_sha256": payload.get("artifact_sha256"),
+        "status": (
+            "blocked_before_validation"
+            if safe_blocked else "historical_implementation_mismatch"
+        ),
+        "warnings": [warning],
+        "preregistration": payload.get("preregistration"),
+        "dataset_audit": payload.get("dataset_audit"),
+        "challenger_results": results if safe_blocked else {},
+        "selected_challenger": None,
+        "sealed_heldout": {"accessed": False, "access_log": []},
+        "prospective_shadow_candidate": None,
+        "automatic_promotion": False,
+    }
+
+
 def _load_tournament(path: Path = TOURNAMENT_PATH) -> dict[str, Any]:
     unavailable = {
         "available": False, "status": "evidence_unavailable",
@@ -42,15 +82,13 @@ def _load_tournament(path: Path = TOURNAMENT_PATH) -> dict[str, Any]:
             "warnings": ["tournament_artifact_hash_mismatch"],
         }
     if str(payload.get("implementation_sha256") or "") != _implementation_hash():
-        return {
-            **unavailable,
-            "warnings": ["tournament_implementation_hash_mismatch"],
-        }
+        return _historical_tournament(
+            payload, "tournament_implementation_hash_mismatch", path,
+        )
     if payload.get("implementation_manifest") != _implementation_manifest():
-        return {
-            **unavailable,
-            "warnings": ["tournament_implementation_manifest_mismatch"],
-        }
+        return _historical_tournament(
+            payload, "tournament_implementation_manifest_mismatch", path,
+        )
     return {"available": True, "artifact_path": str(path), **payload}
 
 
@@ -144,7 +182,10 @@ def _tournament_result() -> dict[str, Any]:
     payload = _load_tournament()
     audit = payload.get("dataset_audit") if isinstance(payload.get("dataset_audit"), dict) else {}
     prereg = payload.get("preregistration") if isinstance(payload.get("preregistration"), dict) else {}
-    warnings = list(audit.get("reasons") or payload.get("warnings") or [])
+    warnings = [
+        *(audit.get("reasons") or []),
+        *(payload.get("warnings") or []),
+    ]
     return {
         "experiment_id": "challenger-tournament",
         "title": "Non-TA challenger tournament",
