@@ -25,6 +25,15 @@
       "oneOf": [{"$ref": "#/$defs/accounting"}, {"type": "null"}]
     },
     "schema_contract": {"$ref": "#/$defs/schemaContract"},
+    "paper_schema_initialization_diagnostics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["code"],
+        "properties": {"code": {"type": "string", "minLength": 1}}
+      }
+    },
     "sqlite_objects_before": {"$ref": "#/$defs/sqliteCounts"},
     "sqlite_objects_after": {"$ref": "#/$defs/sqliteCounts"},
     "report_admission_contract": {"type": "object"},
@@ -68,7 +77,8 @@
                   }
                 }
               },
-              {"properties": {"schema_contract": {"properties": {"passed": {"const": false}}}}}
+              {"properties": {"schema_contract": {"properties": {"passed": {"const": false}}}}},
+              {"required": ["paper_schema_initialization_diagnostics"]}
             ]
           }
         },
@@ -145,6 +155,10 @@
     }
   ],
   "allOf": [
+    {
+      "if": {"required": ["paper_schema_initialization_diagnostics"]},
+      "then": {"properties": {"passed": {"const": false}}}
+    },
     {
       "if": {"properties": {"passed": {"const": true}}},
       "then": {

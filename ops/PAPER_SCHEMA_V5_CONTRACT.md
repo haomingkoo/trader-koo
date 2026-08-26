@@ -68,12 +68,20 @@ computes the pinned semantic fingerprint only after every check passes. It has
 no startup or activation caller; `require_contracted_paper_schema` remains
 closed.
 
+`ensure_paper_trade_schema` is the phase-aware runtime facade. It preserves the
+expand-compatible v4 initializer, recognizes exact v5 only through the full
+verifier, and never invokes the offline contraction migration. On-disk v5 is
+deep-verified once per process/path and cached against the main schema version,
+exact identity tuple, and file identity; TEMP overlap, phase, and identity are
+still checked on every call. The cache detects schema or identity drift, not
+post-verification row-data drift; release and maintenance gates must run the
+uncached verifier when they need a fresh data-integrity claim.
+
 Later, separate changes must implement, in order:
 
-1. a v4/v5 phase-aware initializer;
-2. writer quiescence and restore drills;
-3. copied-production rehearsal and deployment-state preservation;
-4. separately audited write enablement and human activation.
+1. writer quiescence and restore drills;
+2. copied-production rehearsal and deployment-state preservation;
+3. separately audited write enablement and human activation.
 
 Until all gates pass, `require_contracted_paper_schema` remains an unconditional
 activation interlock and the dark-deploy workflow continues to pause writes.

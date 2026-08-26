@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from typing import Any
@@ -12,14 +13,25 @@ from typing import Any
 # In-memory databases are never cached (each connection is a distinct DB).
 _ensured_db_paths: set[str] = set()
 _ensured_db_paths_lock = threading.Lock()
+_verified_v5_paths: dict[str, tuple[Any, ...]] = {}
 PAPER_TRADE_SCHEMA_VERSION = 4
 
 
+class PaperSchemaInitializationError(RuntimeError):
+    """Stable diagnostics for a schema phase that is unsafe to initialize."""
+
+    def __init__(self, diagnostics: list[dict[str, Any]]) -> None:
+        self.diagnostics = tuple(diagnostics)
+        super().__init__(json.dumps(
+            diagnostics, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ))
+
+
 def require_contracted_paper_schema(conn: sqlite3.Connection) -> None:
-    """Block activation until a later release implements the v5 verifier."""
+    """Block activation until a separately audited release enables it."""
     del conn
     raise ValueError(
-        "activation interlock: the contracted paper-schema verifier is not implemented"
+        "activation interlock: contracted paper-schema activation is not enabled"
     )
 
 
@@ -45,6 +57,190 @@ def _schema_is_current(conn: sqlite3.Connection) -> bool:
         "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
     ).fetchone()
     return bool(row and int(row[0]) == PAPER_TRADE_SCHEMA_VERSION)
+
+
+def _schema_phase(conn: sqlite3.Connection) -> str:
+    temp_overlap = [
+        {
+            "code": "temp_schema_overlap",
+            "object_type": str(object_type),
+            "name": str(name),
+            "table": str(table),
+        }
+        for object_type, name, table in conn.execute(
+            "SELECT type,name,tbl_name FROM sqlite_temp_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name,tbl_name"
+        )
+        if str(name).startswith(("paper_", "report_"))
+        or str(table).startswith(("paper_", "report_"))
+        or str(name) in {"bot_versions", "schema_migrations"}
+        or str(table) in {"bot_versions", "schema_migrations"}
+    ]
+    if temp_overlap:
+        raise PaperSchemaInitializationError(temp_overlap)
+
+    tables = {
+        str(row[0]) for row in conn.execute(
+            "SELECT name FROM main.sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    target_marker = False
+    if "schema_migrations" in tables and "migration_id" in {
+        str(row[1])
+        for row in conn.execute("PRAGMA main.table_info('schema_migrations')")
+    }:
+        target_marker = conn.execute(
+            "SELECT 1 FROM main.schema_migrations "
+            "WHERE migration_id='paper_schema_contract_v5_20260826' LIMIT 1"
+        ).fetchone() is not None
+
+    if "paper_trade_schema_meta" not in tables:
+        paper_tables = {name for name in tables if name.startswith("paper_")}
+        anchors = {
+            "paper_trades", "paper_portfolio_snapshots",
+        } & paper_tables
+        v5_campaign_fk = any(
+            str(row[2]) == "paper_campaigns" and str(row[3]) == "campaign_id"
+            for row in conn.execute("PRAGMA main.foreign_key_list('paper_trades')")
+        )
+        if target_marker or v5_campaign_fk:
+            return "v5"
+        legacy_shapes = {
+            "paper_trades": {
+                "report_date", "ticker", "direction", "entry_price",
+                "entry_date", "status",
+            },
+            "paper_portfolio_snapshots": {"snapshot_date"},
+        }
+        supported_anchors = all(
+            required <= {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA main.table_info('{table}')")
+            }
+            for table, required in legacy_shapes.items()
+            if table in anchors
+        )
+        if paper_tables and (not anchors or not supported_anchors):
+            raise PaperSchemaInitializationError([{
+                "code": "ambiguous_schema_phase",
+                "reason": "partial_legacy_schema",
+            }])
+        return "v4_expand"
+
+    columns = [
+        str(row[1])
+        for row in conn.execute("PRAGMA main.table_info('paper_trade_schema_meta')")
+    ]
+    rows = conn.execute(
+        "SELECT * FROM main.paper_trade_schema_meta ORDER BY id"
+    ).fetchall() if "id" in columns else []
+    v5_columns = {"id", "schema_version", "contract_id", "schema_fingerprint"}
+    versions = {
+        row[columns.index("schema_version")]
+        for row in rows
+    } if "schema_version" in columns else set()
+    v5_identity_columns = (
+        v5_columns & (set(columns) - {"id", "schema_version"})
+    )
+    if target_marker or v5_identity_columns or 5 in versions:
+        return "v5"
+
+    if columns != ["id", "schema_version"] or len(rows) != 1 or rows[0][0] != 1:
+        raise PaperSchemaInitializationError([{
+            "code": "ambiguous_schema_phase", "reason": "invalid_v4_identity",
+        }])
+    try:
+        version = int(rows[0][1])
+    except (TypeError, ValueError) as exc:
+        raise PaperSchemaInitializationError([{
+            "code": "ambiguous_schema_phase", "reason": "invalid_v4_version",
+        }]) from exc
+    if version < 1 or version > PAPER_TRADE_SCHEMA_VERSION:
+        raise PaperSchemaInitializationError([{
+            "code": "ambiguous_schema_phase", "reason": "unsupported_version",
+            "schema_version": version,
+        }])
+    return "v4_current" if version == PAPER_TRADE_SCHEMA_VERSION else "v4_expand"
+
+
+def _v4_interlock_diagnostics(
+    conn: sqlite3.Connection,
+    *,
+    require_present: bool = True,
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    expected_indexes = {
+        "idx_paper_trades_legacy_compat": (
+            "paper_trades", ("report_date", "ticker", "direction"),
+        ),
+        "idx_paper_portfolio_legacy_compat": (
+            "paper_portfolio_snapshots", ("snapshot_date",),
+        ),
+    }
+    for index, (table, columns) in expected_indexes.items():
+        row = next((
+            item for item in conn.execute(f"PRAGMA main.index_list('{table}')")
+            if str(item[1]) == index
+        ), None)
+        actual_columns = tuple(
+            str(item[2])
+            for item in conn.execute(f"PRAGMA main.index_info('{index}')")
+        )
+        if row is None and not require_present:
+            continue
+        if (
+            row is None or int(row[2]) != 1 or int(row[4]) != 0
+            or actual_columns != columns
+        ):
+            diagnostics.append({
+                "code": "v4_rollback_interlock_missing", "index": index,
+            })
+    allowed_defaults = {"'paper-v1'", '"paper-v1"', "'paper-v2'", '"paper-v2"'}
+    for table in ("paper_trades", "paper_portfolio_snapshots"):
+        columns = {
+            str(row[1]): (int(row[3]), row[4])
+            for row in conn.execute(f"PRAGMA main.table_info('{table}')")
+        }
+        campaign = columns.get("campaign_id")
+        if campaign is None and not require_present:
+            continue
+        if (
+            campaign is None or campaign[0] != 1
+            or campaign[1] not in allowed_defaults
+        ):
+            diagnostics.append({
+                "code": "v4_rollback_interlock_missing",
+                "table": table, "column": "campaign_id",
+            })
+    if any(
+        str(row[2]) == "paper_campaigns" and str(row[3]) == "campaign_id"
+        for row in conn.execute("PRAGMA main.foreign_key_list('paper_trades')")
+    ):
+        diagnostics.append({
+            "code": "v5_contract_object_with_v4_identity",
+            "table": "paper_trades", "column": "campaign_id",
+        })
+    return diagnostics
+
+
+def _v5_cache_signature(
+    conn: sqlite3.Connection,
+    db_path: str,
+) -> tuple[Any, ...] | None:
+    try:
+        stat = os.stat(db_path)
+        identity = conn.execute(
+            "SELECT id,schema_version,contract_id,schema_fingerprint "
+            "FROM main.paper_trade_schema_meta ORDER BY id"
+        ).fetchall()
+        return (
+            int(conn.execute("PRAGMA main.schema_version").fetchone()[0]),
+            tuple(tuple(row) for row in identity),
+            int(stat.st_dev), int(stat.st_ino),
+        )
+    except (OSError, sqlite3.DatabaseError):
+        return None
 
 
 def _ensure_column(
@@ -145,7 +341,42 @@ def decode_json_list(raw: Any) -> list[str]:
 
 
 def ensure_paper_trade_schema(conn: sqlite3.Connection) -> None:
-    """Own and commit schema migration phases on a clean connection boundary."""
+    """Initialize v4 or verify v5 without crossing the contract boundary."""
+    phase = _schema_phase(conn)
+    if phase == "v5":
+        from trader_koo.paper_trade.schema_v5_verifier import verify_paper_schema_v5
+
+        if conn.in_transaction:
+            verify_paper_schema_v5(conn)
+            return
+        db_path = _resolve_main_db_path(conn)
+        cache_path = os.path.realpath(db_path) if db_path else ""
+        signature = _v5_cache_signature(conn, cache_path) if cache_path else None
+        if cache_path and signature is not None:
+            with _ensured_db_paths_lock:
+                if _verified_v5_paths.get(cache_path) == signature:
+                    return
+        verify_paper_schema_v5(conn)
+        if cache_path and signature is not None:
+            with _ensured_db_paths_lock:
+                _verified_v5_paths[cache_path] = signature
+        return
+    if phase == "v4_current":
+        if diagnostics := _v4_interlock_diagnostics(conn):
+            raise PaperSchemaInitializationError(diagnostics)
+        return
+    if diagnostics := _v4_interlock_diagnostics(conn, require_present=False):
+        raise PaperSchemaInitializationError(diagnostics)
+    _ensure_paper_trade_schema_v4(conn)
+    diagnostics = _v4_interlock_diagnostics(conn)
+    if _schema_phase(conn) != "v4_current" or diagnostics:
+        raise PaperSchemaInitializationError(
+            diagnostics or [{"code": "v4_initialization_postcondition_failed"}],
+        )
+
+
+def _ensure_paper_trade_schema_v4(conn: sqlite3.Connection) -> None:
+    """Own and commit the existing expand-compatible v4 migration."""
     from trader_koo.paper_trade.shadow import ensure_shadow_schema
     from trader_koo.report.runs import ensure_report_run_schema
 

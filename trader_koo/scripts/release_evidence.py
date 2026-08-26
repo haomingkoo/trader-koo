@@ -23,7 +23,11 @@ from trader_koo.paper_trade.errors import (
     AdmissionLedgerContractError,
 )
 from trader_koo.paper_trade.replay import replay_campaign
-from trader_koo.paper_trade.schema import PAPER_TRADE_SCHEMA_VERSION, ensure_paper_trade_schema
+from trader_koo.paper_trade.schema import (
+    PAPER_TRADE_SCHEMA_VERSION,
+    PaperSchemaInitializationError,
+    ensure_paper_trade_schema,
+)
 from trader_koo.paper_trades import _build_config
 from trader_koo.report.runs import ensure_report_run_schema
 from trader_koo.research.next_open_baseline import (
@@ -293,6 +297,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     _snapshot(source, copy_path)
     source_snapshot_hash = _sha256(copy_path)
     contract_failure: AdmissionLedgerContractError | None = None
+    paper_schema_diagnostics: list[dict[str, Any]] = []
     with closing(sqlite3.connect(copy_path)) as conn:
         before_counts = dict(conn.execute(
             "SELECT type,COUNT(*) FROM sqlite_master GROUP BY type"
@@ -305,7 +310,13 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         except AdmissionLedgerContractError as exc:
             contract_failure = exc
         if contract_failure is None:
-            ensure_paper_trade_schema(conn)
+            try:
+                ensure_paper_trade_schema(conn)
+            except PaperSchemaInitializationError as exc:
+                # The copied-database contract below records the structural
+                # failure, while this field preserves the initializer's exact
+                # phase diagnostic instead of silently falling through.
+                paper_schema_diagnostics = [dict(item) for item in exc.diagnostics]
             ensure_price_series_revision_schema(conn)
             ensure_price_repair_schema(conn)
             integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
@@ -372,12 +383,15 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         "sqlite_objects_before": before_counts,
         "sqlite_objects_after": after_counts,
     }
+    if paper_schema_diagnostics:
+        manifest["paper_schema_initialization_diagnostics"] = paper_schema_diagnostics
     manifest["passed"] = (
         integrity == "ok"
         and schema_version == PAPER_TRADE_SCHEMA_VERSION
         and account is not None
         and not account["accounting_breaks"]
         and schema_contract["passed"]
+        and not paper_schema_diagnostics
     )
     _publish_database_manifest(output_dir, manifest)
     if not manifest["passed"]:
