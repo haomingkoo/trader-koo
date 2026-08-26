@@ -52,6 +52,9 @@ MACRO_COOLDOWN_SEC = 3600
 
 # DB table for persisting cooldown timestamps across deploys
 _COOLDOWN_TABLE = "macro_alert_cooldowns"
+_EVENT_KEY_PREFIX = "macro_event"
+_SEVERITY_LARGE_MULTIPLE = 1.5
+_SEVERITY_EXTREME_MULTIPLE = 2.0
 
 
 def _ensure_cooldown_table(db_path: Path) -> None:
@@ -100,6 +103,44 @@ def _write_last_alert_ts(
         conn.close()
     except Exception as exc:
         LOG.warning("Cooldown write failed: %s", exc)
+
+
+def _move_severity_band(move: dict[str, Any]) -> str:
+    """Return an explicit magnitude band relative to the alert threshold."""
+    threshold = float(move.get("threshold_pct") or 0)
+    if threshold <= 0:
+        return "threshold_1x"
+    ratio = abs(float(move.get("change_pct") or 0)) / threshold
+    if ratio >= _SEVERITY_EXTREME_MULTIPLE:
+        return "extreme_2x"
+    if ratio >= _SEVERITY_LARGE_MULTIPLE:
+        return "large_1_5x"
+    return "threshold_1x"
+
+
+def _macro_event_key(
+    moves: list[dict[str, Any]],
+    regime: dict[str, Any],
+) -> str:
+    """Build an event identity tied to the persisted price-data cohort."""
+    exceeded_moves = [move for move in moves if move.get("exceeded")]
+    basis_moves = exceeded_moves or moves
+    price_basis = ",".join(
+        sorted(
+            f"{move['ticker']}={float(move['prev_close']):.4f}"
+            for move in basis_moves
+        )
+    )
+    parts = sorted(
+        f"{move['ticker']}:{move['direction']}:{_move_severity_band(move)}"
+        for move in exceeded_moves
+    )
+    if regime.get("regime") in {"RISK_OFF", "RISK_ON"} and int(
+        regime.get("confidence") or 0
+    ) >= 50:
+        confidence_band = "high" if int(regime["confidence"]) >= 75 else "confirmed"
+        parts.append(f"regime:{regime['regime']}:{confidence_band}")
+    return f"{_EVENT_KEY_PREFIX}:{price_basis}:{'|'.join(parts)}"
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +350,11 @@ def detect_risk_regime(moves: list[dict[str, Any]]) -> dict[str, Any]:
     if total_signals == 0:
         regime = "MIXED"
         confidence = 20
-        reasoning = "No strong directional signals"
+        reasoning = (
+            "Material instrument move; available broader risk signals are not aligned"
+            if any(move.get("exceeded") for move in moves)
+            else "No material move or aligned risk signals in available data"
+        )
     elif risk_off_score >= 3 and risk_off_score > risk_on_score:
         regime = "RISK_OFF"
         confidence = min(90, 40 + risk_off_score * 15)
@@ -362,7 +407,11 @@ def _format_macro_alert(
     if regime["confidence"] >= 50:
         header = f"{header_emoji} *Macro Alert \u2014 {regime['regime']}*"
 
-    lines = [header, ""]
+    lines = [
+        header,
+        f"Coverage: {len(moves)}/{len(MACRO_WATCH)} monitored instruments",
+        "",
+    ]
 
     # Sort moves: exceeded thresholds first, then by absolute change
     sorted_moves = sorted(
@@ -447,10 +496,18 @@ def send_macro_alert(db_path: Path) -> bool:
         )
         return False
 
+    event_key = _macro_event_key(moves, regime)
+    if _read_last_alert_ts(db_path, event_key) > 0:
+        LOG.debug("Macro event already alerted for this data cohort — skipping")
+        return False
+
     msg = _format_macro_alert(moves, regime)
     sent = send_message(msg)
     if sent:
         _write_last_alert_ts(db_path, "macro", now_ts)
+        # The hourly cooldown permits at most 24 successful event rows per day,
+        # so this durable history remains small without a cleanup subsystem.
+        _write_last_alert_ts(db_path, event_key, now_ts)
         LOG.info(
             "Macro alert sent: regime=%s confidence=%d exceeded=%d",
             regime["regime"],
