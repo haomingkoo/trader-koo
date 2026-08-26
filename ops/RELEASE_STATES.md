@@ -94,6 +94,8 @@ destructive parent-table rebuild on the live volume.
    `paper-schema-contract-v5.json`; `ops/PAPER_SCHEMA_V5_CONTRACT.md` records its
    scope and deliberately deferred implementation steps.
 9. Implement and review the migration against the frozen contract fixtures.
+   The dedicated maintenance seam is `migrate_paper_schema_v4_to_v5`; it has no
+   startup or production-command caller and does not verify or activate v5.
 10. Implement and review the exact verifier and schema fingerprint separately.
 11. Implement the phase-aware initializer as another change, proving it operates
     safely on both v4 expand and v5 contract states.
