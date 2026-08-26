@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sqlite3
 
 import numpy as np
@@ -20,6 +21,7 @@ from trader_koo.scripts.update_market_db import (
     write_price_daily,
 )
 from trader_koo.db.price_contract import record_price_series_revision, research_price_contract
+from trader_koo.db.report_price_contract import require_expected_price_contract
 from trader_koo.ml.benchmark import run_benchmark
 from trader_koo.ml.trainer import build_dataset
 from trader_koo.report import generator as report_generator
@@ -59,6 +61,83 @@ def _continuous_prices() -> pd.DataFrame:
         },
         index=dates,
     )
+
+
+def test_expected_price_contract_recomputes_only_its_signed_ticker_cohort() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    verified = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
+    reconcile_vendor_action_ledger(verified, [])
+    write_price_daily(conn, "AAA", verified)
+    expected = research_price_contract(conn, ["AAA"])
+
+    unresolved = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
+    unresolved.attrs["basis_status"] = "unresolved"
+    write_price_daily(conn, "BAD", unresolved)
+    conn.execute(
+        """INSERT INTO price_daily (
+               ticker,date,open,high,low,close,volume,adjustment_basis,
+               adjustment_version,basis_status
+           ) VALUES ('MISSING','2026-08-21',1,1,1,1,1,
+                     'split_adjusted_price_only','fixture-v1','verified')"""
+    )
+
+    current = require_expected_price_contract(conn, expected)
+
+    assert current["eligible"] is True
+    assert set(current["ticker_contracts"]) == {"AAA"}
+    assert research_price_contract(conn)["eligible"] is False
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        {},
+        {"revision": "a" * 64},
+        {"revision": "a" * 64, "ticker_contracts": {}},
+        {"revision": "a" * 64, "ticker_contracts": {" ": {}}},
+        {"revision": "a" * 64, "ticker_contracts": {"AAA": {}, " aaa ": {}}},
+    ],
+)
+def test_expected_price_contract_rejects_missing_or_malformed_cohort(
+    expected: dict,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+
+    with pytest.raises(ValueError, match="canonical report price contract"):
+        require_expected_price_contract(conn, expected)
+
+
+def test_expected_price_contract_rejects_changed_member_without_writes() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    verified = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
+    reconcile_vendor_action_ledger(verified, [])
+    write_price_daily(conn, "AAA", verified)
+    expected = research_price_contract(conn, ["AAA"])
+    conn.execute(
+        "UPDATE price_daily SET close=close+1 WHERE ticker='AAA' AND date=(SELECT MIN(date) FROM price_daily WHERE ticker='AAA')"
+    )
+    before = conn.total_changes
+
+    with pytest.raises(ValueError, match="not research eligible"):
+        require_expected_price_contract(conn, expected)
+
+    assert conn.total_changes == before
+
+
+@pytest.mark.parametrize("field", ["price_sha256", "revision"])
+def test_expected_price_contract_rejects_tampered_nested_seal(field: str) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    verified = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
+    reconcile_vendor_action_ledger(verified, [])
+    write_price_daily(conn, "AAA", verified)
+    tampered = copy.deepcopy(research_price_contract(conn, ["AAA"]))
+    tampered["ticker_contracts"]["AAA"][field] = "f" * 64
+
+    with pytest.raises(ValueError, match="canonical report price contract"):
+        require_expected_price_contract(conn, tampered)
 
 
 @pytest.mark.parametrize(

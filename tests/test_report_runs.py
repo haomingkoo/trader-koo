@@ -14,6 +14,10 @@ from trader_koo.backend.services.report_loader import (
     latest_daily_report_json,
     report_json_for_generated_ts,
 )
+from trader_koo.db.price_contract import (
+    record_price_series_revision,
+    research_price_contract,
+)
 from trader_koo.report.calibration_pulse import _eval_stats
 from trader_koo.report.runs import (
     admit_published_report,
@@ -114,7 +118,20 @@ def _complete_and_publish(
     conn: sqlite3.Connection,
     report_dir: Path,
     report: dict,
+    *,
+    seal_price_contract: bool = True,
 ) -> str:
+    if seal_price_contract and "price_basis" not in report.get("meta", {}):
+        accepted = [
+            str(item["ticker"])
+            for item in report.get("signals", {}).get("report_decisions", [])
+            if item.get("decision") == "accepted"
+        ]
+        if accepted:
+            report["meta"]["price_basis"] = _seed_report_price_contract(
+                conn,
+                *dict.fromkeys([*accepted, "SPY"]),
+            )
     run_id = start_report_run(
         conn,
         report_kind="daily",
@@ -134,6 +151,39 @@ def _complete_and_publish(
     )
     publish_report_run(conn, run_id=run_id, report_dir=report_dir)
     return run_id
+
+
+def _seed_report_price_contract(
+    conn: sqlite3.Connection,
+    *tickers: str,
+) -> dict:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS price_daily (
+               ticker TEXT NOT NULL,date TEXT NOT NULL,open REAL,high REAL,low REAL,
+               close REAL,volume REAL,adjustment_basis TEXT,adjustment_version TEXT,
+               basis_status TEXT,unresolved_reason TEXT,UNIQUE(ticker,date)
+           )"""
+    )
+    for ticker in tickers:
+        if conn.execute(
+            "SELECT 1 FROM price_daily WHERE ticker=? LIMIT 1",
+            (ticker,),
+        ).fetchone() is None:
+            conn.execute(
+                """INSERT INTO price_daily VALUES (
+                       ?,'2026-08-21',99,101,98,100,1000000,
+                       'split_adjusted_price_only','fixture-v1','verified',NULL
+                   )""",
+                (ticker,),
+            )
+        record_price_series_revision(
+            conn,
+            ticker,
+            evidence={"vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-22T00:00:00Z",
+        )
+    conn.commit()
+    return research_price_contract(conn, list(tickers))
 
 
 def _complete_only(
@@ -661,6 +711,129 @@ def test_retry_has_a_separate_cohort_and_setup_calls_never_union(
     assert conn.execute(
         "SELECT superseded_by_run_id FROM report_runs WHERE run_id=?", (second,)
     ).fetchone() == (third,)
+
+
+def test_admission_uses_signed_price_cohort_not_unrelated_database_tickers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trader_koo.paper_trades as paper_trades
+
+    monkeypatch.setattr(paper_trades, "PAPER_TRADE_ENABLED", False)
+    conn = sqlite3.connect(tmp_path / "report.db")
+    expected = _seed_report_price_contract(conn, "AAA", "SPY")
+    conn.execute(
+        """INSERT INTO price_daily VALUES (
+               'UNSEALED','2026-08-21',1,1,1,1,1,
+               'split_adjusted_price_only','fixture-v1','verified',NULL
+           )"""
+    )
+    report = _report("AAA")
+    report["meta"]["price_basis"] = expected
+    run_id = _complete_and_publish(conn, tmp_path / "reports", report)
+
+    admitted = admit_published_report(
+        conn,
+        run_id=run_id,
+        report_dir=tmp_path / "reports",
+    )
+
+    assert research_price_contract(conn)["eligible"] is False
+    assert admitted["setup_calls"] == 1
+    assert conn.execute(
+        "SELECT ticker FROM setup_call_evaluations WHERE report_run_id=?",
+        (run_id,),
+    ).fetchall() == [("AAA",)]
+
+
+@pytest.mark.parametrize(
+    "price_basis",
+    [
+        {
+            "eligible": True,
+            "status": "verified",
+            "basis": "split_adjusted_price_only",
+            "version": "fixture-v1",
+            "revision": "a" * 64,
+        },
+        {
+            "eligible": True,
+            "status": "verified",
+            "basis": "split_adjusted_price_only",
+            "version": "fixture-v1",
+            "revision": "a" * 64,
+            "ticker_contracts": {},
+        },
+    ],
+)
+def test_admission_rejects_revision_without_exact_ticker_cohort(
+    tmp_path: Path,
+    price_basis: dict,
+) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report = _report("AAA")
+    report["meta"]["price_basis"] = price_basis
+    run_id = _complete_and_publish(conn, tmp_path / "reports", report)
+
+    with pytest.raises(ValueError, match="canonical report price contract"):
+        admit_published_report(conn, run_id=run_id, report_dir=tmp_path / "reports")
+
+    assert conn.execute("SELECT COUNT(*) FROM setup_call_evaluations").fetchone() == (0,)
+    assert conn.execute(
+        "SELECT status,error_code,error_message FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == (
+        "failed",
+        "admission_setup_persistence_failed",
+        "price_contract_cohort_missing",
+    )
+
+
+def test_admission_rejects_missing_price_contract_for_nonempty_setup(
+    tmp_path: Path,
+) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    run_id = _complete_and_publish(
+        conn,
+        tmp_path / "reports",
+        _report("AAA"),
+        seal_price_contract=False,
+    )
+
+    with pytest.raises(ValueError, match="price contract is missing"):
+        admit_published_report(conn, run_id=run_id, report_dir=tmp_path / "reports")
+
+    assert conn.execute("SELECT COUNT(*) FROM setup_call_evaluations").fetchone() == (0,)
+    assert conn.execute(
+        "SELECT error_code FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("admission_setup_persistence_failed",)
+    assert conn.execute(
+        "SELECT error_message FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("price_contract_missing",)
+
+
+def test_admission_requires_spy_in_execution_price_cohort(
+    tmp_path: Path,
+) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report = _report("AAA")
+    report["meta"]["price_basis"] = _seed_report_price_contract(conn, "AAA")
+    run_id = _complete_and_publish(conn, tmp_path / "reports", report)
+
+    with pytest.raises(ValueError, match="SPY is not in"):
+        admit_published_report(conn, run_id=run_id, report_dir=tmp_path / "reports")
+
+    assert conn.execute("SELECT COUNT(*) FROM setup_call_evaluations").fetchone() == (0,)
+    assert conn.execute(
+        "SELECT error_code FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("admission_setup_persistence_failed",)
+    assert conn.execute(
+        "SELECT error_message FROM report_admission_attempts WHERE run_id=?",
+        (run_id,),
+    ).fetchone() == ("price_contract_execution_cohort_missing",)
 
 
 def test_setup_call_schema_migration_keeps_legacy_unlinked_and_removes_cohort_union(tmp_path: Path):

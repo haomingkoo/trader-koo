@@ -20,6 +20,10 @@ from pathlib import Path
 import pytest
 
 from trader_koo.backend.services.maintenance import MaintenanceError, acquire_lease, status
+from trader_koo.db.price_contract import (
+    record_price_series_revision,
+    research_price_contract,
+)
 from trader_koo.paper_trade.schema_v5_migration import _logical_database_hash
 from trader_koo.paper_trade.schema_v5_verifier import verify_paper_schema_v5
 
@@ -36,6 +40,30 @@ REHEARSAL_COMMAND_TIMEOUT_SEC = 10 * 60
 def _fresh_v4(path: Path) -> None:
     with sqlite3.connect(path) as conn:
         conn.executescript(FIXTURE.read_text())
+        conn.execute(
+            """CREATE TABLE price_daily (
+                   ticker TEXT NOT NULL,date TEXT NOT NULL,open REAL,high REAL,low REAL,
+                   close REAL,volume REAL,data_source TEXT,fetch_timestamp TEXT,
+                   adjustment_basis TEXT,adjustment_version TEXT,basis_status TEXT,
+                   unresolved_reason TEXT,UNIQUE(ticker,date)
+               )"""
+        )
+        conn.executemany(
+            """INSERT INTO price_daily VALUES (
+                   ?,?,?,?,?,?,?,'fixture','2026-08-25T00:00:00Z',
+                   'split_adjusted_price_only','fixture-actions-v1','verified',NULL
+               )""",
+            [
+                ("SPY", "2026-08-24", 498, 501, 497, 500, 1_000_000),
+                ("SPY", "2026-08-25", 500, 503, 499, 502, 1_100_000),
+            ],
+        )
+        record_price_series_revision(
+            conn,
+            "SPY",
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-25T00:00:00Z",
+        )
 
 
 def _sha256(path: Path) -> str:
@@ -98,6 +126,35 @@ def _campaign_evidence(path: Path) -> dict:
         "v1_snapshot_count": int(snapshots),
         "v2_state": list(v2) if v2 else None,
         "v2_trade_ids": v2_trade_ids,
+    }
+
+
+def _spy_price_evidence(path: Path, *, exclude_date: str | None = None) -> dict:
+    with sqlite3.connect(path) as conn:
+        where = "ticker='SPY'" + (" AND date<>?" if exclude_date else "")
+        params = (exclude_date,) if exclude_date else ()
+        rows = conn.execute(
+            "SELECT * FROM price_daily WHERE " + where + " ORDER BY date",
+            params,
+        ).fetchall()
+        actions = (
+            conn.execute(
+                "SELECT * FROM price_corporate_actions WHERE ticker='SPY' ORDER BY action_date",
+            ).fetchall()
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='price_corporate_actions'"
+            ).fetchone()
+            else []
+        )
+    return {
+        "row_count": len(rows),
+        "rows_sha256": hashlib.sha256(
+            json.dumps(rows, separators=(",", ":"), default=str).encode()
+        ).hexdigest(),
+        "action_count": len(actions),
+        "actions_sha256": hashlib.sha256(
+            json.dumps(actions, separators=(",", ":"), default=str).encode()
+        ).hexdigest(),
     }
 
 
@@ -367,6 +424,27 @@ def _publish_and_admit(
     return json.loads(result.stdout)
 
 
+def _prepare_prices(env: dict[str, str], db_path: Path, report_dir: Path) -> dict:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WORKER),
+            "--db-path",
+            str(db_path),
+            "--report-dir",
+            str(report_dir),
+            "--prepare-prices",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    return json.loads(result.stdout)
+
+
 def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) -> None:
     db_path, backup_dir = tmp_path / "paper.db", tmp_path / "backups"
     report_dir = tmp_path / "reports"
@@ -406,6 +484,22 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
         summary = _request(port, "/api/paper-trades/summary")[1]
         assert summary["campaign_health"]["status"] == "draft"
         assert summary["campaign_health"]["write_state"] == "enabled"
+    paper_before_price_preparation = _campaign_evidence(db_path)
+    spy_before = _spy_price_evidence(db_path)
+    price_preparation = _prepare_prices(enabled_env, db_path, report_dir)
+    assert _campaign_evidence(db_path) == paper_before_price_preparation
+    spy_after_existing = _spy_price_evidence(
+        db_path,
+        exclude_date=price_preparation["spy_appended_date"],
+    )
+    assert spy_after_existing == spy_before
+    evidence["price_preparation"] = {
+        **price_preparation,
+        "preexisting_spy_row_count": spy_before["row_count"],
+        "preexisting_spy_rows_sha256": spy_before["rows_sha256"],
+        "spy_action_count": spy_before["action_count"],
+        "spy_actions_sha256": spy_before["actions_sha256"],
+    }
     observation = _publish_and_admit(
         enabled_env, db_path, report_dir, candidate=True,
     )

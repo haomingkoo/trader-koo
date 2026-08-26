@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from trader_koo.db.report_price_contract import PriceContractError
 from trader_koo.paper_trade.errors import (
     ADMISSION_ERROR_CODES,
     ADMISSION_LEDGER_MIGRATION,
@@ -1040,7 +1041,11 @@ def _record_admission_attempt(
             run_id,
             status,
             error_code if error else None,
-            type(error).__name__ if error else None,
+            (
+                error.code
+                if isinstance(error, PriceContractError)
+                else type(error).__name__
+            ) if error else None,
             _utc_now(),
         ),
     )
@@ -1098,22 +1103,24 @@ def admit_published_report(
             linked_meta.get("price_basis")
             if isinstance(linked_meta.get("price_basis"), dict) else None
         )
-        expected_price_revision = (
-            str(price_basis.get("revision") or "").strip()
-            if price_basis is not None else None
-        ) or None
+        if setups and price_basis is None:
+            raise PriceContractError(
+                "price_contract_missing",
+                "canonical report price contract is missing",
+            )
+        expected_price_contract = price_basis
         if SETUP_EVAL_ENABLED and asof_date and setups:
             calls = _persist_setup_call_candidates(
                 conn, generated_ts=str(row[0]), report_kind=str(row[1]), asof_date=asof_date,
                 setup_rows=setups, report_run_id=run_id,
-                expected_price_revision=expected_price_revision,
+                expected_price_contract=expected_price_contract,
             )
         failure_code = "admission_paper_trade_persistence_failed"
         if PAPER_TRADE_ENABLED and asof_date and setups:
             trades = create_paper_trades_from_report(
                 conn, setup_rows=setups, report_date=asof_date, generated_ts=str(row[0]),
                 report_run_id=run_id, schema_ready=True,
-                expected_price_revision=expected_price_revision,
+                expected_price_contract=expected_price_contract,
             )
         failure_code = "admission_finalize_failed"
         _record_admission_attempt(conn, run_id=run_id, status="succeeded")
