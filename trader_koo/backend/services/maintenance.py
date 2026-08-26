@@ -847,6 +847,7 @@ def restore_backup(
     lease = acquire_lease(db_path, exclusive=True, timeout_sec=int(current["drain_timeout_sec"]))
     failed_path = db_path.with_name(f"{db_path.name}.pre_restore_{run_id}")
     temp_path: Path | None = None
+    temp_sidecars: tuple[Path, ...] = ()
     try:
         if db_path.is_symlink() or (not db_path.is_file() and not failed_path.is_file()):
             raise MaintenanceError("unsafe_database_source")
@@ -878,9 +879,11 @@ def restore_backup(
             if fault: fault("after_plan")
         descriptor, raw_temp = tempfile.mkstemp(prefix=f".{db_path.name}.restore-", dir=db_path.parent)
         os.close(descriptor); temp_path = Path(raw_temp)
+        temp_sidecars = (Path(f"{temp_path}-wal"), Path(f"{temp_path}-shm"))
         with gzip.open(named, "rb") as source, temp_path.open("wb") as target:
             shutil.copyfileobj(source, target); target.flush(); os.fsync(target.fileno())
-        with sqlite3.connect(str(temp_path)) as restored:
+        immutable_uri = f"{temp_path.resolve().as_uri()}?mode=ro&immutable=1"
+        with sqlite3.connect(immutable_uri, uri=True) as restored:
             if restored.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                 raise MaintenanceError("restore_integrity_failed")
             if _logical_database_hash(restored) != current["logical_cohort_sha256"]:
@@ -942,6 +945,8 @@ def restore_backup(
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+        for sidecar in temp_sidecars:
+            sidecar.unlink(missing_ok=True)
         lease.close()
     return status(db_path, run_id)
 
