@@ -105,9 +105,22 @@ def test_scheduled_session_uses_versioned_historical_exchange_calendar() -> None
     ) is True
 
 
-def _db() -> sqlite3.Connection:
+def _db(*, contracted: bool = False) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
-    ensure_paper_trade_schema(conn)
+    if contracted:
+        conn.executescript(
+            (Path(__file__).parent / "fixtures" / "paper_schema_v5_target.sql")
+            .read_text()
+        )
+        config = _build_config()
+        conn.execute(
+            "UPDATE paper_campaigns SET policy_version=?,policy_hash=?,"
+            "replay_live_parity='matched' WHERE campaign_id='paper-v2'",
+            (config.decision_version, canonical_hash(config_snapshot(config))),
+        )
+        conn.commit()
+    else:
+        ensure_paper_trade_schema(conn)
     conn.execute(
         """CREATE TABLE price_daily (
                ticker TEXT, date TEXT, open REAL, high REAL, low REAL,
@@ -434,13 +447,9 @@ def test_inactive_campaign_records_sealed_shadow_set_without_trading():
     ).fetchone() == ("campaign_lifecycle", "campaign_not_active")
 
 
-def test_lifecycle_is_idempotent_audited_atomic_and_reversible(monkeypatch):
-    conn = _db()
+def test_lifecycle_is_idempotent_audited_atomic_and_reversible():
+    conn = _db(contracted=True)
     _seed_promotion(conn)
-    monkeypatch.setattr(
-        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
-        lambda conn: None,
-    )
     first = transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="alice",
         reason="paper validation approved", idempotency_key="activate-paper-v2-001",
@@ -462,8 +471,9 @@ def test_lifecycle_is_idempotent_audited_atomic_and_reversible(monkeypatch):
         conn.execute("UPDATE paper_campaigns SET label='changed' WHERE campaign_id='paper-v1'")
 
 
-def test_observation_campaign_can_activate_from_canonical_sealed_report(monkeypatch):
-    conn = _db()
+def test_observation_campaign_can_activate_from_canonical_sealed_report():
+    conn = _db(contracted=True)
+    _publish(conn, "sealed-observation", [])
     policy_hash = "a" * 64
     conn.execute(
         "UPDATE paper_campaigns SET policy_hash=? WHERE campaign_id='paper-v2'",
@@ -479,11 +489,6 @@ def test_observation_campaign_can_activate_from_canonical_sealed_report(monkeypa
         ("b" * 64, "c" * 64, policy_hash, "d" * 64),
     )
     conn.commit()
-    monkeypatch.setattr(
-        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
-        lambda conn: None,
-    )
-
     result = transition_campaign(
         conn,
         campaign_id="paper-v2",
@@ -607,7 +612,9 @@ def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
                   "vendor_action_ledger": []},
         fetch_timestamp="2026-08-24T00:00:00Z",
     )
-    result = fill_pending_paper_orders(conn, through_date="2026-08-24")
+    result = fill_pending_paper_orders(
+        conn, through_date="2026-08-24", schema_ready=True
+    )
     assert result == {"filled": 1, "rejected": 0, "still_pending": 0}
     trade = conn.execute(
         "SELECT entry_price,entry_date,report_run_id FROM paper_trades"
@@ -635,7 +642,9 @@ def test_pending_order_never_skips_a_missing_immediate_session_open():
                   ('LATE','2026-08-25',152,160,151,158,1000000)"""
     )
 
-    assert fill_pending_paper_orders(conn, through_date="2026-08-25") == {
+    assert fill_pending_paper_orders(
+        conn, through_date="2026-08-25", schema_ready=True
+    ) == {
         "filled": 0, "rejected": 0, "still_pending": 1,
     }
     assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
@@ -650,7 +659,9 @@ def test_pending_order_never_skips_a_missing_immediate_session_open():
                   "vendor_action_ledger": []},
         fetch_timestamp="2026-08-25T00:00:00Z",
     )
-    result = fill_pending_paper_orders(conn, through_date="2026-08-25")
+    result = fill_pending_paper_orders(
+        conn, through_date="2026-08-25", schema_ready=True
+    )
     assert result == {"filled": 1, "rejected": 0, "still_pending": 0}
     assert conn.execute("SELECT entry_date FROM paper_trades").fetchone()[0] == "2026-08-24"
 
@@ -688,7 +699,9 @@ def test_missing_immediate_spy_observation_never_rolls_to_a_later_session() -> N
         conn, setup_rows=[_candidate("NOSPY")], report_date="2026-08-21",
         generated_ts="no-spy-ts", report_run_id="no-spy-run",
     )
-    resolved = fill_pending_paper_orders(conn, through_date="2026-08-25")
+    resolved = fill_pending_paper_orders(
+        conn, through_date="2026-08-25", schema_ready=True
+    )
 
     assert inserted == 0
     assert resolved == {"filled": 0, "rejected": 0, "still_pending": 1}
@@ -803,7 +816,9 @@ def test_pending_order_payload_is_immutable_and_hash_verified_before_fill():
         fetch_timestamp="2026-08-24T00:00:00Z",
     )
     with pytest.raises(ValueError, match="immutable hash verification"):
-        fill_pending_paper_orders(conn, through_date="2026-08-24")
+        fill_pending_paper_orders(
+            conn, through_date="2026-08-24", schema_ready=True
+        )
 
 
 def test_human_approval_requires_exact_eligible_experiment_even_without_foreign_keys():
@@ -861,13 +876,14 @@ def test_seal_rejects_later_insert_and_verifier_detects_forged_child():
 
 
 def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload(monkeypatch):
-    conn = _db()
+    conn = _db(contracted=True)
     started_run = start_report_run(
         conn,
         report_kind="daily",
         configuration={},
         code_version="a" * 40,
     )
+    conn.commit()
     with pytest.raises(ReportLineageError, match="verified report artifact") as lineage_error:
         _create_paper_trades_from_report(
             conn, setup_rows=[], report_date="2026-08-21", generated_ts="x",
@@ -876,16 +892,12 @@ def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload(mo
     assert lineage_error.value.code == "report_not_verified_published"
     assert conn.execute("SELECT COUNT(*) FROM paper_decision_sets").fetchone()[0] == 0
     conn.commit()
-    with pytest.raises(ValueError, match="activation interlock"):
+    with pytest.raises(ValueError, match="activation requires"):
         transition_campaign(
             conn, campaign_id="paper-v2", action="activate", actor="alice",
             reason="attempt without evidence", idempotency_key="no-evidence-001",
         )
     _seed_promotion(conn)
-    monkeypatch.setattr(
-        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
-        lambda conn: None,
-    )
     transition_campaign(
         conn, campaign_id="paper-v2", action="activate", actor="alice",
         reason="approved evidence", idempotency_key="payload-bound-001",
@@ -1283,13 +1295,9 @@ def test_replay_fails_closed_without_an_observed_spy_calendar():
     assert replay["trades"] == []
 
 
-def test_activation_never_falls_back_to_older_eligible_experiment(monkeypatch):
-    conn = _db()
+def test_activation_never_falls_back_to_older_eligible_experiment():
+    conn = _db(contracted=True)
     _seed_promotion(conn)
-    monkeypatch.setattr(
-        "trader_koo.paper_trade.schema.require_contracted_paper_schema",
-        lambda conn: None,
-    )
     with pytest.raises(sqlite3.IntegrityError, match="preregistrations are immutable"):
         conn.execute(
             "UPDATE paper_campaign_preregistrations SET gates_json='{}'"

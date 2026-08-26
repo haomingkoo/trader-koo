@@ -43,6 +43,12 @@ def _normalize_sql(value: str | None) -> str:
     return " ".join(str(value or "").lower().split())
 
 
+def _governed_table_name(name: str) -> bool:
+    return name.startswith(("paper_", "report_")) or name in {
+        "bot_versions", "schema_migrations",
+    }
+
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [str(row[1]) for row in conn.execute(f"PRAGMA table_info({_quote(table)})")]
 
@@ -143,13 +149,17 @@ def _logical_database_hash(conn: sqlite3.Connection) -> str:
     return digest.hexdigest()
 
 
-def _schema_signature(conn: sqlite3.Connection) -> list[list[str]]:
+def _schema_signature(
+    conn: sqlite3.Connection,
+    governed_only: bool = False,
+) -> list[list[str]]:
     return [
         [str(kind), str(name), str(table), _normalize_sql(sql)]
         for kind, name, table, sql in conn.execute(
             "SELECT type,name,tbl_name,sql FROM sqlite_master "
-            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name",
         )
+        if not governed_only or _governed_table_name(str(table))
     ]
 
 
@@ -484,10 +494,10 @@ def _source_contract_diagnostics(
     for fixture_id in ("fresh_v4", "production_like_legacy_v4"):
         fixture_conn = _fixture_connection(fixtures[fixture_id])
         try:
-            source_signatures.append(_schema_signature(fixture_conn))
+            source_signatures.append(_schema_signature(fixture_conn, governed_only=True))
         finally:
             fixture_conn.close()
-    if _schema_signature(conn) not in source_signatures:
+    if _schema_signature(conn, governed_only=True) not in source_signatures:
         diagnostics.append({"code": "v4_contract_drift"})
     required_schema = set(contract["migration_ids"]["required_source"])
     actual_schema = {

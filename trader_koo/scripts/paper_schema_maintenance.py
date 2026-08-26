@@ -17,6 +17,7 @@ from trader_koo.backend.services.maintenance import (
     decide, migrate_verified_copy, quiesce_backup, restore_backup, status,
     verify_resolution,
 )
+from trader_koo.scripts.backup_db import DEFAULT_BACKUP_DIR
 
 
 def main() -> None:
@@ -28,6 +29,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("--db-path", type=Path, default=DB_PATH)
+    parser.add_argument("--backup-dir", type=Path, default=DEFAULT_BACKUP_DIR)
     parser.add_argument("--run-id")
     parser.add_argument("--boot-id", default=secrets.token_hex(16))
     parser.add_argument("--decision", choices=("restore", "complete"))
@@ -38,7 +40,10 @@ def main() -> None:
     elif not args.run_id:
         parser.error("--run-id is required")
     elif args.action == "quiesce-backup":
-        result = quiesce_backup(args.db_path, run_id=args.run_id, boot_id=args.boot_id)
+        result = quiesce_backup(
+            args.db_path, run_id=args.run_id, boot_id=args.boot_id,
+            backup_dir=args.backup_dir,
+        )
     elif args.action == "decide":
         if not args.decision or not args.reason:
             parser.error("--decision and --reason are required")

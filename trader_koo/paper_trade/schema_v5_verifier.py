@@ -15,6 +15,7 @@ from trader_koo.paper_trade.schema_v5_migration import (
     SCHEMA_META_ROW_ID,
     TARGET_SCHEMA_VERSION,
     _collision_diagnostics,
+    _governed_table_name,
     _strict_v2_accounting_diagnostics,
 )
 
@@ -127,12 +128,6 @@ def _target_connection(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.executescript(path.read_text(encoding="utf-8"))
     return conn
-
-
-def _governed_table_name(name: str) -> bool:
-    return name.startswith(("paper_", "report_")) or name in {
-        "bot_versions", "schema_migrations",
-    }
 
 
 def _temp_shadow_diagnostics(
@@ -537,15 +532,20 @@ def _sort_diagnostics(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]
     )
 
 
-def verify_paper_schema_v5(
+def _verify_paper_schema_v5(
     conn: sqlite3.Connection,
     *,
     contract_path: Path = DEFAULT_CONTRACT_PATH,
+    require_active_transaction: bool,
 ) -> dict[str, Any]:
-    """Verify exact v5 semantics without changing the connection or database."""
-    if conn.in_transaction:
+    """Shared exact verifier; callers choose the transaction ownership contract."""
+    if not require_active_transaction and conn.in_transaction:
         raise PaperSchemaV5VerificationError([{
             "code": "transaction_already_active",
+        }])
+    if require_active_transaction and not conn.in_transaction:
+        raise PaperSchemaV5VerificationError([{
+            "code": "transaction_required",
         }])
     transaction_before = conn.in_transaction
     changes_before = conn.total_changes
@@ -590,3 +590,25 @@ def verify_paper_schema_v5(
         "schema_fingerprint": fingerprint,
         "read_only": True,
     }
+
+
+def verify_paper_schema_v5(
+    conn: sqlite3.Connection,
+    *,
+    contract_path: Path = DEFAULT_CONTRACT_PATH,
+) -> dict[str, Any]:
+    """Verify exact v5 semantics without changing the connection or database."""
+    return _verify_paper_schema_v5(
+        conn, contract_path=contract_path, require_active_transaction=False,
+    )
+
+
+def _verify_paper_schema_v5_in_transaction(
+    conn: sqlite3.Connection,
+    *,
+    contract_path: Path = DEFAULT_CONTRACT_PATH,
+) -> dict[str, Any]:
+    """Verify exact v5 semantics inside a caller-owned write transaction."""
+    return _verify_paper_schema_v5(
+        conn, contract_path=contract_path, require_active_transaction=True,
+    )
