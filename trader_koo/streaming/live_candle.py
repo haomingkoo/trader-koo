@@ -2,7 +2,8 @@
 
 Receives live ticks from Finnhub and maintains one forming session candle
 per symbol for the daily chart. The candle starts at the first observed tick
-and accumulates until the process or explicit test state is reset.
+and accumulates until the process or explicit test state is reset. It is not a
+five-minute OHLC bucket: five minutes is only the read-time freshness cutoff.
 
 Usage:
     from trader_koo.streaming.live_candle import update_tick, get_forming_candle
@@ -30,7 +31,7 @@ class FormingCandle:
     """
 
     symbol: str
-    minute_start: dt.datetime  # timestamp of first tick (or floored to minute)
+    session_start: dt.datetime  # timestamp of the first observed session tick
     open: float
     high: float
     low: float
@@ -58,7 +59,7 @@ def update_tick(
         if existing is None:
             _candles[symbol] = FormingCandle(
                 symbol=symbol,
-                minute_start=timestamp,
+                session_start=timestamp,
                 open=price,
                 high=price,
                 low=price,
@@ -80,8 +81,8 @@ def update_tick(
 def get_forming_candle(symbol: str) -> dict[str, Any] | None:
     """Return the current forming candle for *symbol* as a dict.
 
-    Returns ``None`` if there is no live data or the candle has received no
-    tick for more than five minutes.
+    The candle can span the whole observed session. Returns ``None`` if there
+    is no live data or its latest tick is more than five minutes old.
     """
     sym = symbol.upper()
     now = dt.datetime.now(dt.timezone.utc)
@@ -98,7 +99,7 @@ def get_forming_candle(symbol: str) -> dict[str, Any] | None:
         return None
 
     return {
-        "timestamp": candle.minute_start.isoformat(),
+        "timestamp": candle.session_start.isoformat(),
         "open": candle.open,
         "high": candle.high,
         "low": candle.low,
