@@ -31,8 +31,11 @@ def verify(
     base_url: str,
     expected_sha: str,
     api_key: str,
-    expected_campaign_status: str = "draft",
+    expected_campaign_status: str,
+    expected_campaign_write_state: str,
 ) -> dict[str, Any]:
+    if expected_campaign_write_state not in {"enabled", "paused"}:
+        raise ValueError("expected campaign write state must be enabled or paused")
     release_status, release = _get(base_url, "/api/release")
     health_status, health = _get(base_url, "/api/health")
     status_code, status = _get(base_url, "/api/status")
@@ -43,6 +46,7 @@ def verify(
     paper_status, paper = _get(base_url, "/api/paper-trades/summary")
     campaign = paper.get("campaign_health") or {}
     campaign_status = str(campaign.get("status") or "")
+    campaign_write_state = str(campaign.get("write_state") or "")
     campaign_status_matches = (
         campaign_status == "draft"
         if expected_campaign_status == "absent"
@@ -59,10 +63,15 @@ def verify(
         ),
         "admin_rejects_missing_key": unauth_code in {401, 403},
         "admin_accepts_valid_key": auth_code == 200 and agents.get("ok") is True,
+        "paper_summary": paper_status == 200 and paper.get("ok") is True,
         "campaign_v2_status_preserved": (
             paper_status == 200
             and campaign.get("campaign_id") == "paper-v2"
             and campaign_status_matches
+        ),
+        "campaign_v2_write_state_preserved": (
+            paper_status == 200
+            and campaign_write_state == expected_campaign_write_state
         ),
     }
     api_paths = {
@@ -80,7 +89,9 @@ def verify(
         "ok": True,
         "expected_sha": expected_sha,
         "expected_campaign_status": expected_campaign_status,
+        "expected_campaign_write_state": expected_campaign_write_state,
         "observed_campaign_status": campaign_status,
+        "observed_campaign_write_state": campaign_write_state,
         "contracts": contracts,
     }
 
@@ -90,13 +101,19 @@ def main() -> None:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--api-key", required=True)
-    parser.add_argument("--expected-campaign-status", default="draft")
+    parser.add_argument("--expected-campaign-status", required=True)
+    parser.add_argument(
+        "--expected-campaign-write-state",
+        choices=("enabled", "paused"),
+        required=True,
+    )
     args = parser.parse_args()
     print(json.dumps(verify(
         args.base_url,
         args.expected_sha,
         args.api_key,
         args.expected_campaign_status,
+        args.expected_campaign_write_state,
     ), sort_keys=True))
 
 

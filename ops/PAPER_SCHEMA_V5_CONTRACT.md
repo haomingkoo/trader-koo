@@ -85,4 +85,5 @@ Later, separate changes must implement, in order:
 3. separately audited write enablement and human activation.
 
 Until all gates pass, `require_contracted_paper_schema` remains an unconditional
-activation interlock and the dark-deploy workflow continues to pause writes.
+activation interlock. Dark deploys preserve the explicit Railway write gate only
+when it matches the live API state; missing or inconsistent state fails closed.
