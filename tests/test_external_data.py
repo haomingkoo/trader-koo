@@ -3,6 +3,7 @@ from __future__ import annotations
 from trader_koo.ml.external_data import (
     _is_trading_relevant_polymarket_event,
     _redact_url_secrets,
+    get_polymarket_macro_probabilities,
 )
 
 
@@ -38,3 +39,24 @@ def test_polymarket_relevance_uses_source_tags_not_description_words():
 
 def test_untagged_polymarket_event_fails_closed():
     assert _is_trading_relevant_polymarket_event({"title": "Bitcoin doubles"}) is False
+
+
+def test_fed_cut_probability_complements_the_no_cut_bucket(monkeypatch):
+    no_cut = {
+        "question": "Will no Fed rate cuts happen in 2026?",
+        "outcomes": ["Yes", "No"],
+        "prices_pct": [87.4, 12.6],
+        "active": True,
+    }
+    monkeypatch.setattr(
+        "trader_koo.ml.external_data.fetch_polymarket_events",
+        lambda limit: [{
+            "title": "How many Fed rate cuts in 2026?",
+            "top_market": no_cut,
+            "markets": [no_cut],
+        }],
+    )
+
+    result = get_polymarket_macro_probabilities()
+
+    assert result["polymarket_fed_cut_prob"] == 12.6

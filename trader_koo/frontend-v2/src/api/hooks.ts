@@ -35,7 +35,7 @@ import type {
 export function useReport() {
   return useQuery({
     queryKey: ["report"],
-    queryFn: () => apiFetch<DailyReportPayload>("/api/daily-report?limit=20"),
+    queryFn: () => apiFetch<DailyReportPayload>("/api/daily-report?limit=20&view=ui"),
     staleTime: 2 * 60 * 1000,
   });
 }

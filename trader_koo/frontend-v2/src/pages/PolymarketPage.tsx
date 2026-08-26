@@ -8,10 +8,13 @@ import { apiFetch } from "../api/client";
 /* ------------------------------------------------------------------ */
 
 interface SubMarket {
+  market_id: string;
   question: string;
   outcomes: string[];
   prices_pct: (number | null)[];
   volume: number;
+  volume_24h: number;
+  liquidity: number;
   end_date: string | null;
   active: boolean;
   resolved: boolean;
@@ -22,6 +25,8 @@ interface PolyEvent {
   slug: string;
   market_count: number;
   total_volume: number;
+  active_volume_24h: number;
+  active_liquidity: number;
   end_date: string | null;
   url: string;
   top_market: SubMarket | null;
@@ -29,12 +34,16 @@ interface PolyEvent {
   active_count: number;
   resolved_count: number;
   event_type: "simple" | "timeline" | "multi_outcome";
+  source_fetched_at: string;
 }
 
 interface PolyResponse {
   ok: boolean;
   count: number;
   events: PolyEvent[];
+  source_fetched_at: string | null;
+  cache_hit: boolean;
+  error: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -359,7 +368,7 @@ function EventHeader({ event }: EventHeaderProps) {
       </div>
       <div className="mt-1.5 flex items-center gap-3 text-[10px] text-[var(--muted)]">
         <span>
-          Vol: <strong className="text-[var(--text)]">{formatVolume(event.total_volume)}</strong>
+          Active 24h: <strong className="text-[var(--text)]">{formatVolume(event.active_volume_24h)}</strong>
         </span>
         <span>
           {event.active_count ?? event.market_count} active
@@ -442,8 +451,13 @@ export default function PolymarketPage() {
         <div>
           <h2 className="text-xl font-bold tracking-tight">Prediction Markets</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            Finance-relevant events from Polymarket, ranked by trading volume. Crowd pricing as a macro and event-risk reference.
+            Finance-relevant events from Polymarket, ranked by active 24-hour volume. Crowd pricing as a macro and event-risk reference.
           </p>
+          {data?.source_fetched_at && (
+            <p className="mt-1 text-[10px] text-[var(--muted)]">
+              Source fetched {new Date(data.source_fetched_at).toLocaleString()}{data.cache_hit ? " · cached" : ""}
+            </p>
+          )}
         </div>
         <a
           href="https://polymarket.com"

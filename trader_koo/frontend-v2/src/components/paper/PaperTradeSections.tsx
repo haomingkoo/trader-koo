@@ -79,6 +79,18 @@ const evidenceAllowsAction = (evidence?: StrategyEvidenceState): boolean => {
 const readableEvidenceText = (value: string): string =>
   value.replace(/_/g, " ").replace(/\bspy\b/gi, "SPY");
 
+const causalReasonText = (reason: string): string => {
+  const explanations: Record<string, string> = {
+    post_signal_corporate_action_rebasing_can_bias_close_basis_exclusions:
+      "The price provider can revise earlier closes after splits or other corporate actions.",
+    persisted_calls_are_not_linked_to_an_immutable_completed_report_run:
+      "Historical selections are not linked to an immutable completed report run.",
+    current_universe_has_survivorship_bias:
+      "The present-day ticker universe omits historical removals and delistings.",
+  };
+  return explanations[reason] ?? readableEvidenceText(reason);
+};
+
 export function StrategyEvidenceStatePanel({
   evidence,
 }: {
@@ -107,7 +119,7 @@ export function StrategyEvidenceStatePanel({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-[var(--text)]">Strategy evidence</div>
+          <div className="text-sm font-semibold text-[var(--text)]">Historical strategy audit</div>
           <div
             data-testid="strategy-evidence-status"
             className={`mt-1 text-sm font-bold ${actionable ? "text-[var(--green)]" : "text-[var(--amber)]"}`}
@@ -117,7 +129,7 @@ export function StrategyEvidenceStatePanel({
           <p className="mt-1 max-w-3xl text-xs text-[var(--muted)]">
             {actionable
               ? "Evidence may be reviewed by a human. No allocation changes are automatic."
-              : "Results are descriptive. They cannot change admission, ranking, or allocation."}
+              : "This sealed historical snapshot is not live Campaign v2 evidence. It cannot change admission, ranking, or allocation."}
           </p>
         </div>
         {evidence?.snapshot_asof && (
@@ -173,6 +185,17 @@ export function StrategyEvidenceStatePanel({
           </div>
         </dl>
       </div>
+
+      {evidence?.causal_validity?.valid === false && evidence.causal_validity.reasons.length > 0 && (
+        <div className="mt-3 text-xs text-[var(--muted)]">
+          <div className="font-semibold text-[var(--text)]">Why causal validity is unresolved</div>
+          <ul className="mt-1 list-disc space-y-1 pl-4">
+            {evidence.causal_validity.reasons.map((reason) => (
+              <li key={reason}>{causalReasonText(reason)}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {provenance?.artifact_sha256 && provenance.input_hash_sha256 && provenanceHref && (
         <div className="mt-3 border-t border-[var(--line)] pt-3 text-[10px] text-[var(--muted)]">

@@ -4,6 +4,8 @@ import { apiFetch } from "../api/client";
 import Spinner from "../components/ui/Spinner";
 import Badge from "../components/ui/Badge";
 import CounterTradeStudy from "../components/hyperliquid/CounterTradeStudy";
+import PlotlyWrapper from "../components/PlotlyWrapper";
+import { getPlotlyColors } from "../lib/plotlyTheme";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -111,10 +113,33 @@ interface WalletHistory {
     net_pnl: number;
     wins: number;
     losses: number;
-    win_rate_pct: number;
+    win_rate_pct: number | null;
     liquidations: number;
   };
-  by_coin: Record<string, { pnl: number; fills: number; win_rate_pct: number }>;
+  by_coin: Record<string, { pnl: number; fills: number; win_rate_pct: number | null }>;
+  execution_coverage: {
+    complete: boolean;
+    start: string | null;
+    end: string | null;
+    reason: string | null;
+  };
+  portfolio: {
+    available: boolean;
+    source: string;
+    period: string;
+    coverage_start: string | null;
+    coverage_end: string | null;
+    account_value: number | null;
+    account_value_change: number | null;
+    period_pnl_change: number | null;
+    daily: Array<{
+      date: string;
+      timestamp: string;
+      account_value: number;
+      period_pnl: number | null;
+      daily_pnl_change: number | null;
+    }>;
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -351,26 +376,36 @@ function CounterSignals({ signals }: { signals: CounterSignal[] }) {
 
 function HistoryStats({ history }: { history: WalletHistory }) {
   const { stats, by_coin } = history;
+  const portfolio = history.portfolio;
+  const theme = getPlotlyColors();
   const coins = Object.entries(by_coin).sort((a, b) => a[1].pnl - b[1].pnl);
 
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
       <h3 className="mb-3 text-sm font-semibold text-[var(--text)]">
-        {history.lookback_days}-Day Performance ({history.fill_count} fills)
+        {history.lookback_days}-Day Wallet Performance
       </h3>
+      {!history.execution_coverage?.complete && (
+        <div className="mb-3 rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-3 py-2 text-[10px] text-[var(--amber)]">
+          Execution statistics are partial: the provider returned its 2,000-execution page cap
+          {history.execution_coverage?.start && history.execution_coverage?.end
+            ? ` (${new Date(history.execution_coverage.start).toLocaleString()} to ${new Date(history.execution_coverage.end).toLocaleString()})`
+            : ""}. Win rate is unavailable.
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Net PnL</p>
-          <p className={`text-lg font-bold tabular-nums ${pnlColor(stats.net_pnl)}`}>
-            {stats.net_pnl >= 0 ? "+" : ""}{fmtUsd(stats.net_pnl)}
+          <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Provider Period P&amp;L</p>
+          <p className={`text-lg font-bold tabular-nums ${pnlColor(portfolio?.period_pnl_change ?? 0)}`}>
+            {portfolio?.period_pnl_change != null ? `${portfolio.period_pnl_change >= 0 ? "+" : ""}${fmtUsd(portfolio.period_pnl_change)}` : "—"}
           </p>
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Win Rate</p>
-          <p className="text-lg font-bold tabular-nums text-[var(--text)]">{stats.win_rate_pct}%</p>
+          <p className="text-lg font-bold tabular-nums text-[var(--text)]">{stats.win_rate_pct == null ? "—" : `${stats.win_rate_pct}%`}</p>
         </div>
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Fees Paid</p>
+          <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Observed Execution Fees</p>
           <p className="text-lg font-bold tabular-nums text-[var(--red)]">-{fmtUsd(stats.total_fees)}</p>
         </div>
         <div>
@@ -381,6 +416,41 @@ function HistoryStats({ history }: { history: WalletHistory }) {
         </div>
       </div>
 
+      {(portfolio?.daily?.length ?? 0) > 1 && (
+        <div className="mt-4 h-[300px]">
+          <PlotlyWrapper
+            data={[
+              {
+                type: "scatter",
+                mode: "lines+markers",
+                x: portfolio.daily.map((point) => point.date),
+                y: portfolio.daily.map((point) => point.account_value),
+                text: portfolio.daily.map((point) => point.daily_pnl_change),
+                name: "Account value",
+                line: { color: "#38d39f", width: 2.5 },
+                marker: { size: 6 },
+                hovertemplate: "%{x}<br>Account: $%{y:,.0f}<br>Daily P&L change: $%{text:,.0f}<extra></extra>",
+              },
+            ]}
+            layout={{
+              paper_bgcolor: theme.bg,
+              plot_bgcolor: theme.bg,
+              font: { color: theme.font, size: 10 },
+              margin: { t: 16, r: 16, b: 40, l: 70 },
+              xaxis: { gridcolor: theme.grid, title: { text: "UTC day" } },
+              yaxis: { gridcolor: theme.grid, title: { text: "Account value ($)" }, tickformat: "$,.3s" },
+              showlegend: false,
+              autosize: true,
+            }}
+            config={{ responsive: true, displayModeBar: false }}
+            style={{ width: "100%", height: 300 }}
+          />
+          <p className="mt-1 text-[9px] text-[var(--muted)]">
+            Daily endpoint from Hyperliquid portfolio history. Account value can move because of P&amp;L, funding, deposits, or withdrawals; it is not a strategy return curve.
+          </p>
+        </div>
+      )}
+
       {coins.length > 0 && (
         <div className="mt-4">
           <p className="mb-2 text-[10px] uppercase tracking-wider text-[var(--muted)]">By Coin</p>
@@ -390,7 +460,7 @@ function HistoryStats({ history }: { history: WalletHistory }) {
                 <span className="text-xs font-bold text-[var(--text)]">{coin}</span>
                 <div className="flex items-center gap-3">
                   <span className="text-[10px] text-[var(--muted)]">{data.fills} fills</span>
-                  <span className="text-[10px] text-[var(--muted)]">{data.win_rate_pct}% win</span>
+                  <span className="text-[10px] text-[var(--muted)]">{data.win_rate_pct == null ? "win rate —" : `${data.win_rate_pct}% win`}</span>
                   <span className={`text-xs font-bold tabular-nums ${pnlColor(data.pnl)}`}>
                     {data.pnl >= 0 ? "+" : ""}{fmtUsd(data.pnl)}
                   </span>

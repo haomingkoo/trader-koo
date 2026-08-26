@@ -14,6 +14,7 @@ from trader_koo.hyperliquid.tracker import (
     WalletSnapshot,
     _check_reload,
     _diff_positions,
+    _parse_portfolio_history,
     _recent_reload_context,
     _send_telegram_signal_alert,
     ensure_hyperliquid_schema,
@@ -24,6 +25,37 @@ from trader_koo.hyperliquid.tracker import (
     seed_default_wallets,
 )
 from trader_koo.hyperliquid.wallets import get_tracked_wallets
+
+
+def test_portfolio_history_uses_last_point_per_utc_day() -> None:
+    day_one_early = int(dt.datetime(2026, 8, 25, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
+    day_one_late = int(dt.datetime(2026, 8, 25, 23, tzinfo=dt.timezone.utc).timestamp() * 1000)
+    day_two = int(dt.datetime(2026, 8, 26, 23, tzinfo=dt.timezone.utc).timestamp() * 1000)
+    payload = [["week", {
+        "accountValueHistory": [
+            [day_one_early, "1000000"],
+            [day_one_late, "1005000"],
+            [day_two, "1010000"],
+        ],
+        "pnlHistory": [
+            [day_one_early, "0"],
+            [day_one_late, "5000"],
+            [day_two, "10000"],
+        ],
+    }]]
+
+    result = _parse_portfolio_history(
+        payload,
+        7,
+        now_utc=dt.datetime(2026, 8, 27, tzinfo=dt.timezone.utc),
+    )
+
+    assert result["available"] is True
+    assert [point["date"] for point in result["daily"]] == ["2026-08-25", "2026-08-26"]
+    assert result["daily"][0]["account_value"] == 1_005_000
+    assert result["daily"][1]["daily_pnl_change"] == 5_000
+    assert result["account_value_change"] == 5_000
+    assert result["period_pnl_change"] == 5_000
 
 
 @pytest.fixture

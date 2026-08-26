@@ -16,8 +16,12 @@ performance claim.
   no winner was selected, and the sealed held-out data was not opened.
 - Release replay evidence uses a synthetic contract fixture. It verifies code
   and accounting behavior, not trading performance.
-- Campaign v2 remains inactive until separately approved after qualified
-  research evidence exists.
+- Campaign v2 is active as a prospective, deterministic paper campaign. It may
+  record simulated trades only when a canonical report publishes before the
+  intended next-open cutoff and all configured setup and risk gates pass.
+- LightGBM remains observation-only. It cannot veto, rank, or size Campaign v2
+  trades until a separate leakage-safe qualification clears the fixed
+  walk-forward, held-out, calibration, provenance, cost, and benchmark gates.
 
 The checked-in challenger artifact is immutable historical evidence. Its
 negative result is useful: the fixed current-universe dataset lacks verified

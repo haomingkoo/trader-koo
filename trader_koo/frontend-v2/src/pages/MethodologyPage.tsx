@@ -630,7 +630,7 @@ export default function MethodologyPage() {
           step={0}
           icon={Layers}
           title="Pipeline Overview"
-          subtitle="Six configured stages describe the intended flow. ML gating is inactive and the current paper campaign is paused."
+          subtitle="Six configured stages describe the intended flow. Campaign v2 is active; ML remains an observation-only challenger."
         />
 
         <Reveal delay={300}>
@@ -1088,7 +1088,7 @@ export default function MethodologyPage() {
                 </span>
               </div>
               <p className="text-xs leading-relaxed text-[var(--muted)]">
-                Setup passes all gates (pattern + ML filter + rule consensus +
+                Setup passes the active gates (pattern + rule consensus +
                 risk checks) and a paper trade is opened at the next-day open
                 with realistic slippage and commission costs.
               </p>

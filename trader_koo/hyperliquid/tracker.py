@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import sqlite3
+import urllib.request
 from dataclasses import asdict, dataclass
 from html import escape
 from typing import Any
@@ -22,6 +23,8 @@ LOG = logging.getLogger(__name__)
 
 _TELEGRAM_REQUEST_TIMEOUT_SECONDS = 10
 _TELEGRAM_REENTRY_LOOKBACK_HOURS = 24
+_HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
+_HYPERLIQUID_FILL_PAGE_LIMIT = 2_000
 
 
 @dataclass(frozen=True)
@@ -213,18 +216,31 @@ def fetch_wallet_history(
 ) -> dict[str, Any]:
     """Fetch full trade history and compute performance stats.
 
-    Returns historical fills with aggregated PnL, win rate, and per-coin breakdown.
-    Uses user_fills_by_time for deeper history (up to 10K fills).
+    Returns the provider portfolio series plus a capped execution summary.
+    Fill-derived win rates stay unavailable when the provider page is truncated.
     """
     import time as _time
 
+    portfolio = fetch_wallet_portfolio_history(wallet_address, lookback_days)
     try:
         info = _get_info_client()
         start_ms = int((_time.time() - lookback_days * 86400) * 1000)
         fills = info.user_fills_by_time(wallet_address, start_ms)
 
         if not fills:
-            return {"fills": [], "stats": {}, "by_coin": {}}
+            return {
+                "fill_count": 0,
+                "lookback_days": lookback_days,
+                "stats": {},
+                "by_coin": {},
+                "execution_coverage": {
+                    "complete": True,
+                    "start": None,
+                    "end": None,
+                    "reason": None,
+                },
+                "portfolio": portfolio,
+            }
 
         total_pnl = sum(float(f.get("closedPnl", 0)) for f in fills)
         fees = sum(float(f.get("fee", 0)) for f in fills)
@@ -246,6 +262,12 @@ def fetch_wallet_history(
             elif pnl < 0:
                 by_coin[coin]["losses"] += 1
 
+        fill_times = sorted(
+            timestamp
+            for timestamp in (int(f.get("time") or 0) for f in fills)
+            if timestamp > 0
+        )
+        execution_complete = len(fills) < _HYPERLIQUID_FILL_PAGE_LIMIT
         return {
             "fill_count": len(fills),
             "lookback_days": lookback_days,
@@ -255,23 +277,149 @@ def fetch_wallet_history(
                 "net_pnl": round(total_pnl - fees, 2),
                 "wins": wins,
                 "losses": losses,
-                "win_rate_pct": round(wins / (wins + losses) * 100, 1) if (wins + losses) > 0 else 0,
+                "win_rate_pct": (
+                    round(wins / (wins + losses) * 100, 1)
+                    if execution_complete and (wins + losses) > 0
+                    else None
+                ),
                 "liquidations": liqs,
             },
             "by_coin": {
                 coin: {
                     "pnl": round(data["pnl"], 2),
                     "fills": data["fills"],
-                    "win_rate_pct": round(
-                        data["wins"] / (data["wins"] + data["losses"]) * 100, 1
-                    ) if (data["wins"] + data["losses"]) > 0 else 0,
+                    "win_rate_pct": (
+                        round(data["wins"] / (data["wins"] + data["losses"]) * 100, 1)
+                        if execution_complete and (data["wins"] + data["losses"]) > 0
+                        else None
+                    ),
                 }
                 for coin, data in sorted(by_coin.items(), key=lambda x: x[1]["pnl"])
             },
+            "execution_coverage": {
+                "complete": execution_complete,
+                "start": _millis_to_iso(fill_times[0]) if fill_times else None,
+                "end": _millis_to_iso(fill_times[-1]) if fill_times else None,
+                "reason": None if execution_complete else "hyperliquid_2000_execution_page_cap",
+            },
+            "portfolio": portfolio,
         }
     except Exception as exc:
         LOG.warning("Failed to fetch wallet history for %s: %s", wallet_address, exc)
-        return {"fills": [], "stats": {}, "by_coin": {}}
+        return {
+            "fill_count": 0,
+            "lookback_days": lookback_days,
+            "stats": {},
+            "by_coin": {},
+            "execution_coverage": {
+                "complete": False,
+                "start": None,
+                "end": None,
+                "reason": "execution_history_unavailable",
+            },
+            "portfolio": portfolio,
+        }
+
+
+def _millis_to_iso(value: int) -> str:
+    return dt.datetime.fromtimestamp(value / 1000, tz=dt.timezone.utc).isoformat()
+
+
+def _parse_portfolio_history(
+    payload: Any,
+    lookback_days: int,
+    *,
+    now_utc: dt.datetime | None = None,
+) -> dict[str, Any]:
+    """Convert provider portfolio history into one truthful point per UTC day."""
+    period = "week" if lookback_days <= 7 else "month" if lookback_days <= 30 else "allTime"
+    periods = dict(payload) if isinstance(payload, list) else {}
+    selected = periods.get(period)
+    if not isinstance(selected, dict):
+        return {"available": False, "source": "hyperliquid_portfolio", "period": period, "daily": []}
+
+    accounts = {
+        int(row[0]): float(row[1])
+        for row in (selected.get("accountValueHistory") or [])
+        if isinstance(row, list) and len(row) >= 2
+    }
+    pnl = {
+        int(row[0]): float(row[1])
+        for row in (selected.get("pnlHistory") or [])
+        if isinstance(row, list) and len(row) >= 2
+    }
+    now = (now_utc or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)
+    cutoff_ms = int((now - dt.timedelta(days=lookback_days)).timestamp() * 1000)
+    daily_last: dict[str, tuple[int, float, float | None]] = {}
+    for timestamp, account_value in accounts.items():
+        if timestamp < cutoff_ms:
+            continue
+        date = dt.datetime.fromtimestamp(timestamp / 1000, tz=dt.timezone.utc).date().isoformat()
+        candidate = (timestamp, account_value, pnl.get(timestamp))
+        if date not in daily_last or timestamp > daily_last[date][0]:
+            daily_last[date] = candidate
+
+    points: list[dict[str, Any]] = []
+    previous_pnl: float | None = None
+    for date, (timestamp, account_value, period_pnl) in sorted(daily_last.items()):
+        daily_change = (
+            period_pnl - previous_pnl
+            if period_pnl is not None and previous_pnl is not None
+            else None
+        )
+        points.append({
+            "date": date,
+            "timestamp": _millis_to_iso(timestamp),
+            "account_value": round(account_value, 2),
+            "period_pnl": round(period_pnl, 2) if period_pnl is not None else None,
+            "daily_pnl_change": round(daily_change, 2) if daily_change is not None else None,
+        })
+        if period_pnl is not None:
+            previous_pnl = period_pnl
+
+    first = points[0] if points else None
+    last = points[-1] if points else None
+    pnl_points = [point["period_pnl"] for point in points if point["period_pnl"] is not None]
+    return {
+        "available": bool(points),
+        "source": "hyperliquid_portfolio",
+        "period": period,
+        "coverage_start": first["timestamp"] if first else None,
+        "coverage_end": last["timestamp"] if last else None,
+        "account_value": last["account_value"] if last else None,
+        "account_value_change": (
+            round(last["account_value"] - first["account_value"], 2)
+            if first and last else None
+        ),
+        "period_pnl_change": (
+            round(pnl_points[-1] - pnl_points[0], 2)
+            if len(pnl_points) >= 2 else None
+        ),
+        "daily": points,
+    }
+
+
+def fetch_wallet_portfolio_history(wallet_address: str, lookback_days: int) -> dict[str, Any]:
+    """Fetch provider account-value and PnL history without inferring it from fills."""
+    request = urllib.request.Request(
+        _HYPERLIQUID_INFO_URL,
+        data=json.dumps({"type": "portfolio", "user": wallet_address}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "trader-koo/1.0"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return _parse_portfolio_history(payload, lookback_days)
+    except Exception as exc:
+        LOG.warning("Failed to fetch wallet portfolio history for %s: %s", wallet_address, exc)
+        return {
+            "available": False,
+            "source": "hyperliquid_portfolio",
+            "period": None,
+            "daily": [],
+            "error": type(exc).__name__,
+        }
 
 
 def _estimate_position_age_hours(

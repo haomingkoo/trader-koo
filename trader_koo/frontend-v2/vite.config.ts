@@ -19,7 +19,6 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id: string) {
-          if (id.includes("plotly")) return "plotly";
           if (id.includes("react-dom") || id.includes("/react/")) return "react";
           if (id.includes("react-router")) return "router";
           if (id.includes("@tanstack/react-query")) return "query";

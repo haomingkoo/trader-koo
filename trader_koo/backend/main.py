@@ -115,6 +115,15 @@ DIST_DIR = (PROJECT_DIR / ".." / "dist-v2").resolve()
 _ALLOWED_ORIGIN = os.getenv("TRADER_KOO_ALLOWED_ORIGIN", "https://trader.kooexperience.com")
 
 
+class ImmutableStaticFiles(StaticFiles):
+    """Serve content-hashed frontend assets with long-lived browser caching."""
+
+    async def get_response(self, path: str, scope: dict[str, Any]) -> Any:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 def _resolve_log_dir() -> Path:
     requested = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
     try:
@@ -609,7 +618,7 @@ if DIST_DIR.exists() and DIST_DIR.is_dir():
     }
 
     if _root_assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(_root_assets)), name="root-assets")
+        app.mount("/assets", ImmutableStaticFiles(directory=str(_root_assets)), name="root-assets")
 
     if _root_index.is_file():
         # Only intercept KNOWN SPA routes at root level.

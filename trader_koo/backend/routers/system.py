@@ -383,10 +383,18 @@ def vix_pattern_markers() -> dict[str, Any]:
 def polymarket_data(limit: int = 15) -> dict[str, Any]:
     """Public endpoint: curated finance-relevant Polymarket events."""
     try:
-        from trader_koo.ml.external_data import fetch_polymarket_events
+        from trader_koo.ml.external_data import fetch_polymarket_events, polymarket_fetch_status
 
         events = fetch_polymarket_events(limit=limit)
-        return {"ok": True, "count": len(events), "events": events}
+        source = polymarket_fetch_status()
+        return {
+            "ok": bool(source.get("ok")),
+            "count": len(events),
+            "events": events,
+            "source_fetched_at": source.get("source_fetched_at"),
+            "cache_hit": bool(source.get("cache_hit")),
+            "error": source.get("error"),
+        }
     except Exception as exc:
         LOG.exception("Failed to fetch Polymarket events: %s", exc)
         return {"ok": False, "error": "Unable to fetch Polymarket data", "events": []}

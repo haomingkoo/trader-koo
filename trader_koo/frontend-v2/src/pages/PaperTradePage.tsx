@@ -112,7 +112,7 @@ export default function PaperTradePage() {
         <div className="space-y-3 border-t border-[var(--line)] px-4 py-4 text-xs text-[var(--muted)]">
           <div className="flex flex-wrap gap-2">
             <Badge variant="blue">Nightly Pipeline</Badge>
-            <Badge variant="green">ML Scored</Badge>
+            <Badge variant="amber">ML Observation Only</Badge>
             <Badge variant="amber">Critic Reviewed</Badge>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -122,7 +122,7 @@ export default function PaperTradePage() {
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">2. ML Observation</div>
-              <p className="mt-1">A LightGBM model records predicted win probabilities for post-trade calibration only. It does not reject trades until walk-forward AUC, hit-rate lift, and calibration improve enough to justify gating.</p>
+              <p className="mt-1">A LightGBM challenger may record predicted win probabilities for calibration only. It is not a qualified backtest and cannot reject, rank, or size trades until walk-forward, held-out, leakage, cost, benchmark, and calibration gates pass.</p>
             </div>
             <div>
               <div className="font-semibold text-[var(--text)]">3. Critic Review</div>

@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trader_koo.notifications.market_monitor import (
+    POLYMARKET_MIN_ALERT_LIQUIDITY_USD,
+    POLYMARKET_MIN_ALERT_VOLUME_24H_USD,
     POLYMARKET_MIN_ALERT_VOLUME_USD,
     _format_volume,
     detect_crypto_spikes,
@@ -101,6 +103,8 @@ class TestSnapshotPolymarket:
                         "outcomes": ["Yes", "No"],
                         "prices_pct": [65.0, 35.0],
                         "volume": 1_000_000,
+                        "volume_24h": POLYMARKET_MIN_ALERT_VOLUME_24H_USD,
+                        "liquidity": POLYMARKET_MIN_ALERT_LIQUIDITY_USD,
                         "active": True,
                     },
                 ],
@@ -110,6 +114,7 @@ class TestSnapshotPolymarket:
         count = snapshot_polymarket(db_path)
 
         assert count == 1
+        mock_fetch.assert_called_once_with(limit=50, use_cache=False)
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM polymarket_snapshots").fetchone()
@@ -165,7 +170,7 @@ class TestDetectPolymarketSpikes:
         db_path: Path,
         old_prob: float,
         new_prob: float,
-        hours_ago: int = 8,
+        hours_ago: int = 6,
     ) -> None:
         """Insert two snapshot rows: one old and one current."""
         conn = sqlite3.connect(str(db_path))
@@ -266,6 +271,25 @@ class TestDetectPolymarketSpikes:
                 ("baseline", "Baseline", "Will it?", 10.0, 1_000_000, (now - dt.timedelta(days=5)).isoformat()),
                 ("baseline", "Baseline", "Will it?", 48.0, 1_000_000, (now - dt.timedelta(hours=6)).isoformat()),
                 ("baseline", "Baseline", "Will it?", 50.0, 1_000_000, now.isoformat()),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        assert detect_polymarket_spikes(db_path, now_utc=now) == []
+
+    def test_does_not_use_days_old_snapshot_as_six_hour_baseline(self, db_path: Path) -> None:
+        now = dt.datetime(2026, 8, 26, 12, 0, tzinfo=dt.timezone.utc)
+        conn = sqlite3.connect(str(db_path))
+        conn.executemany(
+            """
+            INSERT INTO polymarket_snapshots
+                (event_slug, event_title, market_question, probability, volume, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("gap", "Gap", "Will it?", 10.0, 1_000_000, (now - dt.timedelta(days=5)).isoformat()),
+                ("gap", "Gap", "Will it?", 50.0, 1_000_000, now.isoformat()),
             ],
         )
         conn.commit()
@@ -382,7 +406,7 @@ class TestSendSpikeAlerts:
         # Seed data that will produce a polymarket spike
         conn = sqlite3.connect(str(db_path))
         now = dt.datetime.now(dt.timezone.utc)
-        old_ts = (now - dt.timedelta(hours=8)).isoformat()
+        old_ts = (now - dt.timedelta(hours=6)).isoformat()
         new_ts = now.isoformat()
         conn.execute(
             """
@@ -421,7 +445,7 @@ class TestSendSpikeAlerts:
 
         conn = sqlite3.connect(str(db_path))
         now = dt.datetime.now(dt.timezone.utc)
-        old_ts = (now - dt.timedelta(hours=8)).isoformat()
+        old_ts = (now - dt.timedelta(hours=6)).isoformat()
         new_ts = now.isoformat()
         slug = 'bad" onmouseover="x'
         question = "Will <i>bad</i> & win?"
@@ -474,7 +498,7 @@ class TestSendSpikeAlerts:
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                ("retry", "Retry", "Will retry?", 10.0, 1_000_000, (now - dt.timedelta(hours=8)).isoformat()),
+                ("retry", "Retry", "Will retry?", 10.0, 1_000_000, (now - dt.timedelta(hours=6)).isoformat()),
                 ("retry", "Retry", "Will retry?", 25.0, 1_000_000, now.isoformat()),
             ],
         )
@@ -503,7 +527,7 @@ class TestSendSpikeAlerts:
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                ("full-key", "Full key", question, 10.0, 1_000_000, (now - dt.timedelta(hours=8)).isoformat()),
+                ("full-key", "Full key", question, 10.0, 1_000_000, (now - dt.timedelta(hours=6)).isoformat()),
                 ("full-key", "Full key", question, 25.0, 1_000_000, now.isoformat()),
             ],
         )

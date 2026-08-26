@@ -9,6 +9,7 @@ import pytest
 from trader_koo.backend.services.scheduler import (
     _run_memory_cleanup,
     _run_daily_update_unlocked,
+    _run_preopen_report_watchdog,
     _normalize_update_mode,
     create_scheduler,
 )
@@ -32,6 +33,13 @@ class TestCreateScheduler:
         job = scheduler.get_job("daily_update")
 
         assert job is not None
+
+    def test_has_preopen_report_watchdog(self):
+        scheduler = create_scheduler()
+        job = scheduler.get_job("preopen_report_watchdog")
+
+        assert job is not None
+        assert str(job.trigger) == "cron[day_of_week='mon-fri', hour='12', minute='0']"
 
     def test_has_weekly_yolo_job(self):
         scheduler = create_scheduler()
@@ -158,6 +166,62 @@ class TestNormalizeUpdateMode:
 
     def test_whitespace_stripped(self):
         assert _normalize_update_mode("  full  ") == "full"
+
+
+def test_preopen_watchdog_does_not_duplicate_current_report(tmp_path, monkeypatch):
+    db_path = tmp_path / "scheduler.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE price_daily (date TEXT)")
+        conn.execute("INSERT INTO price_daily VALUES ('2026-08-26')")
+        conn.execute(
+            """CREATE TABLE report_runs (
+                run_id TEXT, status TEXT, publication_verified INTEGER,
+                is_generation_canonical INTEGER, published_ts TEXT,
+                source_timestamps_json TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO report_runs VALUES (?, ?, ?, ?, ?, ?)",
+            ("run", "published", 1, 1, "2026-08-26T22:30:00Z", '{"price_date":"2026-08-26"}'),
+        )
+    monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "trader_koo.backend.services.scheduler._run_daily_update",
+        lambda mode, source: calls.append((mode, source)),
+    )
+
+    _run_preopen_report_watchdog()
+
+    assert calls == []
+
+
+def test_preopen_watchdog_recovers_newer_ingested_price_date(tmp_path, monkeypatch):
+    db_path = tmp_path / "scheduler.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE price_daily (date TEXT)")
+        conn.execute("INSERT INTO price_daily VALUES ('2026-08-26')")
+        conn.execute(
+            """CREATE TABLE report_runs (
+                run_id TEXT, status TEXT, publication_verified INTEGER,
+                is_generation_canonical INTEGER, published_ts TEXT,
+                source_timestamps_json TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO report_runs VALUES (?, ?, ?, ?, ?, ?)",
+            ("old", "published", 1, 1, "2026-08-25T22:30:00Z", '{"price_date":"2026-08-25"}'),
+        )
+    monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "trader_koo.backend.services.scheduler._run_daily_update",
+        lambda mode, source: calls.append((mode, source)),
+    )
+
+    _run_preopen_report_watchdog()
+
+    assert calls == [("report", "preopen_watchdog")]
 
 
 def test_worker_transitions_reserved_record_before_subprocess(tmp_path, monkeypatch):
