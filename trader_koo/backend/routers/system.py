@@ -132,22 +132,38 @@ def _persisted_price_revision_summary(
     *,
     tracked_tickers: int,
 ) -> dict[str, Any]:
-    """Read recorded revision seals without re-hashing price history."""
-    summary: dict[str, Any] = {
+    """Compare the latest successful ingest cohort with retained history."""
+    retained: dict[str, Any] = {
+        "ticker_count": tracked_tickers,
         "verified_tickers": 0,
         "unresolved_tickers": max(0, tracked_tickers),
         "revision_tickers": 0,
         "missing_revision_tickers": max(0, tracked_tickers),
-        "verification_mode": "persisted_revision_seal",
         "bases": [],
     }
+    def unavailable() -> dict[str, Any]:
+        return {
+            "cohort_available": False,
+            "cohort_source": "latest_canonical_sp500_price_ingest",
+            "cohort_run_id": None,
+            "cohort_finished_ts": None,
+            "cohort_tickers": 0,
+            "verified_tickers": 0,
+            "unresolved_tickers": 0,
+            "revision_tickers": 0,
+            "missing_revision_tickers": 0,
+            "verification_mode": "persisted_revision_identity_join",
+            "bases": [],
+            "retained_history": retained,
+        }
     if not table_exists(conn, "price_series_revisions"):
-        return summary
+        return unavailable()
     rows = conn.execute(
-        """SELECT adjustment_basis, adjustment_version, status AS basis_status,
+        """SELECT r.adjustment_basis,r.adjustment_version,r.status AS basis_status,
                   COUNT(*) AS ticker_count
-           FROM price_series_revisions
-           GROUP BY adjustment_basis, adjustment_version, status"""
+             FROM (SELECT DISTINCT ticker FROM price_daily) p
+             JOIN price_series_revisions r ON r.ticker=p.ticker
+            GROUP BY r.adjustment_basis,r.adjustment_version,r.status"""
     ).fetchall()
     bases = [dict(row) for row in rows]
     revision_tickers = sum(int(row["ticker_count"] or 0) for row in bases)
@@ -156,13 +172,74 @@ def _persisted_price_revision_summary(
         for row in bases
         if row["basis_status"] == "verified"
     )
-    return {
-        **summary,
+    retained = {
+        **retained,
         "verified_tickers": verified_tickers,
         "unresolved_tickers": max(0, tracked_tickers - verified_tickers),
         "revision_tickers": revision_tickers,
         "missing_revision_tickers": max(0, tracked_tickers - revision_tickers),
         "bases": bases,
+    }
+    if not table_exists(conn, "ingest_runs") or not table_exists(conn, "ingest_ticker_status"):
+        return unavailable()
+    run = conn.execute(
+        """SELECT run_id,finished_ts,tickers_total,tickers_ok FROM ingest_runs
+             WHERE status='ok' AND COALESCE(tickers_failed,0)=0
+               AND tickers_total=tickers_ok
+               AND json_valid(args_json)=1
+               AND json_extract(args_json,'$.use_sp500')=1
+               AND json_extract(args_json,'$.skip_price')=0
+               AND EXISTS (
+                   SELECT 1 FROM ingest_ticker_status s
+                    WHERE s.run_id=ingest_runs.run_id AND s.status='ok'
+               )
+             ORDER BY COALESCE(finished_ts,started_ts) DESC, run_id DESC
+             LIMIT 1"""
+    ).fetchone()
+    if run is None:
+        return unavailable()
+    run_id = str(run[0])
+    cohort = conn.execute(
+        """SELECT
+                 COUNT(*) AS ticker_count,
+                 SUM(CASE WHEN r.status='verified' THEN 1 ELSE 0 END) AS verified_tickers,
+                 SUM(CASE WHEN r.ticker IS NOT NULL THEN 1 ELSE 0 END) AS revision_tickers
+              FROM (
+                  SELECT DISTINCT ticker FROM ingest_ticker_status
+                   WHERE run_id=? AND status='ok'
+              ) c
+              LEFT JOIN price_series_revisions r ON r.ticker=c.ticker""",
+        (run_id,),
+    ).fetchone()
+    cohort_bases = [dict(row) for row in conn.execute(
+        """SELECT r.adjustment_basis,r.adjustment_version,r.status AS basis_status,
+                  COUNT(*) AS ticker_count
+             FROM (
+                 SELECT DISTINCT ticker FROM ingest_ticker_status
+                  WHERE run_id=? AND status='ok'
+             ) c
+             JOIN price_series_revisions r ON r.ticker=c.ticker
+            GROUP BY r.adjustment_basis,r.adjustment_version,r.status""",
+        (run_id,),
+    ).fetchall()]
+    cohort_tickers = int(cohort["ticker_count"] or 0)
+    if cohort_tickers != int(run[2] or 0) or cohort_tickers != int(run[3] or 0):
+        return unavailable()
+    cohort_verified = int(cohort["verified_tickers"] or 0)
+    cohort_revisions = int(cohort["revision_tickers"] or 0)
+    return {
+        "cohort_available": cohort_tickers > 0,
+        "cohort_source": "latest_canonical_sp500_price_ingest",
+        "cohort_run_id": run_id,
+        "cohort_finished_ts": run[1],
+        "cohort_tickers": cohort_tickers,
+        "verified_tickers": cohort_verified,
+        "unresolved_tickers": max(0, cohort_tickers - cohort_verified),
+        "revision_tickers": cohort_revisions,
+        "missing_revision_tickers": max(0, cohort_tickers - cohort_revisions),
+        "verification_mode": "persisted_revision_identity_join",
+        "bases": cohort_bases,
+        "retained_history": retained,
     }
 
 
@@ -471,7 +548,9 @@ def status() -> dict[str, Any]:
             operational_warnings.append("finviz_fundamentals stale")
         if not report_fresh:
             operational_warnings.append("daily_report stale")
-        if price_basis["unresolved_tickers"]:
+        if not price_basis["cohort_available"]:
+            research_warnings.append("current price cohort unavailable")
+        elif price_basis["unresolved_tickers"]:
             research_warnings.append("price basis unresolved")
 
         latest_run = dict(run_row) if run_row is not None else None

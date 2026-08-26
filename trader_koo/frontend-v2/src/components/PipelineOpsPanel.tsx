@@ -4,7 +4,7 @@ import { usePipelineStatus, useTriggerUpdate } from "../api/hooks";
 import { apiFetch } from "../api/client";
 import type { PipelineStatus } from "../api/types";
 import Badge from "./ui/Badge";
-import { derivePipelineState } from "./pipelineState";
+import { derivePipelineState, priceBasisStatusCopy } from "./pipelineState";
 
 /* ── Helpers ── */
 
@@ -265,6 +265,7 @@ function ActionButton({ label, mode, disabled }: ActionButtonProps) {
 /* ── Status Section ── */
 
 function StatusSection({ data, state }: { data: PipelineStatus; state: PipelineState }) {
+  const priceBasisCopy = priceBasisStatusCopy(data.price_basis);
   const run = data.latest_run;
   const pipeline = data.pipeline;
   const freshness = data.freshness;
@@ -374,10 +375,10 @@ function StatusSection({ data, state }: { data: PipelineStatus; state: PipelineS
       <div className="rounded-md border border-[var(--border)] px-3 py-2 text-xs">
         <div className="flex flex-wrap gap-x-4 gap-y-1">
           <span>
-            Persisted price revisions verified: <strong>{data.price_basis.verified_tickers}</strong>
+            {priceBasisCopy.cohort}
           </span>
-          <span className={data.price_basis.unresolved_tickers > 0 ? "text-[var(--red)]" : "text-[var(--green)]"}>
-            Unresolved or unsealed: <strong>{data.price_basis.unresolved_tickers}</strong>
+          <span className={!data.price_basis.cohort_available || data.price_basis.unresolved_tickers > 0 ? "text-[var(--red)]" : "text-[var(--green)]"}>
+            {priceBasisCopy.unresolved}
           </span>
         </div>
         {data.price_basis.bases.map((basis, index) => (
@@ -389,6 +390,9 @@ function StatusSection({ data, state }: { data: PipelineStatus; state: PipelineS
             {basis.basis_status ?? "unverified"} · {basis.ticker_count} ticker(s)
           </div>
         ))}
+        <div className="mt-1 text-[var(--muted)]">
+          {priceBasisCopy.retained}
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,22 @@ import type { PipelineStatus } from "../api/types";
 
 export type PipelineState = "idle" | "running" | "completed" | "warning" | "error";
 
+export function priceBasisStatusCopy(priceBasis: PipelineStatus["price_basis"]): {
+  cohort: string;
+  unresolved: string;
+  retained: string;
+} {
+  return {
+    cohort: priceBasis.cohort_available
+      ? `Current canonical cohort with verified persisted seals: ${priceBasis.verified_tickers} / ${priceBasis.cohort_tickers}`
+      : "Current canonical cohort seal status unavailable",
+    unresolved: priceBasis.cohort_available
+      ? `Current unresolved or unsealed: ${priceBasis.unresolved_tickers}`
+      : "Current unresolved count unavailable",
+    retained: `Retained history: ${priceBasis.retained_history.ticker_count} symbols · ${priceBasis.retained_history.missing_revision_tickers} missing seal(s)`,
+  };
+}
+
 export function derivePipelineState(data: PipelineStatus | undefined): PipelineState {
   if (!data) return "idle";
   if (data.pipeline_active || data.pipeline?.active) return "running";
