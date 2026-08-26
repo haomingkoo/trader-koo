@@ -2,7 +2,7 @@
 
 `paper-schema-contract-v5.json` is the single source for the contract phase in
 steps 8–17 of `ops/RELEASE_STATES.md`. This change specifies the target; it does
-not implement a migration or verifier and does not permit writes or activation.
+not permit writes or activation.
 
 ## Contract decisions
 
@@ -62,13 +62,18 @@ not schema verification; the activation interlock remains closed. Its v2
 accounting gate rejects unreconciled rows and uses exact decimal arithmetic over
 persisted values, with no hidden tolerance or rounding threshold.
 
+`trader_koo.paper_trade.schema_v5_verifier.verify_paper_schema_v5` implements
+the exact read-only verifier. It checks the frozen object/data contract and
+computes the pinned semantic fingerprint only after every check passes. It has
+no startup or activation caller; `require_contracted_paper_schema` remains
+closed.
+
 Later, separate changes must implement, in order:
 
-1. the exact verifier and semantic fingerprint checks;
-2. a v4/v5 phase-aware initializer;
-3. writer quiescence and restore drills;
-4. copied-production rehearsal and deployment-state preservation;
-5. separately audited write enablement and human activation.
+1. a v4/v5 phase-aware initializer;
+2. writer quiescence and restore drills;
+3. copied-production rehearsal and deployment-state preservation;
+4. separately audited write enablement and human activation.
 
 Until all gates pass, `require_contracted_paper_schema` remains an unconditional
 activation interlock and the dark-deploy workflow continues to pause writes.

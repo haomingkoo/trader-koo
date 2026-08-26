@@ -97,6 +97,8 @@ destructive parent-table rebuild on the live volume.
    The dedicated maintenance seam is `migrate_paper_schema_v4_to_v5`; it has no
    startup or production-command caller and does not verify or activate v5.
 10. Implement and review the exact verifier and schema fingerprint separately.
+    The read-only `verify_paper_schema_v5` seam has no initializer or activation
+    caller; the activation interlock remains unconditional.
 11. Implement the phase-aware initializer as another change, proving it operates
     safely on both v4 expand and v5 contract states.
 12. Implement the writer-quiescence control and recovery drills separately,
