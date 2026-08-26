@@ -463,19 +463,20 @@ def status() -> dict[str, Any]:
         )
         report_fresh = is_report_fresh(report_payload)
 
-        warnings: list[str] = []
+        operational_warnings: list[str] = []
+        research_warnings: list[str] = []
         if price_age_days is None or price_age_days > 3:
-            warnings.append("price_daily stale")
+            operational_warnings.append("price_daily stale")
         if fund_age_hours is None or fund_age_hours > 48:
-            warnings.append("finviz_fundamentals stale")
+            operational_warnings.append("finviz_fundamentals stale")
         if not report_fresh:
-            warnings.append("daily_report stale")
+            operational_warnings.append("daily_report stale")
         if price_basis["unresolved_tickers"]:
-            warnings.append("price basis unresolved")
+            research_warnings.append("price basis unresolved")
 
         latest_run = dict(run_row) if run_row is not None else None
         if latest_run and latest_run.get("status") in {"failed"}:
-            warnings.append("latest ingest run failed")
+            operational_warnings.append("latest ingest run failed")
         if latest_run:
             if ticker_status_count is not None:
                 latest_run["tickers_processed"] = ticker_status_count
@@ -514,19 +515,21 @@ def status() -> dict[str, Any]:
             if pipeline_stage in {"unknown", "idle"}:
                 pipeline_stage = "ingest"
         if latest_run and latest_run.get("status") == "running" and pipeline_snap.get("running_stale"):
-            warnings.append("latest ingest run appears stale-running")
+            operational_warnings.append("latest ingest run appears stale-running")
         if resume_candidate:
-            warnings.append("post-ingest yolo/report recovery recommended")
+            operational_warnings.append("post-ingest yolo/report recovery recommended")
 
         llm_meta = llm_status_readonly()
         llm_health_data = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
         if llm_meta.get("enabled"):
             if not llm_meta.get("ready"):
-                warnings.append("llm not ready")
+                operational_warnings.append("llm not ready")
             if llm_meta.get("runtime_disabled"):
-                warnings.append("llm in runtime cooldown")
+                operational_warnings.append("llm in runtime cooldown")
             if llm_health_data.get("degraded"):
-                warnings.append("llm degraded (rule fallback active)")
+                operational_warnings.append("llm degraded (rule fallback active)")
+
+        warnings = [*operational_warnings, *research_warnings]
 
         activity = {
             "tracked_tickers": counts["tracked_tickers"] if counts else 0,
@@ -564,9 +567,14 @@ def status() -> dict[str, Any]:
 
         payload = {
             **base,
-            "ok": len(warnings) == 0,
+            "ok": len(operational_warnings) == 0,
+            "research_ready": len(research_warnings) == 0,
             "warnings": warnings,
             "warning_count": len(warnings),
+            "operational_warnings": operational_warnings,
+            "research_warnings": research_warnings,
+            "operational_warning_count": len(operational_warnings),
+            "research_warning_count": len(research_warnings),
             "latest_run": latest_run,
             "pipeline_active": pipeline_active,
             "pipeline_stage": pipeline_stage,

@@ -81,6 +81,86 @@ def test_status_caches_at_completion_time(seeded_conn, tmp_path: Path) -> None:
     assert cache.call_args.args[0] == completed
 
 
+def test_unresolved_global_price_basis_is_research_not_service_failure(
+    seeded_conn,
+    tmp_path: Path,
+) -> None:
+    seeded_conn.execute(
+        """
+        INSERT INTO price_daily (ticker, date, open, high, low, close, volume)
+        VALUES ('UNRELATED', '2026-08-25', 10, 11, 9, 10.5, 1000)
+        """
+    )
+    seeded_conn.commit()
+    db_path = tmp_path / "status.db"
+    db_path.touch()
+    invalidate_status_cache()
+    report = {"generated_ts": "2026-08-26T00:00:00Z"}
+
+    with (
+        patch.object(system, "get_conn", return_value=seeded_conn),
+        patch.object(system, "DB_PATH", db_path),
+        patch.object(system, "get_cached_status", return_value=None),
+        patch.object(system, "set_cached_status"),
+        patch.object(system, "days_since", return_value=0.0),
+        patch.object(system, "hours_since", return_value=0.0),
+        patch.object(system, "resolve_published_report", return_value=(tmp_path, report)),
+        patch.object(system, "is_report_fresh", return_value=True),
+        patch.object(
+            system,
+            "pipeline_status_snapshot",
+            return_value={"active": False, "stage": "idle"},
+        ),
+        patch.object(system, "post_ingest_resume_candidate", return_value=None),
+        patch.object(system, "llm_status_readonly", return_value={"enabled": False}),
+    ):
+        payload = system.status()
+
+    assert payload["ok"] is True
+    assert payload["research_ready"] is False
+    assert payload["operational_warnings"] == []
+    assert payload["research_warnings"] == ["price basis unresolved"]
+    assert payload["operational_warning_count"] == 0
+    assert payload["research_warning_count"] == 1
+    assert payload["price_basis"]["unresolved_tickers"] == 1
+
+
+def test_operational_failure_does_not_change_research_readiness(
+    seeded_conn,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "status.db"
+    db_path.touch()
+    invalidate_status_cache()
+    report = {"generated_ts": "2026-08-26T00:00:00Z"}
+
+    with (
+        patch.object(system, "get_conn", return_value=seeded_conn),
+        patch.object(system, "DB_PATH", db_path),
+        patch.object(system, "get_cached_status", return_value=None),
+        patch.object(system, "set_cached_status"),
+        patch.object(system, "days_since", return_value=0.0),
+        patch.object(system, "hours_since", return_value=0.0),
+        patch.object(system, "resolve_published_report", return_value=(tmp_path, report)),
+        patch.object(system, "is_report_fresh", return_value=False),
+        patch.object(
+            system,
+            "pipeline_status_snapshot",
+            return_value={"active": False, "stage": "idle"},
+        ),
+        patch.object(system, "post_ingest_resume_candidate", return_value=None),
+        patch.object(system, "llm_status_readonly", return_value={"enabled": False}),
+    ):
+        payload = system.status()
+
+    assert payload["ok"] is False
+    assert payload["research_ready"] is True
+    assert payload["operational_warnings"] == ["daily_report stale"]
+    assert payload["research_warnings"] == []
+    assert payload["operational_warning_count"] == 1
+    assert payload["research_warning_count"] == 0
+
+
 def test_persisted_revision_summary_does_not_read_price_rows(seeded_conn) -> None:
     statements: list[str] = []
     seeded_conn.set_trace_callback(statements.append)

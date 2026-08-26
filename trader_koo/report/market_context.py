@@ -217,9 +217,9 @@ def _build_regime_llm_commentary(regime: dict[str, Any]) -> dict[str, Any]:
     elif health_state == "risk_off":
         action = "Reduce exposure; favour hedged or defensive positioning."
 
-    source = "regime_context"
+    cache_source = "regime_context"
     if asof_date:
-        source = f"regime_context_{asof_date}"
+        cache_source = f"regime_context_{asof_date}"
 
     row: dict[str, Any] = {}
     try:
@@ -235,13 +235,15 @@ def _build_regime_llm_commentary(regime: dict[str, Any]) -> dict[str, Any]:
                     "ticker": "^VIX",
                     "score": float(health.get("score") or 50.0),
                 },
-                source=source,
+                source=cache_source,
             ) or {}
     except Exception:
         row = {}
 
+    model_observation = str(row.get("observation") or "").strip()
+    model_contributed = bool(model_observation and model_observation != summary.strip())
     return {
-        "source": source,
+        "source": "llm" if model_contributed else "rule",
         "observation": str(row.get("observation") or summary),
         "action": str(row.get("action") or action),
         "risk_note": str(row.get("risk_note") or risk_note or "context_only_signal"),
@@ -250,6 +252,7 @@ def _build_regime_llm_commentary(regime: dict[str, Any]) -> dict[str, Any]:
 
 def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
     regime: dict[str, Any] = {
+        "source": "unavailable",
         "context_only": True,
         "asof_date": None,
         "summary": "",
@@ -269,6 +272,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
     vix_rows = _fetch_symbol_ohlcv(conn, "^VIX", limit=280)
     vix_latest = None
     if len(vix_rows) >= 55:
+        regime["source"] = "price_daily:^VIX"
         closes = [float(r["close"]) for r in vix_rows]
         latest = closes[-1]
         prev = closes[-2]

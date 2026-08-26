@@ -6,6 +6,11 @@ export interface PipelineStatus {
   db_exists: boolean;
   warnings: string[];
   warning_count: number;
+  research_ready?: boolean;
+  operational_warnings?: string[];
+  research_warnings?: string[];
+  operational_warning_count?: number;
+  research_warning_count?: number;
   pipeline_active: boolean;
   pipeline_stage: string;
   pipeline: {

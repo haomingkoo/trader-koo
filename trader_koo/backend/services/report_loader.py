@@ -501,7 +501,14 @@ def daily_report_response(
                     live_regime = {}
                 finally:
                     conn.close()
-                if isinstance(live_regime, dict) and live_regime:
+                usable_live_regime = (
+                    isinstance(live_regime, dict)
+                    and bool(live_regime.get("asof_date"))
+                    and isinstance(live_regime.get("vix"), dict)
+                    and bool(live_regime.get("vix"))
+                    and live_regime.get("vix", {}).get("ticker") == "^VIX"
+                )
+                if usable_live_regime:
                     merged = dict(regime_ctx) if isinstance(regime_ctx, dict) else {}
                     for key in (
                         "asof_date",
@@ -518,9 +525,13 @@ def daily_report_response(
                     ):
                         if key not in merged or not merged.get(key):
                             merged[key] = live_regime.get(key)
-                    if not str(merged.get("source") or "").strip():
-                        merged["source"] = "regime_context_live_patch"
+                    merged["source"] = "regime_context_live_patch:price_daily:^VIX"
                     signals["regime_context"] = merged
+            current_regime = signals.get("regime_context")
+            if isinstance(current_regime, dict) and not str(
+                current_regime.get("source") or ""
+            ).strip():
+                current_regime["source"] = "not_recorded"
     pipeline = pipeline_status_fn(log_lines=120)
     detail: str | None = None
     detail_code: str | None = None

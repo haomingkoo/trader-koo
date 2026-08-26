@@ -37,6 +37,8 @@ def test_build_suggestions_returns_compact_top_ideas():
     assert item["action"] == "Paper Long"
     assert item["conviction"] in {"Medium", "Higher"}
     assert len(item["why"]) <= 3
+    assert any("Rule consensus 72% bullish" in reason for reason in item["why"])
+    assert all("Agent agreement" not in reason for reason in item["why"])
     assert "Invalid below support" in item["invalidation"]
 
 

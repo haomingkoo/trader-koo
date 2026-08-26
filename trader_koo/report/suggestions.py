@@ -77,7 +77,7 @@ def _why(row: dict[str, Any]) -> list[str]:
         else:
             bullets.append(f"Evidence score maps to {prob * 100:.0f}% prior probability; history is still thin.")
     if row.get("debate_agreement_score") is not None:
-        bullets.append(f"Agent agreement {float(row.get('debate_agreement_score') or 0):.0f}% with {row.get('debate_consensus_bias') or 'neutral'} consensus.")
+        bullets.append(f"Rule consensus {float(row.get('debate_agreement_score') or 0):.0f}% {row.get('debate_consensus_bias') or 'neutral'}.")
     option_signal = _as_text(row.get("options_positioning_signal"))
     if option_signal == "underpriced_positioning":
         bullets.append("Options context says OI is elevated while IV is subdued versus local snapshots.")

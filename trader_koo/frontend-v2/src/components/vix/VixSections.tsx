@@ -1,6 +1,7 @@
 import type { RegimeContext, VixData, VixMetricsPayload } from "../../api/types";
 import Badge from "../ui/Badge";
 import Card from "../ui/Card";
+import { commentarySourceLabel } from "./commentarySource";
 import GaugeSvg from "../ui/GaugeSvg";
 import { formatVixState } from "./vixUtils";
 
@@ -381,16 +382,12 @@ export function CommentaryCard({
 }: {
   commentary: RegimeContext["llm_commentary"];
 }) {
-  const commentarySource = (commentary.source ?? "rule").trim().toLowerCase();
-
   return (
     <Card label="Commentary">
       <div className="mt-2 space-y-2">
         <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted)]">
           Source:{" "}
-          {commentarySource === "llm"
-            ? "LLM (generated from current regime snapshot)"
-            : "Rule (rule-based fallback)"}
+          {commentarySourceLabel(commentary.source)}
         </div>
         {commentary.observation ? (
           <div className="space-y-2 text-xs text-[var(--muted)]">
@@ -410,7 +407,7 @@ export function CommentaryCard({
           </div>
         ) : (
           <p className="text-xs text-[var(--muted)]">
-            No LLM commentary available for this snapshot.
+            No commentary available for this snapshot.
           </p>
         )}
       </div>

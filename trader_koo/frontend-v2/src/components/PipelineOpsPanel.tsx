@@ -4,6 +4,7 @@ import { usePipelineStatus, useTriggerUpdate } from "../api/hooks";
 import { apiFetch } from "../api/client";
 import type { PipelineStatus } from "../api/types";
 import Badge from "./ui/Badge";
+import { derivePipelineState } from "./pipelineState";
 
 /* ── Helpers ── */
 
@@ -71,31 +72,6 @@ type MLValidationPayload = {
   };
   model_card?: MLVersionCard;
 };
-
-function derivePipelineState(data: PipelineStatus | undefined): PipelineState {
-  if (!data) return "idle";
-
-  const run = data.latest_run;
-  if (data.pipeline_active || data.pipeline?.active) return "running";
-
-  if (run) {
-    const status = (run.status ?? "").toLowerCase();
-    if (status === "failed" || status === "error") return "error";
-    if (status === "partial_failed" || status === "warning") return "warning";
-    if (status === "completed" || status === "success" || status === "ok") {
-      const failed = run.tickers_failed ?? 0;
-      const ok = run.tickers_ok ?? 0;
-      if (failed > 0 && ok > 0) return "warning";
-      if (failed > 0 && ok === 0) return "error";
-      return "completed";
-    }
-  }
-
-  if (typeof data.warning_count === "number" && data.warning_count > 0) return "warning";
-  if (data.errors?.latest_error_message) return "error";
-
-  return "idle";
-}
 
 function stateColor(state: PipelineState): string {
   switch (state) {
