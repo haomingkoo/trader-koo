@@ -155,6 +155,17 @@ def test_contract_fingerprint_and_fixture_are_hash_bound() -> None:
         "SELECT COUNT(*) FROM schema_migrations WHERE migration_id=?",
         (contract["migration_ids"]["target"],),
     ).fetchone() == (0,)
+    captured_deployed_sql_hashes = {
+        "paper_trades": "48e8d53820b3a4e34ac7fe1aa8be87feb9101b0400d28b8d22fdfd33710014df",
+        "paper_portfolio_snapshots": "169155c07f361204b9bb160066ff2d355713c07630ada4db348dc38b78bcc331",
+    }
+    for table, expected_hash in captured_deployed_sql_hashes.items():
+        sql = deployed.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()[0]
+        normalized = " ".join(str(sql).lower().split())
+        assert hashlib.sha256(normalized.encode()).hexdigest() == expected_hash
 
     target = sqlite3.connect(":memory:")
     target.executescript((

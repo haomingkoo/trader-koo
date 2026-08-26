@@ -170,8 +170,7 @@ CREATE TABLE paper_portfolio_snapshots (
             equity_index REAL NOT NULL DEFAULT 100.0,
             best_trade_pct REAL,
             worst_trade_pct REAL,
-            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, sortino_ratio REAL, calmar_ratio REAL, campaign_id TEXT NOT NULL DEFAULT 'paper-v1', starting_capital REAL, cash REAL, equity REAL, realized_pnl_usd REAL, unrealized_pnl_usd REAL, gross_exposure_usd REAL, gross_exposure_pct REAL, high_water_equity REAL, drawdown_pct REAL, session_pnl_usd REAL, legacy_unreconciled_count INTEGER NOT NULL DEFAULT 0, accounting_breaks_json TEXT NOT NULL DEFAULT '[]'
-        );
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP , sortino_ratio REAL, calmar_ratio REAL, campaign_id TEXT NOT NULL DEFAULT 'paper-v1', starting_capital REAL, cash REAL, equity REAL, realized_pnl_usd REAL, unrealized_pnl_usd REAL, gross_exposure_usd REAL, gross_exposure_pct REAL, high_water_equity REAL, drawdown_pct REAL, session_pnl_usd REAL, legacy_unreconciled_count INTEGER NOT NULL DEFAULT 0, accounting_breaks_json TEXT NOT NULL DEFAULT '[]');
 INSERT INTO paper_portfolio_snapshots (
     id,snapshot_date,open_trades,closed_trades_total,wins,losses,equity_index,
     campaign_id,starting_capital,cash,equity,legacy_unreconciled_count
