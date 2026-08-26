@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import datetime as dt
 import errno
+import json
 import logging
 import os
 import secrets
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -237,6 +239,47 @@ def _run_daily_update(
         )
     finally:
         _release_update_lock(lock_handle)
+
+
+def _run_preopen_report_watchdog() -> None:
+    """Recover a missing publication only when newer ingested prices exist."""
+    if not DB_PATH.exists():
+        _append_run_log("PREOPEN", "Skipped: database unavailable")
+        return
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            latest_price_row = conn.execute("SELECT MAX(date) FROM price_daily").fetchone()
+            latest_price_date = latest_price_row[0] if latest_price_row else None
+            report_row = conn.execute(
+                """SELECT source_timestamps_json
+                   FROM report_runs
+                   WHERE status='published' AND publication_verified=1
+                     AND is_generation_canonical=1
+                   ORDER BY published_ts DESC, run_id DESC
+                   LIMIT 1"""
+            ).fetchone()
+        report_sources = json.loads(report_row[0]) if report_row and report_row[0] else {}
+        report_price_date = report_sources.get("price_date")
+    except (json.JSONDecodeError, sqlite3.Error) as exc:
+        _append_run_log("PREOPEN", f"Publication check failed closed: {type(exc).__name__}")
+        LOG.error("Pre-open report publication check failed: %s", exc)
+        return
+
+    if latest_price_date is None:
+        _append_run_log("PREOPEN", "Skipped: no ingested price date")
+        return
+    if report_price_date == latest_price_date:
+        _append_run_log(
+            "PREOPEN",
+            f"Publication current for price_date={latest_price_date}",
+        )
+        return
+
+    _append_run_log(
+        "PREOPEN",
+        f"Recovering report: published_price_date={report_price_date} latest_price_date={latest_price_date}",
+    )
+    _run_daily_update(mode="report", source="preopen_watchdog")
 
 
 def _run_daily_update_unlocked(
@@ -940,6 +983,12 @@ def create_scheduler() -> BackgroundScheduler:
         _run_daily_update,
         CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="UTC"),
         id="daily_update",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_preopen_report_watchdog,
+        CronTrigger(hour=12, minute=0, day_of_week="mon-fri", timezone="UTC"),
+        id="preopen_report_watchdog",
         replace_existing=True,
     )
     scheduler.add_job(

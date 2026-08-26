@@ -8,6 +8,42 @@ import pytest
 
 
 class TestDailyReportEndpoint:
+    def test_daily_report_ui_view_omits_unrendered_bulk_fields(self, test_app):
+        sealed = {
+            "generated_ts": "2026-08-22T12:00:00Z",
+            "meta": {"bulk": [1, 2, 3]},
+            "signals": {
+                "setup_quality_top": [{"ticker": "AAA"}],
+                "setup_quality_all": [{"ticker": "AAA"}, {"ticker": "BBB"}],
+                "setup_quality_lookup": {"AAA": {"ticker": "AAA"}},
+                "report_decisions": [{"ticker": "AAA"}],
+                "regime_context": {
+                    "ma_matrix": [{}],
+                    "comparison": {"series": [{}]},
+                },
+            },
+        }
+        with (
+            patch(
+                "trader_koo.backend.services.report_loader.latest_daily_report_json",
+                return_value=(None, sealed),
+            ),
+            patch(
+                "trader_koo.backend.routers.report.pipeline_status_snapshot",
+                return_value={"active": False, "stage": "idle", "latest_run": None},
+            ),
+        ):
+            compact = test_app.get("/api/daily-report?view=ui").json()["latest"]
+            full = test_app.get("/api/daily-report?view=full").json()["latest"]
+
+        assert compact["signals"]["setup_quality_top"] == [{"ticker": "AAA"}]
+        assert "setup_quality_all" not in compact["signals"]
+        assert "setup_quality_lookup" not in compact["signals"]
+        assert "report_decisions" not in compact["signals"]
+        assert "meta" not in compact
+        assert full["signals"]["setup_quality_all"][1]["ticker"] == "BBB"
+        assert full["meta"]["bulk"] == [1, 2, 3]
+
     @patch(
         "trader_koo.backend.services.report_loader.latest_daily_report_json",
         return_value=(

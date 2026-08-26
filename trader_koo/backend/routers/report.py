@@ -31,11 +31,54 @@ router = APIRouter()
 REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 _MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
 
+_REPORT_UI_LATEST_KEYS = (
+    "generated_ts",
+    "ok",
+    "warnings",
+    "generation_warnings",
+    "counts",
+    "freshness",
+    "market_session",
+    "risk_filters",
+    "latest_data",
+    "report_run",
+)
+_REPORT_UI_SIGNAL_KEYS = (
+    "regime_context",
+    "sector_heatmap",
+    "setup_quality_top",
+    "setup_evaluation",
+    "tonight_key_changes",
+    "green_barrier_hits",
+    "green_barrier_coverage",
+    "suggestions",
+)
+
+
+def _compact_report_for_ui(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep the public report page contract without shipping research internals."""
+    latest = payload.get("latest")
+    if not isinstance(latest, dict):
+        return payload
+    signals = latest.get("signals")
+    compact_latest = {
+        key: latest[key]
+        for key in _REPORT_UI_LATEST_KEYS
+        if key in latest
+    }
+    compact_latest["signals"] = {
+        key: signals[key]
+        for key in _REPORT_UI_SIGNAL_KEYS
+        if isinstance(signals, dict) and key in signals
+    }
+    return {**payload, "latest": compact_latest}
+
 
 @router.get("/api/daily-report")
 def public_daily_report(
     limit: int = Query(default=20, ge=1, le=200),
     include_markdown: bool = Query(default=False),
+    view: str = Query(default="full", pattern="^(full|ui)$"),
 ) -> dict[str, Any]:
     """Return latest generated daily report for UI without admin auth."""
     payload = daily_report_response(
@@ -58,7 +101,7 @@ def public_daily_report(
             payload["vix_metrics"] = None
         finally:
             conn.close()
-    return payload
+    return _compact_report_for_ui(payload) if view == "ui" else payload
 
 
 @router.get("/api/earnings-calendar")

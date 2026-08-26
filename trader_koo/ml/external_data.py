@@ -33,6 +33,12 @@ import pandas as pd
 _cache_lock = threading.Lock()
 _fred_cache: dict[str, Any] = {}
 _polymarket_cache: dict[str, Any] = {}
+_polymarket_fetch_status: dict[str, Any] = {
+    "ok": False,
+    "source_fetched_at": None,
+    "cache_hit": False,
+    "error": "not_fetched",
+}
 _cache_ttl_sec = 3600  # 1 hour
 
 # In-memory store for bulk-prefetched FRED data.
@@ -365,15 +371,19 @@ def _parse_single_market(m: dict[str, Any]) -> dict[str, Any]:
             prices.append(None)
 
     is_resolved = bool(m.get("closed") or m.get("resolved"))
+    is_active = bool(m.get("active")) and not is_resolved and m.get("acceptingOrders") is not False
 
     return {
+        "market_id": str(m.get("id") or m.get("conditionId") or ""),
         "question": str(m.get("question", "")).strip(),
         "outcomes": outcomes,
         "prices_pct": prices,
         "volume": round(float(m.get("volume", 0) or 0), 2),
+        "volume_24h": round(float(m.get("volume24hr", 0) or 0), 2),
+        "liquidity": round(float(m.get("liquidityNum", m.get("liquidity", 0)) or 0), 2),
         "end_date": m.get("endDate"),
         "resolved": is_resolved,
-        "active": not is_resolved,
+        "active": is_active,
     }
 
 
@@ -440,6 +450,7 @@ def _classify_event_type(markets: list[dict[str, Any]]) -> str:
 def fetch_polymarket_events(
     *,
     limit: int = 15,
+    use_cache: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch curated finance-relevant Polymarket events (grouped markets).
 
@@ -447,22 +458,49 @@ def fetch_polymarket_events(
     sorts by total volume. Returns event-level data with embedded markets.
     """
     cache_key = f"poly_events_{limit}"
-    with _cache_lock:
-        cached = _polymarket_cache.get(cache_key)
-        if cached and cached.get("expires_at", 0) > dt.datetime.now(dt.timezone.utc).timestamp():
-            return cached["data"]
+    if use_cache:
+        with _cache_lock:
+            cached = _polymarket_cache.get(cache_key)
+            if cached and cached.get("expires_at", 0) > dt.datetime.now(dt.timezone.utc).timestamp():
+                _polymarket_fetch_status.update({
+                    "ok": True,
+                    "source_fetched_at": cached.get("source_fetched_at"),
+                    "cache_hit": True,
+                    "error": None,
+                })
+                return cached["data"]
 
     try:
-        url = f"{_POLYMARKET_GAMMA}/events?limit=200&active=true&closed=false"
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "trader-koo/1.0",
-            "Accept": "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw_events = json.loads(resp.read().decode("utf-8"))
+        raw_events: list[dict[str, Any]] = []
+        page_size = 100
+        for offset in (0, page_size):
+            query = urllib.parse.urlencode({
+                "limit": page_size,
+                "offset": offset,
+                "active": "true",
+                "closed": "false",
+                "order": "volume24hr",
+                "ascending": "false",
+            })
+            req = urllib.request.Request(
+                f"{_POLYMARKET_GAMMA}/events?{query}",
+                headers={"User-Agent": "trader-koo/1.0", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                page = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(page, list):
+                raise ValueError("Polymarket events response is not a list")
+            raw_events.extend(event for event in page if isinstance(event, dict))
+            if len(page) < page_size:
+                break
 
-        if not isinstance(raw_events, list):
-            return []
+        deduped_events: dict[str, dict[str, Any]] = {}
+        for event in raw_events:
+            identity = str(event.get("id") or event.get("slug") or "")
+            if identity:
+                deduped_events[identity] = event
+        raw_events = list(deduped_events.values())
+        source_fetched_at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
         # Filter using Polymarket's event taxonomy. Untagged events fail closed.
         relevant: list[dict[str, Any]] = []
@@ -475,11 +513,14 @@ def fetch_polymarket_events(
 
             # Parse all sub-markets for this event
             parsed_markets = _parse_event_markets(raw_markets)
+            active_markets = [market for market in parsed_markets if market.get("active")]
+            if not active_markets:
+                continue
 
-            # Top market = highest volume across all sub-markets
+            # The headline must represent a currently tradable market.
             top_market = (
-                max(parsed_markets, key=lambda m: m["volume"])
-                if parsed_markets
+                max(active_markets, key=lambda m: (m["volume_24h"], m["volume"]))
+                if active_markets
                 else None
             )
 
@@ -495,6 +536,8 @@ def fetch_polymarket_events(
                 "slug": ev.get("slug", ""),
                 "market_count": len(raw_markets),
                 "total_volume": round(total_volume, 2),
+                "active_volume_24h": round(sum(m["volume_24h"] for m in active_markets), 2),
+                "active_liquidity": round(sum(m["liquidity"] for m in active_markets), 2),
                 "end_date": ev.get("endDate"),
                 "image": ev.get("image"),
                 "url": f"https://polymarket.com/event/{ev.get('slug', '')}",
@@ -503,24 +546,48 @@ def fetch_polymarket_events(
                 "active_count": active_count,
                 "resolved_count": resolved_count,
                 "event_type": event_type,
+                "source_fetched_at": source_fetched_at,
             })
 
-        # Sort by volume, return top N
-        relevant.sort(key=lambda e: e["total_volume"], reverse=True)
+        # Rank current activity, not lifetime volume from resolved contracts.
+        relevant.sort(
+            key=lambda e: (e["active_volume_24h"], e["active_liquidity"]),
+            reverse=True,
+        )
         result = relevant[:limit]
 
         with _cache_lock:
             _polymarket_cache[cache_key] = {
                 "data": result,
                 "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=_cache_ttl_sec)).timestamp(),
+                "source_fetched_at": source_fetched_at,
             }
+            _polymarket_fetch_status.update({
+                "ok": True,
+                "source_fetched_at": source_fetched_at,
+                "cache_hit": False,
+                "error": None,
+            })
 
         LOG.info("Polymarket events: %d relevant / %d total", len(relevant), len(raw_events))
         return result
 
     except Exception as exc:
         LOG.warning("Polymarket events fetch failed: %s", exc)
+        with _cache_lock:
+            _polymarket_fetch_status.update({
+                "ok": False,
+                "source_fetched_at": None,
+                "cache_hit": False,
+                "error": type(exc).__name__,
+            })
         return []
+
+
+def polymarket_fetch_status() -> dict[str, Any]:
+    """Return non-secret source freshness for the latest fetch attempt."""
+    with _cache_lock:
+        return dict(_polymarket_fetch_status)
 
 
 def get_polymarket_macro_probabilities() -> dict[str, float]:
@@ -558,23 +625,23 @@ def get_polymarket_macro_probabilities() -> dict[str, float]:
     recession_probs: list[float] = []
     all_yes_probs: list[float] = []
 
+    def yes_probability(market: dict[str, Any]) -> float | None:
+        for outcome, price in zip(
+            market.get("outcomes") or [],
+            market.get("prices_pct") or [],
+        ):
+            if str(outcome).lower() == "yes" and price is not None:
+                return float(price)
+        prices = market.get("prices_pct") or []
+        return float(prices[0]) if prices and prices[0] is not None else None
+
     for ev in events:
         title_lower = ev.get("title", "").lower()
         top = ev.get("top_market")
         if not top:
             continue
 
-        # Extract "Yes" probability (first outcome price)
-        prices = top.get("prices_pct") or []
-        outcomes = top.get("outcomes") or []
-        yes_prob: float | None = None
-        for outcome, price in zip(outcomes, prices):
-            if str(outcome).lower() == "yes" and price is not None:
-                yes_prob = float(price)
-                break
-        # Fallback: first price if no explicit "Yes" label
-        if yes_prob is None and prices and prices[0] is not None:
-            yes_prob = float(prices[0])
+        yes_prob = yes_probability(top)
 
         if yes_prob is None:
             continue
@@ -582,7 +649,21 @@ def get_polymarket_macro_probabilities() -> dict[str, float]:
         all_yes_probs.append(yes_prob)
 
         if "rate cut" in title_lower or "interest rate" in title_lower:
-            fed_cut_probs.append(yes_prob)
+            no_cut_market = next(
+                (
+                    market
+                    for market in (ev.get("markets") or [])
+                    if market.get("active")
+                    and "no fed rate cut" in str(market.get("question") or "").lower()
+                ),
+                None,
+            )
+            no_cut_prob = yes_probability(no_cut_market) if no_cut_market else None
+            fed_cut_probs.append(
+                round(100.0 - no_cut_prob, 4)
+                if no_cut_prob is not None
+                else yes_prob
+            )
         if "recession" in title_lower:
             recession_probs.append(yes_prob)
 

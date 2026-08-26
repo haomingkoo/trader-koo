@@ -121,3 +121,17 @@ def test_new_prev_close_cohort_is_a_new_macro_event() -> None:
     assert macro_monitor._macro_event_key(
         [OIL_MOVE], regime
     ) != macro_monitor._macro_event_key([next_session_move], regime)
+
+
+def test_macro_live_reuses_short_lived_snapshot(tmp_path) -> None:
+    db_path = tmp_path / "macro-live.db"
+    macro_monitor._macro_live_cache.clear()
+    snapshot = {"ok": True, "instruments": [], "regime": {}, "checked_at": "now"}
+
+    with patch.object(macro_monitor, "_load_macro_live", return_value=snapshot) as load:
+        first = macro_monitor.get_macro_live(db_path)
+        second = macro_monitor.get_macro_live(db_path)
+
+    assert first == second == snapshot
+    assert first is not second
+    load.assert_called_once_with(db_path)

@@ -25,7 +25,10 @@ from urllib.parse import quote
 LOG = logging.getLogger("trader_koo.notifications.market_monitor")
 
 POLYMARKET_MIN_ALERT_VOLUME_USD = 25_000.0
+POLYMARKET_MIN_ALERT_LIQUIDITY_USD = 25_000.0
+POLYMARKET_MIN_ALERT_VOLUME_24H_USD = 5_000.0
 POLYMARKET_MAX_SNAPSHOT_AGE_MINUTES = 15
+POLYMARKET_BASELINE_TOLERANCE_MINUTES = 15
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +69,9 @@ def snapshot_polymarket(db_path: Path) -> int:
     from trader_koo.ml.external_data import fetch_polymarket_events
 
     try:
-        events = fetch_polymarket_events(limit=50)
+        # Archival must observe the provider again. Re-stamping the one-hour
+        # display cache every five minutes would fabricate snapshot freshness.
+        events = fetch_polymarket_events(limit=50, use_cache=False)
     except Exception as exc:
         LOG.error("Failed to fetch Polymarket events for snapshot: %s", exc)
         return 0
@@ -91,6 +96,13 @@ def snapshot_polymarket(db_path: Path) -> int:
             prices = mkt.get("prices_pct") or []
             outcomes = mkt.get("outcomes") or []
             volume = mkt.get("volume")
+            liquidity = float(mkt.get("liquidity") or 0)
+            volume_24h = float(mkt.get("volume_24h") or 0)
+            if (
+                liquidity < POLYMARKET_MIN_ALERT_LIQUIDITY_USD
+                or volume_24h < POLYMARKET_MIN_ALERT_VOLUME_24H_USD
+            ):
+                continue
 
             # Extract YES probability
             yes_prob: float | None = None
@@ -145,6 +157,7 @@ def detect_polymarket_spikes(
     *,
     min_volume_usd: float = POLYMARKET_MIN_ALERT_VOLUME_USD,
     max_snapshot_age_minutes: int = POLYMARKET_MAX_SNAPSHOT_AGE_MINUTES,
+    baseline_tolerance_minutes: int = POLYMARKET_BASELINE_TOLERANCE_MINUTES,
     now_utc: dt.datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Compare current probabilities to ``lookback_hours`` ago.
@@ -158,8 +171,6 @@ def detect_polymarket_spikes(
         ensure_polymarket_schema(conn)
 
         now = (now_utc or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)
-        cutoff = (now - dt.timedelta(hours=lookback_hours)).isoformat()
-
         # Get latest snapshot per market
         latest_rows = conn.execute("""
             SELECT event_slug, event_title, market_question,
@@ -190,6 +201,9 @@ def detect_polymarket_spikes(
             )
             return []
 
+        cutoff = latest_ts - dt.timedelta(hours=lookback_hours)
+        baseline_floor = cutoff - dt.timedelta(minutes=baseline_tolerance_minutes)
+
         spikes: list[dict[str, Any]] = []
         for row in latest_rows:
             slug = row["event_slug"]
@@ -207,11 +221,11 @@ def detect_polymarket_spikes(
                 SELECT probability, snapshot_ts
                 FROM polymarket_snapshots
                 WHERE event_slug = ? AND market_question = ?
-                      AND snapshot_ts <= ?
+                      AND snapshot_ts BETWEEN ? AND ?
                 ORDER BY snapshot_ts DESC
                 LIMIT 1
                 """,
-                (slug, question, cutoff),
+                (slug, question, baseline_floor.isoformat(), cutoff.isoformat()),
             ).fetchone()
 
             if old_row is None:
@@ -232,6 +246,8 @@ def detect_polymarket_spikes(
                     "direction": direction,
                     "volume": volume,
                     "lookback_hours": lookback_hours,
+                    "baseline_snapshot_ts": old_row["snapshot_ts"],
+                    "latest_snapshot_ts": latest_ts_raw,
                 })
 
         spikes.sort(key=lambda s: abs(s["change_pct"]), reverse=True)
@@ -495,7 +511,7 @@ def send_spike_alerts(db_path: Path) -> int:
             link_html = f'\n   <a href="{poly_link}">View on Polymarket</a>' if slug else ""
             all_lines.append(
                 f"{arrow} <b>{_html(question)}</b>\n"
-                f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | {vol}"
+                f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | lifetime vol {vol}"
                 f"{link_html}"
             )
             pending_cooldowns.append((key, direction, new_p, legacy_key))

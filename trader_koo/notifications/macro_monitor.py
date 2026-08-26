@@ -13,9 +13,12 @@ Public API
 from __future__ import annotations
 
 import datetime as dt
+import copy
 import logging
 import os
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +52,11 @@ _VIX_TICKER = "^VIX"
 
 # Alert cooldown: suppress macro alerts for 1 hour
 MACRO_COOLDOWN_SEC = 3600
+MACRO_LIVE_CACHE_TTL_SEC = 45
+
+_macro_live_cache_lock = threading.Lock()
+_macro_live_refresh_lock = threading.Lock()
+_macro_live_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 # DB table for persisting cooldown timestamps across deploys
 _COOLDOWN_TABLE = "macro_alert_cooldowns"
@@ -520,11 +528,7 @@ def send_macro_alert(db_path: Path) -> bool:
     return sent
 
 
-def get_macro_live(db_path: Path) -> dict[str, Any]:
-    """Return current prices + daily change for all MACRO_WATCH instruments.
-
-    Used by the ``GET /api/macro-live`` endpoint.
-    """
+def _load_macro_live(db_path: Path) -> dict[str, Any]:
     api_key = _get_finnhub_key()
     instruments: list[dict[str, Any]] = []
 
@@ -570,7 +574,7 @@ def get_macro_live(db_path: Path) -> dict[str, Any]:
     ]
     regime = detect_risk_regime(regime_input)
 
-    return {
+    result = {
         "ok": True,
         "instruments": instruments,
         "regime": regime,
@@ -578,3 +582,31 @@ def get_macro_live(db_path: Path) -> dict[str, Any]:
             microsecond=0,
         ).isoformat(),
     }
+    return result
+
+
+def get_macro_live(db_path: Path) -> dict[str, Any]:
+    """Return a short-lived, single-flight macro snapshot for the web shell."""
+    cache_key = str(db_path.resolve())
+
+    def cached_result() -> dict[str, Any] | None:
+        with _macro_live_cache_lock:
+            cached = _macro_live_cache.get(cache_key)
+            if cached and time.monotonic() - cached[0] < MACRO_LIVE_CACHE_TTL_SEC:
+                return copy.deepcopy(cached[1])
+        return None
+
+    cached = cached_result()
+    if cached is not None:
+        return cached
+
+    # Only one request performs the slow provider fan-out. Requests arriving
+    # during that refresh reuse its completed snapshot.
+    with _macro_live_refresh_lock:
+        cached = cached_result()
+        if cached is not None:
+            return cached
+        result = _load_macro_live(db_path)
+        with _macro_live_cache_lock:
+            _macro_live_cache[cache_key] = (time.monotonic(), result)
+        return copy.deepcopy(result)
