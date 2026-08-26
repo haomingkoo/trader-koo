@@ -40,8 +40,9 @@ frozen and tested in the contract.
 
 The fixture manifest names the clean, legacy-production-like, collision,
 malformed-object, interruption, and exact-v5 cases required of the later
-migration and verifier PRs. Three hash-bound SQL fixtures construct the fresh
-v4, 42-trade production-like legacy v4, and exact empty v5 schemas. Collision
+migration and verifier PRs. Four hash-bound SQL fixtures construct the fresh
+v4, 42-trade production-like legacy v4, sanitized deployed-v4 lineage, and
+exact empty v5 schemas. Collision
 cases contain executable minimal SQL, while interruption cases name the required
 fault-injection points. Exact normalized table and trigger SQL hashes are part
 of the semantic fingerprint. Production database files and sealed research

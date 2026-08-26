@@ -22,7 +22,7 @@ from trader_koo.paper_trade.schema_v5_migration import (
 
 FROZEN_CONTRACT_ID = "paper-schema-contract-v5"
 FROZEN_SEMANTIC_FINGERPRINT = (
-    "82bbb2248f0b4a1d3f0cb2f5c5af60322e2f17a1f401ce5036c18578812d1191"
+    "ede6ea9e66d95034c922025829564bad6f64eff38b0846498e8acb477d270132"
 )
 
 

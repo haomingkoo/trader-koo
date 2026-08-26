@@ -491,7 +491,7 @@ def _source_contract_diagnostics(
             "first_break": foreign_keys[0],
         })
     source_signatures = []
-    for fixture_id in ("fresh_v4", "production_like_legacy_v4"):
+    for fixture_id in ("fresh_v4", "production_like_legacy_v4", "deployed_v4"):
         fixture_conn = _fixture_connection(fixtures[fixture_id])
         try:
             source_signatures.append(_schema_signature(fixture_conn, governed_only=True))

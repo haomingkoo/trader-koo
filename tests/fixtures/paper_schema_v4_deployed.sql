@@ -1,4 +1,3 @@
-PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bot_versions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +71,8 @@ CREATE TABLE paper_campaigns (
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+INSERT INTO "paper_campaigns" VALUES('paper-v1','Paper Campaign v1','paper-trade-eval-v1','','frozen',1000000.0,3,'not_measured','2026-08-26 00:29:18','2026-08-26 00:29:18');
+INSERT INTO "paper_campaigns" VALUES('paper-v2','Paper Campaign v2','paper-campaign-v2.0','','draft',1000000.0,3,'not_measured','2026-08-26 00:29:18','2026-08-26 00:29:18');
 CREATE TABLE paper_candidate_decisions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             report_run_id TEXT NOT NULL,
@@ -154,8 +155,7 @@ CREATE TABLE paper_pending_orders (
         );
 CREATE TABLE paper_portfolio_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            snapshot_date TEXT NOT NULL,
-            campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
+            snapshot_date TEXT NOT NULL UNIQUE,
             open_trades INTEGER NOT NULL DEFAULT 0,
             closed_trades_total INTEGER NOT NULL DEFAULT 0,
             wins INTEGER NOT NULL DEFAULT 0,
@@ -170,8 +170,15 @@ CREATE TABLE paper_portfolio_snapshots (
             equity_index REAL NOT NULL DEFAULT 100.0,
             best_trade_pct REAL,
             worst_trade_pct REAL,
-            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, sortino_ratio REAL, calmar_ratio REAL, starting_capital REAL, cash REAL, equity REAL, realized_pnl_usd REAL, unrealized_pnl_usd REAL, gross_exposure_usd REAL, gross_exposure_pct REAL, high_water_equity REAL, drawdown_pct REAL, session_pnl_usd REAL, legacy_unreconciled_count INTEGER NOT NULL DEFAULT 0, accounting_breaks_json TEXT NOT NULL DEFAULT '[]', snapshot_ts TEXT, total_unrealized_pnl_pct REAL
+            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, sortino_ratio REAL, calmar_ratio REAL, campaign_id TEXT NOT NULL DEFAULT 'paper-v1', starting_capital REAL, cash REAL, equity REAL, realized_pnl_usd REAL, unrealized_pnl_usd REAL, gross_exposure_usd REAL, gross_exposure_pct REAL, high_water_equity REAL, drawdown_pct REAL, session_pnl_usd REAL, legacy_unreconciled_count INTEGER NOT NULL DEFAULT 0, accounting_breaks_json TEXT NOT NULL DEFAULT '[]'
         );
+INSERT INTO paper_portfolio_snapshots (
+    id,snapshot_date,open_trades,closed_trades_total,wins,losses,equity_index,
+    campaign_id,starting_capital,cash,equity,legacy_unreconciled_count
+) VALUES (
+    201,'2026-08-25',1,0,0,0,100.0,
+    'paper-v1',1000000.0,990000.0,1000000.0,1
+);
 CREATE TABLE paper_shadow_decision_sets (
             report_run_id TEXT NOT NULL,
             policy_id TEXT NOT NULL,
@@ -255,19 +262,14 @@ CREATE TABLE paper_trade_reflections (
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 CREATE TABLE paper_trade_schema_meta (
-   id INTEGER PRIMARY KEY CHECK (id=1),
-   schema_version INTEGER NOT NULL CHECK (schema_version=5),
-   contract_id TEXT NOT NULL CHECK (contract_id='paper-schema-contract-v5'),
-   schema_fingerprint TEXT NOT NULL CHECK (
-     length(schema_fingerprint)=64 AND lower(schema_fingerprint) NOT GLOB '*[^0-9a-f]*'
-   )
- );
+               id INTEGER PRIMARY KEY CHECK (id=1),
+               schema_version INTEGER NOT NULL
+           );
+INSERT INTO "paper_trade_schema_meta" VALUES(1,4);
 CREATE TABLE paper_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             report_date TEXT NOT NULL,
             generated_ts TEXT,
-            report_run_id TEXT REFERENCES report_runs(run_id),
-            campaign_id TEXT NOT NULL REFERENCES paper_campaigns(campaign_id),
             ticker TEXT NOT NULL,
             direction TEXT NOT NULL CHECK (direction IN ('long', 'short')),
             entry_price REAL NOT NULL,
@@ -299,8 +301,62 @@ CREATE TABLE paper_trades (
             yolo_recency TEXT,
             debate_agreement_score REAL,
             created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, decision_version TEXT, quantity REAL, entry_notional REAL, entry_commission REAL, exit_commission REAL, borrow_cost REAL, realized_pnl_usd REAL, accounting_status TEXT NOT NULL DEFAULT 'legacy_unreconciled', decision_state TEXT, analyst_stage TEXT, debate_stage TEXT, risk_stage TEXT, portfolio_decision TEXT, decision_summary TEXT, decision_reasons TEXT, risk_flags TEXT, position_size_pct REAL, risk_budget_pct REAL, stop_distance_pct REAL, expected_reward_pct REAL, expected_r_multiple REAL, entry_plan TEXT, exit_plan TEXT, sizing_summary TEXT, review_status TEXT, review_summary TEXT, entry_reason TEXT, entry_evidence TEXT, entry_risks TEXT, bot_version TEXT, vix_at_entry REAL, vix_percentile_at_entry REAL, regime_state_at_entry TEXT, hmm_regime_at_entry TEXT, hmm_confidence_at_entry REAL, ml_predicted_win_prob REAL, ml_confidence REAL, ml_signal TEXT, notes TEXT DEFAULT '', directional_regime_at_entry TEXT, directional_regime_confidence REAL, policy_version TEXT
+            updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            decision_version TEXT,
+            decision_state TEXT,
+            analyst_stage TEXT,
+            debate_stage TEXT,
+            risk_stage TEXT,
+            portfolio_decision TEXT,
+            decision_summary TEXT,
+            decision_reasons TEXT,
+            risk_flags TEXT,
+            position_size_pct REAL,
+            risk_budget_pct REAL,
+            stop_distance_pct REAL,
+            expected_reward_pct REAL,
+            expected_r_multiple REAL,
+            entry_plan TEXT,
+            exit_plan TEXT,
+            sizing_summary TEXT,
+            review_status TEXT,
+            review_summary TEXT,
+            bot_version TEXT,
+            vix_at_entry REAL,
+            vix_percentile_at_entry REAL,
+            regime_state_at_entry TEXT,
+            hmm_regime_at_entry TEXT,
+            hmm_confidence_at_entry REAL,
+            ml_predicted_win_prob REAL,
+            ml_confidence REAL,
+            ml_signal TEXT,
+            notes TEXT DEFAULT '',
+            directional_regime_at_entry TEXT,
+            directional_regime_confidence REAL,
+            entry_reason TEXT,
+            entry_evidence TEXT,
+            entry_risks TEXT,
+            quantity REAL,
+            entry_notional REAL,
+            entry_commission REAL,
+            exit_commission REAL,
+            borrow_cost REAL,
+            realized_pnl_usd REAL,
+            accounting_status TEXT NOT NULL DEFAULT 'legacy_unreconciled',
+            report_run_id TEXT,
+            campaign_id TEXT NOT NULL DEFAULT 'paper-v1',
+            policy_version TEXT,
+            UNIQUE(report_date, ticker, direction)
         );
+INSERT INTO paper_trades (
+    id,report_date,generated_ts,ticker,direction,entry_price,entry_date,status,
+    current_price,quantity,entry_notional,entry_commission,accounting_status,
+    campaign_id,policy_version
+) VALUES (
+    101,'2026-08-22','2026-08-22T22:00:00Z','FIXTURE','long',100.0,
+    '2026-08-25','open',101.0,100.0,10000.0,10.0,
+    'legacy_unreconciled','paper-v1','paper-trade-eval-v1'
+);
 CREATE TABLE report_admission_attempts (
             attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT NOT NULL REFERENCES report_runs(run_id),
@@ -367,187 +423,14 @@ CREATE TABLE report_schema_migrations (
                migration TEXT PRIMARY KEY,
                applied_ts TEXT NOT NULL
            );
+INSERT INTO "report_schema_migrations" VALUES('admission-ledger-contract-v5','2026-08-26T00:29:18Z');
 CREATE TABLE schema_migrations (
             migration_id TEXT PRIMARY KEY,
             applied_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-CREATE INDEX idx_bot_versions_status ON bot_versions(status, created_ts);
-CREATE INDEX idx_candidate_decisions_campaign_report ON paper_candidate_decisions(campaign_id, report_date, report_run_id, candidate_rank);
-CREATE UNIQUE INDEX idx_one_active_paper_campaign ON paper_campaigns(status) WHERE status='active';
-CREATE UNIQUE INDEX idx_paper_portfolio_campaign_date ON paper_portfolio_snapshots(campaign_id,snapshot_date);
-CREATE INDEX idx_paper_portfolio_date ON paper_portfolio_snapshots(snapshot_date);
-CREATE INDEX idx_paper_reflections_ticker ON paper_trade_reflections(ticker, exit_date);
-CREATE INDEX idx_paper_reflections_trade ON paper_trade_reflections(trade_id);
-CREATE INDEX idx_paper_trade_events_timeline ON paper_trade_events(trade_id,event_date,id);
-CREATE UNIQUE INDEX idx_paper_trades_campaign_unique ON paper_trades(campaign_id,report_date,ticker,direction);
-CREATE INDEX idx_paper_trades_family ON paper_trades(campaign_id,setup_family,direction,status);
-CREATE INDEX idx_paper_trades_report_run ON paper_trades(report_run_id);
-CREATE INDEX idx_paper_trades_status ON paper_trades(campaign_id,status,entry_date);
-CREATE INDEX idx_paper_trades_ticker ON paper_trades(campaign_id,ticker,status);
+INSERT INTO "schema_migrations" VALUES('paper_campaign_v2_inactive_governed_20260823','2026-08-26 00:29:18');
+INSERT INTO "schema_migrations" VALUES('paper_campaign_v1_backfill_20260822','2026-08-26 00:29:18');
 CREATE INDEX idx_report_admission_attempts_run ON report_admission_attempts(run_id,attempt_id);
-CREATE UNIQUE INDEX idx_report_runs_canonical_generation ON report_runs(generation_key) WHERE is_generation_canonical=1 AND generation_key IS NOT NULL;
-CREATE INDEX idx_report_runs_published ON report_runs(status,generated_ts,published_ts DESC,run_id DESC);
-CREATE TRIGGER paper_campaign_approvals_no_delete
-            BEFORE DELETE ON paper_campaign_approvals
-            BEGIN SELECT RAISE(ABORT, 'paper campaign approvals are immutable'); END;
-CREATE TRIGGER paper_campaign_approvals_no_update
-            BEFORE UPDATE ON paper_campaign_approvals
-            BEGIN SELECT RAISE(ABORT, 'paper campaign approvals are immutable'); END;
-CREATE TRIGGER paper_campaign_audit_no_delete
-        BEFORE DELETE ON paper_campaign_audit
-        BEGIN SELECT RAISE(ABORT, 'paper campaign audit is immutable'); END;
-CREATE TRIGGER paper_campaign_audit_no_update
-        BEFORE UPDATE ON paper_campaign_audit
-        BEGIN SELECT RAISE(ABORT, 'paper campaign audit is immutable'); END;
-CREATE TRIGGER paper_campaign_experiments_no_delete
-            BEFORE DELETE ON paper_campaign_experiments
-            BEGIN SELECT RAISE(ABORT, 'paper campaign experiments are immutable'); END;
-CREATE TRIGGER paper_campaign_experiments_no_update
-            BEFORE UPDATE ON paper_campaign_experiments
-            BEGIN SELECT RAISE(ABORT, 'paper campaign experiments are immutable'); END;
-CREATE TRIGGER paper_campaign_preregistrations_no_delete
-            BEFORE DELETE ON paper_campaign_preregistrations
-            BEGIN SELECT RAISE(ABORT, 'paper campaign preregistrations are immutable'); END;
-CREATE TRIGGER paper_campaign_preregistrations_no_update
-            BEFORE UPDATE ON paper_campaign_preregistrations
-            BEGIN SELECT RAISE(ABORT, 'paper campaign preregistrations are immutable'); END;
-CREATE TRIGGER paper_candidate_decisions_no_delete
-        BEFORE DELETE ON paper_candidate_decisions
-        BEGIN SELECT RAISE(ABORT, 'paper candidate decisions are immutable'); END;
-CREATE TRIGGER paper_candidate_decisions_no_insert_after_seal
-        BEFORE INSERT ON paper_candidate_decisions
-        WHEN EXISTS (
-            SELECT 1 FROM paper_decision_sets
-            WHERE report_run_id=NEW.report_run_id
-              AND campaign_id=NEW.campaign_id
-              AND status='sealed'
-        )
-        BEGIN SELECT RAISE(ABORT, 'sealed paper decision set is not appendable'); END;
-CREATE TRIGGER paper_candidate_decisions_no_update
-        BEFORE UPDATE ON paper_candidate_decisions
-        BEGIN SELECT RAISE(ABORT, 'paper candidate decisions are immutable'); END;
-CREATE TRIGGER paper_decision_sets_no_delete
-        BEFORE DELETE ON paper_decision_sets
-        BEGIN SELECT RAISE(ABORT, 'paper decision sets are immutable'); END;
-CREATE TRIGGER paper_decision_sets_no_update
-        BEFORE UPDATE ON paper_decision_sets
-        BEGIN SELECT RAISE(ABORT, 'paper decision sets are immutable'); END;
-CREATE TRIGGER paper_order_events_no_delete
-        BEFORE DELETE ON paper_order_events
-        BEGIN SELECT RAISE(ABORT, 'paper order events are immutable'); END;
-CREATE TRIGGER paper_order_events_no_update
-        BEFORE UPDATE ON paper_order_events
-        BEGIN SELECT RAISE(ABORT, 'paper order events are immutable'); END;
-CREATE TRIGGER paper_pending_orders_immutable_payload
-        BEFORE UPDATE ON paper_pending_orders
-        WHEN NEW.order_id IS NOT OLD.order_id
-          OR NEW.report_run_id IS NOT OLD.report_run_id
-          OR NEW.report_date IS NOT OLD.report_date
-          OR NEW.generated_ts IS NOT OLD.generated_ts
-          OR NEW.campaign_id IS NOT OLD.campaign_id
-          OR NEW.policy_version IS NOT OLD.policy_version
-          OR NEW.candidate_rank IS NOT OLD.candidate_rank
-          OR NEW.ticker IS NOT OLD.ticker
-          OR NEW.direction IS NOT OLD.direction
-          OR NEW.candidate_json IS NOT OLD.candidate_json
-          OR NEW.critic_json IS NOT OLD.critic_json
-          OR NEW.market_context_json IS NOT OLD.market_context_json
-          OR NEW.avg_daily_volume IS NOT OLD.avg_daily_volume
-          OR NEW.order_hash IS NOT OLD.order_hash
-          OR NEW.created_ts IS NOT OLD.created_ts
-        BEGIN SELECT RAISE(ABORT, 'pending order payload is immutable'); END;
-CREATE TRIGGER paper_pending_orders_no_delete
-        BEFORE DELETE ON paper_pending_orders
-        BEGIN SELECT RAISE(ABORT, 'pending orders are immutable audit facts'); END;
-CREATE TRIGGER paper_pending_orders_terminal_transition
-        BEFORE UPDATE OF status,resolved_ts ON paper_pending_orders
-        WHEN OLD.status!='pending' OR NEW.status NOT IN ('filled','rejected','cancelled')
-          OR NEW.resolved_ts IS NULL
-        BEGIN SELECT RAISE(ABORT, 'pending order has an invalid terminal transition'); END;
-CREATE TRIGGER paper_pending_orders_valid_insert
-        BEFORE INSERT ON paper_pending_orders
-        WHEN NEW.status!='pending' OR NEW.resolved_ts IS NOT NULL
-          OR NEW.order_hash IS NULL
-          OR length(NEW.order_hash)!=64
-          OR lower(NEW.order_hash) GLOB '*[^0-9a-f]*'
-        BEGIN SELECT RAISE(ABORT, 'pending order requires a sealed immutable payload'); END;
-CREATE TRIGGER paper_shadow_decisions_no_delete
-        BEFORE DELETE ON paper_shadow_decisions
-        BEGIN SELECT RAISE(ABORT,'shadow decisions are immutable'); END;
-CREATE TRIGGER paper_shadow_decisions_no_insert_after_seal
-        BEFORE INSERT ON paper_shadow_decisions
-        WHEN EXISTS (
-            SELECT 1 FROM paper_shadow_decision_sets
-            WHERE report_run_id=NEW.report_run_id AND policy_id=NEW.policy_id
-        )
-        BEGIN SELECT RAISE(ABORT,'sealed shadow decision set is not appendable'); END;
-CREATE TRIGGER paper_shadow_decisions_no_update
-        BEFORE UPDATE ON paper_shadow_decisions
-        BEGIN SELECT RAISE(ABORT,'shadow decisions are immutable'); END;
-CREATE TRIGGER paper_shadow_outcomes_no_delete
-        BEFORE DELETE ON paper_shadow_outcomes
-        BEGIN SELECT RAISE(ABORT,'shadow outcomes are immutable'); END;
-CREATE TRIGGER paper_shadow_outcomes_no_update
-        BEFORE UPDATE ON paper_shadow_outcomes
-        BEGIN SELECT RAISE(ABORT,'shadow outcomes are immutable'); END;
-CREATE TRIGGER paper_shadow_policies_no_delete
-        BEFORE DELETE ON paper_shadow_policies
-        BEGIN SELECT RAISE(ABORT,'shadow policies are immutable'); END;
-CREATE TRIGGER paper_shadow_policies_no_update
-        BEFORE UPDATE ON paper_shadow_policies
-        BEGIN SELECT RAISE(ABORT,'shadow policies are immutable'); END;
-CREATE TRIGGER paper_shadow_sets_no_delete
-        BEFORE DELETE ON paper_shadow_decision_sets
-        BEGIN SELECT RAISE(ABORT,'shadow decision sets are immutable'); END;
-CREATE TRIGGER paper_shadow_sets_no_update
-        BEFORE UPDATE ON paper_shadow_decision_sets
-        BEGIN SELECT RAISE(ABORT,'shadow decision sets are immutable'); END;
-CREATE TRIGGER paper_trade_events_no_delete
-        BEFORE DELETE ON paper_trade_events
-        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END;
-CREATE TRIGGER paper_trade_events_no_update
-        BEFORE UPDATE ON paper_trade_events
-        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END;
-CREATE TRIGGER paper_trades_immutable_lineage
-        BEFORE UPDATE OF report_run_id ON paper_trades
-        WHEN NEW.report_run_id IS NOT OLD.report_run_id
-        BEGIN
-            SELECT RAISE(ABORT, 'paper trade report lineage is immutable');
-        END;
-CREATE TRIGGER paper_trades_require_canonical_run
-        BEFORE INSERT ON paper_trades
-        WHEN NOT EXISTS (
-            SELECT 1 FROM report_runs r
-            JOIN report_run_decisions d ON d.run_id=r.run_id
-            WHERE r.run_id=NEW.report_run_id
-              AND r.status='published' AND r.publication_verified=1
-              AND r.is_generation_canonical=1
-              AND d.ticker=NEW.ticker AND d.decision='accepted'
-        )
-        BEGIN
-            SELECT RAISE(ABORT, 'paper trades require a canonical published report run with an accepted decision');
-        END;
-CREATE TRIGGER paper_v1_campaign_no_delete
-        BEFORE DELETE ON paper_campaigns WHEN OLD.campaign_id='paper-v1'
-        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 metadata is immutable'); END;
-CREATE TRIGGER paper_v1_campaign_no_update
-        BEFORE UPDATE ON paper_campaigns WHEN OLD.campaign_id='paper-v1'
-        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 metadata is immutable'); END;
-CREATE TRIGGER paper_v1_trades_no_delete
-        BEFORE DELETE ON paper_trades WHEN OLD.campaign_id = 'paper-v1'
-        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END;
-CREATE TRIGGER paper_v1_trades_no_insert
-        BEFORE INSERT ON paper_trades WHEN NEW.campaign_id = 'paper-v1'
-        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END;
-CREATE TRIGGER paper_v1_trades_no_update BEFORE UPDATE ON paper_trades
-WHEN OLD.campaign_id = 'paper-v1'
-BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END;
-CREATE TRIGGER report_admission_attempts_no_delete
-           BEFORE DELETE ON report_admission_attempts
-           BEGIN SELECT RAISE(ABORT,'report admission attempts are immutable'); END;
-CREATE TRIGGER report_admission_attempts_no_update
-           BEFORE UPDATE ON report_admission_attempts
-           BEGIN SELECT RAISE(ABORT,'report admission attempts are immutable'); END;
 CREATE TRIGGER report_admission_attempts_valid_insert
            BEFORE INSERT ON report_admission_attempts
            WHEN NEW.attempted_ts IS NULL
@@ -572,65 +455,14 @@ CREATE TRIGGER report_admission_attempts_valid_insert
                   AND COALESCE(NEW.error_message,'') NOT GLOB '*[^A-Za-z0-9_]*')
              ),1)
            BEGIN SELECT RAISE(ABORT,'invalid report admission attempt'); END;
-CREATE TRIGGER report_run_decisions_immutable_delete
-            BEFORE DELETE ON report_run_decisions BEGIN SELECT RAISE(ABORT,'report decisions are immutable'); END;
-CREATE TRIGGER report_run_decisions_immutable_update
-            BEFORE UPDATE ON report_run_decisions BEGIN SELECT RAISE(ABORT,'report decisions are immutable'); END;
-CREATE TRIGGER report_run_decisions_parent_started
-            BEFORE INSERT ON report_run_decisions
-            WHEN COALESCE((SELECT status FROM report_runs WHERE run_id=NEW.run_id),'')!='started'
-            BEGIN SELECT RAISE(ABORT,'report decisions require a started parent run'); END;
-CREATE TRIGGER report_runs_failed_immutable
-            BEFORE UPDATE ON report_runs WHEN OLD.status='failed'
-            BEGIN SELECT RAISE(ABORT,'failed report run is immutable'); END;
-CREATE TRIGGER report_runs_immutable_delete
-            BEFORE DELETE ON report_runs BEGIN SELECT RAISE(ABORT,'report runs are immutable'); END;
-CREATE TRIGGER report_runs_pointer_transition
-            BEFORE UPDATE ON report_runs
-            WHEN OLD.status='published' AND (
-              (NEW.is_generation_canonical IS NOT OLD.is_generation_canonical OR
-               NEW.superseded_by_run_id IS NOT OLD.superseded_by_run_id) AND NOT (
-                (OLD.is_generation_canonical=0 AND NEW.is_generation_canonical=1
-                 AND OLD.superseded_by_run_id IS NULL AND NEW.superseded_by_run_id IS NULL
-                 AND NOT EXISTS (SELECT 1 FROM report_runs r WHERE r.generation_key=OLD.generation_key
-                                 AND r.is_generation_canonical=1 AND r.run_id!=OLD.run_id))
-                OR
-                (OLD.is_generation_canonical=1 AND NEW.is_generation_canonical=0
-                 AND OLD.superseded_by_run_id IS NULL AND NEW.superseded_by_run_id IS NOT NULL
-                 AND EXISTS (SELECT 1 FROM report_runs r WHERE r.run_id=NEW.superseded_by_run_id
-                             AND r.generation_key=OLD.generation_key AND r.status='published'
-                             AND r.publication_verified=1))
-              ))
-            BEGIN SELECT RAISE(ABORT,'invalid canonical report transition'); END;
-CREATE TRIGGER report_runs_snapshot_immutable
-            BEFORE UPDATE ON report_runs
-            WHEN OLD.status IN ('completed','published') AND (
-              NEW.run_id IS NOT OLD.run_id OR NEW.report_kind IS NOT OLD.report_kind
-              OR NEW.started_ts IS NOT OLD.started_ts OR NEW.completed_ts IS NOT OLD.completed_ts
-              OR NEW.failed_ts IS NOT OLD.failed_ts OR NEW.generated_ts IS NOT OLD.generated_ts
-              OR NEW.scanned_universe_json IS NOT OLD.scanned_universe_json
-              OR NEW.ranked_candidates_json IS NOT OLD.ranked_candidates_json
-              OR NEW.decisions_json IS NOT OLD.decisions_json OR NEW.inputs_json IS NOT OLD.inputs_json
-              OR NEW.source_timestamps_json IS NOT OLD.source_timestamps_json
-              OR NEW.config_json IS NOT OLD.config_json OR NEW.config_hash IS NOT OLD.config_hash
-              OR NEW.code_version IS NOT OLD.code_version OR NEW.content_hash IS NOT OLD.content_hash
-              OR NEW.markdown_hash IS NOT OLD.markdown_hash OR NEW.artifact_path IS NOT OLD.artifact_path
-              OR NEW.markdown_path IS NOT OLD.markdown_path OR NEW.error_message IS NOT OLD.error_message
-              OR NEW.generation_key IS NOT OLD.generation_key
-              OR (OLD.status='completed' AND NEW.is_generation_canonical IS NOT OLD.is_generation_canonical)
-              OR (OLD.status='completed' AND NEW.superseded_by_run_id IS NOT OLD.superseded_by_run_id)
-              OR (OLD.status='published' AND NEW.published_ts IS NOT OLD.published_ts)
-              OR (OLD.status='published' AND NEW.publication_verified IS NOT OLD.publication_verified)
-            ) BEGIN SELECT RAISE(ABORT,'completed report snapshot is immutable'); END;
-CREATE TRIGGER report_runs_started_identity_immutable
-            BEFORE UPDATE ON report_runs
-            WHEN OLD.status='started' AND (
-              NEW.run_id IS NOT OLD.run_id OR NEW.report_kind IS NOT OLD.report_kind
-              OR NEW.started_ts IS NOT OLD.started_ts
-              OR NEW.config_json IS NOT OLD.config_json
-              OR NEW.config_hash IS NOT OLD.config_hash
-              OR NEW.code_version IS NOT OLD.code_version
-            ) BEGIN SELECT RAISE(ABORT,'started report identity is immutable'); END;
+CREATE TRIGGER report_admission_attempts_no_update
+           BEFORE UPDATE ON report_admission_attempts
+           BEGIN SELECT RAISE(ABORT,'report admission attempts are immutable'); END;
+CREATE TRIGGER report_admission_attempts_no_delete
+           BEFORE DELETE ON report_admission_attempts
+           BEGIN SELECT RAISE(ABORT,'report admission attempts are immutable'); END;
+CREATE INDEX idx_report_runs_published ON report_runs(status,generated_ts,published_ts DESC,run_id DESC);
+CREATE UNIQUE INDEX idx_report_runs_canonical_generation ON report_runs(generation_key) WHERE is_generation_canonical=1 AND generation_key IS NOT NULL;
 CREATE TRIGGER report_runs_started_insert_only
             BEFORE INSERT ON report_runs
             WHEN NEW.status!='started' OR TRIM(NEW.run_id)='' OR TRIM(NEW.report_kind)=''
@@ -681,25 +513,238 @@ CREATE TRIGGER report_runs_valid_transition
               (OLD.status='started' AND NEW.status IN ('completed','failed')) OR
               (OLD.status='completed' AND NEW.status='published')
             ) BEGIN SELECT RAISE(ABORT,'invalid report run state transition'); END;
-INSERT INTO paper_campaigns (
-  campaign_id,label,policy_version,policy_hash,status,starting_capital,
-  zero_admission_streak_limit,replay_live_parity,created_ts,updated_ts
-) VALUES
-  ('paper-v1','Paper v1 frozen history','paper-v1','','frozen',100000.0,3,
-   'not_measured','2026-08-26T00:00:00Z','2026-08-26T00:00:00Z'),
-  ('paper-v2','Paper v2 inactive candidate','paper-v2','','draft',100000.0,3,
-   'not_measured','2026-08-26T00:00:00Z','2026-08-26T00:00:00Z');
-INSERT INTO schema_migrations (migration_id,applied_ts) VALUES
-  ('paper_campaign_v1_backfill_20260822','2026-08-26T00:00:00Z'),
-  ('paper_campaign_v2_inactive_governed_20260823','2026-08-26T00:00:00Z'),
-  ('paper_schema_contract_v5_20260826','2026-08-26T00:00:00Z');
-INSERT INTO report_schema_migrations (migration,applied_ts) VALUES
-  ('admission-ledger-contract-v5','2026-08-26T00:00:00Z');
-INSERT INTO paper_trade_schema_meta (
-  id,schema_version,contract_id,schema_fingerprint
-) VALUES (
-  1,5,'paper-schema-contract-v5',
-  'ede6ea9e66d95034c922025829564bad6f64eff38b0846498e8acb477d270132'
-);
+CREATE TRIGGER report_runs_failed_immutable
+            BEFORE UPDATE ON report_runs WHEN OLD.status='failed'
+            BEGIN SELECT RAISE(ABORT,'failed report run is immutable'); END;
+CREATE TRIGGER report_runs_started_identity_immutable
+            BEFORE UPDATE ON report_runs
+            WHEN OLD.status='started' AND (
+              NEW.run_id IS NOT OLD.run_id OR NEW.report_kind IS NOT OLD.report_kind
+              OR NEW.started_ts IS NOT OLD.started_ts
+              OR NEW.config_json IS NOT OLD.config_json
+              OR NEW.config_hash IS NOT OLD.config_hash
+              OR NEW.code_version IS NOT OLD.code_version
+            ) BEGIN SELECT RAISE(ABORT,'started report identity is immutable'); END;
+CREATE TRIGGER report_runs_snapshot_immutable
+            BEFORE UPDATE ON report_runs
+            WHEN OLD.status IN ('completed','published') AND (
+              NEW.run_id IS NOT OLD.run_id OR NEW.report_kind IS NOT OLD.report_kind
+              OR NEW.started_ts IS NOT OLD.started_ts OR NEW.completed_ts IS NOT OLD.completed_ts
+              OR NEW.failed_ts IS NOT OLD.failed_ts OR NEW.generated_ts IS NOT OLD.generated_ts
+              OR NEW.scanned_universe_json IS NOT OLD.scanned_universe_json
+              OR NEW.ranked_candidates_json IS NOT OLD.ranked_candidates_json
+              OR NEW.decisions_json IS NOT OLD.decisions_json OR NEW.inputs_json IS NOT OLD.inputs_json
+              OR NEW.source_timestamps_json IS NOT OLD.source_timestamps_json
+              OR NEW.config_json IS NOT OLD.config_json OR NEW.config_hash IS NOT OLD.config_hash
+              OR NEW.code_version IS NOT OLD.code_version OR NEW.content_hash IS NOT OLD.content_hash
+              OR NEW.markdown_hash IS NOT OLD.markdown_hash OR NEW.artifact_path IS NOT OLD.artifact_path
+              OR NEW.markdown_path IS NOT OLD.markdown_path OR NEW.error_message IS NOT OLD.error_message
+              OR NEW.generation_key IS NOT OLD.generation_key
+              OR (OLD.status='completed' AND NEW.is_generation_canonical IS NOT OLD.is_generation_canonical)
+              OR (OLD.status='completed' AND NEW.superseded_by_run_id IS NOT OLD.superseded_by_run_id)
+              OR (OLD.status='published' AND NEW.published_ts IS NOT OLD.published_ts)
+              OR (OLD.status='published' AND NEW.publication_verified IS NOT OLD.publication_verified)
+            ) BEGIN SELECT RAISE(ABORT,'completed report snapshot is immutable'); END;
+CREATE TRIGGER report_runs_pointer_transition
+            BEFORE UPDATE ON report_runs
+            WHEN OLD.status='published' AND (
+              (NEW.is_generation_canonical IS NOT OLD.is_generation_canonical OR
+               NEW.superseded_by_run_id IS NOT OLD.superseded_by_run_id) AND NOT (
+                (OLD.is_generation_canonical=0 AND NEW.is_generation_canonical=1
+                 AND OLD.superseded_by_run_id IS NULL AND NEW.superseded_by_run_id IS NULL
+                 AND NOT EXISTS (SELECT 1 FROM report_runs r WHERE r.generation_key=OLD.generation_key
+                                 AND r.is_generation_canonical=1 AND r.run_id!=OLD.run_id))
+                OR
+                (OLD.is_generation_canonical=1 AND NEW.is_generation_canonical=0
+                 AND OLD.superseded_by_run_id IS NULL AND NEW.superseded_by_run_id IS NOT NULL
+                 AND EXISTS (SELECT 1 FROM report_runs r WHERE r.run_id=NEW.superseded_by_run_id
+                             AND r.generation_key=OLD.generation_key AND r.status='published'
+                             AND r.publication_verified=1))
+              ))
+            BEGIN SELECT RAISE(ABORT,'invalid canonical report transition'); END;
+CREATE TRIGGER report_runs_immutable_delete
+            BEFORE DELETE ON report_runs BEGIN SELECT RAISE(ABORT,'report runs are immutable'); END;
+CREATE TRIGGER report_run_decisions_parent_started
+            BEFORE INSERT ON report_run_decisions
+            WHEN COALESCE((SELECT status FROM report_runs WHERE run_id=NEW.run_id),'')!='started'
+            BEGIN SELECT RAISE(ABORT,'report decisions require a started parent run'); END;
+CREATE TRIGGER report_run_decisions_immutable_update
+            BEFORE UPDATE ON report_run_decisions BEGIN SELECT RAISE(ABORT,'report decisions are immutable'); END;
+CREATE TRIGGER report_run_decisions_immutable_delete
+            BEFORE DELETE ON report_run_decisions BEGIN SELECT RAISE(ABORT,'report decisions are immutable'); END;
+CREATE INDEX idx_paper_trades_status ON paper_trades(status, entry_date);
+CREATE INDEX idx_paper_trades_ticker ON paper_trades(ticker, status);
+CREATE INDEX idx_paper_trades_family ON paper_trades(setup_family, direction, status);
+CREATE INDEX idx_paper_trades_report_run ON paper_trades(report_run_id);
+CREATE UNIQUE INDEX idx_paper_trades_campaign_unique ON paper_trades(campaign_id,report_date,ticker,direction);
+CREATE UNIQUE INDEX idx_paper_trades_legacy_compat ON paper_trades(report_date,ticker,direction);
+CREATE TRIGGER paper_trades_require_canonical_run
+        BEFORE INSERT ON paper_trades
+        WHEN NOT EXISTS (
+            SELECT 1 FROM report_runs r
+            JOIN report_run_decisions d ON d.run_id=r.run_id
+            WHERE r.run_id=NEW.report_run_id
+              AND r.status='published' AND r.publication_verified=1
+              AND r.is_generation_canonical=1
+              AND d.ticker=NEW.ticker AND d.decision='accepted'
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trades require a canonical published report run with an accepted decision');
+        END;
+CREATE TRIGGER paper_trades_immutable_lineage
+        BEFORE UPDATE OF report_run_id ON paper_trades
+        WHEN NEW.report_run_id IS NOT OLD.report_run_id
+        BEGIN
+            SELECT RAISE(ABORT, 'paper trade report lineage is immutable');
+        END;
+CREATE UNIQUE INDEX idx_one_active_paper_campaign ON paper_campaigns(status) WHERE status='active';
+CREATE TRIGGER paper_campaign_audit_no_update
+        BEFORE UPDATE ON paper_campaign_audit
+        BEGIN SELECT RAISE(ABORT, 'paper campaign audit is immutable'); END;
+CREATE TRIGGER paper_campaign_audit_no_delete
+        BEFORE DELETE ON paper_campaign_audit
+        BEGIN SELECT RAISE(ABORT, 'paper campaign audit is immutable'); END;
+CREATE INDEX idx_candidate_decisions_campaign_report ON paper_candidate_decisions(campaign_id, report_date, report_run_id, candidate_rank);
+CREATE TRIGGER paper_candidate_decisions_no_update
+        BEFORE UPDATE ON paper_candidate_decisions
+        BEGIN SELECT RAISE(ABORT, 'paper candidate decisions are immutable'); END;
+CREATE TRIGGER paper_candidate_decisions_no_delete
+        BEFORE DELETE ON paper_candidate_decisions
+        BEGIN SELECT RAISE(ABORT, 'paper candidate decisions are immutable'); END;
+CREATE TRIGGER paper_decision_sets_no_update
+        BEFORE UPDATE ON paper_decision_sets
+        BEGIN SELECT RAISE(ABORT, 'paper decision sets are immutable'); END;
+CREATE TRIGGER paper_decision_sets_no_delete
+        BEFORE DELETE ON paper_decision_sets
+        BEGIN SELECT RAISE(ABORT, 'paper decision sets are immutable'); END;
+CREATE TRIGGER paper_candidate_decisions_no_insert_after_seal
+        BEFORE INSERT ON paper_candidate_decisions
+        WHEN EXISTS (
+            SELECT 1 FROM paper_decision_sets
+            WHERE report_run_id=NEW.report_run_id
+              AND campaign_id=NEW.campaign_id
+              AND status='sealed'
+        )
+        BEGIN SELECT RAISE(ABORT, 'sealed paper decision set is not appendable'); END;
+CREATE TRIGGER paper_pending_orders_valid_insert
+        BEFORE INSERT ON paper_pending_orders
+        WHEN NEW.status!='pending' OR NEW.resolved_ts IS NOT NULL
+          OR NEW.order_hash IS NULL
+          OR length(NEW.order_hash)!=64
+          OR lower(NEW.order_hash) GLOB '*[^0-9a-f]*'
+        BEGIN SELECT RAISE(ABORT, 'pending order requires a sealed immutable payload'); END;
+CREATE TRIGGER paper_pending_orders_immutable_payload
+        BEFORE UPDATE ON paper_pending_orders
+        WHEN NEW.order_id IS NOT OLD.order_id
+          OR NEW.report_run_id IS NOT OLD.report_run_id
+          OR NEW.report_date IS NOT OLD.report_date
+          OR NEW.generated_ts IS NOT OLD.generated_ts
+          OR NEW.campaign_id IS NOT OLD.campaign_id
+          OR NEW.policy_version IS NOT OLD.policy_version
+          OR NEW.candidate_rank IS NOT OLD.candidate_rank
+          OR NEW.ticker IS NOT OLD.ticker
+          OR NEW.direction IS NOT OLD.direction
+          OR NEW.candidate_json IS NOT OLD.candidate_json
+          OR NEW.critic_json IS NOT OLD.critic_json
+          OR NEW.market_context_json IS NOT OLD.market_context_json
+          OR NEW.avg_daily_volume IS NOT OLD.avg_daily_volume
+          OR NEW.order_hash IS NOT OLD.order_hash
+          OR NEW.created_ts IS NOT OLD.created_ts
+        BEGIN SELECT RAISE(ABORT, 'pending order payload is immutable'); END;
+CREATE TRIGGER paper_pending_orders_terminal_transition
+        BEFORE UPDATE OF status,resolved_ts ON paper_pending_orders
+        WHEN OLD.status!='pending' OR NEW.status NOT IN ('filled','rejected','cancelled')
+          OR NEW.resolved_ts IS NULL
+        BEGIN SELECT RAISE(ABORT, 'pending order has an invalid terminal transition'); END;
+CREATE TRIGGER paper_pending_orders_no_delete
+        BEFORE DELETE ON paper_pending_orders
+        BEGIN SELECT RAISE(ABORT, 'pending orders are immutable audit facts'); END;
+CREATE TRIGGER paper_order_events_no_update
+        BEFORE UPDATE ON paper_order_events
+        BEGIN SELECT RAISE(ABORT, 'paper order events are immutable'); END;
+CREATE TRIGGER paper_order_events_no_delete
+        BEFORE DELETE ON paper_order_events
+        BEGIN SELECT RAISE(ABORT, 'paper order events are immutable'); END;
+CREATE INDEX idx_paper_trade_events_timeline ON paper_trade_events(trade_id,event_date,id);
+CREATE TRIGGER paper_trade_events_no_update
+        BEFORE UPDATE ON paper_trade_events
+        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END;
+CREATE TRIGGER paper_trade_events_no_delete
+        BEFORE DELETE ON paper_trade_events
+        BEGIN SELECT RAISE(ABORT, 'paper trade events are append-only'); END;
+CREATE TRIGGER paper_campaign_preregistrations_no_update
+            BEFORE UPDATE ON paper_campaign_preregistrations
+            BEGIN SELECT RAISE(ABORT, 'paper campaign preregistrations are immutable'); END;
+CREATE TRIGGER paper_campaign_preregistrations_no_delete
+            BEFORE DELETE ON paper_campaign_preregistrations
+            BEGIN SELECT RAISE(ABORT, 'paper campaign preregistrations are immutable'); END;
+CREATE TRIGGER paper_campaign_experiments_no_update
+            BEFORE UPDATE ON paper_campaign_experiments
+            BEGIN SELECT RAISE(ABORT, 'paper campaign experiments are immutable'); END;
+CREATE TRIGGER paper_campaign_experiments_no_delete
+            BEFORE DELETE ON paper_campaign_experiments
+            BEGIN SELECT RAISE(ABORT, 'paper campaign experiments are immutable'); END;
+CREATE TRIGGER paper_campaign_approvals_no_update
+            BEFORE UPDATE ON paper_campaign_approvals
+            BEGIN SELECT RAISE(ABORT, 'paper campaign approvals are immutable'); END;
+CREATE TRIGGER paper_campaign_approvals_no_delete
+            BEFORE DELETE ON paper_campaign_approvals
+            BEGIN SELECT RAISE(ABORT, 'paper campaign approvals are immutable'); END;
+CREATE TRIGGER paper_v1_trades_no_insert
+        BEFORE INSERT ON paper_trades WHEN NEW.campaign_id = 'paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END;
+CREATE TRIGGER paper_v1_trades_no_update
+        BEFORE UPDATE ON paper_trades
+        WHEN OLD.campaign_id = 'paper-v1'
+          AND NEW.report_run_id IS OLD.report_run_id
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END;
+CREATE TRIGGER paper_v1_trades_no_delete
+        BEFORE DELETE ON paper_trades WHEN OLD.campaign_id = 'paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 is immutable'); END;
+CREATE TRIGGER paper_v1_campaign_no_update
+        BEFORE UPDATE ON paper_campaigns WHEN OLD.campaign_id='paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 metadata is immutable'); END;
+CREATE TRIGGER paper_v1_campaign_no_delete
+        BEFORE DELETE ON paper_campaigns WHEN OLD.campaign_id='paper-v1'
+        BEGIN SELECT RAISE(ABORT, 'paper campaign v1 metadata is immutable'); END;
+CREATE INDEX idx_bot_versions_status ON bot_versions(status, created_ts);
+CREATE UNIQUE INDEX idx_paper_portfolio_legacy_compat ON paper_portfolio_snapshots(snapshot_date);
+CREATE UNIQUE INDEX idx_paper_portfolio_campaign_date ON paper_portfolio_snapshots(campaign_id, snapshot_date);
+CREATE INDEX idx_paper_portfolio_date ON paper_portfolio_snapshots(snapshot_date);
+CREATE INDEX idx_paper_reflections_trade ON paper_trade_reflections(trade_id);
+CREATE INDEX idx_paper_reflections_ticker ON paper_trade_reflections(ticker, exit_date);
+CREATE TRIGGER paper_shadow_policies_no_update
+        BEFORE UPDATE ON paper_shadow_policies
+        BEGIN SELECT RAISE(ABORT,'shadow policies are immutable'); END;
+CREATE TRIGGER paper_shadow_policies_no_delete
+        BEFORE DELETE ON paper_shadow_policies
+        BEGIN SELECT RAISE(ABORT,'shadow policies are immutable'); END;
+CREATE TRIGGER paper_shadow_decisions_no_update
+        BEFORE UPDATE ON paper_shadow_decisions
+        BEGIN SELECT RAISE(ABORT,'shadow decisions are immutable'); END;
+CREATE TRIGGER paper_shadow_decisions_no_delete
+        BEFORE DELETE ON paper_shadow_decisions
+        BEGIN SELECT RAISE(ABORT,'shadow decisions are immutable'); END;
+CREATE TRIGGER paper_shadow_sets_no_update
+        BEFORE UPDATE ON paper_shadow_decision_sets
+        BEGIN SELECT RAISE(ABORT,'shadow decision sets are immutable'); END;
+CREATE TRIGGER paper_shadow_sets_no_delete
+        BEFORE DELETE ON paper_shadow_decision_sets
+        BEGIN SELECT RAISE(ABORT,'shadow decision sets are immutable'); END;
+CREATE TRIGGER paper_shadow_decisions_no_insert_after_seal
+        BEFORE INSERT ON paper_shadow_decisions
+        WHEN EXISTS (
+            SELECT 1 FROM paper_shadow_decision_sets
+            WHERE report_run_id=NEW.report_run_id AND policy_id=NEW.policy_id
+        )
+        BEGIN SELECT RAISE(ABORT,'sealed shadow decision set is not appendable'); END;
+CREATE TRIGGER paper_shadow_outcomes_no_update
+        BEFORE UPDATE ON paper_shadow_outcomes
+        BEGIN SELECT RAISE(ABORT,'shadow outcomes are immutable'); END;
+CREATE TRIGGER paper_shadow_outcomes_no_delete
+        BEFORE DELETE ON paper_shadow_outcomes
+        BEGIN SELECT RAISE(ABORT,'shadow outcomes are immutable'); END;
+DELETE FROM "sqlite_sequence";
+INSERT INTO "sqlite_sequence" VALUES('paper_trades',101);
+INSERT INTO "sqlite_sequence" VALUES('paper_portfolio_snapshots',201);
 COMMIT;
-PRAGMA foreign_keys=ON;

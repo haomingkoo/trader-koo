@@ -99,11 +99,16 @@ def test_contract_fingerprint_and_fixture_are_hash_bound() -> None:
     )
     fixture = _load(fixture_path)
     assert fixture["fixture_set"] == "paper-schema-v5-contract-cases-v1"
-    assert len(fixture["cases"]) == 13
-    assert {case["id"] for case in fixture["cases"]} >= {
-        "fresh_v4", "production_like_legacy_v4", "interrupted_rebuild",
-        "same_name_malformed_object", "exact_v5",
-    }
+    assert [case["id"] for case in fixture["cases"]] == [
+        "fresh_v4", "production_like_legacy_v4", "deployed_v4",
+        "duplicate_campaign_trade_key", "duplicate_campaign_snapshot_key",
+        "missing_or_unknown_campaign", "orphan_trade_report", "invalid_v2_lineage",
+        "legacy_cancelled_order", "invalid_legacy_order", "logical_orphan",
+        "same_name_malformed_object", "interrupted_rebuild", "exact_v5",
+    ]
+    assert [item["id"] for item in contract["fixtures"]["databases"]] == [
+        "fresh_v4", "production_like_legacy_v4", "deployed_v4", "exact_v5_target",
+    ]
     for database in contract["fixtures"]["databases"]:
         sql_path = ROOT / database["path"]
         assert hashlib.sha256(sql_path.read_bytes()).hexdigest() == database["sha256"]
@@ -123,6 +128,33 @@ def test_contract_fingerprint_and_fixture_are_hash_bound() -> None:
     assert legacy.execute(
         "SELECT COUNT(*) FROM paper_trades WHERE campaign_id='paper-v1'"
     ).fetchone() == (42,)
+
+    deployed = sqlite3.connect(":memory:")
+    deployed.executescript((
+        ROOT / "tests/fixtures/paper_schema_v4_deployed.sql"
+    ).read_text(encoding="utf-8"))
+    assert deployed.execute(
+        "SELECT id,campaign_id,accounting_status FROM paper_trades"
+    ).fetchone() == (101, "paper-v1", "legacy_unreconciled")
+    assert deployed.execute(
+        "SELECT id,campaign_id FROM paper_portfolio_snapshots"
+    ).fetchone() == (201, "paper-v1")
+    assert dict(deployed.execute(
+        "SELECT name,seq FROM sqlite_sequence"
+    )) == {"paper_trades": 101, "paper_portfolio_snapshots": 201}
+    assert deployed.execute(
+        "SELECT id,schema_version FROM paper_trade_schema_meta"
+    ).fetchall() == [(1, 4)]
+    assert set(deployed.execute(
+        "SELECT migration_id FROM schema_migrations"
+    )) == {
+        (migration_id,)
+        for migration_id in contract["migration_ids"]["required_source"]
+    }
+    assert deployed.execute(
+        "SELECT COUNT(*) FROM schema_migrations WHERE migration_id=?",
+        (contract["migration_ids"]["target"],),
+    ).fetchone() == (0,)
 
     target = sqlite3.connect(":memory:")
     target.executescript((
