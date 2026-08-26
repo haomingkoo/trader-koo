@@ -25,6 +25,7 @@ from trader_koo.backend.routers.admin._shared import (
     get_audit_logger,
 )
 from trader_koo.backend.services.database import DB_PATH
+from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
 from trader_koo.scripts.cleanup_storage import run_cleanup
 
 router = APIRouter(tags=["admin", "admin-data"])
@@ -118,7 +119,11 @@ def _verify_seed_history_ingest(
 def _run_seed_history(command: list[str]) -> None:
     global _seed_history_state
     try:
-        completed = subprocess.run(command, capture_output=False, check=False)
+        lease_fds = inherited_writer_lease_fds()
+        lease_kwargs = {"pass_fds": lease_fds} if lease_fds else {}
+        completed = subprocess.run(
+            command, capture_output=False, check=False, **lease_kwargs,
+        )
         verification = (
             _verify_seed_history_ingest(
                 _seed_history_state.get("started_at"),

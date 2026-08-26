@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
+import time
 
 from trader_koo.crypto.models import CryptoBar
 from trader_koo.crypto.service import _aggregate_bars, _backfill_target_limit, get_crypto_history
@@ -170,3 +172,56 @@ def test_get_crypto_history_refreshes_stale_native_interval_history(monkeypatch)
     assert refresh_calls, "stale native 1h history should trigger a refresh"
     assert refresh_calls[0][1] == "1h"
     assert result[-1].timestamp == refreshed_tail[-1].timestamp
+
+
+def test_flush_loop_is_event_cancellable_with_long_interval(monkeypatch):
+    import trader_koo.crypto.service as service
+
+    monkeypatch.setattr(service, "FLUSH_INTERVAL_SEC", 3600)
+    monkeypatch.setattr(service, "_flush_running", True)
+    service._flush_stop_event.clear()
+    thread = threading.Thread(target=service._flush_loop)
+    thread.start()
+    time.sleep(0.02)
+    service._flush_running = False
+    service._flush_stop_event.set()
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+
+
+def test_stop_crypto_feed_joins_partial_start_writer_without_client(monkeypatch):
+    import trader_koo.crypto.service as service
+
+    monkeypatch.setattr(service, "_client", None)
+    monkeypatch.setattr(service, "_flush_running", True)
+    service._flush_stop_event.clear()
+    thread = threading.Thread(target=service._flush_loop, name="partial-crypto-writer")
+    monkeypatch.setattr(service, "_flush_thread", thread)
+    monkeypatch.setattr(service, "_warm_backfill_thread", None)
+    monkeypatch.setattr(service, "_staleness_thread", None)
+    thread.start()
+    service.stop_crypto_feed()
+    assert not thread.is_alive()
+
+
+def test_warm_backfill_retry_wait_is_event_cancellable(monkeypatch):
+    import trader_koo.crypto.service as service
+
+    attempted = threading.Event()
+    monkeypatch.setattr(service, "_db_path_str", ":memory:")
+    monkeypatch.setattr(service, "SYMBOL_MAP", {"BTC": "BTC-USD"})
+    monkeypatch.setattr(service, "_load_recent_bars_from_db", lambda *args, **kwargs: [])
+    monkeypatch.setattr(service, "_WARM_BACKFILL_RETRY_DELAY_SEC", 3600)
+
+    def fail_backfill(*args, **kwargs):
+        attempted.set()
+        raise RuntimeError("retry")
+
+    monkeypatch.setattr(service, "_backfill_history", fail_backfill)
+    service._warm_backfill_stop_event.clear()
+    thread = threading.Thread(target=service._warm_backfill_history)
+    thread.start()
+    assert attempted.wait(timeout=1)
+    service._warm_backfill_stop_event.set()
+    thread.join(timeout=1)
+    assert not thread.is_alive()

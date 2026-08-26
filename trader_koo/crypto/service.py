@@ -48,6 +48,11 @@ _flush_running = False
 _backfill_lock = threading.Lock()
 _warm_backfill_thread: threading.Thread | None = None
 _staleness_thread: threading.Thread | None = None
+_WRITER_DRAIN_TIMEOUT_SEC = 5.0
+_WARM_BACKFILL_DRAIN_TIMEOUT_SEC = 30.0
+_flush_stop_event = threading.Event()
+_staleness_stop_event = threading.Event()
+_warm_backfill_stop_event = threading.Event()
 _staleness_running = False
 
 # Staleness thresholds
@@ -278,7 +283,8 @@ def _flush_loop() -> None:
     """Background thread: periodically flush pending bars to SQLite."""
     global _flush_running
     while _flush_running:
-        time.sleep(FLUSH_INTERVAL_SEC)
+        if _flush_stop_event.wait(FLUSH_INTERVAL_SEC):
+            break
         if not _flush_running:
             break
         _flush_bars_to_db()
@@ -491,6 +497,8 @@ def _warm_backfill_history() -> None:
     failed_pairs: list[tuple[str, str]] = []
     for symbol in SYMBOL_MAP.values():
         for interval, target_limit in (("1h", 2160), ("4h", 1440), ("12h", 1095), ("1d", 1825), ("1w", 260)):
+            if _warm_backfill_stop_event.is_set():
+                return
             existing = _load_recent_bars_from_db(symbol, limit=target_limit, interval=interval)
             if len(existing) >= target_limit:
                 continue
@@ -507,8 +515,10 @@ def _warm_backfill_history() -> None:
                         attempt + 1, _WARM_BACKFILL_MAX_RETRIES, symbol, interval, exc,
                     )
                 if attempt < _WARM_BACKFILL_MAX_RETRIES - 1:
-                    import time
-                    time.sleep(_WARM_BACKFILL_RETRY_DELAY_SEC * (attempt + 1))
+                    if _warm_backfill_stop_event.wait(
+                        _WARM_BACKFILL_RETRY_DELAY_SEC * (attempt + 1)
+                    ):
+                        return
             if not success:
                 failed_pairs.append((symbol, interval))
     if failed_pairs:
@@ -584,7 +594,8 @@ def _on_binance_candle_close(bar: CryptoBar) -> None:
 def _staleness_loop() -> None:
     """Background thread: check WS staleness every 60 seconds."""
     while _staleness_running:
-        time.sleep(_STALENESS_CHECK_INTERVAL_SEC)
+        if _staleness_stop_event.wait(_STALENESS_CHECK_INTERVAL_SEC):
+            break
         if not _staleness_running or _client is None:
             break
         last_msg = _client.last_message_at
@@ -637,6 +648,9 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
         return
 
     _db_path_str = db_path_str
+    _flush_stop_event.clear()
+    _staleness_stop_event.clear()
+    _warm_backfill_stop_event.clear()
 
     # Create the multi-interval aggregator
     _aggregator = CandleAggregator(on_candle_finalized=_on_candle_finalized)
@@ -691,20 +705,36 @@ def start_crypto_feed(db_path_str: str | None = None) -> None:
 def stop_crypto_feed() -> None:
     """Gracefully stop the WebSocket feed and flush remaining bars."""
     global _client, _aggregator, _flush_running, _flush_thread
-    global _staleness_running, _staleness_thread
+    global _staleness_running, _staleness_thread, _warm_backfill_thread
     _flush_running = False
     _staleness_running = False
+    _flush_stop_event.set()
+    _staleness_stop_event.set()
+    _warm_backfill_stop_event.set()
 
     # Final flush before shutdown
     _flush_bars_to_db()
 
-    if _client is None:
-        return
-    _client.stop()
+    if _client is not None:
+        _client.stop()
+    writer_threads = tuple(
+        thread for thread in (_warm_backfill_thread, _flush_thread, _staleness_thread)
+        if thread is not None and thread is not threading.current_thread()
+    )
+    for thread in writer_threads:
+        timeout = (
+            _WARM_BACKFILL_DRAIN_TIMEOUT_SEC
+            if thread is _warm_backfill_thread else _WRITER_DRAIN_TIMEOUT_SEC
+        )
+        thread.join(timeout=timeout)
+    alive = [thread.name for thread in writer_threads if thread.is_alive()]
+    if alive:
+        raise RuntimeError(f"crypto writer threads did not drain: {','.join(alive)}")
     _client = None
     _aggregator = None
     _flush_thread = None
     _staleness_thread = None
+    _warm_backfill_thread = None
     LOG.info("Crypto feed stopped")
 
 

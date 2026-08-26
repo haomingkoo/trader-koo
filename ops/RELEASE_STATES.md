@@ -127,6 +127,46 @@ destructive parent-table rebuild on the live volume.
 17. Only then accept the separate human Campaign v2 activation request and
     verify its first production admission write and audit event.
 
+### Step 12 operator boundary
+
+Step 12 is intentionally split across the authenticated running service and an
+offline Railway shell. `POST /api/admin/maintenance/request` uses the existing
+`X-API-Key`, fsyncs intent to the sidecar maintenance database, and pauses the
+scheduler. After that response all HTTP work is rejected. Stop the application;
+the restart enters a maintenance-only boot before touching the live database or
+starting a writer. `/api/health` remains available from sidecar state so the
+deployment stays reachable through the protected Railway SSH boundary. Even
+after resolution this process stays maintenance-only until an external restart.
+The normal app's shared writer lease is intentionally released only by OS
+process exit, covering accepted daemon writer threads outside the scheduler.
+Every old service replica must therefore exit before `quiesce-backup`; otherwise
+the bounded exclusive-lease acquisition fails closed and remains retryable.
+
+After the maintenance-only restart, use Railway SSH into that volume-backed
+instance (no additional application token is introduced):
+
+```text
+python -m trader_koo.scripts.paper_schema_maintenance status
+python -m trader_koo.scripts.paper_schema_maintenance quiesce-backup --run-id RUN_ID
+python -m trader_koo.scripts.paper_schema_maintenance decide --run-id RUN_ID --decision restore --reason "REASON"
+python -m trader_koo.scripts.paper_schema_maintenance restore-backup --run-id RUN_ID
+python -m trader_koo.scripts.paper_schema_maintenance verify-resolution --run-id RUN_ID
+```
+
+`quiesce-backup` holds the exclusive whole-process lease, preserves every
+accepted queued pipeline row and its run ID for the resolved external restart,
+marks only restart-orphaned running rows interrupted, creates a fresh named
+online backup, verifies its compressed hash and logical cohort,
+and records source device/inode plus retained-backup evidence. Migration is not
+called here. A later migration command must reacquire the exclusive lease and,
+after gaining SQLite transaction authority but before diagnostics or DDL,
+compare the live logical hash to the recorded backup cohort. `decide` never
+reopens writers: `verify-resolution` clears the sidecar only after exact-v5
+verification plus a later hash-bound migration receipt for `complete`, or after
+the live database and named backup both match the recorded cohort for `restore`.
+Step 12 creates no migration receipt, so `complete` remains interlocked until a
+later exclusive migration wrapper supplies that evidence.
+
 The current dark-deploy workflow deliberately resets writes to paused on every
 release. Before the first activation, the contract-aware workflow must be changed
 to capture, audit, preserve, and verify the approved write-gate state across
