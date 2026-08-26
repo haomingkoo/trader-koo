@@ -18,7 +18,7 @@ jobs:
   dark-deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     environment:
       name: production-dark
       url: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
@@ -30,6 +30,9 @@ jobs:
       BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
       ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      DEPLOYMENT_POLL_ATTEMPTS: "90"
+      ROLLBACK_POLL_ATTEMPTS: "120"
+      DEPLOYMENT_POLL_INTERVAL_SEC: "5"
     steps:
       - name: Check out the exact CI commit
         uses: actions/checkout@v6
@@ -165,10 +168,37 @@ jobs:
       - name: Record dark deployment
         id: deployed
         run: |
-          deployment_id=$(railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" | jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty')
-          test -n "$deployment_id"
-          test "$deployment_id" != "${{ steps.previous.outputs.id }}"
-          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          deployment_id=""
+          for attempt in $(seq 1 "$DEPLOYMENT_POLL_ATTEMPTS"); do
+            railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/current-deployments.json
+            if [ -z "$deployment_id" ]; then
+              deployment_id=$(jq -r \
+                --arg message "dark release ${RELEASE_SHA}" \
+                --slurpfile previous /tmp/previous-deployments.json '
+                  [.[]
+                    | select(.meta.cliMessage == $message)
+                    | select(.id as $id | ($previous[0] | map(.id) | index($id) | not))
+                  ] as $matches
+                  | if ($matches | length) == 1 then $matches[0].id
+                    elif ($matches | length) > 1 then "AMBIGUOUS"
+                    else ""
+                    end
+                ' /tmp/current-deployments.json)
+              if [ "$deployment_id" = "AMBIGUOUS" ]; then
+                exit 1
+              fi
+            fi
+            status=$(jq -r --arg id "$deployment_id" '.[] | select(.id == $id) | .status' /tmp/current-deployments.json)
+            if [ "$status" = "SUCCESS" ]; then
+              echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ] || [ "$status" = "REMOVED" ]; then
+              exit 1
+            fi
+            sleep "$DEPLOYMENT_POLL_INTERVAL_SEC"
+          done
+          exit 1
 
       - name: Verify deployed Railway write gate
         id: deployed_config
@@ -207,11 +237,23 @@ jobs:
         id: rollback
         if: ${{ failure() && steps.previous.outputs.id != '' }}
         run: |
-          railway api --file ops/railway-rollback.graphql --raw-var "id=${{ steps.previous.outputs.id }}" --compact > /tmp/rollback.json
+          jq -n \
+            --rawfile query ops/railway-rollback.graphql \
+            --arg id "${{ steps.previous.outputs.id }}" \
+            '{query: $query, variables: {id: $id}}' \
+            > /tmp/rollback-request.json
+          curl --fail --silent --show-error \
+            --request POST \
+            --url https://backboard.railway.com/graphql/v2 \
+            --header "Project-Access-Token: ${RAILWAY_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data-binary @/tmp/rollback-request.json \
+            --output /tmp/rollback.json
+          jq -e '.errors == null' /tmp/rollback.json > /dev/null
           rollback_id=$(jq -r '.data.deploymentRollback.id // empty' /tmp/rollback.json)
           test -n "$rollback_id"
           echo "id=$rollback_id" >> "$GITHUB_OUTPUT"
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 "$ROLLBACK_POLL_ATTEMPTS"); do
             railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-deployments.json
             status=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .status' /tmp/rollback-deployments.json)
             if [ "$status" = "SUCCESS" ]; then
@@ -247,10 +289,10 @@ jobs:
               echo "paper_trade_enabled=$observed_gate" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ]; then
+            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ] || [ "$status" = "REMOVED" ]; then
               exit 1
             fi
-            sleep 5
+            sleep "$DEPLOYMENT_POLL_INTERVAL_SEC"
           done
           exit 1
 
