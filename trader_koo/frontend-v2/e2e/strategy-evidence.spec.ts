@@ -129,7 +129,9 @@ async function expectInadequateEvidence(page: Page) {
   await expect(page.getByTestId("strategy-input-hash")).toContainText(
     productionEvidence.provenance.input_hash_sha256,
   );
-  await expect(panel).toContainText("Results are descriptive");
+  await expect(panel).toContainText(
+    "This sealed historical snapshot is not live Campaign v2 evidence",
+  );
   await expect(panel).toContainText("Invalid / unresolved");
 }
 
