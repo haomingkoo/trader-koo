@@ -54,14 +54,21 @@ v1 history into live v2 decisions.
 
 ## Deliberately deferred
 
+`trader_koo.paper_trade.schema_v5_migration.migrate_paper_schema_v4_to_v5`
+implements the first step as an explicit offline maintenance seam. It owns one
+transaction, consumes the frozen hash-bound fixtures, and has no startup or
+production-command caller. Its `already_v5_identity_only` result is deliberately
+not schema verification; the activation interlock remains closed. Its v2
+accounting gate rejects unreconciled rows and uses exact decimal arithmetic over
+persisted values, with no hidden tolerance or rounding threshold.
+
 Later, separate changes must implement, in order:
 
-1. the v4-to-v5 maintenance migration;
-2. the exact verifier and semantic fingerprint checks;
-3. a v4/v5 phase-aware initializer;
-4. writer quiescence and restore drills;
-5. copied-production rehearsal and deployment-state preservation;
-6. separately audited write enablement and human activation.
+1. the exact verifier and semantic fingerprint checks;
+2. a v4/v5 phase-aware initializer;
+3. writer quiescence and restore drills;
+4. copied-production rehearsal and deployment-state preservation;
+5. separately audited write enablement and human activation.
 
 Until all gates pass, `require_contracted_paper_schema` remains an unconditional
 activation interlock and the dark-deploy workflow continues to pause writes.
