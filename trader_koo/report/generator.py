@@ -261,7 +261,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                     """
                     SELECT ticker
                     FROM ingest_ticker_status
-                    WHERE run_id = ? AND status = 'ok' AND price_rows > 0
+                    WHERE run_id = ? AND status = 'ok'
                     ORDER BY ticker
                     """,
                     (universe_row[0],),

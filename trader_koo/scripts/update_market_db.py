@@ -251,45 +251,33 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
 
 
 def get_succeeded_tickers_from_latest_run(conn: sqlite3.Connection) -> set[str]:
-    """Return tickers that succeeded in the most recent ingest run.
+    """Return tickers with a successful price write on the current UTC day.
 
-    Used for resume: if an ingest run was interrupted (e.g. by a hung
-    ticker), the next run can skip tickers that already completed
-    successfully in the same day's run.
+    A retry may be followed by a smaller context-only run. Unioning today's
+    successful writes preserves the full requested membership instead of
+    treating that later incremental run as the whole universe.
     """
     try:
         if not table_exists(conn, "ingest_runs") or not table_exists(conn, "ingest_ticker_status"):
             return set()
-        run_row = conn.execute(
-            """
-            SELECT run_id, started_ts, status
-            FROM ingest_runs
-            ORDER BY started_ts DESC
-            LIMIT 1
-            """,
-        ).fetchone()
-        if not run_row:
-            return set()
-        # Only resume from runs that started today (UTC) and are running or failed
-        run_date = str(run_row["started_ts"] or "")[:10]
         today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-        if run_date != today:
-            return set()
-        if run_row["status"] not in ("running", "failed", "partial_failed"):
-            return set()
         rows = conn.execute(
             """
-            SELECT ticker FROM ingest_ticker_status
-            WHERE run_id = ? AND status = 'ok' AND price_rows > 0
+            SELECT DISTINCT s.ticker
+            FROM ingest_ticker_status s
+            JOIN ingest_runs r ON r.run_id = s.run_id
+            WHERE substr(r.started_ts, 1, 10) = ?
+              AND s.status = 'ok' AND s.price_rows > 0
+              AND json_valid(r.args_json) = 1
+              AND json_extract(r.args_json, '$.skip_price') = 0
             """,
-            (run_row["run_id"],),
+            (today,),
         ).fetchall()
         tickers = {str(r["ticker"]) for r in rows}
         if tickers:
             LOG.info(
-                "Resume: %d tickers already succeeded in run %s, will skip them",
+                "Resume: %d tickers already have successful price writes today",
                 len(tickers),
-                run_row["run_id"],
             )
         return tickers
     except Exception:
@@ -1301,6 +1289,7 @@ def run(args: argparse.Namespace) -> None:
     for t in ALWAYS_FETCH:
         if t not in tickers:
             tickers.append(t)
+    requested_tickers = list(tickers)
 
     # Resume: skip tickers that already succeeded in today's latest run
     # An explicit full refresh is a complete historical backfill, not a retry
@@ -1319,16 +1308,35 @@ def run(args: argparse.Namespace) -> None:
             len(tickers),
             original_count - len(tickers),
         )
+    carried_tickers = sorted(set(requested_tickers) - set(tickers))
+    total_tickers = len(requested_tickers)
 
     now = dt.datetime.now(dt.timezone.utc)
     snapshot_ts = utc_now_iso()
     run_id = f"{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
-    ok = 0
+    ok = len(carried_tickers)
     fail = 0
     reseeded_tickers: list[str] = []
     max_passes = 1 + max(0, int(args.retry_failed_passes))
     backoff_sec = max(0.0, float(args.retry_failed_backoff_sec))
-    begin_run(conn, run_id=run_id, started_ts=snapshot_ts, tickers_total=len(tickers), args=args)
+    begin_run(conn, run_id=run_id, started_ts=snapshot_ts, tickers_total=total_tickers, args=args)
+    for ticker in carried_tickers:
+        upsert_ticker_status(
+            conn,
+            run_id=run_id,
+            ticker=ticker,
+            started_ts=snapshot_ts,
+            finished_ts=snapshot_ts,
+            status="ok",
+            fundamentals_refreshed=0,
+            price_fetch_start=None,
+            price_rows=0,
+            options_refreshed=0,
+            options_rows=0,
+            message="resume:carried_current_day_price",
+            error_message=None,
+        )
+    conn.commit()
     LOG.info(
         (
             "run_id=%s started db=%s tickers=%s snapshot=%s "
@@ -1337,7 +1345,7 @@ def run(args: argparse.Namespace) -> None:
         ),
         run_id,
         db_path,
-        len(tickers),
+        total_tickers,
         snapshot_ts,
         max_passes,
         int(bool(args.require_full_dataset)),
@@ -1345,7 +1353,7 @@ def run(args: argparse.Namespace) -> None:
         int(args.price_retry_attempts),
         float(args.max_seconds_per_ticker),
     )
-    ticker_position = {ticker: idx for idx, ticker in enumerate(tickers, start=1)}
+    ticker_position = {ticker: idx for idx, ticker in enumerate(requested_tickers, start=1)}
     attempt_by_ticker: dict[str, int] = {}
     final_errors: dict[str, str] = {}
     pending_tickers = list(tickers)
@@ -1386,7 +1394,7 @@ def run(args: argparse.Namespace) -> None:
                         "run_id=%s [%s/%s] ticker=%s start pass=%s/%s attempt=%s",
                         run_id,
                         i,
-                        len(tickers),
+                        total_tickers,
                         tkr,
                         pass_no,
                         max_passes,
@@ -1568,7 +1576,7 @@ def run(args: argparse.Namespace) -> None:
                         ),
                         run_id,
                         i,
-                        len(tickers),
+                        total_tickers,
                         tkr,
                         pass_no,
                         max_passes,
@@ -1614,7 +1622,7 @@ def run(args: argparse.Namespace) -> None:
                         ),
                         run_id,
                         i,
-                        len(tickers),
+                        total_tickers,
                         tkr,
                         err_class,
                         retryable,
@@ -1664,7 +1672,7 @@ def run(args: argparse.Namespace) -> None:
             fail = counted_fail
         else:
             fail = len(final_errors)
-            ok = max(0, len(tickers) - fail)
+            ok = max(0, total_tickers - fail)
 
         market_state = infer_market_data_state(conn, run_id)
         LOG.info(
@@ -1703,7 +1711,7 @@ def run(args: argparse.Namespace) -> None:
 
         require_complete_dataset(
             final_errors,
-            ticker_count=len(tickers),
+            ticker_count=total_tickers,
             max_passes=max_passes,
             required=bool(args.require_full_dataset),
         )
@@ -1717,12 +1725,12 @@ def run(args: argparse.Namespace) -> None:
             if soft_fail_errors and not blocking_errors:
                 final_error_message = (
                     "soft_fail_context_only: "
-                    f"{fail}/{len(tickers)} ticker(s) failed after {max_passes} pass(es). "
+                    f"{fail}/{total_tickers} ticker(s) failed after {max_passes} pass(es). "
                     f"failed_tickers={failed_preview}"
                 )
             else:
                 final_error_message = (
-                    f"{fail}/{len(tickers)} ticker(s) failed after {max_passes} pass(es). "
+                    f"{fail}/{total_tickers} ticker(s) failed after {max_passes} pass(es). "
                     f"failed_tickers={failed_preview}"
                 )
         finish_run(
@@ -1761,7 +1769,7 @@ def run(args: argparse.Namespace) -> None:
             finished_ts=utc_now_iso(),
             status="failed",
             tickers_ok=ok,
-            tickers_failed=max(fail, len(tickers) - ok),
+            tickers_failed=max(fail, total_tickers - ok),
             error_message=str(exc),
         )
         if isinstance(exc, GracefulStopError):
