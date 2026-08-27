@@ -402,7 +402,7 @@ function HistoryStats({ history }: { history: WalletHistory }) {
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Win Rate</p>
-          <p className="text-lg font-bold tabular-nums text-[var(--text)]">{stats.win_rate_pct == null ? "—" : `${stats.win_rate_pct}%`}</p>
+          <p data-testid="wallet-win-rate" className="text-lg font-bold tabular-nums text-[var(--text)]">{stats.win_rate_pct == null ? "—" : `${stats.win_rate_pct}%`}</p>
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Observed Execution Fees</p>

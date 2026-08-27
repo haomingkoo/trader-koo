@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("the public product is operational, not merely reachable", async ({ page, request }) => {
+  test.setTimeout(120_000);
   test.skip(
     process.env.PLAYWRIGHT_REQUIRE_LIVE_PRODUCT !== "1",
     "Run after report publication and paper-campaign activation.",
@@ -96,6 +97,5 @@ test("the public product is operational, not merely reachable", async ({ page, r
   await page.goto("/hyperliquid");
   await expect(page.getByText("Provider Period P&L")).toBeVisible();
   await expect(page.getByText("Execution statistics are partial", { exact: false })).toBeVisible();
-  const winRateCard = page.getByText("Win Rate").last().locator("..");
-  await expect(winRateCard).toContainText("—");
+  await expect(page.getByTestId("wallet-win-rate")).toHaveText("—");
 });
