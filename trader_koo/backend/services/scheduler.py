@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - production/runtime is Unix-like
 
 from trader_koo.backend.services.report_loader import _tail_text_file
 from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
+from trader_koo.backend.services.market_data import read_latest_ingest_run
 from trader_koo.config import (
     DEFAULT_DB_PATH,
     DEFAULT_LOG_DIR,
@@ -275,11 +276,18 @@ def _run_preopen_report_watchdog() -> None:
         )
         return
 
+    latest_ingest = read_latest_ingest_run(DB_PATH)
+    ingest_status = str((latest_ingest or {}).get("status") or "missing").lower()
+    recovery_mode = "report" if ingest_status == "ok" else "full"
     _append_run_log(
         "PREOPEN",
-        f"Recovering report: published_price_date={report_price_date} latest_price_date={latest_price_date}",
+        (
+            f"Recovering publication: published_price_date={report_price_date} "
+            f"latest_price_date={latest_price_date} ingest_status={ingest_status} "
+            f"mode={recovery_mode}"
+        ),
     )
-    _run_daily_update(mode="report", source="preopen_watchdog")
+    _run_daily_update(mode=recovery_mode, source="preopen_watchdog")
 
 
 def _run_daily_update_unlocked(

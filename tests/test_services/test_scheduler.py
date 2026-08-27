@@ -212,6 +212,17 @@ def test_preopen_watchdog_recovers_newer_ingested_price_date(tmp_path, monkeypat
             "INSERT INTO report_runs VALUES (?, ?, ?, ?, ?, ?)",
             ("old", "published", 1, 1, "2026-08-25T22:30:00Z", '{"price_date":"2026-08-25"}'),
         )
+        conn.execute(
+            """CREATE TABLE ingest_runs (
+                run_id TEXT, started_ts TEXT, finished_ts TEXT, status TEXT,
+                tickers_total INTEGER, tickers_ok INTEGER, tickers_failed INTEGER,
+                error_message TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO ingest_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("ingest", "2026-08-26T22:00:00Z", "2026-08-26T22:20:00Z", "ok", 540, 540, 0, None),
+        )
     monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -222,6 +233,45 @@ def test_preopen_watchdog_recovers_newer_ingested_price_date(tmp_path, monkeypat
     _run_preopen_report_watchdog()
 
     assert calls == [("report", "preopen_watchdog")]
+
+
+def test_preopen_watchdog_reruns_failed_ingest_before_report(tmp_path, monkeypatch):
+    db_path = tmp_path / "scheduler.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE price_daily (date TEXT)")
+        conn.execute("INSERT INTO price_daily VALUES ('2026-08-26')")
+        conn.execute(
+            """CREATE TABLE report_runs (
+                run_id TEXT, status TEXT, publication_verified INTEGER,
+                is_generation_canonical INTEGER, published_ts TEXT,
+                source_timestamps_json TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO report_runs VALUES (?, ?, ?, ?, ?, ?)",
+            ("old", "published", 1, 1, "2026-08-25T22:30:00Z", '{"price_date":"2026-08-25"}'),
+        )
+        conn.execute(
+            """CREATE TABLE ingest_runs (
+                run_id TEXT, started_ts TEXT, finished_ts TEXT, status TEXT,
+                tickers_total INTEGER, tickers_ok INTEGER, tickers_failed INTEGER,
+                error_message TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO ingest_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("ingest", "2026-08-26T22:00:00Z", "2026-08-26T22:20:00Z", "failed", 540, 538, 2, "2 failed"),
+        )
+    monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "trader_koo.backend.services.scheduler._run_daily_update",
+        lambda mode, source: calls.append((mode, source)),
+    )
+
+    _run_preopen_report_watchdog()
+
+    assert calls == [("full", "preopen_watchdog")]
 
 
 def test_worker_transitions_reserved_record_before_subprocess(tmp_path, monkeypatch):
