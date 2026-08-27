@@ -96,11 +96,11 @@ _SHARED_CONTEXT_TICKERS = (
 )
 DEFAULT_SOFT_FAIL_TICKERS = (
     *_SHARED_CONTEXT_TICKERS,
-    # VIX term-structure variants (soft-fail only — frequently empty on free data)
+    # Yahoo Finance index symbols used for VIX term structure. The unprefixed
+    # aliases are not provider instruments and make strict ingest fail on a
+    # permanent Finviz 404.
     "^VIX3M",
     "^VIX6M",
-    "VIX3M",
-    "VIX6M",
 )
 LOG = logging.getLogger("trader_koo.ingest")
 
