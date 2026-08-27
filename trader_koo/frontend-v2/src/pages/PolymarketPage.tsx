@@ -124,29 +124,6 @@ function dateBadge(market: SubMarket): string | null {
 }
 
 /* ------------------------------------------------------------------ */
-/* Chevron SVG                                                         */
-/* ------------------------------------------------------------------ */
-
-interface ChevronProps {
-  open: boolean;
-  className?: string;
-}
-
-function Chevron({ open, className = "" }: ChevronProps) {
-  return (
-    <svg
-      className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""} ${className}`}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-    </svg>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* SubMarketRow — single probability bar row                           */
 /* ------------------------------------------------------------------ */
 
@@ -302,44 +279,6 @@ function SubMarketList({ markets, eventType }: SubMarketListProps) {
 }
 
 /* ------------------------------------------------------------------ */
-/* ResolvedToggle — collapsed resolved markets                         */
-/* ------------------------------------------------------------------ */
-
-interface ResolvedToggleProps {
-  markets: SubMarket[];
-}
-
-function ResolvedToggle({ markets }: ResolvedToggleProps) {
-  const [open, setOpen] = useState(false);
-
-  if (markets.length === 0) return null;
-
-  return (
-    <div className="mt-2 border-t border-[var(--line)]/30 pt-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-center gap-1.5 text-[9px] text-[var(--muted)] hover:text-[var(--text)] transition-colors"
-      >
-        <Chevron open={open} />
-        <span>{markets.length} resolved</span>
-      </button>
-      {open && (
-        <div className="mt-1.5 space-y-1">
-          {markets.map((mkt, i) => (
-            <SubMarketRow
-              key={`resolved-${mkt.question}-${i}`}
-              market={mkt}
-              muted
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* EventHeader — title, volume, end date, link                         */
 /* ------------------------------------------------------------------ */
 
@@ -394,7 +333,6 @@ interface EventCardProps {
 function EventCard({ event }: EventCardProps) {
   const allMarkets = event.markets ?? [];
   const activeMarkets = allMarkets.filter((m) => m.active !== false);
-  const resolvedMarkets = allMarkets.filter((m) => m.resolved === true);
 
   const eventType = event.event_type ?? "simple";
 
@@ -412,8 +350,6 @@ function EventCard({ event }: EventCardProps) {
               eventType={eventType}
             />
           )}
-
-          <ResolvedToggle markets={resolvedMarkets} />
       </div>
     </article>
   );
