@@ -534,7 +534,7 @@ def fetch_polymarket_events(
             relevant.append({
                 "title": str(ev.get("title", "")).strip(),
                 "slug": ev.get("slug", ""),
-                "market_count": len(raw_markets),
+                "market_count": len(active_markets),
                 "total_volume": round(total_volume, 2),
                 "active_volume_24h": round(sum(m["volume_24h"] for m in active_markets), 2),
                 "active_liquidity": round(sum(m["liquidity"] for m in active_markets), 2),
@@ -542,7 +542,10 @@ def fetch_polymarket_events(
                 "image": ev.get("image"),
                 "url": f"https://polymarket.com/event/{ev.get('slug', '')}",
                 "top_market": top_market,
-                "markets": parsed_markets,
+                # Public consumers only need contracts that can still trade.
+                # Retain aggregate resolved_count for provenance without
+                # returning stale contracts as current opportunities.
+                "markets": active_markets,
                 "active_count": active_count,
                 "resolved_count": resolved_count,
                 "event_type": event_type,
