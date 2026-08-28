@@ -387,7 +387,7 @@ def test_live_path_persists_every_ranked_candidate_and_exact_disposition():
     assert trade == ("paper-v2", "immutable-run-id-1", "paper-campaign-v2.0")
 
 
-def test_three_eligible_zero_admission_reports_make_campaign_unhealthy():
+def test_three_eligible_zero_admission_reports_warn_without_claiming_outage():
     conn = _db()
     _activate(conn)
     for index in range(3):
@@ -412,8 +412,9 @@ def test_three_eligible_zero_admission_reports_make_campaign_unhealthy():
         }
     ]
     assert health["consecutive_eligible_zero_admission_reports"] == 3
-    assert health["healthy"] is False
-    assert health["health_reasons"] == ["eligible_candidate_zero_admission_streak"]
+    assert health["healthy"] is True
+    assert health["health_reasons"] == []
+    assert health["funnel_warnings"] == ["eligible_candidate_zero_admission_streak"]
 
 
 def test_candidate_decision_rows_are_immutable():

@@ -365,20 +365,31 @@ def run_backtest_endpoint(
                     )
                     model_return = model_summary.get("total_return_pct")
                     rule_return = rule_summary.get("return_pct")
+                    from trader_koo.ml.validation_registry import comparable_execution_contract
+
+                    comparison_contract = comparable_execution_contract({
+                        "backtest": result,
+                        "rule_baseline": rule_baseline,
+                    })
+                    result["comparison_contract"] = comparison_contract
                     try:
                         result["rule_baseline_comparison"] = {
                             "model_return_pct": model_return,
                             "rule_baseline_return_pct": rule_return,
-                            "alpha_vs_rule_baseline_pct": round(
-                                float(model_return) - float(rule_return),
-                                2,
+                            "alpha_vs_rule_baseline_pct": (
+                                round(float(model_return) - float(rule_return), 2)
+                                if comparison_contract["eligible"] else None
                             ),
+                            "eligible": comparison_contract["eligible"],
+                            "reasons": comparison_contract["reasons"],
                         }
                     except Exception:
                         result["rule_baseline_comparison"] = {
                             "model_return_pct": model_return,
                             "rule_baseline_return_pct": rule_return,
                             "alpha_vs_rule_baseline_pct": None,
+                            "eligible": False,
+                            "reasons": comparison_contract["reasons"],
                         }
                 _backtest_result = result
             finally:

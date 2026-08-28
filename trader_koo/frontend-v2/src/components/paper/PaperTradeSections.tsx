@@ -429,10 +429,15 @@ export function PaperCampaignHealthPanel({
       </div>
       {report ? (
         <>
+          {report.admitted === 0 && (
+            <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--muted)]">
+              No paper order was expected from this report: every candidate was rejected by a recorded policy gate. Campaign writes remain {health.write_state ?? "unknown"}.
+            </div>
+          )}
           <div className="mt-4 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
             {[
               ["Ranked", report.ranked],
-              ["Eligible", report.eligible],
+              ["Setup gate pass", report.eligible],
               ["Rejected", report.rejected],
               ["Admitted", report.admitted],
               ["Exposure", `${report.exposure_pct.toFixed(1)}%`],
@@ -446,10 +451,18 @@ export function PaperCampaignHealthPanel({
           </div>
           <div className="mt-3 grid gap-3 text-xs text-[var(--muted)] md:grid-cols-2">
             <div>
-              Consecutive eligible reports with zero admissions: {health.consecutive_eligible_zero_admission_reports ?? 0}/{health.zero_admission_streak_limit ?? 0}
+              Consecutive reports with a setup-gate pass but no final order: {health.consecutive_eligible_zero_admission_reports ?? 0}/{health.zero_admission_streak_limit ?? 0}
             </div>
-            <div>Replay/live parity: {String(health.replay_live_parity ?? "not measured").replace(/_/g, " ")}</div>
+            <div>
+              Replay/live parity: {String(health.replay_live_parity ?? "not measured").replace(/_/g, " ")}
+              {health.replay_live_parity === "not_measured" && " (promotion evidence, not a live-write gate)"}
+            </div>
           </div>
+          {!!health.funnel_warnings?.length && (
+            <div className="mt-2 text-xs text-[var(--amber)]">
+              Selectivity warning: setup candidates reached later gates but none became orders. This is not a writer outage.
+            </div>
+          )}
           <div className="mt-2 text-xs text-[var(--muted)]">
             SPY comparison is campaign health and promotion evidence only; it is not a candidate admission gate.
           </div>

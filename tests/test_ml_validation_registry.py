@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from trader_koo.research.next_open_baseline import canonical_json_bytes
+
 from trader_koo.ml.validation_registry import (
     champion_status,
     evaluate_champion_eligibility,
@@ -9,6 +11,7 @@ from trader_koo.ml.validation_registry import (
     model_version_card,
     record_validation_run,
 )
+import hashlib
 
 
 def _conn() -> sqlite3.Connection:
@@ -18,6 +21,25 @@ def _conn() -> sqlite3.Connection:
 
 
 def _good_result(*, include_rule_baseline: bool = True) -> dict:
+    def ledger() -> dict:
+        body = {
+            "schema_version": "portfolio-ledger-v1",
+            "engine_version": "portfolio-execution-v1.0",
+            "cash": {"initial": 100_000.0, "final": 118_000.0},
+            "equity": [
+                {"date": "2025-01-01", "equity": 100_000.0},
+                {"date": "2026-01-01", "equity": 118_000.0},
+            ],
+            "provenance": {"config_sha256": "a" * 64, "input_sha256": "b" * 64},
+        }
+        return {
+            **body,
+            "provenance": {
+                **body["provenance"],
+                "ledger_sha256": hashlib.sha256(canonical_json_bytes(body)).hexdigest(),
+            },
+        }
+
     result = {
         "ok": True,
         "config": {
@@ -39,7 +61,11 @@ def _good_result(*, include_rule_baseline: bool = True) -> dict:
         },
         "backtest": {
             "ok": True,
+            "execution_ledger": ledger(),
             "summary": {
+                "return_basis": "total_return",
+                "benchmark_return_basis": "total_return",
+                "distributions_included": True,
                 "total_return_pct": 18.0,
                 "spy_return_pct": 10.0,
                 "alpha_pct": 8.0,
@@ -50,7 +76,16 @@ def _good_result(*, include_rule_baseline: bool = True) -> dict:
         },
     }
     if include_rule_baseline:
-        result["rule_baseline"] = {"return_pct": 12.0}
+        result["rule_baseline"] = {
+            "return_pct": 12.0,
+            "execution_ledger": ledger(),
+            "summary": {
+                "return_pct": 12.0,
+                "return_basis": "total_return",
+                "benchmark_return_basis": "total_return",
+                "distributions_included": True,
+            },
+        }
     return result
 
 
@@ -69,7 +104,7 @@ def test_good_result_with_rule_baseline_is_champion_eligible():
     assert evaluation["metrics"]["alpha_vs_rule_baseline_pct"] == 6.0
 
 
-def test_rule_baseline_summary_return_is_accepted():
+def test_summary_only_rule_baseline_is_not_promotion_evidence():
     result = _good_result(include_rule_baseline=False)
     result["rule_baseline"] = {
         "ok": True,
@@ -81,9 +116,31 @@ def test_rule_baseline_summary_return_is_accepted():
 
     evaluation = evaluate_champion_eligibility(result)
 
-    assert evaluation["champion_eligible"] is True
+    assert evaluation["champion_eligible"] is False
+    assert "rule_canonical_execution_ledger_missing" in evaluation["eligibility_reasons"]
     assert evaluation["metrics"]["rule_baseline_return_pct"] == 11.5
     assert evaluation["metrics"]["alpha_vs_rule_baseline_pct"] == 6.5
+
+
+def test_mismatched_comparison_dates_block_promotion():
+    result = _good_result()
+    result["rule_baseline"]["execution_ledger"]["equity"][1]["date"] = "2025-12-31"
+    ledger = result["rule_baseline"]["execution_ledger"]
+    body = {
+        **ledger,
+        "provenance": {
+            key: value for key, value in ledger["provenance"].items()
+            if key != "ledger_sha256"
+        },
+    }
+    ledger["provenance"]["ledger_sha256"] = hashlib.sha256(
+        canonical_json_bytes(body)
+    ).hexdigest()
+
+    evaluation = evaluate_champion_eligibility(result)
+
+    assert evaluation["champion_eligible"] is False
+    assert "model_rule_equity_dates_not_identical" in evaluation["eligibility_reasons"]
 
 
 def test_record_validation_run_persists_promotion_status():

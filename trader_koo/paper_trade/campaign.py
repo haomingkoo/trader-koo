@@ -581,8 +581,9 @@ def campaign_health(conn: sqlite3.Connection, *, campaign_id: str) -> dict[str, 
     limit = int(campaign[5])
     parity = str(campaign[6])
     reasons: list[str] = []
+    warnings: list[str] = []
     if streak >= limit:
-        reasons.append("eligible_candidate_zero_admission_streak")
+        warnings.append("eligible_candidate_zero_admission_streak")
     if parity == "diverged":
         reasons.append("replay_live_divergence")
     if str(campaign[3]) != "active":
@@ -604,14 +605,15 @@ def campaign_health(conn: sqlite3.Connection, *, campaign_id: str) -> dict[str, 
             "parity_status": latest_experiment[4],
         }
         if not promotion["risk_gate_passed"]:
-            reasons.append("promotion_risk_gate_failed")
+            warnings.append("promotion_risk_gate_failed")
         if not promotion["active_return_gate_passed"]:
-            reasons.append("promotion_active_return_gate_failed")
+            warnings.append("promotion_active_return_gate_failed")
     return {
         "available": True, "campaign_id": campaign[0], "campaigns": campaigns, "label": campaign[1],
         "policy_version": campaign[2], "status": campaign[3], "starting_capital": float(campaign[4]),
         "reports_observed": len(reports), "latest_report": latest,
         "consecutive_eligible_zero_admission_reports": streak, "zero_admission_streak_limit": limit,
         "replay_live_parity": parity, "healthy": not reasons, "health_reasons": reasons,
+        "funnel_warnings": warnings,
         "latest_promotion_experiment": promotion,
     }

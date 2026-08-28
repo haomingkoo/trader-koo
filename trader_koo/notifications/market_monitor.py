@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 import sqlite3
 from html import escape
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+from trader_koo.config import env_float, env_int
 
 LOG = logging.getLogger("trader_koo.notifications.market_monitor")
 
@@ -29,6 +32,23 @@ POLYMARKET_MIN_ALERT_LIQUIDITY_USD = 25_000.0
 POLYMARKET_MIN_ALERT_VOLUME_24H_USD = 5_000.0
 POLYMARKET_MAX_SNAPSHOT_AGE_MINUTES = 15
 POLYMARKET_BASELINE_TOLERANCE_MINUTES = 15
+POLYMARKET_MAX_ALERT_GROUPS = env_int(
+    "TRADER_KOO_POLYMARKET_MAX_ALERT_GROUPS", 4, min_value=1, max_value=10,
+)
+POLYMARKET_GROUP_COOLDOWN_HOURS = env_float(
+    "TRADER_KOO_POLYMARKET_GROUP_COOLDOWN_HOURS", 12.0, min_value=1.0, max_value=168.0,
+)
+POLYMARKET_GROUP_BREAKTHROUGH_DELTA_PTS = env_float(
+    "TRADER_KOO_POLYMARKET_GROUP_BREAKTHROUGH_DELTA_PTS", 10.0, min_value=1.0, max_value=50.0,
+)
+
+_POLYMARKET_ASSET_ALIASES = {
+    "BTC": ("bitcoin", "btc"),
+    "ETH": ("ethereum", "ether", "eth"),
+    "SOL": ("solana", "sol"),
+    "XRP": ("xrp",),
+    "DOGE": ("dogecoin", "doge"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +429,58 @@ def _html(value: Any) -> str:
     return escape(str(value), quote=False)
 
 
+def _polymarket_group_key(spike: dict[str, Any]) -> str:
+    """Return a stable topic key so correlated contracts share one alert slot."""
+    text = " ".join(
+        str(spike.get(field) or "")
+        for field in ("event_title", "question", "event_slug")
+    ).lower()
+    words = set(re.findall(r"[a-z0-9]+", text))
+    for asset, aliases in _POLYMARKET_ASSET_ALIASES.items():
+        if any(alias in words for alias in aliases):
+            return f"asset:{asset}"
+
+    slug = str(spike.get("event_slug") or "").strip().lower()
+    if slug:
+        return f"event:{slug}"
+    title = re.sub(r"[^a-z0-9]+", "-", str(spike.get("event_title") or "market").lower())
+    return f"title:{title.strip('-') or 'market'}"
+
+
+def _select_polymarket_digest(
+    spikes: list[dict[str, Any]],
+    *,
+    max_groups: int = POLYMARKET_MAX_ALERT_GROUPS,
+) -> list[dict[str, Any]]:
+    """Choose one strongest, most liquid representative per market topic."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for spike in spikes:
+        grouped.setdefault(_polymarket_group_key(spike), []).append(spike)
+
+    selected: list[dict[str, Any]] = []
+    for group_key, members in grouped.items():
+        members.sort(
+            key=lambda item: (
+                abs(float(item.get("change_pct") or 0)),
+                float(item.get("volume") or 0),
+            ),
+            reverse=True,
+        )
+        representative = dict(members[0])
+        representative["alert_group_key"] = group_key
+        representative["related_count"] = len(members) - 1
+        selected.append(representative)
+
+    selected.sort(
+        key=lambda item: (
+            abs(float(item.get("change_pct") or 0)),
+            float(item.get("volume") or 0),
+        ),
+        reverse=True,
+    )
+    return selected[:max_groups]
+
+
 def send_spike_alerts(db_path: Path) -> int:
     """Run both spike detectors and send Telegram alerts.
 
@@ -491,17 +563,32 @@ def send_spike_alerts(db_path: Path) -> int:
 
     # Polymarket spikes
     try:
-        poly_spikes = detect_polymarket_spikes(db_path)
+        poly_spikes = _select_polymarket_digest(detect_polymarket_spikes(db_path))
         for spike in poly_spikes:
             slug = str(spike.get("event_slug") or "")
             question = str(spike.get("question") or spike.get("event_title") or "?")
             direction = spike.get("direction", "up")
             new_p = spike.get("new_prob", 0)
-            key = f"polymarket:{slug}:{question}"
-            legacy_key = f"{slug}:{question[:60]}"
-
-            if not _should_alert(key, direction, new_p, legacy_key=legacy_key):
-                continue  # already alerted, same direction, small move
+            group_key = str(spike["alert_group_key"])
+            key = f"polymarket:{group_key}"
+            magnitude = abs(float(spike.get("change_pct") or 0))
+            row = conn_cd.execute(
+                "SELECT last_prob, alerted_at FROM spike_alert_cooldown WHERE event_key = ?",
+                (key,),
+            ).fetchone()
+            if row is not None:
+                try:
+                    alerted_at = dt.datetime.fromisoformat(str(row[1]).replace("Z", "+00:00"))
+                    if alerted_at.tzinfo is None:
+                        alerted_at = alerted_at.replace(tzinfo=dt.timezone.utc)
+                    elapsed = dt.datetime.now(dt.timezone.utc) - alerted_at.astimezone(dt.timezone.utc)
+                except (TypeError, ValueError):
+                    elapsed = dt.timedelta.max
+                previous_magnitude = float(row[0] or 0)
+                still_cooling = elapsed < dt.timedelta(hours=POLYMARKET_GROUP_COOLDOWN_HOURS)
+                is_breakthrough = magnitude >= previous_magnitude + POLYMARKET_GROUP_BREAKTHROUGH_DELTA_PTS
+                if still_cooling and not is_breakthrough:
+                    continue
 
             arrow = "\u2B06\uFE0F" if direction == "up" else "\u2B07\uFE0F"
             old_p = spike.get("old_prob", 0)
@@ -509,12 +596,15 @@ def send_spike_alerts(db_path: Path) -> int:
             vol = _format_volume(spike.get("volume", 0))
             poly_link = f"https://polymarket.com/event/{quote(slug, safe='')}" if slug else ""
             link_html = f'\n   <a href="{poly_link}">View on Polymarket</a>' if slug else ""
+            related_count = int(spike.get("related_count") or 0)
+            related_html = f" | +{related_count} related" if related_count else ""
             all_lines.append(
                 f"{arrow} <b>{_html(question)}</b>\n"
                 f"   {old_p:.0f}% \u2192 {new_p:.0f}% ({change:+.1f} pts) | lifetime vol {vol}"
+                f"{related_html}"
                 f"{link_html}"
             )
-            pending_cooldowns.append((key, direction, new_p, legacy_key))
+            pending_cooldowns.append((key, "digest", magnitude, None))
     except Exception as exc:
         LOG.error("Polymarket spike alerting failed: %s", exc)
 

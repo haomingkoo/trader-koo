@@ -7,9 +7,12 @@ must pass explicit out-of-sample gates before it is eligible for promotion.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import sqlite3
 from typing import Any
+
+from trader_koo.research.next_open_baseline import canonical_json_bytes
 
 MIN_FOLD_COUNT = 5
 MIN_AVG_AUC = 0.55
@@ -138,9 +141,68 @@ def extract_validation_metrics(result: dict[str, Any]) -> dict[str, Any]:
     return metrics
 
 
+def comparable_execution_contract(result: dict[str, Any]) -> dict[str, Any]:
+    """Verify model and rule results came from matching canonical ledgers."""
+    model = result.get("backtest") if isinstance(result.get("backtest"), dict) else {}
+    rule = result.get("rule_baseline") if isinstance(result.get("rule_baseline"), dict) else {}
+    ledgers = [model.get("execution_ledger"), rule.get("execution_ledger")]
+    reasons: list[str] = []
+    for label, ledger in zip(("model", "rule"), ledgers):
+        if not isinstance(ledger, dict):
+            reasons.append(f"{label}_canonical_execution_ledger_missing")
+            continue
+        if ledger.get("schema_version") != "portfolio-ledger-v1":
+            reasons.append(f"{label}_execution_ledger_schema_invalid")
+        if ledger.get("engine_version") != "portfolio-execution-v1.0":
+            reasons.append(f"{label}_execution_engine_invalid")
+        provenance = ledger.get("provenance") if isinstance(ledger.get("provenance"), dict) else {}
+        expected = str(provenance.get("ledger_sha256") or "")
+        body = {
+            **ledger,
+            "provenance": {
+                key: value for key, value in provenance.items() if key != "ledger_sha256"
+            },
+        }
+        actual = hashlib.sha256(canonical_json_bytes(body)).hexdigest()
+        if expected != actual:
+            reasons.append(f"{label}_execution_ledger_hash_invalid")
+
+    if not reasons:
+        model_ledger, rule_ledger = ledgers
+        model_equity = model_ledger.get("equity") or []
+        rule_equity = rule_ledger.get("equity") or []
+        model_dates = [str(row.get("date")) for row in model_equity if isinstance(row, dict)]
+        rule_dates = [str(row.get("date")) for row in rule_equity if isinstance(row, dict)]
+        if len(model_dates) < 2 or model_dates != rule_dates:
+            reasons.append("model_rule_equity_dates_not_identical")
+        model_cash = model_ledger.get("cash") if isinstance(model_ledger.get("cash"), dict) else {}
+        rule_cash = rule_ledger.get("cash") if isinstance(rule_ledger.get("cash"), dict) else {}
+        if model_cash.get("initial") != rule_cash.get("initial"):
+            reasons.append("model_rule_starting_capital_not_identical")
+        model_summary = model.get("summary") if isinstance(model.get("summary"), dict) else {}
+        rule_summary = rule.get("summary") if isinstance(rule.get("summary"), dict) else {}
+        for field in ("return_basis", "benchmark_return_basis", "distributions_included"):
+            if model_summary.get(field) != rule_summary.get(field):
+                reasons.append(f"model_rule_{field}_not_identical")
+        if not model_summary.get("return_basis"):
+            reasons.append("model_rule_return_basis_unavailable")
+        if model_summary.get("distributions_included") is not True:
+            reasons.append("model_rule_total_return_distributions_unavailable")
+
+    return {
+        "eligible": not reasons,
+        "reasons": reasons,
+        "required_engine": "portfolio-execution-v1.0",
+        "required_ledger_schema": "portfolio-ledger-v1",
+    }
+
+
 def evaluate_champion_eligibility(result: dict[str, Any]) -> dict[str, Any]:
     metrics = extract_validation_metrics(result)
     reasons: list[str] = []
+    comparison = comparable_execution_contract(result)
+
+    reasons.extend(comparison["reasons"])
 
     if metrics["status"] != "ok":
         reasons.append("run_failed")
@@ -174,6 +236,7 @@ def evaluate_champion_eligibility(result: dict[str, Any]) -> dict[str, Any]:
         "promotion_status": "eligible" if eligible else "blocked",
         "eligibility_reasons": reasons,
         "metrics": metrics,
+        "comparison_contract": comparison,
     }
 
 
