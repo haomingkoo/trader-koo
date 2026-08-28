@@ -17,6 +17,8 @@ from trader_koo.notifications.market_monitor import (
     POLYMARKET_MIN_ALERT_VOLUME_24H_USD,
     POLYMARKET_MIN_ALERT_VOLUME_USD,
     _format_volume,
+    _polymarket_group_key,
+    _select_polymarket_digest,
     detect_crypto_spikes,
     detect_polymarket_spikes,
     ensure_polymarket_schema,
@@ -511,7 +513,7 @@ class TestSendSpikeAlerts:
 
     @patch("trader_koo.notifications.telegram.is_configured", return_value=True)
     @patch("trader_koo.notifications.telegram.send_message", return_value=True)
-    def test_successful_send_persists_full_identity_cooldown(
+    def test_successful_send_persists_event_group_cooldown(
         self,
         mock_send: MagicMock,
         _mock_configured: MagicMock,
@@ -540,7 +542,67 @@ class TestSendSpikeAlerts:
         conn = sqlite3.connect(str(db_path))
         key = conn.execute("SELECT event_key FROM spike_alert_cooldown").fetchone()[0]
         conn.close()
-        assert key == f"polymarket:full-key:{question}"
+        assert key == "polymarket:event:full-key"
+
+    @patch("trader_koo.notifications.telegram.is_configured", return_value=True)
+    @patch("trader_koo.notifications.telegram.send_message", return_value=True)
+    def test_correlated_crypto_contracts_collapse_into_asset_groups(
+        self,
+        mock_send: MagicMock,
+        _mock_configured: MagicMock,
+        db_path: Path,
+    ) -> None:
+        now = dt.datetime.now(dt.timezone.utc)
+        markets = [
+            ("btc-dip", "Will Bitcoin dip to $77,500 in August?", 48.0, 38.0, 146_500),
+            ("btc-82", "Will Bitcoin reach $82,000 August 24-30?", 46.0, 55.0, 65_100),
+            ("btc-day", "Bitcoin Up or Down on August 28?", 46.0, 51.0, 49_800),
+            ("eth-dip", "Will Ethereum dip to $2,400 in August?", 46.0, 37.0, 64_400),
+            ("eth-26", "Will Ethereum reach $2,600 in August?", 46.0, 54.0, 402_700),
+        ]
+        rows = []
+        for slug, question, old_prob, new_prob, volume in markets:
+            rows.extend([
+                (slug, question, question, old_prob, volume, (now - dt.timedelta(hours=6)).isoformat()),
+                (slug, question, question, new_prob, volume, now.isoformat()),
+            ])
+        conn = sqlite3.connect(str(db_path))
+        conn.executemany(
+            """
+            INSERT INTO polymarket_snapshots
+                (event_slug, event_title, market_question, probability, volume, snapshot_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+        assert send_spike_alerts(db_path) == 2
+        text = mock_send.call_args.args[0]
+        assert "Market Spikes (2 events)" in text
+        assert text.count("View on Polymarket") == 2
+        assert "+2 related" in text
+        assert "+1 related" in text
+
+        assert send_spike_alerts(db_path) == 0
+        mock_send.assert_called_once()
+
+
+class TestPolymarketDigest:
+    def test_asset_group_key_uses_whole_words(self) -> None:
+        assert _polymarket_group_key({"question": "Will Bitcoin reach $82k?"}) == "asset:BTC"
+        assert _polymarket_group_key({"question": "Will something solid happen?", "event_slug": "solid"}) == "event:solid"
+
+    def test_digest_caps_groups_after_selecting_strongest_member(self) -> None:
+        spikes = [
+            {"question": "Bitcoin above 80k?", "change_pct": 6.0, "volume": 1_000},
+            {"question": "BTC above 82k?", "change_pct": 9.0, "volume": 500},
+            {"question": "Ethereum above 3k?", "change_pct": 8.0, "volume": 2_000},
+        ]
+        digest = _select_polymarket_digest(spikes, max_groups=1)
+        assert [item["question"] for item in digest] == ["BTC above 82k?"]
+        assert digest[0]["related_count"] == 1
 
 
 # ---------------------------------------------------------------------------

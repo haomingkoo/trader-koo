@@ -1093,6 +1093,7 @@ export interface PaperCampaignHealth {
   replay_live_parity?: string;
   healthy?: boolean;
   health_reasons?: string[];
+  funnel_warnings?: string[];
   benchmark_evidence?: {
     role: string;
     spy_buy_hold?: SpyBuyHoldBenchmark | null;
