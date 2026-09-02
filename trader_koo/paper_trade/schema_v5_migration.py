@@ -376,16 +376,27 @@ def _strict_v2_accounting_diagnostics(
         qty = Decimal(str(quantity))
         reserve = Decimal(str(entry_notional))
         entry_fee = Decimal(str(entry_commission))
+        # These columns are SQLite REALs and the writer persists the result of
+        # Python float multiplication. Reproduce that exact operation here;
+        # multiplying their decimal renderings can invent a mismatch at the
+        # final binary-float digit (for example, 65580.31820000001 vs
+        # 65580.31820) even when the stored value is byte-for-byte the writer's
+        # result.
+        expected_notional_float = float(entry_price) * float(quantity)
         expected_notional = entry * qty
-        if reserve != expected_notional:
+        if float(entry_notional) != expected_notional_float:
             diagnostics.append({
                 "code": "accounting",
                 "reason": "entry_notional_mismatch",
                 "trade_id": int(trade_id),
                 "expected_entry_notional": str(expected_notional),
                 "actual_entry_notional": str(reserve),
-                "arithmetic": "exact_decimal_from_persisted_values",
+                "arithmetic": "exact_float_writer_replay",
             })
+        else:
+            # Continue portfolio reconciliation with the exact decimal meaning
+            # of entry price times quantity, not SQLite's binary rendering.
+            reserve = expected_notional
         cash -= reserve + entry_fee
         if str(status) != "open":
             if any(value is None for value in (

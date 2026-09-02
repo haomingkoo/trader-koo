@@ -90,6 +90,7 @@ def public_daily_report(
         include_markdown=include_markdown,
         include_internal_paths=False,
         include_admin_log_hints=False,
+        include_history=view != "ui",
     )
     # VIX metrics — use cached from nightly report if available, else compute live
     if not payload.get("vix_metrics"):
