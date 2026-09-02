@@ -445,6 +445,7 @@ def daily_report_response(
     include_markdown: bool,
     include_internal_paths: bool,
     include_admin_log_hints: bool,
+    include_history: bool = True,
 ) -> dict[str, Any]:
     """Build the daily report payload for admin/public APIs.
 
@@ -592,7 +593,10 @@ def daily_report_response(
             LOG.warning("Failed to read markdown file %s: %s", latest_md_path.name, exc)
             md_text = ""
 
-    history = daily_report_history(report_dir, limit=limit)
+    # The public Report/VIX pages do not render report history. Verifying it is
+    # intentionally expensive because every immutable artifact is re-hashed;
+    # callers that do not display it should not pay that cost.
+    history = daily_report_history(report_dir, limit=limit) if include_history else []
     if not include_internal_paths:
         for row in history:
             row.pop("path", None)

@@ -472,9 +472,34 @@ def test_wrong_entry_notional_fails_per_trade_and_rolls_back() -> None:
         "trade_id": 1,
         "expected_entry_notional": "100.00",
         "actual_entry_notional": "99.0",
-        "arithmetic": "exact_decimal_from_persisted_values",
+        "arithmetic": "exact_float_writer_replay",
     },)
     assert _logical_database_hash(conn) == before
+
+
+def test_binary_float_writer_result_is_not_rejected_as_accounting_drift() -> None:
+    conn = _connect_fixture("paper_schema_v4_fresh.sql")
+    entry_price = 34.6253
+    quantity = 1894.0
+    _insert_canonical_v2_trade(
+        conn, accounting_status="reconciled", realized_pnl_usd=0.0,
+        entry_notional=entry_price * quantity,
+    )
+    conn.execute(
+        """UPDATE paper_trades
+           SET entry_price=?, quantity=?, status='open', current_price=?,
+               exit_price=NULL, exit_date=NULL, exit_commission=NULL,
+               borrow_cost=NULL, realized_pnl_usd=NULL
+           WHERE id=1""",
+        (entry_price, quantity, entry_price),
+    )
+    conn.commit()
+
+    migrate_paper_schema_v4_to_v5(conn)
+
+    assert conn.execute(
+        "SELECT entry_notional FROM paper_trades WHERE id=1"
+    ).fetchone()[0] == entry_price * quantity
 
 
 @pytest.mark.parametrize("missing_column", ["exit_commission", "borrow_cost"])

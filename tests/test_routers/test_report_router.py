@@ -8,6 +8,16 @@ import pytest
 
 
 class TestDailyReportEndpoint:
+    def test_daily_report_ui_view_skips_unrendered_history_verification(self, test_app):
+        with patch(
+            "trader_koo.backend.services.report_loader.daily_report_history"
+        ) as history:
+            response = test_app.get("/api/daily-report?view=ui")
+
+        assert response.status_code == 200
+        history.assert_not_called()
+        assert response.json()["history"] == []
+
     def test_daily_report_ui_view_omits_unrendered_bulk_fields(self, test_app):
         sealed = {
             "generated_ts": "2026-08-22T12:00:00Z",
