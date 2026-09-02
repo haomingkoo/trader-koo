@@ -424,7 +424,7 @@ def test_every_nonzero_v2_accounting_delta_fails_exactly(delta: float) -> None:
     assert raised.value.diagnostics[0]["code"] == "accounting"
     assert raised.value.diagnostics[0]["reason"] == "realized_pnl_mismatch"
     assert raised.value.diagnostics[0]["arithmetic"] == (
-        "exact_decimal_from_persisted_values"
+        "exact_float_writer_replay"
     )
     assert raised.value.diagnostics[0]["actual_realized_pnl_usd"] != (
         raised.value.diagnostics[0]["expected_realized_pnl_usd"]
@@ -500,6 +500,45 @@ def test_binary_float_writer_result_is_not_rejected_as_accounting_drift() -> Non
     assert conn.execute(
         "SELECT entry_notional FROM paper_trades WHERE id=1"
     ).fetchone()[0] == entry_price * quantity
+
+
+def test_binary_float_realized_pnl_is_not_rejected_as_accounting_drift() -> None:
+    conn = _connect_fixture("paper_schema_v4_fresh.sql")
+    entry_price = 149.4593
+    exit_price = 139.98987
+    quantity = 348.0
+    entry_commission = 5.0
+    exit_commission = 5.0
+    borrow_cost = 0.0
+    realized_pnl = (
+        (exit_price - entry_price) * quantity
+        - entry_commission
+        - exit_commission
+        - borrow_cost
+    )
+    _insert_canonical_v2_trade(
+        conn, accounting_status="reconciled", realized_pnl_usd=realized_pnl,
+        entry_notional=entry_price * quantity,
+    )
+    conn.execute(
+        """UPDATE paper_trades
+           SET entry_price=?, exit_price=?, quantity=?, entry_notional=?,
+               entry_commission=?, exit_commission=?, borrow_cost=?,
+               realized_pnl_usd=?, current_price=?
+           WHERE id=1""",
+        (
+            entry_price, exit_price, quantity, entry_price * quantity,
+            entry_commission, exit_commission, borrow_cost, realized_pnl,
+            exit_price,
+        ),
+    )
+    conn.commit()
+
+    migrate_paper_schema_v4_to_v5(conn)
+
+    assert conn.execute(
+        "SELECT realized_pnl_usd FROM paper_trades WHERE id=1"
+    ).fetchone()[0] == realized_pnl
 
 
 @pytest.mark.parametrize("missing_column", ["exit_commission", "borrow_cost"])

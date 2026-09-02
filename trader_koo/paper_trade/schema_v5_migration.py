@@ -417,15 +417,27 @@ def _strict_v2_accounting_diagnostics(
             )
             actual_realized = Decimal(str(realized_pnl))
             expected_realized = gross - entry_fee - exit_fee - borrow
-            if actual_realized != expected_realized:
+            expected_realized_float = (
+                (
+                    (float(exit_price) - float(entry_price)) * float(quantity)
+                    if str(direction) == "long"
+                    else (float(entry_price) - float(exit_price)) * float(quantity)
+                )
+                - float(entry_commission)
+                - float(exit_commission)
+                - float(borrow_cost)
+            )
+            if float(realized_pnl) != expected_realized_float:
                 diagnostics.append({
                     "code": "accounting",
                     "reason": "realized_pnl_mismatch",
                     "trade_id": int(trade_id),
                     "expected_realized_pnl_usd": str(expected_realized),
                     "actual_realized_pnl_usd": str(actual_realized),
-                    "arithmetic": "exact_decimal_from_persisted_values",
+                    "arithmetic": "exact_float_writer_replay",
                 })
+            else:
+                actual_realized = expected_realized
             cash += reserve + gross - exit_fee - borrow
             realized += actual_realized
             continue
