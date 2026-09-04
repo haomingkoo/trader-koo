@@ -233,7 +233,8 @@ def macro_snapshot(request: Request) -> dict[str, Any]:
 
         return {"ok": True, **get_macro_snapshot()}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        LOG.exception("Failed to fetch macro snapshot: %s", exc)
+        return {"ok": False, "error": "Unable to fetch macro data"}
 
 
 @router.get("/api/admin/ml-shap-analysis")

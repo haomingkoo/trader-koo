@@ -400,18 +400,6 @@ def polymarket_data(limit: int = 15) -> dict[str, Any]:
         return {"ok": False, "error": "Unable to fetch Polymarket data", "events": []}
 
 
-@router.get("/api/macro-data")
-def macro_data_public() -> dict[str, Any]:
-    """Public endpoint: FRED yield curve + M2 data."""
-    try:
-        from trader_koo.ml.external_data import get_macro_snapshot
-
-        return {"ok": True, **get_macro_snapshot()}
-    except Exception as exc:
-        LOG.exception("Failed to fetch macro data: %s", exc)
-        return {"ok": False, "error": "Unable to fetch macro data"}
-
-
 @router.get("/api/macro-live")
 def macro_live() -> dict[str, Any]:
     """Public endpoint: live macro instrument prices + risk regime.
