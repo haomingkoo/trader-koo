@@ -235,11 +235,14 @@ def build_crypto_structure(
     hmm_directional = None
     if include_hmm:
         hmm_input = prices[["date", "open", "high", "low", "close", "volume"]].copy()
-        hmm_regime = predict_regimes(
-            hmm_input,
-            lookback_days=min(len(hmm_input), 720),
-            ticker=f"crypto:{symbol}:{interval}",
-        )
+        try:
+            hmm_regime = predict_regimes(
+                hmm_input,
+                lookback_days=min(len(hmm_input), 720),
+                ticker=f"crypto:{symbol}:{interval}",
+            )
+        except Exception as exc:
+            LOG.warning("HMM regime failed for %s [%s]: %s", symbol, interval, exc)
         try:
             hmm_directional = predict_directional_regimes(
                 hmm_input,
