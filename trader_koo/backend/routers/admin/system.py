@@ -35,11 +35,6 @@ from trader_koo.backend.routers.admin._shared import (
     _to_int,
 )
 
-from trader_koo.backend.routers.usage import (
-    _feedback_summary,
-    _usage_summary,
-)
-
 router = APIRouter(tags=["admin", "admin-system"])
 
 
@@ -408,97 +403,6 @@ def report_stability(
         "summary": summary_data,
         "missing_examples": missing_examples,
         "rows": rows,
-    }
-
-
-@router.get("/api/admin/usage-summary")
-def usage_summary_endpoint(
-    days: int = Query(default=7, ge=1, le=365),
-    limit: int = Query(default=10, ge=1, le=100),
-) -> dict[str, Any]:
-    if not ANALYTICS_ENABLED:
-        return {
-            "ok": True,
-            "analytics_enabled": False,
-            "detail": "Analytics collection is disabled.",
-        }
-    conn = get_conn()
-    try:
-        summary = _usage_summary(conn, days=days, limit=limit)
-    finally:
-        conn.close()
-    summary["analytics_enabled"] = True
-    return summary
-
-
-@router.get("/api/admin/feedback-summary")
-def admin_feedback_summary(
-    days: int = Query(default=30, ge=1, le=365),
-    limit: int = Query(default=12, ge=1, le=100),
-) -> dict[str, Any]:
-    conn = get_conn()
-    try:
-        summary = _feedback_summary(conn, days=days)
-        if not table_exists(conn, "setup_feedback"):
-            return {
-                "ok": True,
-                "summary": summary,
-                "top_tickers": [],
-                "recent": [],
-            }
-        cutoff = (
-            dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
-        ).isoformat()
-        top_rows = conn.execute(
-            """
-            SELECT
-                ticker,
-                COUNT(*) AS votes,
-                SUM(CASE WHEN verdict='good' THEN 1 ELSE 0 END) AS good,
-                SUM(CASE WHEN verdict='bad' THEN 1 ELSE 0 END) AS bad,
-                SUM(CASE WHEN verdict='neutral' THEN 1 ELSE 0 END) AS neutral
-            FROM setup_feedback
-            WHERE created_ts >= ?
-            GROUP BY ticker
-            ORDER BY votes DESC, ticker ASC
-            LIMIT ?
-            """,
-            (cutoff, int(limit)),
-        ).fetchall()
-        recent_rows = conn.execute(
-            """
-            SELECT
-                created_ts, ticker, verdict, source_surface, asof,
-                setup_tier, setup_score
-            FROM setup_feedback
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (int(limit),),
-        ).fetchall()
-    finally:
-        conn.close()
-    return {
-        "ok": True,
-        "summary": summary,
-        "top_tickers": [
-            {
-                "ticker": str(row["ticker"] or ""),
-                "votes": int(row["votes"] or 0),
-                "good": int(row["good"] or 0),
-                "bad": int(row["bad"] or 0),
-                "neutral": int(row["neutral"] or 0),
-                "good_rate_pct": round(
-                    (int(row["good"] or 0) * 100.0)
-                    / int(row["votes"] or 1),
-                    2,
-                )
-                if int(row["votes"] or 0)
-                else None,
-            }
-            for row in top_rows
-        ],
-        "recent": [dict(row) for row in recent_rows],
     }
 
 
