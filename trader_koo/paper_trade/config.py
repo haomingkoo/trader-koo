@@ -38,6 +38,11 @@ class PaperTradeConfig:
     # Capped at tier notional max to prevent overleveraging on tight stops.
     risk_per_trade_pct: float = 0.5  # risk 0.5% of capital per trade (=$5K on $1M)
     ml_enabled: bool = False  # Disabled until the registered promotion gates pass.
+    # Observation mode is deliberately independent of ml_enabled: the activation
+    # gate requires >= 20 closed trades carrying ml_predicted_win_prob, and that
+    # column is only populated by scoring. Gating scoring on ml_enabled made the
+    # gate's own precondition unreachable. Scoring never filters a trade.
+    ml_observe: bool = True
     ml_min_win_prob: float = 0.55
     max_drawdown_pct: float = 15.0  # halt new entries if portfolio draws down this much
     max_daily_loss_pct: float = 5.0  # halt new entries if daily portfolio loss exceeds this

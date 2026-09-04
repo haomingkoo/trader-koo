@@ -136,26 +136,33 @@ def generate_triple_barrier_labels(
                 future_close = float(close.iloc[future_idx])
                 days_held = future_idx - entry_idx
 
+                # Check LOW for stop loss FIRST (intraday touch counts).
+                # Ambiguous-bar rule: when a single bar touches BOTH barriers,
+                # daily OHLC cannot tell us which was hit first, so resolve
+                # stop-first.  research/next_open_baseline.py:_resolve_bar does
+                # the same and documents it as the conservative choice.
+                # Checking the target first labelled every both-touched bar a
+                # win, inflating the positive class exactly in the
+                # high-volatility bars where both barriers are reachable.
+                # Exit price = lower barrier: stop-market order triggers at the
+                # barrier price (optimistic — ignores additional slippage).
+                if future_low <= lower:
+                    label = -1
+                    exit_date = dates.iloc[future_idx]
+                    exit_reason = "stop_loss"
+                    exit_price = lower  # stop triggers at barrier price
+                    break
                 # Check HIGH for profit target (intraday touch counts).
                 # Exit price = upper barrier: a limit order fills at the barrier
                 # price, not the day's close.  Using close caused return_pct to
                 # be negative for label=+1 rows when price pulled back, creating
                 # a target-leakage-adjacent mismatch between label and training
                 # target (return_pct > 0).
-                if future_high >= upper:
+                elif future_high >= upper:
                     label = 1
                     exit_date = dates.iloc[future_idx]
                     exit_reason = "profit_target"
                     exit_price = upper  # limit order fills exactly at barrier
-                    break
-                # Check LOW for stop loss (intraday touch counts).
-                # Exit price = lower barrier: stop-market order triggers at the
-                # barrier price (optimistic — ignores additional slippage).
-                elif future_low <= lower:
-                    label = -1
-                    exit_date = dates.iloc[future_idx]
-                    exit_reason = "stop_loss"
-                    exit_price = lower  # stop triggers at barrier price
                     break
             else:
                 # Time expired — use last available price
