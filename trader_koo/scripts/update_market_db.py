@@ -37,8 +37,13 @@ from trader_koo.config import (
     get_options_config,
 )
 from trader_koo.db.schema import ensure_ohlcv_schema
-from trader_koo.db.price_contract import record_price_series_revision, valid_price_provenance
+from trader_koo.db.price_contract import (
+    ensure_price_series_revision_schema,
+    record_price_series_revision,
+    valid_price_provenance,
+)
 from trader_koo.options_research import (
+    ensure_options_iv_schema,
     fetch_yfinance_options_rows,
     write_options_rows as write_options_snapshot_rows,
 )
@@ -341,38 +346,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (ticker, action_date, action_type, provider)
         );
 
-        CREATE TABLE IF NOT EXISTS price_series_revisions (
-            ticker TEXT PRIMARY KEY,
-            managed_start TEXT NOT NULL,
-            managed_end TEXT NOT NULL,
-            row_count INTEGER NOT NULL,
-            adjustment_basis TEXT NOT NULL,
-            adjustment_version TEXT NOT NULL,
-            price_sha256 TEXT NOT NULL,
-            action_sha256 TEXT NOT NULL,
-            evidence_sha256 TEXT NOT NULL,
-            revision_sha256 TEXT NOT NULL,
-            status TEXT NOT NULL,
-            evidence_json TEXT NOT NULL,
-            fetch_timestamp TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS options_iv (
-            snapshot_ts TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            expiration TEXT NOT NULL,
-            option_type TEXT NOT NULL,
-            strike REAL NOT NULL,
-            last_price REAL,
-            bid REAL,
-            ask REAL,
-            implied_vol REAL,
-            open_interest REAL,
-            volume REAL,
-            moneyness REAL,
-            PRIMARY KEY (snapshot_ts, ticker, expiration, option_type, strike)
-        );
-
         CREATE TABLE IF NOT EXISTS ingest_runs (
             run_id TEXT PRIMARY KEY,
             started_ts TEXT NOT NULL,
@@ -406,11 +379,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_price_ticker_date ON price_daily(ticker, date);
         CREATE INDEX IF NOT EXISTS idx_price_daily_ticker ON price_daily(ticker);
         CREATE INDEX IF NOT EXISTS idx_price_actions_ticker_date ON price_corporate_actions(ticker, action_date);
-        CREATE INDEX IF NOT EXISTS idx_options_ticker_snap ON options_iv(ticker, snapshot_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_runs_started ON ingest_runs(started_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_ticker_status_run ON ingest_ticker_status(run_id, status);
         """
     )
+    # Single owners for these two tables; the local copies drifted from the
+    # migrations these carry (options_iv gained 7 columns via ALTER).
+    ensure_price_series_revision_schema(conn)
+    ensure_options_iv_schema(conn)
     conn.commit()
 
     # Migrate older DBs that predate the data_source / fetch_timestamp columns.
