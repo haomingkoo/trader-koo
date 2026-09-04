@@ -1,4 +1,4 @@
-# CV Pipeline — Detect → Label → Train Loop
+# CV Pattern Detection — parameters and references
 
 This folder supports an incremental bootstrapping loop for chart pattern recognition:
 
@@ -93,104 +93,6 @@ sanity-check detection output and calibrate thresholds.
 
 ---
 
-## Workflow commands
-
-### Step 1 — Detect patterns + render images
-
-```bash
-cd trader_koo
-source .venv/bin/activate
-
-# Small test batch first (renders clean + annotated images)
-python scripts/grow_gold_labels.py detect \
-    --tickers "AAPL,SPY,NVDA,MSFT" \
-    --max-windows-per-ticker 50 \
-    --render-images
-
-# Output:
-#   data/cv/images/          ← clean PNGs for model training (no text/lines)
-#   data/cv/images_review/   ← annotated PNGs with detected lines (for human review)
-#   data/cv/pending_review_template.csv
-```
-
-### Step 2 — Human review (Option A: CSV)
-
-Open `data/cv/pending_review_template.csv` in Excel/Numbers.
-Look at each `images_review/{sample_id}.png`, fill `approved` = TRUE/FALSE.
-
-### Step 2 — Human review (Option B: Label Studio)
-
-```bash
-# Export to Label Studio format (uses annotated review images)
-python scripts/export_label_studio_tasks.py \
-    --cv-dir data/cv \
-    --source review_queue \
-    --tasks-out data/cv/ls_tasks.json \
-    --config-out data/cv/ls_config.xml \
-    --image-mode absolute
-
-# In Label Studio:
-#   1. New project → Settings → Labeling Interface → paste ls_config.xml
-#   2. Import → upload ls_tasks.json
-#   3. Review each chart (lines are pre-drawn)
-#   4. Export → JSON → save as data/cv/ls_annotations.json
-
-# Convert Label Studio export back to decisions
-python scripts/ls_export_to_gold.py \
-    --ls-export data/cv/ls_annotations.json \
-    --weak-labels data/cv/batch_weak_labels.csv \
-    --out-decisions data/cv/review_decisions.csv
-```
-
-### Step 3 — Merge approved labels into gold set
-
-```bash
-python scripts/grow_gold_labels.py merge
-# → appends confirmed labels to data/cv/gold_labels.csv
-# → archives pending_review_template.csv as .done.csv
-```
-
-### Step 4 — Calibrate thresholds (once you have ≥100 gold labels)
-
-```bash
-python scripts/calibrate_thresholds.py
-# Compares detected patterns vs gold labels
-# Sweeps depth_pct, min_shape_r2 etc. and reports precision/recall/F1
-# Prints recommended CVProxyConfig values
-```
-
-### Step 5 — Scale to all tickers
-
-```bash
-python scripts/grow_gold_labels.py detect \
-    --use-all-tickers \
-    --render-images
-python scripts/grow_gold_labels.py merge
-```
-
-### Step 6 — Pseudo-label expansion (after model training)
-
-```bash
-python scripts/promote_cv_pseudo_labels.py \
-    --model-predictions-csv data/cv/model_predictions.csv \
-    --gold-labels-csv data/cv/gold_labels.csv \
-    --out-dir data/cv
-```
-
----
-
-## Two image folders explained
-
-| Folder | Purpose | Contents |
-|---|---|---|
-| `data/cv/images/` | **Model training** | Plain candlestick only — no text, no lines, no axes |
-| `data/cv/images_review/` | **Human review** | Candlestick + detected pattern lines + labels |
-
-The model must NOT train on `images_review/` — it would learn to detect the text labels
-instead of the actual price patterns.
-
----
-
 ## Detection thresholds (current vs Bulkowski)
 
 | Parameter | Current | Bulkowski recommendation |
@@ -202,14 +104,3 @@ instead of the actual price patterns.
 | Wedge convergence | 35%+ required | ≥ 25–30% ✓ |
 | Shape R² quality | ≥ 0.45 | no reference, empirical |
 | Flag pole return | 5% | ≥ 15% (consider tightening) |
-
-Run `calibrate_thresholds.py` once you have gold labels to get data-driven values.
-
----
-
-## Notes
-
-- This is an assistive labeling workflow, not a production trading system.
-- Keep a human in the loop for new pattern classes and market regime changes.
-- Use strict out-of-sample (time-ordered) evaluation before trusting model confidence.
-- The gold set should have ≥ 200 confirmed examples per class for reliable model training.
