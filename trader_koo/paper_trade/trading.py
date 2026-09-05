@@ -1324,7 +1324,7 @@ def _create_paper_trades_from_report_in_transaction(
         # Scores are recorded on the trade for post-hoc analysis so we
         # can evaluate when the model improves enough to re-enable filtering.
         ml_prediction: dict[str, Any] = {}
-        if config.ml_enabled:
+        if config.ml_observe or config.ml_enabled:
             try:
                 from trader_koo.ml.scorer import score_single_ticker
 

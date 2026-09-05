@@ -538,3 +538,79 @@ class TestCriticReview:
         assert isinstance(result["critic_reasons"], list)
         assert isinstance(result["rejections"], list)
         assert isinstance(result["approved"], bool)
+
+
+def test_sector_gate_reports_when_it_cannot_evaluate(tmp_path):
+    """The sector map covers ~46 of ~500 tickers, so the gate usually no-ops.
+
+    It used to pass silently, which is how three Healthcare positions were open
+    at once under a max-1-per-sector rule. The unknown case must say so.
+    """
+    from trader_koo.paper_trade.critic import _check_portfolio_concentration
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE paper_trades (ticker TEXT, direction TEXT, setup_family TEXT,"
+        " status TEXT, campaign_id TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO paper_trades VALUES ('ISRG','long','bullish_continuation','open','paper-v2')"
+    )
+    conn.commit()
+
+    ok, reason = _check_portfolio_concentration(
+        conn, "COR", "long", {"setup_family": "bullish_reversal"},
+        max_open=5, campaign_id="paper-v2",
+    )
+    conn.close()
+
+    # Both are Healthcare, but neither resolves through the sector map, so the
+    # gate cannot evaluate. It must admit that rather than reporting a clean pass.
+    assert ok is True
+    assert "SECTOR GATE NOT EVALUATED" in reason
+    assert "COR" in reason
+
+
+def test_sector_gate_blocks_second_position_once_sector_is_known():
+    """With Sector present in raw_json the gate evaluates and blocks.
+
+    finviz.get_stock carries no Sector field; update_market_db.prime_finviz_sectors
+    fills it from the screener. This pins the downstream half: given the field,
+    a second position in the same sector must be refused.
+    """
+    import json
+
+    from trader_koo.paper_trade.critic import _check_portfolio_concentration
+    import trader_koo.ml.sector_rotation as sector_rotation
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE finviz_fundamentals (snapshot_ts TEXT NOT NULL, ticker TEXT NOT NULL,"
+        " raw_json TEXT, PRIMARY KEY (snapshot_ts, ticker))"
+    )
+    for ticker in ("UNH", "ISRG"):
+        conn.execute(
+            "INSERT INTO finviz_fundamentals (snapshot_ts, ticker, raw_json) VALUES (?, ?, ?)",
+            ("2026-09-05T00:00:00Z", ticker, json.dumps({"Sector": "Healthcare"})),
+        )
+    conn.execute(
+        "CREATE TABLE paper_trades (ticker TEXT, direction TEXT, setup_family TEXT,"
+        " status TEXT, campaign_id TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO paper_trades VALUES ('UNH','long','bullish_continuation','open','paper-v2')"
+    )
+    conn.commit()
+
+    sector_rotation._sector_map_cache = None
+    try:
+        allowed, reason = _check_portfolio_concentration(
+            conn, "ISRG", "long", {"setup_family": "bullish_reversal"},
+            max_open=5, campaign_id="paper-v2",
+        )
+    finally:
+        sector_rotation._sector_map_cache = None
+        conn.close()
+
+    assert allowed is False
+    assert "health_care" in reason

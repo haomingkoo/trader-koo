@@ -272,7 +272,6 @@ def market_summary(days: int = Query(90, ge=7, le=365)) -> Any:
         conn.close()
 
 
-@router.get("/api/fear-greed")
 @router.get("/api/market-sentiment")
 def fear_greed_index() -> dict[str, Any]:
     """Market sentiment payload with internal composite and optional external news pulse."""

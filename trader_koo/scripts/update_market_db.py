@@ -37,8 +37,13 @@ from trader_koo.config import (
     get_options_config,
 )
 from trader_koo.db.schema import ensure_ohlcv_schema
-from trader_koo.db.price_contract import record_price_series_revision, valid_price_provenance
+from trader_koo.db.price_contract import (
+    ensure_price_series_revision_schema,
+    record_price_series_revision,
+    valid_price_provenance,
+)
 from trader_koo.options_research import (
+    ensure_options_iv_schema,
     fetch_yfinance_options_rows,
     write_options_rows as write_options_snapshot_rows,
 )
@@ -341,38 +346,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (ticker, action_date, action_type, provider)
         );
 
-        CREATE TABLE IF NOT EXISTS price_series_revisions (
-            ticker TEXT PRIMARY KEY,
-            managed_start TEXT NOT NULL,
-            managed_end TEXT NOT NULL,
-            row_count INTEGER NOT NULL,
-            adjustment_basis TEXT NOT NULL,
-            adjustment_version TEXT NOT NULL,
-            price_sha256 TEXT NOT NULL,
-            action_sha256 TEXT NOT NULL,
-            evidence_sha256 TEXT NOT NULL,
-            revision_sha256 TEXT NOT NULL,
-            status TEXT NOT NULL,
-            evidence_json TEXT NOT NULL,
-            fetch_timestamp TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS options_iv (
-            snapshot_ts TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            expiration TEXT NOT NULL,
-            option_type TEXT NOT NULL,
-            strike REAL NOT NULL,
-            last_price REAL,
-            bid REAL,
-            ask REAL,
-            implied_vol REAL,
-            open_interest REAL,
-            volume REAL,
-            moneyness REAL,
-            PRIMARY KEY (snapshot_ts, ticker, expiration, option_type, strike)
-        );
-
         CREATE TABLE IF NOT EXISTS ingest_runs (
             run_id TEXT PRIMARY KEY,
             started_ts TEXT NOT NULL,
@@ -406,11 +379,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_price_ticker_date ON price_daily(ticker, date);
         CREATE INDEX IF NOT EXISTS idx_price_daily_ticker ON price_daily(ticker);
         CREATE INDEX IF NOT EXISTS idx_price_actions_ticker_date ON price_corporate_actions(ticker, action_date);
-        CREATE INDEX IF NOT EXISTS idx_options_ticker_snap ON options_iv(ticker, snapshot_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_runs_started ON ingest_runs(started_ts);
         CREATE INDEX IF NOT EXISTS idx_ingest_ticker_status_run ON ingest_ticker_status(run_id, status);
         """
     )
+    # Single owners for these two tables; the local copies drifted from the
+    # migrations these carry (options_iv gained 7 columns via ALTER).
+    ensure_price_series_revision_schema(conn)
+    ensure_options_iv_schema(conn)
     conn.commit()
 
     # Migrate older DBs that predate the data_source / fetch_timestamp columns.
@@ -801,6 +777,50 @@ def upsert_ticker_status(
     )
 
 
+# Finviz's per-ticker snapshot (finviz.get_stock) carries 88 fields and none of
+# them is Sector, so build_sector_map_from_db found nothing and the critic's
+# sector-concentration gate silently passed for ~90% of the universe. The
+# screener does expose Sector, in one bulk call.
+_SECTOR_BY_TICKER: dict[str, str] = {}
+
+
+def prime_finviz_sectors(tickers: list[str]) -> int:
+    """Populate the ticker -> Finviz sector name cache for this run.
+
+    Returns the number of tickers resolved. Failure is non-fatal: the sector
+    stays unknown and the critic reports the gate as unevaluated rather than
+    reporting a clean pass.
+    """
+    from trader_koo.ml.sector_rotation import _FINVIZ_SECTOR_TO_INTERNAL
+
+    known_sectors = set(_FINVIZ_SECTOR_TO_INTERNAL)
+    wanted = [t.upper() for t in tickers]
+    try:
+        from finviz.screener import Screener
+    except Exception as exc:
+        LOG.warning("Finviz screener unavailable; sector gate stays unevaluated: %s", exc)
+        return 0
+
+    for start in range(0, len(wanted), 100):
+        chunk = set(wanted[start : start + 100])
+        try:
+            rows = list(Screener(tickers=sorted(chunk), table="Overview"))
+        except Exception as exc:
+            LOG.warning("Finviz sector chunk failed (%d tickers): %s", len(chunk), exc)
+            continue
+        for row in rows:
+            # The installed finviz build misaligns its column headers by one, so
+            # identify both fields by value instead of trusting the key names.
+            values = [str(v).strip() for v in row.values()]
+            ticker = next((v for v in values if v in chunk), None)
+            sector = next((v for v in values if v in known_sectors), None)
+            if ticker and sector:
+                _SECTOR_BY_TICKER[ticker] = sector
+
+    LOG.info("Finviz sectors resolved for %d/%d tickers", len(_SECTOR_BY_TICKER), len(wanted))
+    return len(_SECTOR_BY_TICKER)
+
+
 def fetch_finviz_row(ticker: str, retry_attempts: int = 3) -> dict:
     last_err: Optional[Exception] = None
     raw: dict = {}
@@ -815,6 +835,10 @@ def fetch_finviz_row(ticker: str, retry_attempts: int = 3) -> dict:
             if attempt == retry_attempts:
                 raise RuntimeError(f"Finviz fetch failed for {ticker}: {last_err}") from last_err
             time.sleep((1.8 ** (attempt - 1)) + random.uniform(0.0, 0.4))
+
+    sector = _SECTOR_BY_TICKER.get(ticker.upper())
+    if sector:
+        raw.setdefault("Sector", sector)
 
     price = to_float(raw.get("Price"))
     pe = to_float(raw.get("P/E"))
@@ -1356,6 +1380,10 @@ def run(args: argparse.Namespace) -> None:
     ticker_position = {ticker: idx for idx, ticker in enumerate(requested_tickers, start=1)}
     attempt_by_ticker: dict[str, int] = {}
     final_errors: dict[str, str] = {}
+    # One bulk call: the per-ticker Finviz snapshot has no Sector field, and
+    # without it the critic's sector-concentration gate cannot evaluate.
+    prime_finviz_sectors(list(tickers))
+
     pending_tickers = list(tickers)
     pass_no = 1
     term_prev_handlers: dict[int, object] = {}

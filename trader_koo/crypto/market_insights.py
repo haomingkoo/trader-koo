@@ -194,6 +194,12 @@ def build_btc_spy_correlation(
             "sample_size": len(aligned_rows),
             "relationship_label": "insufficient overlap",
             "note": "Need at least 6 aligned daily closes between crypto and benchmark.",
+            "latest": {
+                "asset_close": None,
+                "benchmark_close": None,
+                "asset_change_1d_pct": None,
+                "benchmark_change_1d_pct": None,
+            },
             "windows": {f"{window}d": _window_metrics(aligned_rows, window=window) for window in windows},
             "aligned_history": [],
         }

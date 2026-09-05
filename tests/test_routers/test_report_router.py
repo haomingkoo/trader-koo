@@ -359,7 +359,7 @@ class TestMarketSentimentEndpoint:
         },
     )
     def test_market_sentiment_exposes_methodology_metadata(self, _mock_social, _mock_news, test_app):
-        response = test_app.get("/api/fear-greed")
+        response = test_app.get("/api/market-sentiment")
 
         assert response.status_code == 200
         data = response.json()

@@ -658,7 +658,11 @@ def write_reports(
     latest_json = out_dir / "daily_report_latest.json"
     latest_md = out_dir / "daily_report_latest.md"
 
-    json_text = json.dumps(report, indent=2)
+    # Compact, not indent=2: pretty-printing was 4.6 MB of the 14.2 MB artifact,
+    # and /api/daily-report reads, hashes and parses the whole file per request.
+    # Hashes are computed over the bytes as written, so only new artifacts are
+    # affected; existing ones keep their recorded content_hash.
+    json_text = json.dumps(report, separators=(",", ":"))
     md_text = to_markdown(report)
     json_path.write_text(json_text + "\n", encoding="utf-8")
     md_path.write_text(md_text + "\n", encoding="utf-8")

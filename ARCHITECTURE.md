@@ -793,22 +793,6 @@ Configurable allowed origins via `TRADER_KOO_CORS_ORIGINS` env var. Defaults to 
 
 ---
 
-## CV label pipeline
-
-The `cv/` module and `scripts/grow_gold_labels.py` implement a human-in-the-loop label curation workflow for training a custom pattern detector (future work):
-
-```
-1. detect   — run proxy_patterns.py over all tickers, render annotated images
-2. review   — human inspects images_review/, marks accept/reject in CSV
-3. gold     — approved detections merged into gold_labels.csv
-4. calibrate — sweep detection thresholds against gold set, optimize F1
-5. pseudo   — high-confidence model predictions promoted to training data
-```
-
-This pipeline supports Label Studio for the human review step (optional) or a simple CSV-based workflow. The current state uses the rule-based `cv/proxy_patterns.py` as a detection oracle; the intent is to eventually fine-tune a YOLO model on the gold labels.
-
----
-
 ## Configuration
 
 All detection components are configured via dataclasses with sensible defaults. Instances are created once at startup in `main.py` and passed to each function call. To tune any parameter, change the dataclass default or instantiate with overrides:

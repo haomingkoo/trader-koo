@@ -22,7 +22,6 @@ from trader_koo.backend.routers.opportunities import router as opportunities_rou
 from trader_koo.backend.routers.options import router as options_router
 from trader_koo.backend.routers.paper_trades import router as paper_trades_router
 from trader_koo.backend.routers.email import router as email_router
-from trader_koo.backend.routers.usage import router as usage_router
 from trader_koo.backend.routers.admin import router as admin_router
 from trader_koo.db.price_contract import record_price_series_revision
 
@@ -292,7 +291,6 @@ def test_app(tmp_path: Path, seeded_conn: sqlite3.Connection):
     app.include_router(options_router)
     app.include_router(paper_trades_router)
     app.include_router(email_router)
-    app.include_router(usage_router)
     app.include_router(admin_router)
 
     def _fake_get_conn(db_path=None):
