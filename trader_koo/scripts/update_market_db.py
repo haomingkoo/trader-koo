@@ -777,6 +777,50 @@ def upsert_ticker_status(
     )
 
 
+# Finviz's per-ticker snapshot (finviz.get_stock) carries 88 fields and none of
+# them is Sector, so build_sector_map_from_db found nothing and the critic's
+# sector-concentration gate silently passed for ~90% of the universe. The
+# screener does expose Sector, in one bulk call.
+_SECTOR_BY_TICKER: dict[str, str] = {}
+
+
+def prime_finviz_sectors(tickers: list[str]) -> int:
+    """Populate the ticker -> Finviz sector name cache for this run.
+
+    Returns the number of tickers resolved. Failure is non-fatal: the sector
+    stays unknown and the critic reports the gate as unevaluated rather than
+    reporting a clean pass.
+    """
+    from trader_koo.ml.sector_rotation import _FINVIZ_SECTOR_TO_INTERNAL
+
+    known_sectors = set(_FINVIZ_SECTOR_TO_INTERNAL)
+    wanted = [t.upper() for t in tickers]
+    try:
+        from finviz.screener import Screener
+    except Exception as exc:
+        LOG.warning("Finviz screener unavailable; sector gate stays unevaluated: %s", exc)
+        return 0
+
+    for start in range(0, len(wanted), 100):
+        chunk = set(wanted[start : start + 100])
+        try:
+            rows = list(Screener(tickers=sorted(chunk), table="Overview"))
+        except Exception as exc:
+            LOG.warning("Finviz sector chunk failed (%d tickers): %s", len(chunk), exc)
+            continue
+        for row in rows:
+            # The installed finviz build misaligns its column headers by one, so
+            # identify both fields by value instead of trusting the key names.
+            values = [str(v).strip() for v in row.values()]
+            ticker = next((v for v in values if v in chunk), None)
+            sector = next((v for v in values if v in known_sectors), None)
+            if ticker and sector:
+                _SECTOR_BY_TICKER[ticker] = sector
+
+    LOG.info("Finviz sectors resolved for %d/%d tickers", len(_SECTOR_BY_TICKER), len(wanted))
+    return len(_SECTOR_BY_TICKER)
+
+
 def fetch_finviz_row(ticker: str, retry_attempts: int = 3) -> dict:
     last_err: Optional[Exception] = None
     raw: dict = {}
@@ -791,6 +835,10 @@ def fetch_finviz_row(ticker: str, retry_attempts: int = 3) -> dict:
             if attempt == retry_attempts:
                 raise RuntimeError(f"Finviz fetch failed for {ticker}: {last_err}") from last_err
             time.sleep((1.8 ** (attempt - 1)) + random.uniform(0.0, 0.4))
+
+    sector = _SECTOR_BY_TICKER.get(ticker.upper())
+    if sector:
+        raw.setdefault("Sector", sector)
 
     price = to_float(raw.get("Price"))
     pe = to_float(raw.get("P/E"))
@@ -1332,6 +1380,10 @@ def run(args: argparse.Namespace) -> None:
     ticker_position = {ticker: idx for idx, ticker in enumerate(requested_tickers, start=1)}
     attempt_by_ticker: dict[str, int] = {}
     final_errors: dict[str, str] = {}
+    # One bulk call: the per-ticker Finviz snapshot has no Sector field, and
+    # without it the critic's sector-concentration gate cannot evaluate.
+    prime_finviz_sectors(list(tickers))
+
     pending_tickers = list(tickers)
     pass_no = 1
     term_prev_handlers: dict[int, object] = {}
