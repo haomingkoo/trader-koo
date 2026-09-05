@@ -275,10 +275,11 @@ else
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [DONE]  daily_update.sh mode=${UPDATE_MODE} ${SUMMARY}" >> "$RUN_LOG"
 fi
 
-# ── 5. Housekeeping — keep last 30 report archives, cap log size ──────────────
-# Keep only the 30 most recent timestamped report files (latest.* are always kept)
-ls -t "$REPORT_DIR"/daily_report_2*.json 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
-ls -t "$REPORT_DIR"/daily_report_2*.md   2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
+# ── 5. Housekeeping — cap log size ───────────────────────────────────────────
+# Report artifacts are pruned by scripts/cleanup_storage.py, which is the single
+# owner of retention and can see which artifacts report_runs still references.
+# The `ls -t | tail -n +31 | xargs rm` that used to live here deleted by recency
+# alone and would remove immutable registry evidence a live run still points at.
 # Truncate cron log to last 5 MB if it exceeds 10 MB
 for f in "$LOG_DIR"/*.log; do
     [ -f "$f" ] || continue

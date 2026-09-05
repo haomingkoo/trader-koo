@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -119,6 +120,55 @@ def _prune_by_ts_column(
     return count
 
 
+def _prune_unreferenced_reports(
+    conn: sqlite3.Connection,
+    report_dir: Path,
+    *,
+    grace_days: float = 2.0,
+    dry_run: bool = False,
+) -> int:
+    """Delete report artifacts that no ``report_runs`` row references.
+
+    A run-scoped artifact is immutable registry evidence: ``report/runs.py``
+    re-reads and re-hashes it on every resolve, and a missing file makes paper
+    admission raise ``ReportLineageError``. So retention cannot be by age --
+    it has to ask the ledger. Files younger than *grace_days* are always kept,
+    because an artifact is written moments before its run row commits.
+
+    Returns the number of files deleted (or that would be, when *dry_run*).
+    """
+    if not report_dir.is_dir() or not _table_exists(conn, "report_runs"):
+        return 0
+
+    referenced: set[str] = set()
+    for artifact, markdown in conn.execute(
+        "SELECT artifact_path, markdown_path FROM report_runs"
+    ):
+        for value in (artifact, markdown):
+            if value:
+                referenced.add(os.path.realpath(str(value)))
+
+    cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - grace_days * 86400.0
+    removed = 0
+    for path in sorted(report_dir.glob("daily_report_*")):
+        if path.suffix not in {".json", ".md"} or path.name.startswith("daily_report_latest"):
+            continue
+        if os.path.realpath(path) in referenced or path.stat().st_mtime >= cutoff:
+            continue
+        if not dry_run:
+            try:
+                path.unlink()
+            except OSError as exc:
+                LOG.warning("[CLEANUP] could not remove %s: %s", path.name, exc)
+                continue
+        removed += 1
+    LOG.info(
+        "[CLEANUP] report artifacts: %d unreferenced %s (%d referenced paths retained)",
+        removed, "would be removed" if dry_run else "removed", len(referenced),
+    )
+    return removed
+
+
 def run_cleanup(db_path: Path, *, dry_run: bool = False) -> dict[str, int]:
     """Run all cleanup tasks. Returns dict of table → rows deleted."""
     mode = "DRY RUN" if dry_run else "LIVE"
@@ -172,7 +222,13 @@ def run_cleanup(db_path: Path, *, dry_run: bool = False) -> dict[str, int]:
         results["yolo_run_events"] = n
         LOG.info("[CLEANUP] yolo_run_events: %d rows to delete (keep %dd)", n, RETENTION_DAYS["yolo_run_events"])
 
-        # 7. WAL checkpoint + VACUUM (only in live mode)
+        # 7. Report artifacts with no owning run (the ledger decides, not age)
+        n = _prune_unreferenced_reports(
+            conn, Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports")), dry_run=dry_run,
+        )
+        results["report_artifacts"] = n
+
+        # 8. WAL checkpoint + VACUUM (only in live mode)
         if not dry_run:
             LOG.info("[CLEANUP] Running WAL checkpoint...")
             try:
