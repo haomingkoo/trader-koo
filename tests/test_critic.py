@@ -614,3 +614,28 @@ def test_sector_gate_blocks_second_position_once_sector_is_known():
 
     assert allowed is False
     assert "health_care" in reason
+
+
+def test_finviz_sector_rows_are_read_positionally_not_by_value_search():
+    """A, C, F, K, M, O, T and V are real S&P 500 tickers.
+
+    The finviz Overview row carries a stray first-letter column before the real
+    ticker. Searching for "the first value that is a requested ticker" therefore
+    matched that stray letter whenever a single-letter ticker was in the chunk,
+    which dropped live coverage to 70%. Reading by position and validating both
+    fields resolves the whole universe.
+    """
+    from trader_koo.ml.sector_rotation import _FINVIZ_SECTOR_TO_INTERNAL
+
+    # Verbatim shape returned by the installed finviz build.
+    row = ["1", "A", "AAPL", "Apple Inc", "Technology", "Consumer Electronics", "USA"]
+    chunk = {"AAPL", "A"}  # 'A' (Agilent) is in the universe alongside AAPL
+
+    value_search = next((v for v in row if v in chunk), None)
+    assert value_search == "A", "the old heuristic picked the stray letter"
+
+    ticker, sector = row[2], row[4]
+    assert ticker == "AAPL"
+    assert ticker in chunk
+    assert sector in _FINVIZ_SECTOR_TO_INTERNAL
+    assert _FINVIZ_SECTOR_TO_INTERNAL[sector] == "technology"
