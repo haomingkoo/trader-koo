@@ -255,6 +255,7 @@ def _check_portfolio_concentration(
             return False, f"Family clustering: already {same_family} trades from '{row.get('setup_family')}'. Diversify."
 
     # Check sector concentration (max 1 open position per sector)
+    sector_unknown = False
     try:
         from trader_koo.ml.sector_rotation import build_sector_map_from_db
 
@@ -268,8 +269,20 @@ def _check_portfolio_concentration(
                     f"Sector overweight: already holding a position in '{new_sector}'. "
                     "Diversify across sectors."
                 )
+        else:
+            sector_unknown = True
     except Exception:
-        pass  # Fail open — sector check is best-effort
+        sector_unknown = True
+
+    if sector_unknown:
+        # The sector source (finviz raw_json) carries no Sector field, so the map
+        # falls back to a 46-entry hardcoded list against a ~500-ticker universe.
+        # The gate then silently passes. Surface that instead of hiding it: this
+        # is why several same-sector positions can be open at once.
+        return True, (
+            f"Portfolio OK: {open_count}/{max_open} open, {same_dir} {direction} "
+            f"(SECTOR GATE NOT EVALUATED — no sector known for {ticker.upper()})"
+        )
 
     return True, f"Portfolio OK: {open_count}/{max_open} open, {same_dir} {direction}"
 

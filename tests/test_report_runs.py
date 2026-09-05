@@ -211,6 +211,21 @@ def _complete_only(
     return run_id
 
 
+def test_write_reports_emits_compact_json(tmp_path: Path) -> None:
+    """The artifact is read, hashed and parsed on every /api/daily-report call.
+
+    indent=2 was 4.6 MB of a 14.2 MB production artifact for zero information.
+    """
+    report = _report("AAA", "BBB", accepted=1)
+
+    paths = write_reports(report, tmp_path, run_id="compact-run", publish_latest=False)
+    text = Path(paths["json_path"]).read_text(encoding="utf-8")
+
+    assert text.count("\n") == 1, "only the trailing newline should remain"
+    assert '", "' not in text, "compact separators drop the space after commas"
+    assert json.loads(text) == report
+
+
 def test_published_run_owns_immutable_accepted_and_rejected_decisions(tmp_path: Path):
     conn = sqlite3.connect(tmp_path / "report.db")
     run_id = _complete_and_publish(conn, tmp_path / "reports", _report("AAA", "BBB", accepted=1))

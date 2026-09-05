@@ -538,3 +538,34 @@ class TestCriticReview:
         assert isinstance(result["critic_reasons"], list)
         assert isinstance(result["rejections"], list)
         assert isinstance(result["approved"], bool)
+
+
+def test_sector_gate_reports_when_it_cannot_evaluate(tmp_path):
+    """The sector map covers ~46 of ~500 tickers, so the gate usually no-ops.
+
+    It used to pass silently, which is how three Healthcare positions were open
+    at once under a max-1-per-sector rule. The unknown case must say so.
+    """
+    from trader_koo.paper_trade.critic import _check_portfolio_concentration
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE paper_trades (ticker TEXT, direction TEXT, setup_family TEXT,"
+        " status TEXT, campaign_id TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO paper_trades VALUES ('ISRG','long','bullish_continuation','open','paper-v2')"
+    )
+    conn.commit()
+
+    ok, reason = _check_portfolio_concentration(
+        conn, "COR", "long", {"setup_family": "bullish_reversal"},
+        max_open=5, campaign_id="paper-v2",
+    )
+    conn.close()
+
+    # Both are Healthcare, but neither resolves through the sector map, so the
+    # gate cannot evaluate. It must admit that rather than reporting a clean pass.
+    assert ok is True
+    assert "SECTOR GATE NOT EVALUATED" in reason
+    assert "COR" in reason
