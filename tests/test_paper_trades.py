@@ -1523,12 +1523,15 @@ class TestPaperTradeSummary:
 
         assert core_satellite["core_allocation_pct"] == pytest.approx(70.0)
         assert core_satellite["satellite_allocation_pct"] == pytest.approx(30.0)
-        assert core_satellite["core_return_pct"] == pytest.approx(10.05)
+        # 10.0, not 10.05: the benchmark no longer adds a hardcoded 1.8%/yr
+        # dividend the paper book does not itself earn. The extra 0.05 was
+        # 10 days of that constant, and it understated alpha.
+        assert core_satellite["core_return_pct"] == pytest.approx(10.0)
         # Quantity/cash history is absent, so the legacy row is excluded rather
         # than converted into an invented 10%-of-starting-capital position.
         assert core_satellite["satellite_return_pct"] == pytest.approx(0.0)
-        assert core_satellite["total_return_pct"] == pytest.approx(7.04)
-        assert core_satellite["alpha_vs_spy_pct"] == pytest.approx(-3.02)
+        assert core_satellite["total_return_pct"] == pytest.approx(7.0)
+        assert core_satellite["alpha_vs_spy_pct"] == pytest.approx(-3.0)
 
     def test_summary_includes_recent_reflections(self, conn):
         base_date = dt.date.today() - dt.timedelta(days=30)
@@ -1908,3 +1911,38 @@ class TestTradingDayExpiry:
 
         trade = conn.execute("SELECT stop_loss FROM paper_trades WHERE ticker='AAPL'").fetchone()
         assert trade[0] == 100.0
+
+
+def test_spy_benchmark_uses_the_same_basis_as_the_paper_book():
+    """Both sides must be price-return, or the comparison is meaningless.
+
+    The benchmark used to add a hardcoded 1.8%/yr dividend while the paper book
+    earns none (update_market_db is never invoked with --auto-adjust, so
+    price_daily is split-adjusted price only). Crediting only the benchmark
+    understated the strategy's alpha by roughly the SPY yield, pro-rated.
+    """
+    import sqlite3
+
+    from trader_koo.paper_trade.summary import _compute_spy_benchmark
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE price_daily (ticker TEXT NOT NULL, date TEXT NOT NULL, close REAL,"
+        " PRIMARY KEY (ticker, date))"
+    )
+    # Exactly +10% over a full year: a synthetic dividend would push it past that.
+    conn.execute("INSERT INTO price_daily VALUES ('SPY','2025-01-02',100.0)")
+    conn.execute("INSERT INTO price_daily VALUES ('SPY','2026-01-02',110.0)")
+    conn.commit()
+    try:
+        result = _compute_spy_benchmark(
+            conn, first_entry_date="2025-01-02", last_exit_date="2026-01-02"
+        )
+    finally:
+        conn.close()
+
+    assert result is not None
+    assert result["return_pct"] == 10.0, "no synthetic dividend may be added"
+    assert result["return_pct"] == result["price_return_pct"]
+    assert result["basis"] == "split_adjusted_price_only"
+    assert "dividend_pct" not in result
