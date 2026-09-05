@@ -639,3 +639,54 @@ def test_finviz_sector_rows_are_read_positionally_not_by_value_search():
     assert ticker in chunk
     assert sector in _FINVIZ_SECTOR_TO_INTERNAL
     assert _FINVIZ_SECTOR_TO_INTERNAL[sector] == "technology"
+
+
+def test_sector_gate_cannot_evaluate_when_an_open_position_is_unresolved():
+    """The gate needs the candidate AND every open position.
+
+    An unresolved open position maps to None, never equals the candidate's
+    sector, and so silently lowers the same-sector count. The candidate would be
+    admitted alongside a holding the map could not see. Resolving only the
+    candidate is not enough.
+    """
+    import json
+
+    from trader_koo.paper_trade.critic import _check_portfolio_concentration
+    import trader_koo.ml.sector_rotation as sector_rotation
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE finviz_fundamentals (snapshot_ts TEXT NOT NULL, ticker TEXT NOT NULL,"
+        " raw_json TEXT, PRIMARY KEY (snapshot_ts, ticker))"
+    )
+    # The candidate resolves; the open position does not.
+    conn.execute(
+        "INSERT INTO finviz_fundamentals (snapshot_ts, ticker, raw_json) VALUES (?, ?, ?)",
+        ("2026-09-06T00:00:00Z", "ISRG", json.dumps({"Sector": "Healthcare"})),
+    )
+    conn.execute(
+        "INSERT INTO finviz_fundamentals (snapshot_ts, ticker, raw_json) VALUES (?, ?, ?)",
+        ("2026-09-06T00:00:00Z", "ZZZZ", json.dumps({"Price": "1"})),
+    )
+    conn.execute(
+        "CREATE TABLE paper_trades (ticker TEXT, direction TEXT, setup_family TEXT,"
+        " status TEXT, campaign_id TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO paper_trades VALUES ('ZZZZ','long','bullish_continuation','open','paper-v2')"
+    )
+    conn.commit()
+
+    sector_rotation._sector_map_cache = None
+    try:
+        allowed, reason = _check_portfolio_concentration(
+            conn, "ISRG", "long", {"setup_family": "bullish_reversal"},
+            max_open=5, campaign_id="paper-v2",
+        )
+    finally:
+        sector_rotation._sector_map_cache = None
+        conn.close()
+
+    assert allowed is True
+    assert "SECTOR GATE NOT EVALUATED" in reason
+    assert "ZZZZ" in reason, "the reason must name the position it could not resolve"
