@@ -127,4 +127,3 @@ def ensure_feedback_schema() -> None:
         conn.commit()
     finally:
         conn.close()
-
