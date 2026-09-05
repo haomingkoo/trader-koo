@@ -298,7 +298,7 @@ def run_yolo_seed(timeframe: str = "both") -> dict[str, Any]:
         "ok": True,
         "message": (
             f"YOLO seed started (timeframe={timeframe_norm}) "
-            "-- tail /data/logs/yolo_patterns.log"
+            "-- tail /data/logs/cron_daily.log"
         ),
         "timeframe": timeframe_norm,
     }
@@ -310,7 +310,7 @@ def yolo_status(
 ) -> dict[str, Any]:
     """Return YOLO runner status + DB summary + recent log tail."""
     log_path = Path(
-        os.getenv("TRADER_KOO_YOLO_LOG_PATH", "/data/logs/yolo_patterns.log")
+        os.getenv("TRADER_KOO_YOLO_LOG_PATH", str(_shared.RUN_LOG_PATH))
     )
     conn = get_conn()
     try:

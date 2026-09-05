@@ -23,7 +23,9 @@ RUN_LOG_PATH = LOG_DIR / "cron_daily.log"
 LOG_PATHS: dict[str, Path] = {
     "cron": RUN_LOG_PATH,
     "update_market_db": LOG_DIR / "update_market_db.log",
-    "yolo": LOG_DIR / "yolo_patterns.log",
+    # daily_update.sh redirects run_yolo_patterns.py into cron_daily.log;
+    # yolo_patterns.log was never written by anything.
+    "yolo": RUN_LOG_PATH,
     "api": LOG_DIR / "api.log",
 }
 
@@ -39,25 +41,6 @@ _yolo_seed_thread: threading.Thread | None = None
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _load_json_file(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        LOG.warning("Failed to parse JSON file %s: %s", path.name, exc)
-        return None
-
-
-def _to_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return default
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
 def _to_float(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -65,24 +48,6 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _avg(values: list[float]) -> float | None:
-    if not values:
-        return None
-    return round(sum(values) / len(values), 2)
-
-
-def _find_timeframe_summary(rows: Any, timeframe: str) -> dict[str, Any]:
-    target = str(timeframe or "").strip().lower()
-    if not isinstance(rows, list):
-        return {}
-    for row in rows:
-        if isinstance(row, dict) and str(
-            row.get("timeframe", "")
-        ).strip().lower() == target:
-            return row
-    return {}
 
 
 def get_audit_logger() -> AuditLogger:
