@@ -357,9 +357,14 @@ class TestVolatilityEnvironment:
         passed, _ = _check_volatility_environment({"vix_at_entry": REGIME_VIX_EXTREME - 0.1})
         assert passed is True
 
-    def test_none_vix_passes(self):
-        passed, _ = _check_volatility_environment({"vix_at_entry": None})
-        assert passed is True
+    def test_missing_vix_blocks(self):
+        """No VIX reading means no volatility check, so it must fail closed.
+
+        Allowing here would walk past both the extreme-volatility block and,
+        for longs, the high-vol block in _check_regime_alignment.
+        """
+        passed, reason = _check_volatility_environment({"vix_at_entry": None})
+        assert passed is False, reason
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +488,39 @@ class TestFamilyEdge:
         passed, reason = _check_family_edge(conn, _row(setup_family=""), _eval())
         assert passed is True
         assert "skipping" in reason.lower()
+
+    def test_absent_calibration_table_falls_through_to_paper_trades(self):
+        """No calibration_state yet is a bootstrap state, not a failure.
+
+        The pulse creates that table on its first run, so an absent table means
+        "no verdict yet" and Layer 2 still applies. This is the one fall-through
+        that stays, and it is named rather than swallowed.
+        """
+        conn = _make_conn()  # _make_conn deliberately has no calibration_state
+        for _ in range(FAMILY_EDGE_MIN_SAMPLE - 1):
+            _insert_closed(conn, pnl=-1.0, family="bullish_breakout", direction="long")
+
+        passed, reason = _check_family_edge(
+            conn, _row(setup_family="bullish_breakout"), _eval(),
+        )
+
+        assert passed is True
+        assert "insufficient" in reason.lower()
+
+    def test_unreadable_calibration_table_fails_closed(self):
+        """The table exists but cannot be read, so the family edge is unknown.
+
+        Schema drift or a corrupt row must not be silently downgraded to
+        "allowed". Missing evidence fails closed.
+        """
+        conn = _make_conn()
+        conn.execute("CREATE TABLE calibration_state (family TEXT)")  # wrong shape
+
+        passed, reason = _check_family_edge(
+            conn, _row(setup_family="bullish_breakout"), _eval(),
+        )
+
+        assert passed is False, reason
 
 
 # ---------------------------------------------------------------------------
