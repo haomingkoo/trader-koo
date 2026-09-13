@@ -668,7 +668,7 @@ def test_filled_pending_order_persists_captured_market_context():
     assert resolved == {"filled": 1, "rejected": 0, "still_pending": 0}
     assert conn.execute(
         "SELECT vix_at_entry,regime_state_at_entry,debate_agreement_score,bot_version "
-        "FROM paper_trades"
+        "FROM paper_trades WHERE ticker='CTX'"
     ).fetchone() == (14.0, "bull_low_vol", 80.0, _build_config().bot_version)
 
 
