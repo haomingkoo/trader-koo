@@ -138,6 +138,7 @@ def _eval_stats(
         WHERE status = 'scored'
           AND asof_date >= ?
           AND setup_family IS NOT NULL
+          AND signed_return_pct IS NOT NULL
           AND call_direction IN ('long', 'short')
           {lineage_clause}
         """,
@@ -288,7 +289,9 @@ def _compute_block(combined: dict[str, Any]) -> bool:
     hr = combined.get("hit_rate_pct")
     if exp is None or hr is None:
         return False
-    return exp < BLOCK_EXPECTANCY_THRESHOLD and hr < BLOCK_HIT_RATE_THRESHOLD
+    # Either signal alone blocks. Requiring both let a family with a 27% hit
+    # rate keep trading because its expectancy missed the bar by 0.02.
+    return exp < BLOCK_EXPECTANCY_THRESHOLD or hr < BLOCK_HIT_RATE_THRESHOLD
 
 
 def _make_notes(combined: dict[str, Any], adj: float, block: bool) -> str:

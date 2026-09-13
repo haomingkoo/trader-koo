@@ -1879,6 +1879,7 @@ def fill_pending_paper_orders(
         if decision["disposition"] == "admitted":
             levels = decision["levels"]
             plan = decision["plan"]
+            market_ctx = context["market_context"]
             insert_cursor = conn.execute(
                 """INSERT INTO paper_trades
                    (report_date,generated_ts,ticker,direction,entry_price,entry_date,
@@ -1887,8 +1888,13 @@ def fill_pending_paper_orders(
                     signal_bias,actionability,position_size_pct,risk_budget_pct,
                     stop_distance_pct,expected_reward_pct,expected_r_multiple,
                     entry_plan,exit_plan,sizing_summary,campaign_id,report_run_id,
-                    policy_version,decision_version,decision_state)
-                   VALUES (?,?,?,?,?,?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    policy_version,decision_version,decision_state,
+                    bot_version,debate_agreement_score,vix_at_entry,
+                    vix_percentile_at_entry,regime_state_at_entry,hmm_regime_at_entry,
+                    hmm_confidence_at_entry,directional_regime_at_entry,
+                    directional_regime_confidence)
+                   VALUES (?,?,?,?,?,?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                           ?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(campaign_id,report_date,ticker,direction) DO NOTHING""",
                 (report_date,generated_ts,ticker,direction,entry_price,open_row[1],
                  levels.get("target_price"),levels.get("stop_loss"),levels.get("atr_at_entry"),
@@ -1898,7 +1904,13 @@ def fill_pending_paper_orders(
                  plan.get("stop_distance_pct"),plan.get("expected_reward_pct"),
                  plan.get("expected_r_multiple"),plan.get("entry_plan"),plan.get("exit_plan"),
                  plan.get("sizing_summary"),campaign_id,report_run_id,policy_version,
-                 policy_version,"admitted"),
+                 policy_version,"admitted",
+                 market_ctx.get("bot_version"),row.get("debate_agreement_score"),
+                 market_ctx.get("vix_at_entry"),market_ctx.get("vix_percentile_at_entry"),
+                 market_ctx.get("regime_state_at_entry"),market_ctx.get("hmm_regime_at_entry"),
+                 market_ctx.get("hmm_confidence_at_entry"),
+                 market_ctx.get("directional_regime_at_entry"),
+                 market_ctx.get("directional_regime_confidence")),
             )
             if insert_cursor.rowcount == 1:
                 trade_id = int(insert_cursor.lastrowid)

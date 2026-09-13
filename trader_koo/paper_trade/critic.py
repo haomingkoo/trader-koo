@@ -13,6 +13,8 @@ import logging
 import sqlite3
 from typing import Any
 
+from trader_koo.report.utils import table_exists
+
 LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -124,7 +126,9 @@ def _check_regime_alignment(
 
     if not regime or "unknown" in regime:
         # Fail closed when VIX is elevated — don't let trades through without regime data
-        if isinstance(vix, (int, float)) and vix > REGIME_VIX_UNKNOWN_BLOCK:
+        if not isinstance(vix, (int, float)):
+            return False, "Regime unknown and VIX unavailable. Blocking without regime data."
+        if vix > REGIME_VIX_UNKNOWN_BLOCK:
             return False, f"Regime unknown but VIX={vix:.1f} elevated. Blocking without regime data."
         return True, "Regime unknown, low-vol environment — allowing"
 
@@ -293,7 +297,9 @@ def _check_volatility_environment(
     """In extreme volatility, the critic blocks all new entries."""
     vix = market_ctx.get("vix_at_entry")
     if vix is None:
-        return True, "VIX data unavailable — no vol check"
+        # No reading means no check. Allowing here would walk past both the
+        # extreme-volatility block and the high-vol long block.
+        return False, "VIX unavailable — no volatility check is possible. Blocking."
 
     if vix > REGIME_VIX_EXTREME:
         return False, f"VIX at {vix:.1f} — extreme volatility. Critic blocks all new entries."
@@ -341,13 +347,32 @@ def _check_family_edge(
         return True, "No family/direction — skipping family edge check"
 
     # Layer 1: check calibration_state (broad sample, pre-computed every 3 sessions)
-    try:
-        calib = conn.execute(
-            "SELECT block_new_entries, score_adjustment, hit_rate_pct, expectancy_pct, "
-            "combined_sample_count FROM calibration_state "
-            "WHERE family = ? AND direction = ?",
-            (family, direction),
-        ).fetchone()
+    if not table_exists(conn, "calibration_state"):
+        # The pulse creates this table on its first run, so an absent table means
+        # "no verdict yet" rather than an error. Layer 2 still applies. This is
+        # the only fall-through here, and it is named instead of swallowed.
+        LOG.info(
+            "calibration_state absent — family edge for %s %s falls through to paper trades",
+            family, direction,
+        )
+    else:
+        try:
+            calib = conn.execute(
+                "SELECT block_new_entries, score_adjustment, hit_rate_pct, expectancy_pct, "
+                "combined_sample_count FROM calibration_state "
+                "WHERE family = ? AND direction = ?",
+                (family, direction),
+            ).fetchone()
+        except Exception as exc:
+            # The table exists but cannot be read: schema drift, a corrupt row, a
+            # locked database. The edge is unknown, so the trade does not proceed.
+            LOG.error(
+                "calibration_state unreadable for %s %s: %s", family, direction, exc,
+            )
+            return False, (
+                f"Family '{family}' {direction} edge unknown: calibration_state "
+                f"could not be read ({type(exc).__name__}). Blocking."
+            )
         if calib is not None and int(calib[0]) == 1:
             exp = calib[3]
             n = calib[4]
@@ -355,10 +380,8 @@ def _check_family_edge(
             return False, (
                 f"Family '{family}' {direction} blocked by calibration pulse: "
                 f"expectancy {exp:.1f}% | hit {hr:.0f}% | {n} combined samples. "
-                "Will restore when edge recovers to ≥0%."
+                "Will restore when the next pulse clears the block."
             )
-    except Exception:
-        pass  # Table not yet created — fail open and fall through
 
     # Layer 2: recent paper_trades win rate (real-time, smaller sample)
     campaign_clause = "" if campaign_id is None else "AND campaign_id=? "
