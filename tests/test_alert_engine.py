@@ -382,6 +382,25 @@ class TestPollFinnhubQuote:
 
         assert price is None
 
+    def test_explicit_empty_key_is_not_replaced_by_the_environment(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """A key passed as empty on purpose must stay empty.
+
+        Falling back to the environment makes the engine depend on whatever
+        ran before it, which is what makes the sibling test above pass alone
+        and fail inside a full suite run.
+        """
+        monkeypatch.setenv("FINNHUB_API_KEY", "env_key_placeholder")
+
+        engine = AlertEngine(
+            db_path=tmp_path / "test.db",
+            report_dir=tmp_path / "reports",
+            finnhub_api_key="",
+        )
+
+        assert engine._finnhub_api_key == ""
+
     def test_returns_none_on_zero_price(self, tmp_path: Path) -> None:
         engine = AlertEngine(
             db_path=tmp_path / "test.db",
