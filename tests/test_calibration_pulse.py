@@ -225,14 +225,27 @@ class TestComputeBlock:
         }
         assert _compute_block(combined) is False
 
-    def test_no_block_when_only_expectancy_bad(self):
-        """Requires BOTH expectancy AND hit rate to be bad."""
+    def test_block_when_only_expectancy_bad(self):
+        """Either signal alone is enough to block."""
         combined = {
             "combined_sample": MIN_COMBINED_FOR_BLOCK,
             "expectancy_pct": BLOCK_EXPECTANCY_THRESHOLD - 0.1,
             "hit_rate_pct": BLOCK_HIT_RATE_THRESHOLD + 5.0,  # hit rate OK
         }
-        assert _compute_block(combined) is False
+        assert _compute_block(combined) is True
+
+    def test_block_when_only_hit_rate_bad(self):
+        """A family just above the expectancy bar still blocks on a weak hit rate.
+
+        This is the observed production case: bullish_continuation long sat at
+        -1.48% expectancy against the -1.5% bar while hitting 27.3%.
+        """
+        combined = {
+            "combined_sample": MIN_COMBINED_FOR_BLOCK,
+            "expectancy_pct": BLOCK_EXPECTANCY_THRESHOLD + 0.02,  # expectancy OK
+            "hit_rate_pct": BLOCK_HIT_RATE_THRESHOLD - 10.0,
+        }
+        assert _compute_block(combined) is True
 
     def test_no_block_at_exact_threshold(self):
         """At exactly the threshold — not below — should not block."""
