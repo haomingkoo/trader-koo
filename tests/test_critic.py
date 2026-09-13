@@ -321,6 +321,15 @@ class TestRegimeAlignment:
         )
         assert passed is True, reason
 
+    def test_unknown_regime_missing_vix_blocked(self):
+        """Unknown regime with no VIX reading must fail closed, not allow."""
+        passed, reason = _check_regime_alignment(
+            _row(),
+            _eval(direction="long"),
+            _ctx(regime="unknown", vix=None, dir_regime=""),
+        )
+        assert passed is False, reason
+
     def test_hmm_counter_trend_hard_blocked(self):
         """HMM counter-trend is blocked — no tier or score override.
         Uses VIX=20 (normal range) to avoid triggering the low_vol override.

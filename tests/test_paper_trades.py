@@ -174,6 +174,12 @@ def conn(tmp_path: Path):
     ensure_price_series_revision_schema(db)
     for ticker, close in (("AAPL", 150.0), ("MSFT", 300.0)):
         _seed_price(db, ticker, close)
+    # The critic fails closed when no VIX observation exists, so the business
+    # fixture supplies one; regime behaviour itself is covered in test_critic.
+    db.execute(
+        "INSERT INTO price_daily (ticker,date,open,high,low,close,volume) "
+        "VALUES ('^VIX','2026-03-13',14,14.5,13.5,14.0,0)"
+    )
     db.commit()
     return db
 
