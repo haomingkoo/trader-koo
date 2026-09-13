@@ -1373,15 +1373,24 @@ class TestPaperTradeSummary:
         assert result["strategy_evidence"]["decision_eligible"] is False
 
     def test_summary_with_closed_trades(self, conn):
-        for ticker, pnl, r in [("AAPL", 5.0, 1.0), ("MSFT", -3.0, -0.6), ("GOOG", 8.0, 1.6)]:
+        # Dates are relative because paper_trade_summary only counts the last
+        # 180 days. Hardcoded fixture dates pass until they age out of that
+        # window, then fail on a date nobody changed anything on.
+        entry_date = dt.date.today() - dt.timedelta(days=30)
+        closed_date = entry_date + dt.timedelta(days=4)
+        rows = [("AAPL", 5.0, 1.0), ("MSFT", -3.0, -0.6), ("GOOG", 8.0, 1.6)]
+        for index, (ticker, pnl, r) in enumerate(rows):
             conn.execute(
                 """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
                    status, pnl_pct, r_multiple, exit_date, exit_reason, current_price,
                    generated_ts, report_run_id)
-                VALUES (?, ?, 'long', 100.0, '2026-03-10',
-                   'closed', ?, ?, '2026-03-14', 'manual_close', 100.0, 'ts',
+                VALUES (?, ?, 'long', 100.0, ?,
+                   'closed', ?, ?, ?, 'manual_close', 100.0, 'ts',
                    'paper-trade-test-run')""",
-                (f"2026-03-{10 + hash(ticker) % 3}", ticker, pnl, r),
+                (
+                    (entry_date + dt.timedelta(days=index % 3)).isoformat(),
+                    ticker, entry_date.isoformat(), pnl, r, closed_date.isoformat(),
+                ),
             )
         conn.commit()
 
