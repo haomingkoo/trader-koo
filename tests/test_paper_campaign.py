@@ -672,6 +672,39 @@ def test_filled_pending_order_persists_captured_market_context():
     ).fetchone() == (14.0, "bull_low_vol", 80.0, _build_config().bot_version)
 
 
+def test_continuation_long_is_refused_in_a_non_bull_regime():
+    """The regime gate must actually refuse an order, not just a unit-level call.
+
+    Most fixtures seed SPY only at the intended session, which is after the
+    market-context cutoff, so the regime resolves to '*_unknown' and the gate is
+    never reached. Seeding falling SPY history before the report date produces
+    'bear_normal', where a continuation long has no override available.
+    """
+    conn = _db()
+    _activate(conn)
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SPY','2026-08-19',650,651,648,649,1000000),
+                  ('SPY','2026-08-20',648,649,644,645,1000000),
+                  ('SPY','2026-08-21',644,645,640,641,1000000),
+                  ('^VIX','2026-08-21',18,18.5,17.5,18.0,0)"""
+    )
+
+    create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("BEARISH")], report_date="2026-08-21",
+        generated_ts="bear-ts", report_run_id="bear-run",
+    )
+
+    gate, reason_code = conn.execute(
+        "SELECT final_gate,reason_code FROM paper_candidate_decisions "
+        "WHERE report_run_id='bear-run'"
+    ).fetchone()
+
+    assert gate == "critic.regime_alignment"
+    assert reason_code == "critic_regime_alignment_rejected"
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+
 def test_pending_order_never_skips_a_missing_immediate_session_open():
     conn = _db()
     _activate(conn)
