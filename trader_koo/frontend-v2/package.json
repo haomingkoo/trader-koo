@@ -41,5 +41,9 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.0",
     "vite": "8.2.2"
+  },
+  "overrides": {
+    "js-yaml": "^4.3.2",
+    "maplibre-gl": "^6.5.0"
   }
 }
