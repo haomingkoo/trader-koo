@@ -71,16 +71,20 @@ class TelegramCommandHandler:
         chat_id: str,
         db_path: Path,
         report_dir: Path,
-        finnhub_api_key: str = "",
+        finnhub_api_key: str | None = None,
         alert_engine: Any = None,
     ) -> None:
         self._bot_token = bot_token
         self._chat_id = chat_id
         self._db_path = db_path
         self._report_dir = report_dir
+        # Only an omitted key reads the environment. An explicitly empty key
+        # stays empty, so a caller cannot be handed credentials it did not ask
+        # for by whatever happened to set the variable first.
         self._finnhub_api_key = (
             finnhub_api_key
-            or os.getenv("FINNHUB_API_KEY", "").strip()
+            if finnhub_api_key is not None
+            else os.getenv("FINNHUB_API_KEY", "").strip()
         )
         self._alert_engine = alert_engine
 

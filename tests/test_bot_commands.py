@@ -29,6 +29,28 @@ def handler(tmp_path: Path) -> TelegramCommandHandler:
     )
 
 
+def test_explicit_empty_key_is_not_replaced_by_the_environment(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A key passed as empty on purpose must stay empty.
+
+    Reading the environment behind the caller's back makes the handler depend
+    on whatever happened to set that variable first.
+    """
+    monkeypatch.setenv("FINNHUB_API_KEY", "env_key_placeholder")
+
+    handler = TelegramCommandHandler(
+        bot_token="test-token",
+        chat_id="12345",
+        db_path=tmp_path / "test.db",
+        report_dir=tmp_path / "reports",
+        finnhub_api_key="",
+        alert_engine=None,
+    )
+
+    assert handler._finnhub_api_key == ""
+
+
 # ---------------------------------------------------------------------------
 # /help
 # ---------------------------------------------------------------------------
