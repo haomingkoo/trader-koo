@@ -132,6 +132,12 @@ def _db(*, contracted: bool = False) -> sqlite3.Connection:
                UNIQUE(ticker, date)
            )"""
     )
+    # The critic fails closed when no VIX observation exists, so every business
+    # fixture supplies one; regime-specific behaviour is covered in test_critic.
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('^VIX','2026-08-18',14,14.5,13.5,14.0,0)"""
+    )
     ensure_price_series_revision_schema(conn)
     return conn
 

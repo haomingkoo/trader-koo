@@ -124,7 +124,9 @@ def _check_regime_alignment(
 
     if not regime or "unknown" in regime:
         # Fail closed when VIX is elevated — don't let trades through without regime data
-        if isinstance(vix, (int, float)) and vix > REGIME_VIX_UNKNOWN_BLOCK:
+        if not isinstance(vix, (int, float)):
+            return False, "Regime unknown and VIX unavailable. Blocking without regime data."
+        if vix > REGIME_VIX_UNKNOWN_BLOCK:
             return False, f"Regime unknown but VIX={vix:.1f} elevated. Blocking without regime data."
         return True, "Regime unknown, low-vol environment — allowing"
 
