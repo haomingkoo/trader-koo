@@ -138,6 +138,7 @@ def _eval_stats(
         WHERE status = 'scored'
           AND asof_date >= ?
           AND setup_family IS NOT NULL
+          AND signed_return_pct IS NOT NULL
           AND call_direction IN ('long', 'short')
           {lineage_clause}
         """,

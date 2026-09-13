@@ -22,6 +22,7 @@ from trader_koo.report.calibration_pulse import (
     _compute_block,
     _compute_score_adjustment,
     _combined_expectancy,
+    _eval_stats,
     build_telegram_message,
     ensure_calibration_schema,
     load_calibration_state,
@@ -128,6 +129,17 @@ def _seed_eval(conn: sqlite3.Connection, family: str, direction: str, returns: l
             "VALUES (?, ?, ?, 'scored', ?, ?, 'canonical-test-run')",
             (asof_date, family, direction, 1 if ret > 0 else 0, ret),
         )
+    conn.commit()
+
+
+def _seed_eval_null_return(conn: sqlite3.Connection, family: str, direction: str) -> None:
+    """Seed a scored row whose return is NULL, bypassing the writer's invariant."""
+    conn.execute(
+        "INSERT INTO setup_call_evaluations (asof_date, setup_family, call_direction, "
+        "status, direction_hit, signed_return_pct, report_run_id) "
+        "VALUES (?, ?, ?, 'scored', 1, NULL, 'canonical-test-run')",
+        (dt.datetime.now(dt.timezone.utc).date().isoformat(), family, direction),
+    )
     conn.commit()
 
 
@@ -255,6 +267,33 @@ class TestComputeBlock:
             "hit_rate_pct": BLOCK_HIT_RATE_THRESHOLD,
         }
         assert _compute_block(combined) is False
+
+
+# ---------------------------------------------------------------------------
+# _eval_stats
+# ---------------------------------------------------------------------------
+
+class TestEvalStats:
+    def test_null_return_is_excluded_rather_than_counted_as_a_loss(
+        self, tmp_path: Path,
+    ) -> None:
+        """A NULL return carries no outcome, so it must not become a miss.
+
+        The writer's invariant means a scored row always has a return today, so
+        this removes no live rows. It matters because the block now fires on hit
+        rate alone, so a coerced NULL would drag a family toward a block on
+        missing data rather than on evidence. _paper_stats already guards this
+        explicitly; _eval_stats relies on the invariant holding forever.
+        """
+        conn = _make_conn(tmp_path)
+        _seed_eval(conn, "bullish_breakout", "long", [1.0] * MIN_EVAL_SAMPLE)
+        _seed_eval_null_return(conn, "bullish_breakout", "long")
+
+        stats = _eval_stats(conn, window_days=90)
+        bucket = stats[("bullish_breakout", "long")]
+
+        assert bucket["sample"] == MIN_EVAL_SAMPLE
+        assert bucket["hit_rate_pct"] == 100.0
 
 
 # ---------------------------------------------------------------------------
