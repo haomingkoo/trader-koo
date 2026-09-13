@@ -635,6 +635,43 @@ def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
     assert health["latest_report"]["candidates"][0]["tradeability"] == "actionable"
 
 
+def test_filled_pending_order_persists_captured_market_context():
+    conn = _db()
+    _activate(conn)
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SPY','2026-08-19',640,645,639,641,1000000),
+                  ('SPY','2026-08-20',641,646,640,645,1000000),
+                  ('SPY','2026-08-21',645,650,644,649,1000000),
+                  ('^VIX','2026-08-21',14,14.5,13.5,14.0,0)"""
+    )
+    create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("CTX")], report_date="2026-08-21",
+        generated_ts="ctx-ts", report_run_id="ctx-run",
+    )
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('CTX','2026-08-24',152,160,151,158,1000000),
+                  ('SPY','2026-08-24',650,651,649,650,1000000)"""
+    )
+    record_price_series_revision(
+        conn, "CTX",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                  "vendor_action_ledger": []},
+        fetch_timestamp="2026-08-24T00:00:00Z",
+    )
+
+    resolved = fill_pending_paper_orders(
+        conn, through_date="2026-08-24", schema_ready=True
+    )
+
+    assert resolved == {"filled": 1, "rejected": 0, "still_pending": 0}
+    assert conn.execute(
+        "SELECT vix_at_entry,regime_state_at_entry,debate_agreement_score,bot_version "
+        "FROM paper_trades"
+    ).fetchone() == (14.0, "bull_low_vol", 80.0, _build_config().bot_version)
+
+
 def test_pending_order_never_skips_a_missing_immediate_session_open():
     conn = _db()
     _activate(conn)
