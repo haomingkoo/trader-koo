@@ -380,7 +380,7 @@ def _check_family_edge(
             return False, (
                 f"Family '{family}' {direction} blocked by calibration pulse: "
                 f"expectancy {exp:.1f}% | hit {hr:.0f}% | {n} combined samples. "
-                "Will restore when edge recovers to ≥0%."
+                "Will restore when the next pulse clears the block."
             )
 
     # Layer 2: recent paper_trades win rate (real-time, smaller sample)
