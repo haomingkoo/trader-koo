@@ -43,6 +43,95 @@ VACUUM_FREE_SPACE_MULTIPLIER: float = 1.3
 VACUUM_MIN_FREELIST_BYTES: int = 50 * 1024 * 1024
 
 
+# The volume reached 68% with no alarm of any kind: there was no disk monitoring
+# anywhere in the repository. At 100% SQLite returns SQLITE_FULL, every scheduler
+# job swallows its own exception, the API keeps serving reads and /health stays
+# green, so the first symptom is silently stale data.
+DISK_ALERT_THRESHOLD_PCT: float = 85.0
+
+
+def disk_pressure_alert(
+    *,
+    free_bytes: int,
+    total_bytes: int,
+    db_bytes: int,
+) -> str | None:
+    """Return an operator-facing alert when the volume is too full, else None.
+
+    Reports whether a VACUUM can still run, because "full" and "full and unable
+    to dig out" need different responses.
+    """
+    if total_bytes <= 0:
+        return None
+
+    used_bytes = total_bytes - free_bytes
+    used_pct = used_bytes / total_bytes * 100.0
+    if used_pct < DISK_ALERT_THRESHOLD_PCT:
+        return None
+
+    required = int(db_bytes * VACUUM_FREE_SPACE_MULTIPLIER)
+    if free_bytes >= required:
+        vacuum_note = f"VACUUM still fits (needs {required / 1e6:.0f} MB)."
+    else:
+        vacuum_note = (
+            f"VACUUM is BLOCKED: it needs {required / 1e6:.0f} MB free to stage the "
+            f"rewrite, so the volume cannot reclaim its own space."
+        )
+
+    # Name the ruler: df reports usable bytes, the Railway dashboard reports the
+    # raw device, and the two disagree by about 3 percentage points.
+    return (
+        f"Volume {used_pct:.0f}% full per df "
+        f"({used_bytes / 1e9:.2f} GB of {total_bytes / 1e9:.2f} GB, "
+        f"{free_bytes / 1e6:.0f} MB free). Database {db_bytes / 1e6:.0f} MB. "
+        f"{vacuum_note}"
+    )
+
+
+def vacuum_headroom_alert(
+    *,
+    free_bytes: int,
+    total_bytes: int,
+    db_bytes: int,
+) -> str | None:
+    """Return an alert when VACUUM can no longer start, whatever the volume shows.
+
+    This is the alarm a percentage threshold cannot raise. VACUUM's requirement
+    scales with the database, not with the volume, so a growing database starves
+    it long before the disk looks full: on 2026-10-18 the volume was two thirds
+    full, which is quiet, while VACUUM was already blocked.
+    """
+    required = int(db_bytes * VACUUM_FREE_SPACE_MULTIPLIER)
+    if free_bytes >= required:
+        return None
+
+    used_pct = (total_bytes - free_bytes) / total_bytes * 100.0 if total_bytes > 0 else 0.0
+    return (
+        f"VACUUM headroom gone: {free_bytes / 1e6:.0f} MB free against the "
+        f"{required / 1e6:.0f} MB that a {db_bytes / 1e6:.0f} MB database needs to stage "
+        f"its rewrite, while the volume is only {used_pct:.0f}% full per df. "
+        f"Deletions can no longer reclaim space."
+    )
+
+
+def storage_health_alert(db_path: Path) -> str | None:
+    """Return the most urgent storage alert for *db_path*'s volume, or None.
+
+    Thin filesystem wrapper over the two pure checks above, in severity order.
+    """
+    try:
+        usage = shutil.disk_usage(db_path.parent)
+        db_bytes = db_path.stat().st_size
+    except OSError as exc:
+        return f"Storage health check could not read {db_path.parent}: {exc}"
+
+    return disk_pressure_alert(
+        free_bytes=usage.free, total_bytes=usage.total, db_bytes=db_bytes,
+    ) or vacuum_headroom_alert(
+        free_bytes=usage.free, total_bytes=usage.total, db_bytes=db_bytes,
+    )
+
+
 def _vacuum_decision(
     *,
     free_bytes: int,
