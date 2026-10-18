@@ -205,6 +205,11 @@ def test_scan_snapshot_reports_incomplete_coverage(tmp_path: Path) -> None:
         "insufficient_history_skipped_count": 0,
         "basis_unresolved_skipped_count": 0,
         "basis_unresolved_skipped_tickers": [],
+        # This fixture has no ingest ledger, so the scan falls back to every
+        # ticker in price_daily and both are correctly counted stale.
+        "source_universe_origin": "price_daily",
+        "out_of_universe_count": 0,
+        "out_of_universe_tickers": [],
     }
 
 

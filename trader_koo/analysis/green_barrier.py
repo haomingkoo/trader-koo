@@ -31,6 +31,50 @@ def _configured_threshold() -> float:
 GREEN_BARRIER_THRESHOLD = _configured_threshold()
 
 
+def _current_ingest_universe(conn: sqlite3.Connection) -> tuple[set[str] | None, str]:
+    """Return the tickers the latest ingest run covered, and where that came from.
+
+    ``price_daily`` is append-only, so it is not a universe: it accumulates every
+    symbol ever ingested, including delisted and index-rotated ones. Those cannot
+    go fresh again, so scanning them guarantees a staleness warning forever. The
+    ingest ledger is the only record of what the pipeline is currently
+    responsible for.
+
+    Returns ``(None, "price_daily")`` when the ledger is unavailable, which keeps
+    the conservative behaviour of scanning everything. That still raises the
+    coverage warning and blocks publication, whereas scanning nothing would
+    publish a clean report on no evidence.
+    """
+    try:
+        row = conn.execute(
+            "SELECT run_id FROM ingest_runs ORDER BY started_ts DESC LIMIT 1"
+        ).fetchone()
+        if not row or not row[0]:
+            return None, "price_daily"
+        run_id = str(row[0])
+        tickers = {
+            str(record[0]).upper()
+            for record in conn.execute(
+                "SELECT DISTINCT ticker FROM ingest_ticker_status WHERE run_id = ?",
+                (run_id,),
+            )
+            if record[0]
+        }
+    except sqlite3.Error as exc:
+        LOG.warning(
+            "Ingest universe unavailable (%s); scanning every ticker in price_daily", exc
+        )
+        return None, "price_daily"
+
+    if not tickers:
+        LOG.warning(
+            "Ingest run %s recorded no tickers; scanning every ticker in price_daily",
+            run_id,
+        )
+        return None, "price_daily"
+    return tickers, f"ingest_runs:{run_id}"
+
+
 def _configured_max_age_days() -> int:
     try:
         return max(1, int(os.getenv("TRADER_KOO_GREEN_BARRIER_MAX_AGE_DAYS", "7")))
@@ -149,7 +193,12 @@ def scan_green_barrier_snapshot(
         "insufficient_history_skipped_count": 0,
         "basis_unresolved_skipped_count": 0,
         "basis_unresolved_skipped_tickers": [],
+        "source_universe_origin": "price_daily",
+        "out_of_universe_count": 0,
+        "out_of_universe_tickers": [],
     }
+    universe, universe_origin = _current_ingest_universe(conn)
+    coverage["source_universe_origin"] = universe_origin
     if daily.empty:
         return {"hits": [], "coverage": coverage}
 
@@ -157,7 +206,13 @@ def scan_green_barrier_snapshot(
     stale_tickers: list[str] = []
     eligible_tickers = research_eligible_tickers(conn)
     basis_skipped: list[str] = []
+    out_of_universe: list[str] = []
     for ticker, ticker_daily in daily.groupby("ticker", sort=True):
+        # Checked before eligibility: a symbol the pipeline no longer ingests is
+        # out of scope, not unresolved evidence and not stale coverage.
+        if universe is not None and str(ticker).upper() not in universe:
+            out_of_universe.append(str(ticker))
+            continue
         if str(ticker) not in eligible_tickers:
             basis_skipped.append(str(ticker))
             continue
@@ -206,6 +261,14 @@ def scan_green_barrier_snapshot(
     coverage["stale_skipped_tickers"] = stale_tickers
     coverage["basis_unresolved_skipped_count"] = len(basis_skipped)
     coverage["basis_unresolved_skipped_tickers"] = basis_skipped
+    coverage["out_of_universe_count"] = len(out_of_universe)
+    coverage["out_of_universe_tickers"] = out_of_universe
+    if out_of_universe:
+        LOG.info(
+            "Green Barrier skipped %d ticker(s) outside the current ingest universe (%s)",
+            len(out_of_universe),
+            universe_origin,
+        )
     return {
         "hits": sorted(
             hits,
