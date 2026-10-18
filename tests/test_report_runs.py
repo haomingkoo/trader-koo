@@ -211,6 +211,39 @@ def _complete_only(
     return run_id
 
 
+def test_write_reports_never_prunes_the_artifact_it_just_wrote(tmp_path: Path) -> None:
+    """Writing a file and deleting it in the same call is wrong at any date.
+
+    _prune_report_snapshots drops snapshots older than
+    TRADER_KOO_REPORT_MAX_AGE_DAYS (45 by default) using the timestamp parsed out
+    of the filename, and write_reports writes the artifact and then prunes. So an
+    artifact generated for an older date -- a backfill, a replay, or any fixture
+    that has simply aged -- was written and immediately deleted, leaving the
+    caller holding a path to a file that does not exist.
+    """
+    report = _report("AAA", "BBB", accepted=1)
+    report["generated_ts"] = "2026-01-01T12:00:00Z"  # far outside any prune window
+
+    paths = write_reports(report, tmp_path, run_id="backfill-run", publish_latest=False)
+
+    assert Path(paths["json_path"]).is_file(), "write_reports deleted its own artifact"
+    assert Path(paths["md_path"]).is_file()
+    assert paths["pruned_snapshots"] == 0
+
+
+def test_write_reports_still_prunes_other_stale_snapshots(tmp_path: Path) -> None:
+    """Protecting the new artifact must not disable retention for the rest."""
+    stale = tmp_path / "daily_report_20260101T120000Z_old-run.json"
+    stale.write_text("{}", encoding="utf-8")
+
+    report = _report("AAA", accepted=1)
+    report["generated_ts"] = "2026-10-18T12:00:00Z"
+    paths = write_reports(report, tmp_path, run_id="fresh-run", publish_latest=False)
+
+    assert Path(paths["json_path"]).is_file()
+    assert not stale.exists(), "the unrelated stale snapshot should still be pruned"
+
+
 def test_write_reports_emits_compact_json(tmp_path: Path) -> None:
     """The artifact is read, hashed and parsed on every /api/daily-report call.
 
