@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import logging
 import os
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -28,6 +29,50 @@ RETENTION_DAYS = {
     "audit_logs": 90,
     "yolo_run_events": 90,
 }
+
+# VACUUM rewrites the whole database. In WAL mode that rewrite stages through the
+# -wal file inside a single transaction, so wal_autocheckpoint cannot interrupt it
+# and journal_size_limit cannot cap it: it needs roughly the database size in free
+# space, plus headroom. Starting one without that space fails after doing all the
+# work, and on 2026-10-18 the margin on /data was 168 MiB against a 1297 MiB file.
+VACUUM_FREE_SPACE_MULTIPLIER: float = 1.3
+
+# VACUUM is also usually not worth its cost. Over 17 observed nights it reclaimed
+# 108.6 MB in total and exactly nothing on 10 of them, at 26-57s each. Only run it
+# when the freelist holds enough to repay the rewrite.
+VACUUM_MIN_FREELIST_BYTES: int = 50 * 1024 * 1024
+
+
+def _vacuum_decision(
+    *,
+    free_bytes: int,
+    db_bytes: int,
+    freelist_pages: int,
+    page_size: int,
+) -> tuple[bool, str]:
+    """Return (should_vacuum, reason).
+
+    Space is checked before worth, so an operator reading the log hears about the
+    disk before hearing about tidiness.
+    """
+    required = int(db_bytes * VACUUM_FREE_SPACE_MULTIPLIER)
+    if free_bytes < required:
+        return False, (
+            f"unsafe: {free_bytes / 1e6:.0f} MB free is under the "
+            f"{VACUUM_FREE_SPACE_MULTIPLIER:.1f}x database size ({required / 1e6:.0f} MB) "
+            f"that the rewrite has to stage"
+        )
+
+    reclaimable = freelist_pages * page_size
+    if reclaimable < VACUUM_MIN_FREELIST_BYTES:
+        return False, (
+            f"not worth it: freelist holds {reclaimable / 1e6:.1f} MB, under the "
+            f"{VACUUM_MIN_FREELIST_BYTES / 1e6:.0f} MB threshold"
+        )
+
+    return True, (
+        f"ok: {free_bytes / 1e6:.0f} MB free, freelist {reclaimable / 1e6:.1f} MB reclaimable"
+    )
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -235,13 +280,36 @@ def run_cleanup(db_path: Path, *, dry_run: bool = False) -> dict[str, int]:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except Exception as exc:
                 LOG.warning("[CLEANUP] WAL checkpoint failed: %s", exc)
-            LOG.info("[CLEANUP] Running VACUUM (this may take a minute)...")
-            try:
-                conn.execute("VACUUM")
-                new_size_mb = db_path.stat().st_size / (1024 * 1024)
-                LOG.info("[CLEANUP] DB size after VACUUM: %.1f MB (was %.1f MB)", new_size_mb, db_size_mb)
-            except Exception as exc:
-                LOG.warning("[CLEANUP] VACUUM failed (disk may be too full): %s", exc)
+            # Measure after the checkpoint: a live WAL makes the file size misleading,
+            # and the gate below depends on an accurate one.
+            free_bytes = shutil.disk_usage(db_path.parent).free
+            db_bytes = db_path.stat().st_size
+            freelist_pages = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+            page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+            should_vacuum, reason = _vacuum_decision(
+                free_bytes=free_bytes,
+                db_bytes=db_bytes,
+                freelist_pages=freelist_pages,
+                page_size=page_size,
+            )
+            if not should_vacuum:
+                # ERROR, not warning: a skipped VACUUM on a filling volume is the
+                # signal that the volume needs attention, and it used to be silent.
+                LOG.error(
+                    "[CLEANUP] VACUUM SKIPPED — %s (db %.0f MB, free %.0f MB)",
+                    reason, db_bytes / 1e6, free_bytes / 1e6,
+                )
+            else:
+                LOG.info("[CLEANUP] VACUUM gate %s; running (this may take a minute)...", reason)
+                try:
+                    conn.execute("VACUUM")
+                    new_size_mb = db_path.stat().st_size / (1024 * 1024)
+                    LOG.info(
+                        "[CLEANUP] DB size after VACUUM: %.1f MB (was %.1f MB)",
+                        new_size_mb, db_bytes / (1024 * 1024),
+                    )
+                except Exception as exc:
+                    LOG.error("[CLEANUP] VACUUM FAILED after doing the work: %s", exc)
 
         total = sum(results.values())
         LOG.info("[CLEANUP] %s complete: %d total rows %s", mode, total, "would be deleted" if dry_run else "deleted")
