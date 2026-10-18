@@ -41,6 +41,10 @@ _FRESHNESS: tuple[tuple[str, str, str, float], ...] = (
     ("hyperliquid_snapshots", "SELECT MAX(snapshot_ts) FROM hyperliquid_snapshots", "whale tracker", 1.0),
     ("hyperliquid_fills", "SELECT MAX(fill_date) FROM hyperliquid_fills", "whale fills", 96.0),
     ("options_iv", "SELECT MAX(snapshot_ts) FROM options_iv", "option chains", 96.0),
+    # Publication, not generation: runs kept starting and failing for 23 days
+    # (28 published against 97 failed) while every data feed above stayed green,
+    # so nothing here noticed. 96h matches the weekday allowance used above.
+    ("report_runs", "SELECT MAX(published_ts) FROM report_runs", "report publication", 96.0),
 )
 
 
