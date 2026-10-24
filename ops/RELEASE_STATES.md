@@ -65,6 +65,9 @@ Campaign v2 and paper writes remain disabled throughout the image-rollback
 window. The legacy `paper_trades.report_run_id` foreign key is intentionally
 deferred to the contract migration because SQLite requires a table rebuild to
 add it; the expand-only v4 gate does not pretend that constraint already exists.
+After the step-15 production migration the same gate is phase-aware: a copy
+stored at v5 runs the uncached exact v5 verifier instead of the expand-v4
+checks, and the release still requires integrity and paper-v2 accounting.
 
 The public schema initializer owns its migration phases and rejects a connection
 that already has a transaction. Private table rebuilds use an immediate

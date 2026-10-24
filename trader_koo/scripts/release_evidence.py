@@ -28,6 +28,13 @@ from trader_koo.paper_trade.schema import (
     PaperSchemaInitializationError,
     ensure_paper_trade_schema,
 )
+from trader_koo.paper_trade.schema_v5_migration import (
+    TARGET_SCHEMA_VERSION as CONTRACTED_PAPER_SCHEMA_VERSION,
+)
+from trader_koo.paper_trade.schema_v5_verifier import (
+    PaperSchemaV5VerificationError,
+    verify_paper_schema_v5,
+)
 from trader_koo.paper_trades import _build_config
 from trader_koo.report.runs import ensure_report_run_schema
 from trader_koo.research.next_open_baseline import (
@@ -73,7 +80,7 @@ def _validate_database_manifest(payload: dict[str, Any]) -> None:
 
 
 def _validate_database_manifest_schema(payload: dict[str, Any]) -> None:
-    schema_path = Path(__file__).resolve().parents[2] / "release-database-copy-v4.schema.json"
+    schema_path = Path(__file__).resolve().parents[2] / "release-database-copy-v5.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(payload)
 
@@ -86,7 +93,7 @@ def _publish_database_manifest(output_dir: Path, payload: dict[str, Any]) -> Non
         _write_json(output_dir / "database-migration-generation-error.json", {
             "schema": "release-database-generation-error-v1",
             "error_code": "release_manifest_validation_failed",
-            "target_schema": "release-database-copy-v4",
+            "target_schema": "release-database-copy-v5",
         })
         raise RuntimeError(
             "release database manifest validation failed; primary manifest not published"
@@ -291,6 +298,27 @@ def _schema_contract(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def _schema_contract_v5(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Exact uncached v5 verification; v5 drops the v4 compatibility objects."""
+    try:
+        verified = verify_paper_schema_v5(conn)
+    except PaperSchemaV5VerificationError as exc:
+        return {
+            "contract": "paper-schema-contract-v5",
+            "contract_id": None,
+            "schema_fingerprint": None,
+            "diagnostics": [dict(item) for item in exc.diagnostics],
+            "passed": False,
+        }
+    return {
+        "contract": "paper-schema-contract-v5",
+        "contract_id": verified["contract_id"],
+        "schema_fingerprint": verified["schema_fingerprint"],
+        "diagnostics": [],
+        "passed": True,
+    }
+
+
 def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
     copy_path = output_dir / "database-copy.db"
     source_artifact_hash = _sha256(source)
@@ -312,7 +340,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         if contract_failure is None:
             try:
                 ensure_paper_trade_schema(conn)
-            except PaperSchemaInitializationError as exc:
+            except (PaperSchemaInitializationError, PaperSchemaV5VerificationError) as exc:
                 # The copied-database contract below records the structural
                 # failure, while this field preserves the initializer's exact
                 # phase diagnostic instead of silently falling through.
@@ -323,7 +351,19 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             schema_version = int(conn.execute(
                 "SELECT schema_version FROM paper_trade_schema_meta WHERE id=1"
             ).fetchone()[0])
-            schema_contract = _schema_contract(conn)
+            # The stored phase selects the contract; the exact v5 verifier
+            # refuses an open transaction.
+            conn.commit()
+            expected_schema_version = (
+                CONTRACTED_PAPER_SCHEMA_VERSION
+                if schema_version == CONTRACTED_PAPER_SCHEMA_VERSION
+                else PAPER_TRADE_SCHEMA_VERSION
+            )
+            schema_contract = (
+                _schema_contract_v5(conn)
+                if expected_schema_version == CONTRACTED_PAPER_SCHEMA_VERSION
+                else _schema_contract(conn)
+            )
             account = (
                 reconcile_portfolio(
                     conn, campaign_id="paper-v2",
@@ -337,7 +377,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
             conn.commit()
     if contract_failure is not None:
         failure_manifest = {
-            "schema": "release-database-copy-v4",
+            "schema": "release-database-copy-v5",
             "source_artifact": source.name,
             "source_artifact_sha256": source_artifact_hash,
             "source_snapshot_sha256": source_snapshot_hash,
@@ -358,14 +398,14 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         _publish_database_manifest(output_dir, failure_manifest)
         raise RuntimeError("database copy report-admission contract failed") from contract_failure
     manifest = {
-        "schema": "release-database-copy-v4",
+        "schema": "release-database-copy-v5",
         "source_artifact": source.name,
         "source_artifact_sha256": source_artifact_hash,
         "source_snapshot_sha256": source_snapshot_hash,
         "migrated_copy_sha256": _sha256(copy_path),
         "integrity_check": integrity,
         "paper_trade_schema_version": schema_version,
-        "expected_paper_trade_schema_version": PAPER_TRADE_SCHEMA_VERSION,
+        "expected_paper_trade_schema_version": expected_schema_version,
         "report_admission_contract": {
             "passed": True,
             "migration": ADMISSION_LEDGER_MIGRATION,
@@ -387,7 +427,7 @@ def migrate_copy(source: Path, output_dir: Path) -> dict[str, Any]:
         manifest["paper_schema_initialization_diagnostics"] = paper_schema_diagnostics
     manifest["passed"] = (
         integrity == "ok"
-        and schema_version == PAPER_TRADE_SCHEMA_VERSION
+        and schema_version == expected_schema_version
         and account is not None
         and not account["accounting_breaks"]
         and schema_contract["passed"]
