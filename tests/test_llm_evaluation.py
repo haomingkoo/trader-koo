@@ -149,8 +149,8 @@ def test_grounding_rejects_prompt_injection_and_stale_evidence() -> None:
 
 def test_cache_identity_binds_model_prompt_validator_and_runtime() -> None:
     context = _context()
-    first = cache_identity(context, {"provider": "azure_openai", "deployment": "a"})
-    second = cache_identity(context, {"provider": "azure_openai", "deployment": "b"})
+    first = cache_identity(context, {"provider": "gemini", "deployment": "a"})
+    second = cache_identity(context, {"provider": "gemini", "deployment": "b"})
 
     assert first != second
     assert len(first) == 64
@@ -191,14 +191,10 @@ def test_cache_hit_is_traced_and_failure_restores_baseline(tmp_path, monkeypatch
     monkeypatch.setattr(llm_narrative, "_default_db_path", lambda: db_path)
     monkeypatch.setattr(llm_narrative, "_runtime_disabled_now", lambda: False)
     monkeypatch.setattr(llm_narrative, "llm_ready", lambda: True)
-    monkeypatch.setattr(llm_narrative, "_llm_provider", lambda: "azure_openai")
-    monkeypatch.setattr(llm_narrative, "_azure_cfg", lambda: {
-        "endpoint": "https://redacted.invalid",
-        "api_key": "secret",
-        "deployment": "fixture",
-        "api_version": "fixture-v1",
+    monkeypatch.setattr(llm_narrative, "_gemini_cfg", lambda: {
+        "api_key": "secret", "model": "gemini-fixture",
     })
-    monkeypatch.setattr(llm_narrative, "_azure_chat_rewrite", rewrite)
+    monkeypatch.setattr(llm_narrative, "_gemini_chat_rewrite", rewrite)
     monkeypatch.setattr(llm_narrative, "_safe_note_success", lambda *args, **kwargs: None)
     monkeypatch.setattr(llm_narrative, "_safe_note_token_usage", lambda *args, **kwargs: None)
     llm_narrative._PROMPT_CACHE.clear()
@@ -223,7 +219,7 @@ def test_cache_hit_is_traced_and_failure_restores_baseline(tmp_path, monkeypatch
     assert detail["run_graph"]["graph_kind"] == "cached_llm_result"
 
     llm_narrative._PROMPT_CACHE.clear()
-    monkeypatch.setattr(llm_narrative, "_azure_chat_rewrite", lambda _context: ({
+    monkeypatch.setattr(llm_narrative, "_gemini_chat_rewrite", lambda _context: ({
         "observation": "BBB is guaranteed to reach 999.",
         "action": "Sell below support.",
         "risk_note": "Risk-free.",
@@ -256,12 +252,8 @@ def test_unsafe_evidence_never_calls_provider(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(llm_narrative, "_default_db_path", lambda: db_path)
     monkeypatch.setattr(llm_narrative, "_runtime_disabled_now", lambda: False)
     monkeypatch.setattr(llm_narrative, "llm_ready", lambda: True)
-    monkeypatch.setattr(llm_narrative, "_llm_provider", lambda: "azure_openai")
-    monkeypatch.setattr(llm_narrative, "_azure_cfg", lambda: {
-        "endpoint": "https://redacted.invalid",
-        "api_key": "secret",
-        "deployment": "fixture",
-        "api_version": "fixture-v1",
+    monkeypatch.setattr(llm_narrative, "_gemini_cfg", lambda: {
+        "api_key": "secret", "model": "gemini-fixture",
     })
     called = False
 
@@ -270,7 +262,7 @@ def test_unsafe_evidence_never_calls_provider(tmp_path, monkeypatch) -> None:
         called = True
         return {}, {}
 
-    monkeypatch.setattr(llm_narrative, "_azure_chat_rewrite", rewrite)
+    monkeypatch.setattr(llm_narrative, "_gemini_chat_rewrite", rewrite)
     llm_narrative._PROMPT_CACHE.clear()
     output = llm_narrative.maybe_rewrite_setup_copy({
         "ticker": "AAA",
