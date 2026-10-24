@@ -91,7 +91,7 @@ conn.close()
 trace_start = dt.datetime(2026, 8, 21, 22, 5, tzinfo=dt.timezone.utc)
 record_llm_call(
     DB_PATH, source="chart_commentary", role="narrative_rewriter",
-    stage="setup_copy_rewrite", provider="azure_openai", model="gpt-fixture",
+    stage="setup_copy_rewrite", provider="gemini", model="gpt-fixture",
     deployment="fixture-deployment", prompt_template_version="setup-rewrite-v2",
     input_payload={"ticker": "REJECT"},
     proposed_output={"observation": "Candidate rejected by deterministic tier rule."},

@@ -346,7 +346,7 @@ def send_llm_failure_alert_email(
         f"Last error class: {last_error}\n"
         f"Runtime cooldown: {disable_hint}\n\n"
         "Fallback is active: rule-based narratives are being used for continuity.\n"
-        "Please check Azure OpenAI credentials/deployment/network and recent API logs.\n"
+        "Please check Gemini API key/model/network and recent API logs.\n"
     )
     html_body = (
         "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#0f172a;'>"

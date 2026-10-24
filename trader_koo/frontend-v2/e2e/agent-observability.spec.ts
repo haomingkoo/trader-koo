@@ -10,7 +10,7 @@ test("authenticated agent view shows only real redacted model spans", async ({ p
   const view = page.getByTestId("agent-observability-page");
   await expect(view).toContainText("Recorded traces");
   await expect(view).toContainText("narrative_rewriter");
-  await expect(view).toContainText("azure_openai");
+  await expect(view).toContainText("gemini");
   await expect(view).toContainText("gpt-fixture");
   await expect(view).toContainText("passed");
   await expect(view).toContainText("rephrased");
