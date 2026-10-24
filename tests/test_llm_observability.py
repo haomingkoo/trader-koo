@@ -25,7 +25,7 @@ def _record(tmp_path, *, status: str = "success", fallback: str | None = None):
     identifiers = record_llm_call(
         db_path,
         source="chart_commentary", role="narrative_rewriter",
-        stage="setup_copy_rewrite", provider="azure_openai",
+        stage="setup_copy_rewrite", provider="gemini",
         model="gpt-fixture", deployment="fixture-deployment",
         prompt_template_version="setup-rewrite-v1",
         input_payload={"ticker": "AAA", "api_key": "must-not-persist"},
@@ -48,7 +48,7 @@ def test_trace_is_complete_redacted_and_append_only(tmp_path) -> None:
     assert b"must-not-persist" not in raw
     detail = observability_trace(db_path, identifiers["trace_id"])
     assert detail is not None
-    assert detail["trace"]["provider"] == "azure_openai"
+    assert detail["trace"]["provider"] == "gemini"
     assert detail["trace"]["model"] == "gpt-fixture"
     assert detail["trace"]["prompt_template_version"] == "setup-rewrite-v1"
     assert detail["trace"]["latency_ms"] == pytest.approx(125)
@@ -196,12 +196,10 @@ def test_real_narrative_call_records_trace_and_contribution(tmp_path, monkeypatc
     monkeypatch.setattr(llm_narrative, "_default_db_path", lambda: db_path)
     monkeypatch.setattr(llm_narrative, "_runtime_disabled_now", lambda: False)
     monkeypatch.setattr(llm_narrative, "llm_ready", lambda: True)
-    monkeypatch.setattr(llm_narrative, "_llm_provider", lambda: "azure_openai")
-    monkeypatch.setattr(llm_narrative, "_azure_cfg", lambda: {
-        "endpoint": "https://redacted.invalid", "api_key": "secret",
-        "deployment": "fixture", "api_version": "fixture-v1",
+    monkeypatch.setattr(llm_narrative, "_gemini_cfg", lambda: {
+        "api_key": "secret", "model": "gemini-fixture",
     })
-    monkeypatch.setattr(llm_narrative, "_azure_chat_rewrite", lambda _context: ({
+    monkeypatch.setattr(llm_narrative, "_gemini_chat_rewrite", lambda _context: ({
         "observation": "Validated rewrite.",
         "action": "Original action.",
         "risk_note": "Original risk.",

@@ -228,7 +228,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     # ... existing code ...
 
     try:
-        rewritten, usage_meta = _azure_chat_rewrite(context)
+        rewritten, usage_meta = _gemini_chat_rewrite(context)
 
         # Validate LLM output
         result = validate_llm_output(

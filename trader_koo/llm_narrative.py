@@ -36,6 +36,7 @@ _CACHE_LOCK = threading.Lock()
 _PROMPT_CACHE: dict[str, dict[str, Any]] = {}
 _RUNTIME_DISABLED_UNTIL: dt.datetime | None = None
 LOG = logging.getLogger("trader_koo.llm")
+_PROVIDER = "gemini"
 
 
 def _as_bool(value: Any) -> bool:
@@ -44,11 +45,6 @@ def _as_bool(value: Any) -> bool:
 
 def llm_enabled() -> bool:
     return _as_bool(os.getenv("TRADER_KOO_LLM_ENABLED", "0"))
-
-
-def _llm_provider() -> str:
-    provider = str(os.getenv("TRADER_KOO_LLM_PROVIDER", "azure_openai") or "azure_openai").strip().lower()
-    return provider if provider in {"azure_openai", "gemini"} else "azure_openai"
 
 
 def _llm_timeout_sec() -> int:
@@ -81,15 +77,6 @@ def llm_max_setups() -> int:
         return max(0, min(20, int(raw)))
     except ValueError:
         return 8
-
-
-def _azure_cfg() -> dict[str, Any]:
-    return {
-        "endpoint": str(os.getenv("AZURE_OPENAI_ENDPOINT", "") or "").strip().rstrip("/"),
-        "api_key": str(os.getenv("AZURE_OPENAI_API_KEY", "") or "").strip(),
-        "api_version": str(os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview") or "2024-12-01-preview").strip(),
-        "deployment": str(os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME", "") or "").strip(),
-    }
 
 
 def _default_db_path() -> Path:
@@ -200,20 +187,13 @@ def _gemini_cfg() -> dict[str, Any]:
 def llm_ready() -> bool:
     if not llm_enabled():
         return False
-    provider = _llm_provider()
-    if provider == "azure_openai":
-        cfg = _azure_cfg()
-        return bool(cfg["endpoint"] and cfg["api_key"] and cfg["deployment"] and cfg["api_version"])
-    if provider == "gemini":
-        cfg = _gemini_cfg()
-        return bool(cfg["api_key"])
-    return False
+    return bool(_gemini_cfg()["api_key"])
 
 
 def _llm_status(*, readonly: bool) -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
     runtime_disabled = _runtime_disabled_now(now)
-    provider = _llm_provider()
+    cfg = _gemini_cfg()
     health = {}
     try:
         health_reader = llm_health_summary_readonly if readonly else llm_health_summary
@@ -222,7 +202,7 @@ def _llm_status(*, readonly: bool) -> dict[str, Any]:
         health = {}
     base = {
         "enabled": llm_enabled(),
-        "provider": provider,
+        "provider": _PROVIDER,
         "ready": llm_ready(),
         "runtime_disabled": runtime_disabled,
         "runtime_disabled_remaining_sec": _runtime_disable_remaining_sec(now),
@@ -231,17 +211,9 @@ def _llm_status(*, readonly: bool) -> dict[str, Any]:
         "max_tokens": _llm_max_tokens(),
         "max_setups": llm_max_setups(),
         "health": health,
+        "has_api_key": bool(cfg["api_key"]),
+        "model": cfg["model"],
     }
-    if provider == "gemini":
-        cfg = _gemini_cfg()
-        base["has_api_key"] = bool(cfg["api_key"])
-        base["model"] = cfg["model"]
-    else:
-        cfg = _azure_cfg()
-        base["has_endpoint"] = bool(cfg["endpoint"])
-        base["has_api_key"] = bool(cfg["api_key"])
-        base["has_deployment"] = bool(cfg["deployment"])
-        base["api_version"] = cfg["api_version"]
     return base
 
 
@@ -365,75 +337,6 @@ def _gemini_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any]
     return (_extract_json_object(str(text or "")), usage_meta)
 
 
-def _azure_chat_rewrite(prompt_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    cfg = _azure_cfg()
-    if not (cfg["endpoint"] and cfg["api_key"] and cfg["deployment"]):
-        return ({}, {})
-    url = (
-        f"{cfg['endpoint']}/openai/deployments/{cfg['deployment']}"
-        f"/chat/completions?api-version={cfg['api_version']}"
-    )
-    system_prompt = (
-        "You analyze and rewrite the observation for a stock setup dashboard. "
-        "Use ONLY facts from INPUT. Do not fabricate indicators, events, or prices. "
-        "Copy baseline.action and baseline.risk_note exactly; they are deterministic decisions. "
-        "Copy intent_contract exactly; decision_delta must remain none. "
-        "Keep the observation concise and evidence-first. Return STRICT JSON only with keys: "
-        "observation, action, risk_note, intent."
-    )
-    user_prompt = json.dumps(prompt_payload, ensure_ascii=True, separators=(",", ":"))
-    body = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": _llm_temperature(),
-        "max_tokens": _llm_max_tokens(),
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "api-key": cfg["api_key"],
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=_llm_timeout_sec()) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
-    payload = json.loads(raw)
-    usage = payload.get("usage") if isinstance(payload, dict) else {}
-    try:
-        prompt_tokens = max(0, int(float((usage or {}).get("prompt_tokens") or 0)))
-    except Exception:
-        prompt_tokens = 0
-    try:
-        completion_tokens = max(0, int(float((usage or {}).get("completion_tokens") or 0)))
-    except Exception:
-        completion_tokens = 0
-    try:
-        total_tokens = max(0, int(float((usage or {}).get("total_tokens") or 0)))
-    except Exception:
-        total_tokens = 0
-    if total_tokens <= 0:
-        total_tokens = prompt_tokens + completion_tokens
-    usage_meta = {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-        "model": str(payload.get("model") or "").strip() if isinstance(payload, dict) else "",
-        "deployment": cfg["deployment"],
-        "api_version": cfg["api_version"],
-        "response_id": str(payload.get("id") or "").strip() if isinstance(payload, dict) else "",
-    }
-    choices = payload.get("choices") or []
-    if not choices:
-        return ({}, usage_meta)
-    msg = choices[0].get("message") if isinstance(choices[0], dict) else {}
-    content = msg.get("content") if isinstance(msg, dict) else ""
-    return (_extract_json_object(str(content or "")), usage_meta)
-
-
 def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, str]:
     db_path = _default_db_path()
     if _runtime_disabled_now():
@@ -489,10 +392,9 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
     }
     context["intent_contract"] = intent_contract(context)
 
-    provider = _llm_provider()
-    configured = _gemini_cfg() if provider == "gemini" else _azure_cfg()
+    configured = _gemini_cfg()
     runtime_identity = {
-        "provider": provider,
+        "provider": _PROVIDER,
         "model": configured.get("model"),
         "deployment": configured.get("deployment"),
         "api_version": configured.get("api_version"),
@@ -500,7 +402,6 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         "max_tokens": _llm_max_tokens(),
     }
     prompt_hash = cache_identity(context, runtime_identity)
-    _rewrite_fn = _gemini_chat_rewrite if provider == "gemini" else _azure_chat_rewrite
     trace_started = dt.datetime.now(dt.timezone.utc)
 
     def record_trace(
@@ -520,7 +421,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
                 source=source,
                 role="narrative_rewriter",
                 stage="setup_copy_rewrite",
-                provider=provider,
+                provider=_PROVIDER,
                 model=str(usage.get("model") or configured.get("model") or "") or None,
                 deployment=str(
                     usage.get("deployment") or configured.get("deployment") or ""
@@ -576,7 +477,7 @@ def maybe_rewrite_setup_copy(row: dict[str, Any], *, source: str) -> dict[str, s
         return output
 
     try:
-        rewritten, usage_meta = _rewrite_fn(context)
+        rewritten, usage_meta = _gemini_chat_rewrite(context)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
         error_class = "network_or_decode_error"
         _safe_note_failure(
