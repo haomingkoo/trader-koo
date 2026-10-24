@@ -42,6 +42,16 @@ VACUUM_FREE_SPACE_MULTIPLIER: float = 1.3
 # when the freelist holds enough to repay the rewrite.
 VACUUM_MIN_FREELIST_BYTES: int = 50 * 1024 * 1024
 
+# The transient cost of a VACUUM is (current usage + database size), because the
+# second copy exists alongside the original until the swap. Expressing the limit
+# as a share of the volume is therefore the only rule that actually bounds it; a
+# multiple of the database size does not, since it ignores how full the volume is.
+# Measured on 2026-10-24: a three-day retention backlog left a large freelist, the
+# nightly VACUUM rewrote all 1348 MB, and a 4.4 GB volume peaked at 3.99 GB = 89%,
+# which raised a Railway alert. Steady state was 60% before and after. The old
+# free >= 1.3x database rule was satisfied and permitted exactly that.
+VACUUM_PEAK_MAX_PCT: float = 80.0
+
 
 # The volume reached 68% with no alarm of any kind: there was no disk monitoring
 # anywhere in the repository. At 100% SQLite returns SQLITE_FULL, every scheduler
@@ -138,12 +148,25 @@ def _vacuum_decision(
     db_bytes: int,
     freelist_pages: int,
     page_size: int,
+    total_bytes: int = 0,
 ) -> tuple[bool, str]:
     """Return (should_vacuum, reason).
 
     Space is checked before worth, so an operator reading the log hears about the
-    disk before hearing about tidiness.
+    disk before hearing about tidiness. ``total_bytes`` is optional: callers that
+    cannot report the volume size fall back to the free-space floor alone.
     """
+    if total_bytes > 0:
+        used_bytes = total_bytes - free_bytes
+        peak_pct = (used_bytes + db_bytes) / total_bytes * 100.0
+        if peak_pct > VACUUM_PEAK_MAX_PCT:
+            return False, (
+                f"unsafe: the rewrite would peak the volume at {peak_pct:.0f}% "
+                f"(now {used_bytes / total_bytes * 100.0:.0f}%, plus a "
+                f"{db_bytes / 1e6:.0f} MB second copy), above the "
+                f"{VACUUM_PEAK_MAX_PCT:.0f}% ceiling"
+            )
+
     required = int(db_bytes * VACUUM_FREE_SPACE_MULTIPLIER)
     if free_bytes < required:
         return False, (
@@ -371,7 +394,8 @@ def run_cleanup(db_path: Path, *, dry_run: bool = False) -> dict[str, int]:
                 LOG.warning("[CLEANUP] WAL checkpoint failed: %s", exc)
             # Measure after the checkpoint: a live WAL makes the file size misleading,
             # and the gate below depends on an accurate one.
-            free_bytes = shutil.disk_usage(db_path.parent).free
+            usage = shutil.disk_usage(db_path.parent)
+            free_bytes = usage.free
             db_bytes = db_path.stat().st_size
             freelist_pages = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
             page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
@@ -380,6 +404,7 @@ def run_cleanup(db_path: Path, *, dry_run: bool = False) -> dict[str, int]:
                 db_bytes=db_bytes,
                 freelist_pages=freelist_pages,
                 page_size=page_size,
+                total_bytes=usage.total,
             )
             if not should_vacuum:
                 # ERROR, not warning: a skipped VACUUM on a filling volume is the
