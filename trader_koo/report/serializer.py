@@ -11,11 +11,8 @@ from typing import Any
 
 LOG = logging.getLogger(__name__)
 
-_MANAGED_REPORT_FILE_RE = re.compile(
-    r"^daily_report_\d{8}T\d{6}Z_[0-9a-f]{8}-[0-9a-f]{4}-"
-    r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:json|md)$",
-    re.IGNORECASE,
-)
+# write_reports adds a suffix only for a run_id, so any suffix marks a registry artifact.
+_MANAGED_REPORT_FILE_RE = re.compile(r"^daily_report_\d{8}T\d{6}Z_[^.]+\.(?:json|md)$")
 
 
 def _md_line(k: str, v: Any) -> str:
