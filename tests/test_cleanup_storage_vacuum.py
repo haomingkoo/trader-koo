@@ -205,6 +205,66 @@ def test_headroom_alert_clears_after_reclaiming_the_backups():
     ) is None
 
 
+def test_refuses_when_the_projected_peak_would_alarm_the_volume():
+    """The real 2026-10-24 production event, which the 1.3x rule PERMITTED.
+
+    VACUUM writes a complete second copy before swapping it in, so its cost is
+    `current usage + database size`, not a fraction of the database. On Oct 24 a
+    three-day retention backlog (119,569 rows against a normal 23-42k, because
+    the service was down Oct 22-23) left a large freelist, the nightly VACUUM
+    rewrote all 1348 MB, and the volume peaked at 3.99 GB of 4.4 GB = 89%.
+    Railway alerted on that sample. Steady state was 60% before and after.
+
+    free >= 1.3 x db was satisfied (1800 >= 1752), so the old gate allowed it.
+    """
+    peak_state = {
+        "free_bytes": 1800 * _MB,
+        "total_bytes": 4505 * _MB,
+        "db_bytes": 1348 * _MB,
+        "freelist_pages": _pages(500 * _MB),
+        "page_size": _PAGE,
+    }
+
+    without_total, _ = _vacuum_decision(
+        **{k: v for k, v in peak_state.items() if k != "total_bytes"}
+    )
+    assert without_total is True, "documents the old permissive behaviour"
+
+    safe, reason = _vacuum_decision(**peak_state)
+    assert safe is False
+    assert "peak" in reason.lower()
+
+
+def test_allows_the_same_database_on_a_volume_with_room():
+    """Nothing about the database changed; only the volume did.
+
+    The same 1348 MB database and the same 2.6 GB of real data on a 10 GB volume
+    peaks at about 39%, which is why raising the volume is a real fix and not a
+    way of avoiding one.
+    """
+    safe, reason = _vacuum_decision(
+        free_bytes=7400 * _MB,
+        total_bytes=10_000 * _MB,
+        db_bytes=1348 * _MB,
+        freelist_pages=_pages(500 * _MB),
+        page_size=_PAGE,
+    )
+
+    assert safe is True, reason
+
+
+def test_an_unknown_volume_size_falls_back_to_the_free_space_floor():
+    """Callers that cannot report the volume size keep the old conservative rule."""
+    safe, _ = _vacuum_decision(
+        free_bytes=100 * _MB,
+        db_bytes=1000 * _MB,
+        freelist_pages=_pages(500 * _MB),
+        page_size=_PAGE,
+    )
+
+    assert safe is False
+
+
 def test_headroom_alert_tracks_the_database_not_the_volume():
     """Identical free space, different database: only the larger one is starved.
 
