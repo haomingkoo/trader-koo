@@ -570,7 +570,11 @@ def _parse_report_snapshot_ts(path: Path) -> dt.datetime | None:
         return None
 
 
-def _prune_report_snapshots(out_dir: Path) -> dict[str, int]:
+def _prune_report_snapshots(
+    out_dir: Path,
+    *,
+    protect: frozenset[Path] = frozenset(),
+) -> dict[str, int]:
     keep_files_raw = os.getenv("TRADER_KOO_REPORT_KEEP_FILES", "21").strip()
     max_age_days_raw = os.getenv("TRADER_KOO_REPORT_MAX_AGE_DAYS", "45").strip()
     try:
@@ -600,10 +604,20 @@ def _prune_report_snapshots(out_dir: Path) -> dict[str, int]:
     snapshots.sort(key=lambda item: item[0], reverse=True)
 
     now_utc = dt.datetime.now(dt.timezone.utc)
+    protected = {path.resolve() for path in protect}
     deleted_files = 0
     deleted_snapshots = 0
     retained_snapshots = 0
     for idx, (snap_ts, paths) in enumerate(snapshots):
+        # Never delete the snapshot this very call just wrote. Age is read from
+        # the filename, so a backfill or replay carrying a historical
+        # generated_ts would otherwise be written and immediately removed,
+        # handing the caller a path to a file that no longer exists. Retention
+        # for everything else is unaffected: a genuinely stale unmanaged
+        # snapshot is still pruned on the next call.
+        if protected and any(path.resolve() in protected for path in paths):
+            retained_snapshots += 1
+            continue
         # Report-run artifacts are immutable registry evidence. They also need
         # to survive the completed/published crash window before a marker exists.
         if any(_MANAGED_REPORT_FILE_RE.fullmatch(path.name) for path in paths):
@@ -669,7 +683,9 @@ def write_reports(
     if publish_latest:
         latest_json.write_text(json_text + "\n", encoding="utf-8")
         latest_md.write_text(md_text + "\n", encoding="utf-8")
-    prune_info = _prune_report_snapshots(out_dir)
+    prune_info = _prune_report_snapshots(
+        out_dir, protect=frozenset({json_path, md_path}),
+    )
 
     return {
         "json_path": str(json_path),
