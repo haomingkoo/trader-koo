@@ -21,7 +21,7 @@ pip install --force-reinstall opencv-python-headless==4.10.0.84
 
 # ── 4. Preflight import check ──────────────────────────────────────────
 log "Running preflight import check..."
-python -c "import cv2, torch, ultralyticsplus; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)"
+python -c "import cv2, torch, ultralytics, huggingface_hub; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)"
 
 # ── 5. Install Node.js via nvm ──────────────────────────────────────────
 log "Installing Node.js 22 via NodeSource..."
