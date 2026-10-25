@@ -19,6 +19,7 @@ import re
 import secrets
 import sqlite3
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,7 @@ from trader_koo.backend.services.scheduler import (
     _append_run_log,
     _run_daily_update,
 )
+from trader_koo.report.utils import expected_price_date
 
 LOG = logging.getLogger("trader_koo.services.pipeline")
 
@@ -60,6 +62,10 @@ AUTO_RESUME_INTERRUPTED_PIPELINE = _env_flag(
     "TRADER_KOO_AUTO_RESUME_INTERRUPTED_PIPELINE",
     os.getenv("TRADER_KOO_AUTO_RESUME_POST_INGEST", "1"),
 )
+# Opt-out for the startup catch-up that follows a container outage.
+AUTO_STARTUP_CATCHUP = _env_flag("TRADER_KOO_AUTO_STARTUP_CATCHUP", "1")
+# Keeps the catch-up clear of the release workflow's post-deploy verification.
+STARTUP_CATCHUP_DELAY = dt.timedelta(minutes=7)
 AUTO_RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_AGE_HOURS", "18")))
 AUTO_RESUME_MAX_RETRIES = max(0, int(os.getenv("TRADER_KOO_AUTO_RESUME_MAX_RETRIES", "2")))
 
@@ -1087,3 +1093,127 @@ def queue_reserved_pipeline_run(
         "mode": mode,
         "source": source,
     }
+
+
+def startup_work_queued(
+    *,
+    reserved: Mapping[str, Any],
+    interrupted_resume_queued: bool,
+    post_ingest: Mapping[str, Any],
+) -> bool:
+    """True only when a startup block actually queued a job.
+
+    An interrupted pipeline_runs row, or a queued row that
+    queue_reserved_pipeline_run skipped, has no job behind it and must not
+    suppress the outage catch-up.
+    """
+    return bool(
+        reserved.get("scheduled")
+        or interrupted_resume_queued
+        or post_ingest.get("scheduled")
+    )
+
+
+def startup_catchup_reason(
+    *,
+    latest_price_date: str | None,
+    now_utc: dt.datetime,
+    already_queued: bool,
+) -> str | None:
+    """Return why a startup catch-up is needed, or None when it is not."""
+    if latest_price_date is None or already_queued:
+        return None
+    expected = expected_price_date(now_utc).isoformat()
+    latest = str(latest_price_date)[:10]
+    if latest >= expected:
+        return None
+    return f"latest_price_date={latest} expected_price_date={expected}"
+
+
+def _abandon_stale_pipeline_runs(db_path: Path) -> int:
+    """Mark every queued or running row interrupted and return the count.
+
+    Only safe at startup, once no job is queued: the process is fresh, so no
+    pipeline can be live, and any such row would make the catch-up job's own
+    reservation fail.
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        if not table_exists(conn, "pipeline_runs"):
+            return 0
+        count = conn.execute(
+            """
+            UPDATE pipeline_runs
+            SET status = 'interrupted', stage = 'done', finished_ts = ?,
+                error_message = COALESCE(error_message, 'stale_at_startup_catchup')
+            WHERE status IN ('queued', 'running')
+            """,
+            (_now_iso_z(),),
+        ).rowcount
+        conn.commit()
+        return count
+    finally:
+        conn.close()
+
+
+def _latest_price_date(db_path: Path) -> str | None:
+    """Newest price_daily date, or None after logging a visible CATCHUP skip."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = conn.execute("SELECT MAX(date) FROM price_daily").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        LOG.warning("Startup catch-up check failed closed: %s", exc)
+        _append_run_log("CATCHUP", f"skipped: price check failed ({type(exc).__name__})")
+        return None
+    if not row or row[0] is None:
+        LOG.warning("Startup catch-up skipped: no price data")
+        _append_run_log("CATCHUP", "skipped: no price data")
+        return None
+    return str(row[0])
+
+
+def queue_startup_catchup(
+    scheduler: BackgroundScheduler,
+    *,
+    already_queued: bool = False,
+    db_path: Path | None = None,
+    now_utc: dt.datetime | None = None,
+) -> dict[str, Any]:
+    """Queue one delayed full run when stored prices lag the last due session.
+
+    The scheduler keeps no jobstore, so a container that was down at 22:00 UTC
+    forgets the missed run. This is the only place that notices at boot.
+    Callers pass already_queued=True only when a job was really queued.
+    When the catch-up is needed, leftover queued or running pipeline_runs rows
+    are marked interrupted first. The job reserves its own run and would
+    otherwise log SKIP and do nothing. Skips are written to the run log.
+    """
+    path = db_path or DB_PATH
+    now = now_utc or dt.datetime.now(dt.timezone.utc)
+    latest = _latest_price_date(path)
+    if latest is None:
+        return {"scheduled": False}
+    reason = startup_catchup_reason(
+        latest_price_date=latest,
+        now_utc=now,
+        already_queued=already_queued,
+    )
+    if reason is None:
+        return {"scheduled": False}
+    abandoned = _abandon_stale_pipeline_runs(path)
+    if abandoned:
+        _append_run_log("CATCHUP", f"marked {abandoned} stale pipeline run(s) interrupted")
+    job_id = f"startup_catchup_{now.strftime('%Y%m%dT%H%M%S')}"
+    scheduler.add_job(
+        _run_daily_update,
+        trigger="date",
+        run_date=now + STARTUP_CATCHUP_DELAY,
+        id=job_id,
+        kwargs={"mode": "full", "source": "startup_catchup"},
+    )
+    _append_run_log("CATCHUP", f"queued mode=full source=startup_catchup {reason}")
+    LOG.warning("Queued startup catch-up job_id=%s %s", job_id, reason)
+    return {"scheduled": True, "job_id": job_id, "reason": reason}

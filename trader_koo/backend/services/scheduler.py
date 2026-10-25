@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - production/runtime is Unix-like
 from trader_koo.backend.services.report_loader import _tail_text_file
 from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
 from trader_koo.backend.services.market_data import read_latest_ingest_run
+from trader_koo.report.utils import expected_price_date
 from trader_koo.config import (
     DEFAULT_DB_PATH,
     DEFAULT_LOG_DIR,
@@ -242,8 +243,15 @@ def _run_daily_update(
         _release_update_lock(lock_handle)
 
 
-def _run_preopen_report_watchdog() -> None:
-    """Recover a missing publication only when newer ingested prices exist."""
+def _run_preopen_report_watchdog(now_utc: dt.datetime | None = None) -> None:
+    """Recover a missing publication only when newer ingested prices exist.
+
+    Hardens the case where the last ingest run says ok but stored prices lag
+    the newest expected session. A report-only run is chosen only when prices
+    are current; otherwise a full run is queued regardless of ingest status.
+    This is separate from the startup catch-up, which covers a container that
+    was down at ingest time.
+    """
     if not DB_PATH.exists():
         _append_run_log("PREOPEN", "Skipped: database unavailable")
         return
@@ -278,12 +286,14 @@ def _run_preopen_report_watchdog() -> None:
 
     latest_ingest = read_latest_ingest_run(DB_PATH)
     ingest_status = str((latest_ingest or {}).get("status") or "missing").lower()
-    recovery_mode = "report" if ingest_status == "ok" else "full"
+    prices_current = str(latest_price_date)[:10] >= expected_price_date(now_utc).isoformat()
+    recovery_mode = "report" if ingest_status == "ok" and prices_current else "full"
     _append_run_log(
         "PREOPEN",
         (
             f"Recovering publication: published_price_date={report_price_date} "
-            f"latest_price_date={latest_price_date} ingest_status={ingest_status} "
+            f"latest_price_date={latest_price_date} prices_current={prices_current} "
+            f"ingest_status={ingest_status} "
             f"mode={recovery_mode}"
         ),
     )

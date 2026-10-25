@@ -1,6 +1,7 @@
 """Unit tests for trader_koo.backend.services.scheduler."""
 from __future__ import annotations
 
+import datetime as dt
 import sqlite3
 from types import SimpleNamespace
 
@@ -230,7 +231,7 @@ def test_preopen_watchdog_recovers_newer_ingested_price_date(tmp_path, monkeypat
         lambda mode, source: calls.append((mode, source)),
     )
 
-    _run_preopen_report_watchdog()
+    _run_preopen_report_watchdog(now_utc=dt.datetime(2026, 8, 27, 12, tzinfo=dt.timezone.utc))
 
     assert calls == [("report", "preopen_watchdog")]
 
@@ -269,9 +270,63 @@ def test_preopen_watchdog_reruns_failed_ingest_before_report(tmp_path, monkeypat
         lambda mode, source: calls.append((mode, source)),
     )
 
-    _run_preopen_report_watchdog()
+    _run_preopen_report_watchdog(now_utc=dt.datetime(2026, 8, 27, 12, tzinfo=dt.timezone.utc))
 
     assert calls == [("full", "preopen_watchdog")]
+
+
+def _watchdog_db(tmp_path, *, price_date: str, ingest_status: str = "ok"):
+    db_path = tmp_path / "scheduler.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE price_daily (date TEXT)")
+        conn.execute("INSERT INTO price_daily VALUES (?)", (price_date,))
+        conn.execute(
+            """CREATE TABLE report_runs (
+                run_id TEXT, status TEXT, publication_verified INTEGER,
+                is_generation_canonical INTEGER, published_ts TEXT,
+                source_timestamps_json TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO report_runs VALUES ('old','published',1,1,'2026-10-15T22:30:00Z','{\"price_date\":\"2026-10-14\"}')"
+        )
+        conn.execute(
+            """CREATE TABLE ingest_runs (
+                run_id TEXT, started_ts TEXT, finished_ts TEXT, status TEXT,
+                tickers_total INTEGER, tickers_ok INTEGER, tickers_failed INTEGER,
+                error_message TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO ingest_runs VALUES ('i','2026-10-20T22:00:00Z','2026-10-20T22:20:00Z',?,538,538,0,NULL)",
+            (ingest_status,),
+        )
+    return db_path
+
+
+@pytest.mark.parametrize(
+    ("price_date", "now", "mode"),
+    [
+        # Oct 23 12:00Z after the outage: ingest says ok but prices are 3 sessions old.
+        ("2026-10-20", dt.datetime(2026, 10, 23, 12, tzinfo=dt.timezone.utc), "full"),
+        # Prices are current (Thu close) and only the publication is stale.
+        ("2026-10-22", dt.datetime(2026, 10, 23, 12, tzinfo=dt.timezone.utc), "report"),
+        # Saturday: Friday is the newest expected session, so Friday is current.
+        ("2026-10-23", dt.datetime(2026, 10, 24, 12, tzinfo=dt.timezone.utc), "report"),
+    ],
+)
+def test_preopen_watchdog_mode_follows_price_freshness(tmp_path, monkeypatch, price_date, now, mode):
+    db_path = _watchdog_db(tmp_path, price_date=price_date)
+    monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "trader_koo.backend.services.scheduler._run_daily_update",
+        lambda mode, source: calls.append((mode, source)),
+    )
+
+    _run_preopen_report_watchdog(now_utc=now)
+
+    assert calls == [(mode, "preopen_watchdog")]
 
 
 def test_worker_transitions_reserved_record_before_subprocess(tmp_path, monkeypatch):

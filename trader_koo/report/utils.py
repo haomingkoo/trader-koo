@@ -194,6 +194,19 @@ def last_completed_nyse_session(
     return previous_nyse_session(candidate)
 
 
+# The nightly ingest starts 22:00 UTC and takes up to about an hour. Until this
+# lag has passed after the NYSE close, tonight's bar is not yet "owed".
+INGEST_DUE_LAG = dt.timedelta(hours=4)
+
+
+def expected_price_date(now_utc: dt.datetime | None = None) -> dt.date:
+    """Newest session whose bar the nightly ingest should already have stored."""
+    now = now_utc or dt.datetime.now(dt.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    return last_completed_nyse_session(now - INGEST_DUE_LAG)
+
+
 def completed_nyse_period_through(
     timeframe: str,
     as_of: dt.date | dt.datetime | None = None,
