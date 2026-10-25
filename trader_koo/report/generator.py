@@ -85,6 +85,19 @@ LOG = logging.getLogger(__name__)
 _report_warnings: list[str] = []
 
 
+def _llm_health_codes(llm_meta: dict[str, Any]) -> list[str]:
+    """Advisory LLM status codes; these never block report publication."""
+    health = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
+    codes = []
+    if not llm_meta.get("ready"):
+        codes.append("llm_not_ready")
+    if llm_meta.get("runtime_disabled"):
+        codes.append("llm_runtime_cooldown")
+    if health.get("degraded"):
+        codes.append("llm_degraded")
+    return codes
+
+
 def _green_barrier_coverage_requires_warning(coverage: dict[str, Any]) -> bool:
     """Return whether missing coverage reflects stale or invalid market data."""
     return (
@@ -1630,15 +1643,10 @@ def fetch_report_payload(
         elif isinstance(yolo_age, (int, float)) and yolo_age > 30:
             payload["warnings"].append("yolo_data_stale")
 
-        llm_meta = payload.get("meta", {}).get("llm", {}) if isinstance(payload.get("meta"), dict) else {}
-        llm_health = llm_meta.get("health") if isinstance(llm_meta, dict) and isinstance(llm_meta.get("health"), dict) else {}
-        if llm_enabled():
-            if isinstance(llm_meta, dict) and not llm_meta.get("ready"):
-                payload["warnings"].append("llm_not_ready")
-            if isinstance(llm_meta, dict) and llm_meta.get("runtime_disabled"):
-                payload["warnings"].append("llm_runtime_cooldown")
-            if llm_health.get("degraded"):
-                payload["warnings"].append("llm_degraded")
+        # LLM health is advisory: record it in meta.llm, never in publication-blocking warnings.
+        llm_meta = payload["meta"].get("llm")
+        if isinstance(llm_meta, dict) and llm_enabled():
+            llm_meta["health_codes"] = _llm_health_codes(llm_meta)
 
         payload["risk_filters"] = build_no_trade_conditions(payload)
         signals = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}
