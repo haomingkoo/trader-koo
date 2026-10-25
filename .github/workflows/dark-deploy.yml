@@ -35,19 +35,19 @@ jobs:
       DEPLOYMENT_POLL_INTERVAL_SEC: "5"
     steps:
       - name: Check out the exact CI commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: requirements-dev.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
@@ -322,7 +322,7 @@ jobs:
 
       - name: Upload deployment evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: dark-deploy-evidence-${{ github.event.workflow_run.head_sha }}
           path: release-evidence/*.json
