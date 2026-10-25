@@ -66,6 +66,7 @@ from trader_koo.backend.services.maintenance import (
 )
 from trader_koo.backend.services.pipeline import (
     AUTO_RESUME_INTERRUPTED_PIPELINE,
+    AUTO_STARTUP_CATCHUP,
     determine_resume_mode,
     ensure_pipeline_runs_schema,
     finish_pipeline_run,
@@ -73,6 +74,8 @@ from trader_koo.backend.services.pipeline import (
     reconcile_stale_running_runs,
     queue_post_ingest_resume,
     queue_reserved_pipeline_run,
+    queue_startup_catchup,
+    startup_work_queued,
 )
 from trader_koo.crypto.service import start_crypto_feed, stop_crypto_feed
 from trader_koo.crypto.storage import ensure_crypto_schema
@@ -287,6 +290,7 @@ async def lifespan(_app: FastAPI):
             )
 
         # DB-based pipeline resume: check for interrupted pipeline_runs
+        interrupted_resume_queued = False
         interrupted = read_interrupted_pipeline_run()
         if interrupted:
             interrupted_id = str(interrupted.get("run_id") or "")
@@ -330,6 +334,7 @@ async def lifespan(_app: FastAPI):
                     id=job_id,
                     kwargs={"mode": resume_mode, "source": resume_source},
                 )
+                interrupted_resume_queued = True
                 LOG.warning(
                     "Startup queued pipeline resume job_id=%s mode=%s from interrupted run_id=%s stage=%s",
                     job_id,
@@ -353,6 +358,24 @@ async def lifespan(_app: FastAPI):
                 resume.get("mode"),
                 resume.get("reason"),
             )
+
+        # Outage catch-up: the scheduler forgets a 22:00 UTC run it never saw.
+        # Skipped only when a block above actually queued a job.
+        if AUTO_STARTUP_CATCHUP:
+            catchup = queue_startup_catchup(
+                _scheduler,
+                already_queued=startup_work_queued(
+                    reserved=reserved,
+                    interrupted_resume_queued=interrupted_resume_queued,
+                    post_ingest=resume,
+                ),
+            )
+            if catchup.get("scheduled"):
+                LOG.warning(
+                    "Startup queued outage catch-up job_id=%s %s",
+                    catchup.get("job_id"),
+                    catchup.get("reason"),
+                )
 
     # Start real-time crypto feed (Binance WebSocket, daemon thread)
     # Pass DB path so bars are persisted and history is restored on restart
