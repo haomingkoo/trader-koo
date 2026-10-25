@@ -331,3 +331,211 @@ def test_data_warning_still_blocks_publication_when_llm_is_degraded(
     assert payload["ok"] is False
     with pytest.raises(ValueError, match="degraded|partial-quality"):
         _assert_publishable_report(payload)
+
+
+def _set_yolo_rows(db_path: Path, rows: list[tuple[str, str, str]]) -> None:
+    """Replace yolo_patterns with (timeframe, detected_ts, as_of_date) rows."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM yolo_patterns")
+    conn.executemany(
+        "INSERT INTO yolo_patterns (ticker, timeframe, detected_ts, as_of_date, confidence) "
+        "VALUES ('AAA', ?, ?, ?, 0.9)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def _hours_ago_ts(hours: float) -> str:
+    ts = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+    return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def test_yolo_current_on_latest_price_date_is_fresh_despite_old_detected_ts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=False)
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    _set_yolo_rows(kwargs["db_path"], [("daily", _hours_ago_ts(40), today)])
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_stale" not in payload["warnings"]
+    assert payload["warnings"] == []
+    assert payload["ok"] is True
+    assert payload["latest_data"]["yolo_as_of_date"] == today
+    assert payload["freshness"]["yolo_age_hours"] > 30
+
+
+def test_yolo_daily_behind_latest_price_date_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=False)
+    yesterday = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1)).isoformat()
+    _set_yolo_rows(kwargs["db_path"], [("daily", _hours_ago_ts(1), yesterday)])
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_stale" in payload["warnings"]
+    assert payload["ok"] is False
+
+
+def test_yolo_without_rows_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=False)
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_missing" in payload["warnings"]
+    assert "yolo_data_stale" not in payload["warnings"]
+
+
+def test_yolo_weekly_rows_alone_do_not_count_as_current_daily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=False)
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    _set_yolo_rows(kwargs["db_path"], [("weekly", _hours_ago_ts(1), today)])
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_missing" in payload["warnings"]
+    assert payload["ok"] is False
+
+
+def _add_price_ticker(db_path: Path, ticker: str, date: str) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO price_daily (ticker, date, open, high, low, close, volume, data_source) "
+        "VALUES (?, ?, 100, 101, 99, 100, 1000000, 'test')",
+        (ticker, date),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _add_yolo_row(db_path: Path, ticker: str, timeframe: str, as_of: str) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO yolo_patterns (ticker, timeframe, detected_ts, as_of_date, confidence) "
+        "VALUES (?, ?, ?, ?, 0.9)",
+        (ticker, timeframe, _hours_ago_ts(1), as_of),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _add_yolo_event(db_path: Path, ticker: str, status: str, as_of: str) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS yolo_run_events (run_id TEXT, timeframe TEXT, "
+        "ticker TEXT, status TEXT, as_of_date TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO yolo_run_events VALUES ('r1', 'daily', ?, ?, ?)", (ticker, status, as_of)
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_yolo_missing_reports_no_as_of_date_and_no_age(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=False)
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert payload["latest_data"]["yolo_as_of_date"] is None
+    assert payload["freshness"]["yolo_age_hours"] is None
+
+
+def test_yolo_current_over_long_weekend_is_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=False)
+    friday = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=3)).isoformat()
+    conn = sqlite3.connect(kwargs["db_path"])
+    conn.execute("UPDATE price_daily SET date = ?", (friday,))
+    conn.execute(
+        "INSERT INTO yolo_patterns (ticker, timeframe, detected_ts, as_of_date, confidence) "
+        "VALUES ('AAA', 'daily', ?, ?, 0.9)",
+        (_hours_ago_ts(80), friday),
+    )
+    conn.commit()
+    conn.close()
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert payload["freshness"]["yolo_age_hours"] > 72
+    assert payload["warnings"] == []
+
+
+def test_yolo_current_daily_with_old_weekly_is_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    _add_yolo_row(kwargs["db_path"], "AAA", "weekly", "2000-01-07")
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_stale" not in payload["warnings"]
+    assert "yolo_data_missing" not in payload["warnings"]
+
+
+def test_yolo_partial_run_below_coverage_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    _add_price_ticker(kwargs["db_path"], "BBB", today)
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_stale" in payload["warnings"]
+
+
+def test_yolo_zero_detection_ticker_counts_via_ok_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    _add_price_ticker(kwargs["db_path"], "BBB", today)
+    _add_yolo_event(kwargs["db_path"], "BBB", "ok", today)
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_stale" not in payload["warnings"]
+
+
+def test_yolo_failed_event_does_not_count_as_covered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    _add_price_ticker(kwargs["db_path"], "BBB", today)
+    _add_yolo_event(kwargs["db_path"], "BBB", "failed", today)
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_stale" in payload["warnings"]
+
+
+def test_yolo_coverage_ignores_tickers_excluded_from_research_universe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trader_koo.report import generator
+
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    _add_price_ticker(kwargs["db_path"], "BBB", today)
+    base_fetch = generator.fetch_signals
+    monkeypatch.setattr(
+        generator,
+        "fetch_signals",
+        lambda conn: {**base_fetch(conn), "price_contract": {"excluded_tickers": ["BBB"]}},
+    )
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert "yolo_data_stale" not in payload["warnings"]
