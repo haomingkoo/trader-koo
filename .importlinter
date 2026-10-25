@@ -1,0 +1,9 @@
+[importlinter]
+root_package = trader_koo
+
+[importlinter:contract:layers]
+name = Layers: report above config
+type = layers
+layers =
+    trader_koo.report
+    trader_koo.config

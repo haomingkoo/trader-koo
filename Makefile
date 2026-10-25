@@ -38,4 +38,8 @@ precommit:
 golden:
 	PYTHON=$(PYTHON) ops/golden_diff.sh $(or $(BASE),origin/main)
 
-ci: backend-check test frontend-build precommit
+guardrails:
+	$(PYTHON) -m ops.guardrails check
+	$(PYTHON) -c "from importlinter.cli import lint_imports_command as m; m()" --config .importlinter
+
+ci: backend-check test frontend-build precommit guardrails
