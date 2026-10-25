@@ -14,7 +14,6 @@ import {
   PaperTradeDecisionMemory,
   PaperTradeFeedbackPanel,
   PaperTradePerformanceAttribution,
-  PaperTradeMLCalibration,
   PaperTradeFilters,
   PaperTradeLogTable,
   StrategyEvidenceStatePanel,
@@ -112,24 +111,19 @@ export default function PaperTradePage() {
         <div className="space-y-3 border-t border-[var(--line)] px-4 py-4 text-xs text-[var(--muted)]">
           <div className="flex flex-wrap gap-2">
             <Badge variant="blue">Nightly Pipeline</Badge>
-            <Badge variant="amber">ML Observation Only</Badge>
             <Badge variant="amber">Critic Reviewed</Badge>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <div className="font-semibold text-[var(--text)]">1. Signal Generation</div>
               <p className="mt-1">Every market night, the pipeline scans 500+ S&P tickers for technical setups using YOLOv8 pattern detection, support/resistance levels, and deterministic multi-angle rule scoring.</p>
             </div>
             <div>
-              <div className="font-semibold text-[var(--text)]">2. ML Observation</div>
-              <p className="mt-1">A LightGBM challenger may record predicted win probabilities for calibration only. It is not a qualified backtest and cannot reject, rank, or size trades until walk-forward, held-out, leakage, cost, benchmark, and calibration gates pass.</p>
-            </div>
-            <div>
-              <div className="font-semibold text-[var(--text)]">3. Critic Review</div>
+              <div className="font-semibold text-[var(--text)]">2. Critic Review</div>
               <p className="mt-1">A 9-check critic layer plays devil&apos;s advocate: conviction grade, rule-consensus strength, risk/reward, regime alignment, portfolio concentration, VIX environment, caution flags, rolling expectancy, and family edge. All checks must pass.</p>
             </div>
             <div>
-              <div className="font-semibold text-[var(--text)]">4. Position Management</div>
+              <div className="font-semibold text-[var(--text)]">3. Position Management</div>
               <p className="mt-1">Approved trades get ATR-aware stops, tier-adjusted sizing, and nightly mark-to-market updates. Stops trail in stages: breakeven from +1.25R, wider profit protection at +1.5R, and tighter lock-in at +2R. Max drawdown circuit breaker halts entries at -15%.</p>
             </div>
           </div>
@@ -160,7 +154,6 @@ export default function PaperTradePage() {
         <PaperTradePerformanceAttribution summary={summary} />
       )}
 
-      <PaperTradeMLCalibration trades={trades} />
 
       <PaperTradeFilters
         statusFilter={statusFilter}

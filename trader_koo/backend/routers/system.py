@@ -359,7 +359,7 @@ def vix_pattern_markers() -> dict[str, Any]:
 def polymarket_data(limit: int = 15) -> dict[str, Any]:
     """Public endpoint: curated finance-relevant Polymarket events."""
     try:
-        from trader_koo.ml.external_data import fetch_polymarket_events, polymarket_fetch_status
+        from trader_koo.polymarket import fetch_polymarket_events, polymarket_fetch_status
 
         events = fetch_polymarket_events(limit=limit)
         source = polymarket_fetch_status()
@@ -695,30 +695,9 @@ def methodology_stats() -> dict[str, Any]:
             ).fetchone()
             patterns_today = int(pt_row["n"]) if pt_row else 0
 
-        from trader_koo.ml.features import FEATURE_COLUMNS
-        from trader_koo.ml.validation_registry import MIN_AVG_AUC
         from trader_koo.paper_trades import PAPER_TRADE_ENABLED, _build_config
 
-        ml_features = len(FEATURE_COLUMNS)
-        ml_auc: float | None = None
-        ml_fold_count: int | None = None
-        if table_exists(conn, "ml_validation_runs"):
-            validation_row = conn.execute(
-                "SELECT avg_auc, fold_count FROM ml_validation_runs ORDER BY created_ts DESC, id DESC LIMIT 1"
-            ).fetchone()
-            if validation_row:
-                ml_auc = (
-                    float(validation_row["avg_auc"])
-                    if validation_row["avg_auc"] is not None
-                    else None
-                )
-                ml_fold_count = (
-                    int(validation_row["fold_count"])
-                    if validation_row["fold_count"] is not None
-                    else None
-                )
-        ml_config = _build_config()
-        campaign_id = ml_config.campaign_id
+        campaign_id = _build_config().campaign_id
 
         # Paper trade stats. Keep the inactive current campaign separate from
         # the frozen legacy ledger so historical results cannot look live.
@@ -728,7 +707,6 @@ def methodology_stats() -> dict[str, Any]:
         legacy_total = 0
         legacy_win_rate: float | None = None
         campaign_status: str | None = None
-        ml_predictions_closed = 0
         if table_exists(conn, "paper_trades"):
             trade_columns = {
                 str(row[1]) for row in conn.execute("PRAGMA table_info(paper_trades)").fetchall()
@@ -736,12 +714,6 @@ def methodology_stats() -> dict[str, Any]:
             has_campaign_id = "campaign_id" in trade_columns
             campaign_filter = "campaign_id=? AND " if has_campaign_id else "0 AND "
             campaign_params: tuple[str, ...] = (campaign_id,) if has_campaign_id else ()
-            if "ml_predicted_win_prob" in trade_columns:
-                prediction_row = conn.execute(
-                    f"SELECT COUNT(*) AS n FROM paper_trades WHERE {campaign_filter}status != 'open' AND ml_predicted_win_prob IS NOT NULL",
-                    campaign_params,
-                ).fetchone()
-                ml_predictions_closed = int(prediction_row["n"]) if prediction_row else 0
             pt_total = conn.execute(
                 f"SELECT COUNT(*) AS n FROM paper_trades WHERE {campaign_filter}status != 'open'",
                 campaign_params,
@@ -781,12 +753,6 @@ def methodology_stats() -> dict[str, Any]:
             "ok": True,
             "tickers_tracked": tickers_tracked,
             "patterns_detected_today": patterns_today,
-            "ml_features": ml_features,
-            "ml_auc": ml_auc,
-            "ml_fold_count": ml_fold_count,
-            "ml_min_auc": MIN_AVG_AUC,
-            "ml_enabled": ml_config.ml_enabled,
-            "ml_predictions_closed": ml_predictions_closed,
             "paper_trades_total": paper_total,
             "paper_trades_open": paper_open,
             "win_rate": win_rate,

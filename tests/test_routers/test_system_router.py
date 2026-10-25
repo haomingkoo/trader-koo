@@ -89,8 +89,6 @@ class TestMethodologyStatsEndpoint:
         assert data["paper_trades_total"] == 0
         assert "legacy_paper_trades_total" in data
         assert data["paper_campaign_write_state"] in {"enabled", "paused"}
-        assert data["ml_auc"] is None
-        assert data["ml_enabled"] is False
 
 
 class TestVixPatternMarkersEndpoint:

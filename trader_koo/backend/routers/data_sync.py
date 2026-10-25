@@ -1,9 +1,8 @@
-"""Data sync endpoints: export tables and upload model files.
+"""Data sync endpoints: export tables.
 
 Provides admin-only endpoints for:
-- Exporting SQLite tables as CSV (for local ML training)
+- Exporting SQLite tables as CSV
 - Downloading a full SQLite dump of selected tables
-- Uploading trained model files to the persistent volume
 
 All endpoints require X-API-Key authentication via the standard admin middleware.
 """
@@ -13,14 +12,12 @@ import logging
 import os
 import sqlite3
 import tempfile
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
-from trader_koo.backend.utils import resolve_child_filename
 
 router = APIRouter()
 LOG = logging.getLogger("trader_koo.routers.data_sync")
@@ -34,21 +31,6 @@ EXPORTABLE_TABLES = {
     "options_iv",
     "fundamentals",
 }
-
-MODEL_DIR = Path(os.getenv("TRADER_KOO_MODEL_DIR", "/data/models"))
-LOCAL_MODEL_DIR = Path(__file__).resolve().parents[3] / "data" / "models"
-
-# 50 MB upload limit for model files
-MAX_MODEL_SIZE = 50 * 1024 * 1024
-
-
-def _model_dir() -> Path:
-    """Return writable model directory (Railway or local fallback)."""
-    if MODEL_DIR.exists():
-        return MODEL_DIR
-    LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    return LOCAL_MODEL_DIR
-
 
 # ---------------------------------------------------------------------------
 # Export: CSV
@@ -239,74 +221,3 @@ def export_info(request: Request) -> dict[str, Any]:
         return {"tables": info, "db_size_bytes": DB_PATH.stat().st_size if DB_PATH.exists() else 0}
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Upload: model files
-# ---------------------------------------------------------------------------
-
-@router.post("/api/admin/upload/model")
-async def upload_model(
-    request: Request,
-    file: UploadFile = File(...),
-    filename: str = Query(
-        default="",
-        description="Override filename (default: use uploaded name)",
-    ),
-) -> dict[str, Any]:
-    """Upload a trained model file to the persistent volume.
-
-    Accepted file extensions: .txt (LightGBM), .json (metadata).
-    Files are saved to /data/models/ on Railway.
-    """
-    allowed_extensions = {".txt", ".json", ".pkl", ".joblib"}
-    original_name = file.filename or "model.txt"
-    target_name = filename.strip() or original_name
-    dest_dir = _model_dir()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        safe_name, dest_path = resolve_child_filename(dest_dir, target_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    ext = Path(safe_name).suffix.lower()
-    if ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File extension '{ext}' not allowed. Accepted: {sorted(allowed_extensions)}",
-        )
-
-    content = await file.read()
-    if len(content) > MAX_MODEL_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large ({len(content)} bytes). Max: {MAX_MODEL_SIZE} bytes",
-        )
-
-    dest_path.write_bytes(content)
-    LOG.info("Model uploaded: %s (%d bytes)", dest_path, len(content))
-
-    return {
-        "ok": True,
-        "path": str(dest_path),
-        "filename": safe_name,
-        "size_bytes": len(content),
-    }
-
-
-@router.get("/api/admin/models/list")
-def list_models(request: Request) -> dict[str, Any]:
-    """List all model files on the persistent volume."""
-    dest_dir = _model_dir()
-    if not dest_dir.exists():
-        return {"models": [], "model_dir": str(dest_dir)}
-
-    files = []
-    for p in sorted(dest_dir.iterdir()):
-        if p.is_file():
-            files.append({
-                "name": p.name,
-                "size_bytes": p.stat().st_size,
-                "modified": p.stat().st_mtime,
-            })
-    return {"models": files, "model_dir": str(dest_dir)}

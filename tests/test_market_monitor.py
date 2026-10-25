@@ -91,7 +91,7 @@ class TestSchema:
 # ---------------------------------------------------------------------------
 
 class TestSnapshotPolymarket:
-    @patch("trader_koo.ml.external_data.fetch_polymarket_events")
+    @patch("trader_koo.polymarket.fetch_polymarket_events")
     def test_snapshot_saves_active_markets(
         self, mock_fetch: MagicMock, db_path: Path,
     ) -> None:
@@ -124,7 +124,7 @@ class TestSnapshotPolymarket:
         assert row["event_slug"] == "test-event"
         assert row["probability"] == 65.0
 
-    @patch("trader_koo.ml.external_data.fetch_polymarket_events")
+    @patch("trader_koo.polymarket.fetch_polymarket_events")
     def test_snapshot_skips_inactive_markets(
         self, mock_fetch: MagicMock, db_path: Path,
     ) -> None:
@@ -147,14 +147,14 @@ class TestSnapshotPolymarket:
         count = snapshot_polymarket(db_path)
         assert count == 0
 
-    @patch("trader_koo.ml.external_data.fetch_polymarket_events")
+    @patch("trader_koo.polymarket.fetch_polymarket_events")
     def test_snapshot_returns_zero_on_empty(
         self, mock_fetch: MagicMock, db_path: Path,
     ) -> None:
         mock_fetch.return_value = []
         assert snapshot_polymarket(db_path) == 0
 
-    @patch("trader_koo.ml.external_data.fetch_polymarket_events")
+    @patch("trader_koo.polymarket.fetch_polymarket_events")
     def test_snapshot_handles_fetch_error(
         self, mock_fetch: MagicMock, db_path: Path,
     ) -> None:

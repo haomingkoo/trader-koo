@@ -117,7 +117,7 @@ def test_app(temp_db_path, monkeypatch):
             patch("trader_koo.backend.routers.admin.pipeline.DB_PATH", temp_db_path),
         patch("trader_koo.backend.routers.admin.pipeline.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.admin.email_admin.DB_PATH", temp_db_path),
-        patch("trader_koo.backend.routers.admin.ml.get_conn", _fake_get_conn),
+        patch("trader_koo.backend.routers.admin.paper_trades.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.admin.system.DB_PATH", temp_db_path),
         patch("trader_koo.backend.routers.admin.system.get_conn", _fake_get_conn),
     ]

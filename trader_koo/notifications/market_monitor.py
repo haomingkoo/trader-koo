@@ -86,7 +86,7 @@ def snapshot_polymarket(db_path: Path) -> int:
     For each active sub-market within each event, stores the current
     YES probability and volume.  Returns the number of snapshots saved.
     """
-    from trader_koo.ml.external_data import fetch_polymarket_events
+    from trader_koo.polymarket import fetch_polymarket_events
 
     try:
         # Archival must observe the provider again. Re-stamping the one-hour

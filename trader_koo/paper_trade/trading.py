@@ -1318,40 +1318,8 @@ def _create_paper_trades_from_report_in_transaction(
             )
             continue
 
-        # ML score — OBSERVATION MODE: score trades but never reject.
-        # The current best local model is a barrier model, so the probability
-        # means "long target-hit likelihood" rather than a generic short signal.
-        # Scores are recorded on the trade for post-hoc analysis so we
-        # can evaluate when the model improves enough to re-enable filtering.
+        # The ML scorer was removed; the trade-row columns remain, always empty.
         ml_prediction: dict[str, Any] = {}
-        if config.ml_observe or config.ml_enabled:
-            try:
-                from trader_koo.ml.scorer import score_single_ticker
-
-                ml_score = score_single_ticker(
-                    conn, ticker=ticker, as_of_date=report_date,
-                )
-                if (
-                    ml_score.get("model_available")
-                    and ml_score.get("predicted_win_prob") is not None
-                ):
-                    ml_prediction = ml_score
-                    prediction_label = ml_score.get("prediction_label") or "model_probability"
-                    LOG.info(
-                        "ML observation: %s %s %s=%.2f (threshold %.2f, NOT filtering)",
-                        direction.upper(),
-                        ticker,
-                        prediction_label,
-                        ml_score["predicted_win_prob"],
-                        config.ml_min_win_prob,
-                    )
-                else:
-                    LOG.debug(
-                        "ML scoring unavailable for %s: %s",
-                        ticker, ml_score.get("note", "no model"),
-                    )
-            except Exception as exc:
-                LOG.warning("ML scoring failed (allowing trade): %s", exc)
 
         # Capture market context at entry (VIX, regime, HMM state)
         from trader_koo.paper_trade.context import capture_market_context

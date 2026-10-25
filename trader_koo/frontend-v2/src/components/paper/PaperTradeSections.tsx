@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useMemo, useState, useCallback } from "react";
+import { useState, useCallback } from "react";
 import type {
   PaperTrade,
   PaperCampaignHealth,
@@ -1381,140 +1381,6 @@ export function PaperTradePerformanceAttribution({
   );
 }
 
-/* ── ML Calibration ── */
-interface CalibrationBucket {
-  label: string;
-  min: number;
-  max: number;
-  total: number;
-  wins: number;
-  actualWinRate: number | null;
-}
-
-const ML_BUCKETS: Array<{ label: string; min: number; max: number }> = [
-  { label: "0-40%", min: 0, max: 0.4 },
-  { label: "40-50%", min: 0.4, max: 0.5 },
-  { label: "50-60%", min: 0.5, max: 0.6 },
-  { label: "60-70%", min: 0.6, max: 0.7 },
-  { label: "70%+", min: 0.7, max: 1.01 },
-];
-
-export function PaperTradeMLCalibration({
-  trades,
-}: {
-  trades: PaperTrade[];
-}) {
-  const buckets = useMemo<CalibrationBucket[]>(() => {
-    const closedWithML = trades.filter(
-      (t) =>
-        t.status !== "open" &&
-        typeof t.ml_predicted_win_prob === "number" &&
-        t.ml_predicted_win_prob != null,
-    );
-
-    return ML_BUCKETS.map(({ label, min, max }) => {
-      const inBucket = closedWithML.filter(
-        (t) => t.ml_predicted_win_prob! >= min && t.ml_predicted_win_prob! < max,
-      );
-      const wins = inBucket.filter((t) => {
-        const pnl = t.pnl_pct ?? 0;
-        return pnl > 0;
-      }).length;
-      const total = inBucket.length;
-      return {
-        label,
-        min,
-        max,
-        total,
-        wins,
-        actualWinRate: total > 0 ? (wins / total) * 100 : null,
-      };
-    });
-  }, [trades]);
-
-  const totalScored = buckets.reduce((sum, b) => sum + b.total, 0);
-
-  if (totalScored === 0) {
-    return (
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-        <div className="text-sm font-semibold text-[var(--text)]">ML Calibration</div>
-        <div className="mt-2 text-xs text-[var(--muted)]">
-          No closed trades with ML predictions yet. Calibration data will appear once trades with
-          ml_predicted_win_prob are resolved.
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-[var(--text)]">ML Calibration</div>
-        <span className="text-xs text-[var(--muted)]">{totalScored} scored trades</span>
-      </div>
-      <p className="mt-1 text-[10px] text-[var(--muted)]">
-        Compares ML probability buckets to actual outcomes. For barrier models, this is target-hit
-        likelihood for long setups and low probability is not a short signal.
-      </p>
-      <div className="mt-3 overflow-x-auto rounded-lg border border-[var(--line)]">
-        <table className="w-full text-left text-xs">
-          <thead>
-            <tr className="border-b border-[var(--line)] text-[var(--muted)]">
-              <th className="px-3 py-1.5 font-semibold">Predicted Prob</th>
-              <th className="px-3 py-1.5 font-semibold text-right">Trades</th>
-              <th className="px-3 py-1.5 font-semibold text-right">Wins</th>
-              <th className="px-3 py-1.5 font-semibold text-right">Actual Win Rate</th>
-              <th className="px-3 py-1.5 font-semibold text-right">Calibration</th>
-            </tr>
-          </thead>
-          <tbody>
-            {buckets.map((bucket) => {
-              const midpoint = ((bucket.min + Math.min(bucket.max, 1)) / 2) * 100;
-              const diff =
-                bucket.actualWinRate != null ? bucket.actualWinRate - midpoint : null;
-              const calibrationColor =
-                diff == null
-                  ? ""
-                  : Math.abs(diff) <= 10
-                    ? "text-[var(--green)]"
-                    : Math.abs(diff) <= 20
-                      ? "text-[var(--amber)]"
-                      : "text-[var(--red)]";
-
-              return (
-                <tr
-                  key={bucket.label}
-                  className="border-b border-[var(--line)]/60 last:border-b-0"
-                >
-                  <td className="px-3 py-1.5 font-medium text-[var(--text)]">
-                    {bucket.label}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-[var(--text)]">
-                    {bucket.total}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-[var(--text)]">
-                    {bucket.wins}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-[var(--text)]">
-                    {bucket.actualWinRate != null
-                      ? `${bucket.actualWinRate.toFixed(1)}%`
-                      : "\u2014"}
-                  </td>
-                  <td className={`px-3 py-1.5 text-right font-medium ${calibrationColor}`}>
-                    {diff != null
-                      ? `${diff > 0 ? "+" : ""}${diff.toFixed(1)}pp`
-                      : "\u2014"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 /* ── CSV Export ── */
 const CSV_COLUMNS = [
   "ticker",
@@ -1529,7 +1395,6 @@ const CSV_COLUMNS = [
   "exit_reason",
   "setup_family",
   "setup_tier",
-  "ml_predicted_win_prob",
   "entry_reason",
   "entry_evidence",
   "entry_risks",
