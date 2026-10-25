@@ -7,10 +7,10 @@ from typing import Any
 from trader_koo.email_chart_preview import build_chart_preview_url, chart_preview_enabled
 
 EMAIL_CATALYST_DAY_LIMIT = 2
-EMAIL_CATALYST_ROWS_PER_SESSION = 1
-EMAIL_SETUP_ROWS_PER_BUCKET = 1
-EMAIL_SETUP_OBS_MAX_CHARS = 72
-EMAIL_SETUP_ACTION_MAX_CHARS = 64
+EMAIL_CATALYST_ROWS_PER_SESSION = 2
+EMAIL_SETUP_ROWS_PER_BUCKET = 3
+EMAIL_SETUP_OBS_MAX_CHARS = 160
+EMAIL_SETUP_ACTION_MAX_CHARS = 120
 EMAIL_PREVIEW_CHART_LIMIT = 2
 
 
@@ -191,6 +191,20 @@ def build_report_email_bodies(
         for item in key_changes[:3]
     ) or "<li style=\"margin:0;\">No material change summary was generated for this run.</li>"
 
+    def _mover_note(row: dict[str, Any], near_key: str) -> str:
+        if near_key.endswith("high"):
+            if row.get(near_key):
+                return "near 52W high"
+            dist, where = row.get("pct_from_high"), "below 52W high"
+        else:
+            if row.get(near_key):
+                return "near 52W low"
+            dist, where = row.get("pct_from_low"), "above 52W low"
+        try:
+            return f"{float(dist):.1f}% {where}"
+        except (TypeError, ValueError):
+            return ""
+
     def _mover_rows(rows: list[dict[str, Any]], near_key: str) -> str:
         out = []
         for row in rows[:5]:
@@ -199,7 +213,7 @@ def build_report_email_bodies(
                 "<tr>"
                 f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;font-weight:700;color:#0f172a;\">{_esc(row.get('ticker'))}</td>"
                 f"<td style=\"padding:8px 0;border-bottom:1px solid #eef2f7;text-align:right;color:{move_color};font-weight:700;\">{_esc(_fmt_signed_pct(row.get('pct_change')))}</td>"
-                f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:#6b7280;\">{_esc('near 52W ' + ('high' if near_key.endswith('high') else 'low') if row.get(near_key) else '-')}</td>"
+                f"<td style=\"padding:8px 0 8px 12px;border-bottom:1px solid #eef2f7;color:#6b7280;\">{html.escape(_mover_note(row, near_key))}</td>"
                 "</tr>"
             )
         if not out:
@@ -696,11 +710,9 @@ def _compact_copy(value: Any, *, max_sentences: int = 2, max_chars: int = 140) -
             text += "."
     if len(text) <= max_chars:
         return text
-    clipped = text[:max_chars].rstrip()
-    cut = clipped.rfind(" ")
-    if cut > 80:
-        clipped = clipped[:cut]
-    return clipped.rstrip(".,;: ")
+    # Look one char past the limit so a word ending exactly at max_chars is kept whole.
+    clipped = text[: max_chars + 1].rsplit(" ", 1)[0] if " " in text[: max_chars + 1] else text[:max_chars]
+    return clipped.rstrip(" .,;:") + "…"
 
 
 def _setup_family_label(row: dict[str, Any]) -> str:
