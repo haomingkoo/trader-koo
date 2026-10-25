@@ -4,8 +4,8 @@ Comprehensive API rate limiting implementation for trader_koo platform.
 
 ## Features
 
-- **Per-IP rate limiting** for public endpoints (100 requests/minute)
-- **Per-user rate limiting** for authenticated endpoints (1000 requests/hour)
+- **Per-IP rate limiting** for public endpoints
+- **Per-user rate limiting** for authenticated endpoints
 - **Sliding window algorithm** for accurate rate calculation
 - **HTTP 429 responses** with Retry-After headers
 - **Admin override capabilities** to temporarily increase limits
@@ -15,7 +15,7 @@ Comprehensive API rate limiting implementation for trader_koo platform.
 
 ## Requirements Implemented
 
-- **Requirement 17.1**: Per-IP limits (100/min) and per-user limits (1000/hour)
+- **Requirement 17.1**: Per-IP and per-user limits (defaults in `integration.py`)
 - **Requirement 17.2**: HTTP 429 with Retry-After header when exceeded
 - **Requirement 17.3**: Sliding window algorithm for accurate rate calculation
 - **Requirement 17.4**: Sliding window implementation
@@ -51,24 +51,24 @@ Request → Middleware → RateLimiter.check_rate_limit()
 
 ## Configuration
 
-Set environment variables to customize rate limits:
+Set environment variables to customize rate limits. Defaults live in `integration.py`:
 
 ```bash
 # Per-IP limits for public endpoints
-RATE_LIMIT_PUBLIC_PER_MINUTE=100
+RATE_LIMIT_PUBLIC_PER_MINUTE=<value>
 
 # Per-user limits for authenticated endpoints
-RATE_LIMIT_AUTH_PER_HOUR=1000
+RATE_LIMIT_AUTH_PER_HOUR=<value>
 
 # Export endpoint limits
-RATE_LIMIT_EXPORT_PER_HOUR=10
+RATE_LIMIT_EXPORT_PER_HOUR=<value>
 ```
 
 ## Usage
 
 ### Basic Setup
 
-The rate limiting is automatically initialized in `main.py`:
+The rate limiting is automatically initialized in `trader_koo/backend/main.py`:
 
 ```python
 from trader_koo.ratelimit.integration import initialize_rate_limiting
@@ -252,7 +252,6 @@ config = RateLimitConfig(
 
 ## References
 
-- Design Document: `.kiro/specs/enterprise-platform-upgrade/design.md`
-- Requirements: `.kiro/specs/enterprise-platform-upgrade/requirements.md` (Requirement 17)
+- Requirement numbers above (17.1 to 17.8) are cited in `trader_koo/ratelimit/service.py`
 - FastAPI Middleware: https://fastapi.tiangolo.com/advanced/middleware/
 - Rate Limiting Algorithms: https://en.wikipedia.org/wiki/Rate_limiting

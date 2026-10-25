@@ -3,16 +3,8 @@
 Trader Koo is a research-only FastAPI, React, and SQLite application deployed
 as one Railway service. Paper trades never send broker orders.
 
-## Source layout
-
-- `trader_koo/backend/`: FastAPI app, routers, and scheduler modules.
-- `trader_koo/frontend-v2/`: the served React/Vite frontend.
-- `trader_koo/report/`: daily report generation and scoring.
-- `trader_koo/paper_trade/`: paper lifecycle, replay, and campaign internals.
-- `trader_koo/paper_trades.py`: stable paper-trading facade for callers.
-- `trader_koo/research/`: fail-closed research runners and evidence artifacts.
-- `trader_koo/scripts/`: operator and scheduled command entry points.
-- `tests/`: backend, contract, and research tests.
+Callers use `trader_koo/paper_trades.py` (the stable facade) rather than
+importing `trader_koo/paper_trade/` internals.
 
 Read `ARCHITECTURE.md`, `RESEARCH_STATUS.md`, and `DEPLOYMENT.md` before making
 architecture, performance, or release claims.
@@ -31,6 +23,11 @@ architecture, performance, or release claims.
   rollback window. Validate them on a copied production database.
 - Campaign activation is a separate authenticated human action. Code changes,
   CI, and deployment must not activate or reset it.
+- Changing `_PAPER_DECISION_VERSION` or adding a column to a `paper_*` or
+  `report_*` table is a contract change (`ops/PAPER_SCHEMA_V5_CONTRACT.md`).
+  `PAPER_TRADE_SCHEMA_VERSION` in `schema.py` is a floor, not production state.
+  `ensure_paper_trade_schema` runs no migration on a v5 database. A bump
+  needs its own runbook.
 - Keep secrets out of source, logs, fixtures, and command output.
 
 ## Verification

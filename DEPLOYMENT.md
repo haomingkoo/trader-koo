@@ -39,16 +39,13 @@ following before calling a release complete:
 - production browser journeys passed; and
 - the paper campaign state matches the pre-deploy state.
 
-The detailed state model, rollback boundary, and database compatibility matrix
-are in `ops/RELEASE_STATES.md`.
-
-## Local verification
-
-```bash
-make ci
-npm run lint --prefix trader_koo/frontend-v2
-npm run build --prefix trader_koo/frontend-v2
-```
+The `production-dark` environment requires reviewer approval, so a merge stays
+undeployed until a dark-deploy run is approved. Unapproved runs end cancelled.
+Check `gh run list --workflow dark-deploy.yml` and compare the `/api/release`
+git_sha with `origin/main`.
 
 Run deployment verification only against a release you are authorized to
 inspect. Never place the admin API key in shell history, logs, or command output.
+
+The detailed state model, rollback boundary, and database compatibility matrix
+are in `ops/RELEASE_STATES.md`.

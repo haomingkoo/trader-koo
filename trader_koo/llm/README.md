@@ -44,13 +44,6 @@ HTML/script sanitization and length enforcement:
 - **sanitize_html()**: Sanitizes and escapes for HTML rendering
 - **sanitize_llm_output()**: Sanitizes entire output dictionary
 
-### 4. Fallback (`fallback.py`)
-
-Deterministic fallback logic for LLM failures:
-
-- **generate_template_narrative()**: Context-based narrative templates
-- **generate_rule_based_pattern_explanation()**: Pattern explanation templates
-
 ## Usage Examples
 
 ### Basic Validation
@@ -211,7 +204,7 @@ Property tests verify universal properties across all inputs:
 - **Requirement 2.3**: Truncation with ellipsis (sanitizer.py)
 - **Requirement 2.4**: HTML/script stripping (sanitizer.py)
 - **Requirement 2.5**: Special character escaping (sanitizer.py)
-- **Requirement 2.6**: Fallback to deterministic output (validator.py, fallback.py)
+- **Requirement 2.6**: Fallback to deterministic output (validator.py)
 - **Requirement 2.7**: Validation failure logging (validator.py)
 - **Requirements 7.1-7.7**: Schema enforcement and validation (schemas.py, validator.py)
 
