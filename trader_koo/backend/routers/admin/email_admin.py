@@ -11,16 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.services.report_loader import latest_daily_report_json
-from trader_koo.email_subscribers import (
-    email_max_recipients,
-    parse_recipients,
-)
-from trader_koo.llm_health import (
-    llm_alert_cooldown_min,
-    llm_alert_enabled,
-    llm_degraded_threshold,
-    llm_health_summary,
-)
+from trader_koo.email_subscribers import email_max_recipients
 from trader_koo.report_email import (
     build_report_email_bodies,
     build_report_email_subject,
@@ -59,21 +50,6 @@ def smtp_health() -> dict[str, Any]:
     auto_email = str(
         os.getenv("TRADER_KOO_AUTO_EMAIL", "")
     ).strip().lower() in {"1", "true", "yes"}
-    llm_alert_to = (
-        str(os.getenv("TRADER_KOO_LLM_FAIL_ALERT_TO", "") or "").strip()
-        or str(os.getenv("TRADER_KOO_LLM_ALERT_TO", "") or "").strip()
-    )
-    llm_alert_recipient_count = (
-        len(parse_recipients(llm_alert_to)) if llm_alert_to else 0
-    )
-    llm_health: dict[str, Any] = {}
-    try:
-        llm_health = llm_health_summary(DB_PATH, recent_limit=10)
-    except Exception as exc:
-        LOG.warning(
-            "Failed to load LLM health summary for smtp-health: %s", exc
-        )
-        llm_health = {"error": str(exc)}
     missing: list[str] = []
     if transport == "resend":
         if not resend["api_key"]:
@@ -114,14 +90,6 @@ def smtp_health() -> dict[str, Any]:
             "from_email": resend["from_email"],
             "default_to": resend["default_to"],
             "timeout_sec": resend["timeout_sec"],
-        },
-        "llm_alert": {
-            "enabled": llm_alert_enabled(),
-            "cooldown_min": llm_alert_cooldown_min(),
-            "degraded_threshold": llm_degraded_threshold(),
-            "has_override_recipients": bool(llm_alert_to),
-            "override_recipient_count": llm_alert_recipient_count,
-            "health": llm_health,
         },
     }
 

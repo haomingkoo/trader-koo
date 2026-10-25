@@ -105,7 +105,6 @@ The admin router is split for maintainability. All require `X-API-Key` authentic
 | `data.py` | DB inspection, cache management, data quality checks |
 | `system.py` | Logs, audit trail, health events, configuration |
 | `email_admin.py` | SMTP health, test sends |
-| `agents.py` | Agent observability traces |
 | `alert_quality.py` | Alert quality report |
 | `backups.py` | Create, list, and inspect backups |
 | `crypto.py` | Crypto backfill and data status |
@@ -216,7 +215,7 @@ Each run writes to `ingest_runs` (overall status) and `ingest_ticker_status` (pe
 
 | Table | Purpose |
 |-------|---------|
-| `setup_call_evaluations` | LLM evaluation scores for setup call quality |
+| `setup_call_evaluations` | Evaluation scores for setup call quality |
 
 ### Email system
 
@@ -229,9 +228,6 @@ Each run writes to `ingest_runs` (overall status) and `ingest_ticker_status` (pe
 | Table | Purpose |
 |-------|---------|
 | `audit_logs` | Admin action audit trail with IP tracking |
-| `llm_health_events` | LLM provider health check events |
-| `llm_health_state` | Current LLM provider status |
-| `llm_token_usage` | Token consumption tracking per LLM call |
 | `external_data_cache` | Cached FRED/macro data to avoid redundant API calls |
 | `crypto_bars` | Binance real-time kline persistence (multi-interval) |
 
@@ -582,7 +578,6 @@ The v2 frontend lives in `trader_koo/frontend-v2/`. It is built at deploy time a
 | `OpportunitiesPage` | `/opportunities` | Valuation screens + filters |
 | `ReportPage` | `/report` | Daily market report viewer |
 | `ExperimentResultsPage` | `/experiments` | Reproducible experiment artifacts and evidence gates |
-| `AgentObservabilityPage` | `/agent-observability` | Redacted LLM traces, validation, and fallback evidence |
 | `AlertsPage` | `/alerts` | Price, volatility, and crypto alert history |
 | `EarningsPage` | `/earnings` | Earnings calendar + estimates |
 | `VixPage` | `/vix` | VIX analysis + term structure |

@@ -87,12 +87,6 @@ export const appRoutes: AppRouteDefinition[] = [
     load: () => import("../pages/ExperimentResultsPage"),
   },
   {
-    path: "agent-observability",
-    loaderTitle: "Loading agent traces",
-    loaderDetail: "Checking redacted LLM spans, validation, fallback, and contribution records.",
-    load: () => import("../pages/AgentObservabilityPage"),
-  },
-  {
     path: "alerts",
     navPath: "/alerts",
     label: "Alerts",

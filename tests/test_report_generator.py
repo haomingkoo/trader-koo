@@ -207,7 +207,6 @@ def test_unlinked_report_generation_is_read_only_for_calls_and_trades(
             "regime_context": {},
         },
     )
-    monkeypatch.setattr(generator, "llm_enabled", lambda: False)
     monkeypatch.setattr(generator, "build_earnings_calendar_payload", lambda *args, **kwargs: {})
     monkeypatch.setattr(generator, "build_tonight_key_changes", lambda *args, **kwargs: [])
     monkeypatch.setattr(generator, "fetch_yolo_delta", lambda *args, **kwargs: {})
@@ -228,13 +227,6 @@ def test_unlinked_report_generation_is_read_only_for_calls_and_trades(
     )
     assert payload["paper_trades"]["admission_state"] == "requires_report_run_publication"
     verify.close()
-
-
-_DEGRADED_LLM_STATUS = {
-    "ready": False,
-    "runtime_disabled": True,
-    "health": {"degraded": True, "consecutive_failures": 3},
-}
 
 
 def _fresh_report_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, with_yolo: bool) -> dict:
@@ -281,8 +273,6 @@ def _fresh_report_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, wit
         "setup_quality_lookup": {"AAA": dict(setup)}, "report_decisions": [],
         "scanned_universe": [], "regime_context": {},
     })
-    monkeypatch.setattr(generator, "llm_enabled", lambda: True)
-    monkeypatch.setattr(generator, "llm_status", lambda: dict(_DEGRADED_LLM_STATUS))
     monkeypatch.setattr(generator, "build_earnings_calendar_payload", lambda *a, **k: {})
     monkeypatch.setattr(generator, "build_tonight_key_changes", lambda *a, **k: [])
     monkeypatch.setattr(generator, "fetch_yolo_delta", lambda *a, **k: {})
@@ -290,34 +280,7 @@ def _fresh_report_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, wit
     return {"db_path": db_path, "run_log": tmp_path / "cron.log", "tail_lines": 0, "report_run_id": None}
 
 
-def test_llm_health_alone_does_not_block_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from trader_koo.report.runs import _assert_publishable_report
-
-    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
-
-    payload = fetch_report_payload(**kwargs)
-
-    assert payload["warnings"] == []
-    assert payload["generation_warnings"] == []
-    assert payload["ok"] is True
-    _assert_publishable_report(payload)
-
-
-def test_llm_health_codes_stay_visible_in_llm_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
-
-    payload = fetch_report_payload(**kwargs)
-
-    assert payload["meta"]["llm"]["health_codes"] == [
-        "llm_not_ready", "llm_runtime_cooldown", "llm_degraded",
-    ]
-
-
-def test_data_warning_still_blocks_publication_when_llm_is_degraded(
+def test_data_warning_still_blocks_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from trader_koo.report.runs import _assert_publishable_report

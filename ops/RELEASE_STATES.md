@@ -11,7 +11,7 @@ Trader Koo deliberately separates these states:
    database backup passed copy-only migrations. The first Campaign v2 release is
    inactive; later releases preserve the campaign's pre-deploy lifecycle state.
 5. **Production verified**: exact SHA, API contracts, auth behavior, and the real
-   Report, Chart, Paper Trades, Agent Observability, and Experiment Results pages
+   Report, Chart, Paper Trades, and Experiment Results pages
    passed against the public service.
 6. **Campaign activated**: a human separately used the authenticated, audited
    campaign transition. CI/CD never calls activation or reset endpoints.
@@ -82,7 +82,7 @@ destructive parent-table rebuild on the live volume.
 3. Land schema transaction ownership, expand compatibility, copied-production
    upgrade checks, and previous-image rollback compatibility.
 4. Land exact campaign-state verification, scoped CORS preflight behavior, and
-   the Report, Chart, Paper Trades, Agent Observability, and Experiment SPA routes.
+   the Report, Chart, Paper Trades, and Experiment SPA routes.
 5. Refresh research evidence in a separate artifact-only commit bound to the
    declared source and dependency-manifest closure. This is source-level
    provenance, not a claim that two unresolved numerical environments are identical.

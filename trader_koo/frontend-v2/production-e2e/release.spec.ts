@@ -38,8 +38,4 @@ test("exact inactive release works through production pages", async ({ page, req
   await expect(page.getByText(/Frozen v1 figures below are historical and unreconciled/)).toBeVisible();
   await expect(page.getByRole("link", { name: "Agent Traces" })).toHaveCount(0);
   await expect(page.getByText("Market closed")).toHaveCount(0);
-  await page.goto("/agent-observability");
-  await expect(page.getByTestId("agent-observability-page")).toBeVisible();
-  await page.getByRole("button", { name: "Load" }).click();
-  await expect(page.getByTestId("agent-observability-page")).toContainText("Recorded traces");
 });

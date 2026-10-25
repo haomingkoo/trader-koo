@@ -34,11 +34,6 @@ class TestTickersEndpoint:
 
 
 class TestDashboardEndpoint:
-    @patch("trader_koo.backend.services.chart_builder.llm_status", return_value={})
-    @patch(
-        "trader_koo.backend.services.chart_builder.maybe_rewrite_setup_copy",
-        return_value=None,
-    )
     @patch(
         "trader_koo.backend.services.chart_builder.get_ticker_earnings_markers",
         return_value=[],
@@ -47,16 +42,11 @@ class TestDashboardEndpoint:
         "trader_koo.backend.services.chart_builder.latest_report_setup_for_ticker",
         return_value=None,
     )
-    def test_dashboard_spy_returns_200(self, mock_setup, mock_earn, mock_llm_rw, mock_llm_st, test_app):
+    def test_dashboard_spy_returns_200(self, mock_setup, mock_earn, test_app):
         response = test_app.get("/api/dashboard/SPY?months=1")
 
         assert response.status_code == 200
 
-    @patch("trader_koo.backend.services.chart_builder.llm_status", return_value={})
-    @patch(
-        "trader_koo.backend.services.chart_builder.maybe_rewrite_setup_copy",
-        return_value=None,
-    )
     @patch(
         "trader_koo.backend.services.chart_builder.get_ticker_earnings_markers",
         return_value=[],
@@ -65,7 +55,7 @@ class TestDashboardEndpoint:
         "trader_koo.backend.services.chart_builder.latest_report_setup_for_ticker",
         return_value=None,
     )
-    def test_dashboard_spy_has_expected_keys(self, mock_setup, mock_earn, mock_llm_rw, mock_llm_st, test_app):
+    def test_dashboard_spy_has_expected_keys(self, mock_setup, mock_earn, test_app):
         response = test_app.get("/api/dashboard/SPY?months=1")
         data = response.json()
 
@@ -73,11 +63,6 @@ class TestDashboardEndpoint:
         assert expected_keys.issubset(set(data.keys()))
         assert data["ticker"] == "SPY"
 
-    @patch("trader_koo.backend.services.chart_builder.llm_status", return_value={})
-    @patch(
-        "trader_koo.backend.services.chart_builder.maybe_rewrite_setup_copy",
-        return_value=None,
-    )
     @patch(
         "trader_koo.backend.services.chart_builder.get_ticker_earnings_markers",
         return_value=[],
@@ -86,7 +71,7 @@ class TestDashboardEndpoint:
         "trader_koo.backend.services.chart_builder.latest_report_setup_for_ticker",
         return_value=None,
     )
-    def test_dashboard_spy_chart_is_list(self, mock_setup, mock_earn, mock_llm_rw, mock_llm_st, test_app):
+    def test_dashboard_spy_chart_is_list(self, mock_setup, mock_earn, test_app):
         response = test_app.get("/api/dashboard/SPY?months=1")
         data = response.json()
 

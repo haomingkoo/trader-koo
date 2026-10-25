@@ -942,7 +942,7 @@ export default function MethodologyPage() {
           step={4}
           icon={MessageSquare}
           title="Multi-Angle Rule Review"
-          subtitle="Five deterministic rule lenses produce structured views. Optional LLM narrative rewriting is separately attributed and cannot change scores, gates, or trades."
+          subtitle="Five deterministic rule lenses produce structured views."
         />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mt-8">
           <AnalystCard

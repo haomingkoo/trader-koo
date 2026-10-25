@@ -115,7 +115,7 @@ def _age_hours(value: Any) -> float | None:
 
 def check_http(report: Report, base_url: str, api_key: str | None) -> None:
     code, payload, elapsed = _get(base_url, "/api/health")
-    ok = code == 200 and isinstance(payload, dict) and payload.get("ok") is True
+    ok = code == 200 and isinstance(payload, dict) and payload.get("total", 0) > 0
     report.add("HTTP", "health", PASS if ok else FAIL, f"HTTP {code} in {elapsed:.2f}s")
 
     for name, path, slow in (
@@ -135,15 +135,15 @@ def check_http(report: Report, base_url: str, api_key: str | None) -> None:
             report.add("HTTP", name, PASS, f"HTTP 200 in {elapsed:.2f}s")
 
     # An unauthenticated admin route must be refused; that guard is easy to lose.
-    code, _, _ = _get(base_url, "/api/admin/agent-observability")
+    code, _, _ = _get(base_url, "/api/admin/routes")
     report.add(
         "HTTP", "admin requires key",
         PASS if code in {401, 403} else FAIL,
         f"unauthenticated request got HTTP {code}",
     )
     if api_key:
-        code, payload, _ = _get(base_url, "/api/admin/agent-observability", api_key=api_key)
-        ok = code == 200 and isinstance(payload, dict) and payload.get("ok") is True
+        code, payload, _ = _get(base_url, "/api/admin/routes", api_key=api_key)
+        ok = code == 200 and isinstance(payload, dict) and payload.get("total", 0) > 0
         report.add("HTTP", "admin accepts key", PASS if ok else FAIL, f"HTTP {code}")
 
 

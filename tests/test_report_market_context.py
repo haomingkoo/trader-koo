@@ -62,46 +62,8 @@ def test_regime_context_names_price_source_only_with_usable_vix(mem_conn) -> Non
     assert payload["source"] == "price_daily:^VIX"
     assert payload["asof_date"] == (start + dt.timedelta(days=59)).isoformat()
 
-
-def test_regime_commentary_marks_deterministic_copy_as_rule() -> None:
-    with patch("trader_koo.llm_narrative.llm_enabled", return_value=False):
-        payload = _build_regime_llm_commentary({"summary": "Mixed regime."})
+def test_regime_commentary_is_rule_copy() -> None:
+    payload = _build_regime_llm_commentary({"summary": "Mixed regime."})
 
     assert payload["source"] == "rule"
-
-
-def test_regime_commentary_marks_accepted_model_copy_as_llm() -> None:
-    rewritten = {
-        "observation": "Model observation.",
-        "action": "Model action.",
-        "risk_note": "Model risk.",
-    }
-    with (
-        patch("trader_koo.llm_narrative.llm_enabled", return_value=True),
-        patch(
-            "trader_koo.llm_narrative.maybe_rewrite_setup_copy",
-            return_value=rewritten,
-        ),
-    ):
-        payload = _build_regime_llm_commentary({"summary": "Mixed regime."})
-
-    assert payload["source"] == "llm"
-    assert payload["observation"] == "Model observation."
-
-
-def test_regime_commentary_does_not_label_nonempty_baseline_fallback_as_llm() -> None:
-    baseline = {
-        "observation": "Mixed regime.",
-        "action": "No urgency.",
-        "risk_note": "context_only_signal",
-    }
-    with (
-        patch("trader_koo.llm_narrative.llm_enabled", return_value=True),
-        patch(
-            "trader_koo.llm_narrative.maybe_rewrite_setup_copy",
-            return_value=baseline,
-        ),
-    ):
-        payload = _build_regime_llm_commentary({"summary": "Mixed regime."})
-
-    assert payload["source"] == "rule"
+    assert payload["observation"] == "Mixed regime."

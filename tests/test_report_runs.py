@@ -1627,11 +1627,6 @@ def test_email_dispatch_happens_only_after_publication_and_admission(
     monkeypatch.setattr(command, "publish_report_run", publish_then_record)
     monkeypatch.setattr(command, "admit_published_report", admit_then_record)
     monkeypatch.setattr(command, "send_report_email", send_after_publish)
-    monkeypatch.setattr(
-        command,
-        "send_llm_failure_alert_email",
-        lambda *args, **kwargs: {"attempted": False, "reason": "not_needed"},
-    )
     monkeypatch.setattr(command, "_email_transport", lambda: "smtp")
     monkeypatch.setattr(command, "_smtp_cfg", lambda: {"to_email": "reader@example.com"})
     monkeypatch.setattr(command, "_resend_cfg", lambda: {})

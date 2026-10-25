@@ -23,7 +23,6 @@ Response targets:
 - Use environment variables in Railway (or equivalent secret manager) only.
 - Required rotations after any accidental exposure:
   - `TRADER_KOO_API_KEY`
-  - `GOOGLE_API_KEY`
   - `TRADER_KOO_RESEND_API_KEY`
   - SMTP app password
   - Any CI/CD or deploy tokens

@@ -8,7 +8,6 @@ from typing import Any
 
 from trader_koo.config import env_bool, env_float, env_int
 from trader_koo.debate_engine import build_setup_debate
-from trader_koo.llm_narrative import llm_enabled, llm_max_setups, maybe_rewrite_setup_copy
 from trader_koo.report.utils import (
     _clamp,
     _fmt_pct_short,
@@ -990,37 +989,6 @@ def _describe_setup(row: dict[str, Any]) -> dict[str, str]:
             f"vs MA20 {_fmt_pct_short(pct_vs_ma20)}{level_suffix}"
         ),
     }
-
-
-def _apply_llm_narrative_overrides(
-    setup_rows: list[dict[str, Any]],
-    *,
-    source: str,
-) -> None:
-    if not setup_rows:
-        return
-    if not llm_enabled():
-        for row in setup_rows:
-            if isinstance(row, dict):
-                row.setdefault("narrative_source", "rule")
-        return
-    max_rows = llm_max_setups()
-    if max_rows <= 0:
-        for row in setup_rows:
-            if isinstance(row, dict):
-                row.setdefault("narrative_source", "rule")
-        return
-    for idx, row in enumerate(setup_rows):
-        if not isinstance(row, dict):
-            continue
-        row.setdefault("narrative_source", "rule")
-        if idx >= max_rows:
-            continue
-        overrides = maybe_rewrite_setup_copy(row, source=source)
-        if not overrides:
-            continue
-        row.update(overrides)
-        row["narrative_source"] = "llm"
 
 
 def _apply_debate_payload(setup_rows: list[dict[str, Any]]) -> None:

@@ -30,9 +30,6 @@ def to_markdown(report: dict[str, Any]) -> str:
     yolo_summary = yolo.get("summary", {})
     warn = report.get("warnings", [])
     email = report.get("email", {}) if isinstance(report.get("email"), dict) else {}
-    llm_meta = ((report.get("meta") or {}).get("llm") or {}) if isinstance(report.get("meta"), dict) else {}
-    llm_health = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
-    llm_alert = report.get("llm_alert", {}) if isinstance(report.get("llm_alert"), dict) else {}
 
     lines: list[str] = []
     lines.append("# Trader Koo Daily Report")
@@ -89,32 +86,6 @@ def to_markdown(report: dict[str, Any]) -> str:
             lines.append(_md_line("error", email.get("error")))
     else:
         lines.append("- Not attempted (auto-email disabled for this run).")
-    lines.append("")
-    lines.append("## LLM Health")
-    if llm_meta:
-        lines.append(_md_line("enabled", llm_meta.get("enabled")))
-        lines.append(_md_line("ready", llm_meta.get("ready")))
-        lines.append(_md_line("runtime_disabled", llm_meta.get("runtime_disabled")))
-        lines.append(_md_line("runtime_disabled_remaining_sec", llm_meta.get("runtime_disabled_remaining_sec")))
-        if llm_health:
-            lines.append(_md_line("degraded", llm_health.get("degraded")))
-            lines.append(_md_line("consecutive_failures", llm_health.get("consecutive_failures")))
-            lines.append(_md_line("last_success_ts", llm_health.get("last_success_ts")))
-            lines.append(_md_line("last_failure_ts", llm_health.get("last_failure_ts")))
-            lines.append(_md_line("last_failure_reason", llm_health.get("last_failure_reason")))
-    else:
-        lines.append("- LLM status unavailable")
-    lines.append("")
-    lines.append("## LLM Alert")
-    if llm_alert:
-        lines.append(_md_line("attempted", llm_alert.get("attempted")))
-        lines.append(_md_line("reason", llm_alert.get("reason")))
-        lines.append(_md_line("sent_count", llm_alert.get("sent_count")))
-        lines.append(_md_line("failed_count", llm_alert.get("failed_count")))
-        if llm_alert.get("error"):
-            lines.append(_md_line("error", llm_alert.get("error")))
-    else:
-        lines.append("- no llm alert metadata")
     lines.append("")
     lines.append("## YOLO Summary")
     lines.append(_md_line("table_exists", yolo.get("table_exists")))

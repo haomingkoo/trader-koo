@@ -43,7 +43,7 @@ def test_verify_deployment_checks_exact_sha_auth_and_public_contracts(monkeypatc
         "/api/release": (200, {"ok": True, "git_sha": "a" * 40}),
         "/api/health": (200, {"ok": True}),
         "/api/status": (200, {"ok": True, "service_meta": {"version": "0.2.0"}}),
-        "/api/admin/agent-observability": (401, {"detail": "unauthorized"}),
+        "/api/admin/routes": (401, {"detail": "unauthorized"}),
         "/api/daily-report": (200, {"ok": True}),
         "/api/dashboard/SPY/quick?months=12": (200, {"ticker": "SPY"}),
         "/api/paper-trades/summary": (
@@ -56,8 +56,8 @@ def test_verify_deployment_checks_exact_sha_auth_and_public_contracts(monkeypatc
     }
 
     def fake_get(_base_url, path, *, api_key=None):
-        if path == "/api/admin/agent-observability" and api_key:
-            return 200, {"ok": True}
+        if path == "/api/admin/routes" and api_key:
+            return 200, {"total": 1}
         return responses[path]
 
     monkeypatch.setattr(verify_deployment, "_get", fake_get)
@@ -88,8 +88,8 @@ def test_verify_deployment_preserves_active_campaign_on_later_releases(monkeypat
             return 200, {"ok": True}
         if path == "/api/status":
             return 200, {"ok": True, "service_meta": {}}
-        if path == "/api/admin/agent-observability":
-            return (200, {"ok": True}) if api_key else (401, {})
+        if path == "/api/admin/routes":
+            return (200, {"total": 1}) if api_key else (401, {})
         if path == "/api/paper-trades/summary":
             return 200, {"ok": True, "campaign_health": {
                 "campaign_id": "paper-v2", "status": "active", "write_state": "enabled",
@@ -134,8 +134,8 @@ def test_verify_deployment_allows_only_absent_to_draft_bootstrap(monkeypatch) ->
             return 200, {"ok": True}
         if path == "/api/status":
             return 200, {"ok": True, "service_meta": {}}
-        if path == "/api/admin/agent-observability":
-            return (200, {"ok": True}) if api_key else (401, {})
+        if path == "/api/admin/routes":
+            return (200, {"total": 1}) if api_key else (401, {})
         if path == "/api/paper-trades/summary":
             return 200, {"ok": True, "campaign_health": {
                 "campaign_id": "paper-v2", "status": "draft", "write_state": "paused",
@@ -156,8 +156,8 @@ def test_verify_deployment_rejects_missing_or_unknown_write_state(monkeypatch) -
             return 200, {"ok": True}
         if path == "/api/status":
             return 200, {"ok": True, "service_meta": {}}
-        if path == "/api/admin/agent-observability":
-            return (200, {"ok": True}) if api_key else (401, {})
+        if path == "/api/admin/routes":
+            return (200, {"total": 1}) if api_key else (401, {})
         if path == "/api/paper-trades/summary":
             return 200, {"campaign_health": {"campaign_id": "paper-v2", "status": "draft"}}
         return 200, {"ok": True}
