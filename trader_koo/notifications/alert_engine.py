@@ -127,15 +127,19 @@ class AlertEngine:
         self,
         db_path: Path,
         report_dir: Path,
-        finnhub_api_key: str = "",
+        finnhub_api_key: str | None = None,
         proximity_pct: float = DEFAULT_PROXIMITY_PCT,
         cooldown_sec: int = DEFAULT_COOLDOWN_SEC,
     ) -> None:
         self._db_path = db_path
         self._report_dir = report_dir
+        # Only an omitted key reads the environment. An explicitly empty key
+        # stays empty, so a caller cannot be handed credentials it did not ask
+        # for by whatever happened to set the variable first.
         self._finnhub_api_key = (
             finnhub_api_key
-            or os.getenv("FINNHUB_API_KEY", "").strip()
+            if finnhub_api_key is not None
+            else os.getenv("FINNHUB_API_KEY", "").strip()
         )
         self._proximity_pct = proximity_pct
         self._cooldown_sec = cooldown_sec
