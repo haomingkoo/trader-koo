@@ -12,15 +12,12 @@ import urllib.request
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from trader_koo.email_subscribers import (
     already_sent_generated_report,
     email_max_recipients,
-    ensure_subscriber_schema,
     parse_recipients,
     record_generated_report_delivery,
-    resolve_report_recipients,
 )
 from trader_koo.llm_health import (
     llm_alert_enabled,
@@ -150,7 +147,7 @@ def send_report_email(
     db_path: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Send daily report email to resolved recipients with anti-duplication safeguards."""
+    """Send daily report email to env recipients with anti-duplication safeguards."""
     transport = _email_transport()
     smtp = _smtp_cfg()
     resend = _resend_cfg()
@@ -171,18 +168,12 @@ def send_report_email(
         default_db = Path(os.getenv("TRADER_KOO_DB_PATH", str((Path(__file__).resolve().parents[1] / "data" / "trader_koo.db"))))
         db_path = default_db.resolve()
 
-    try:
-        ensure_subscriber_schema(db_path)
-        recipient_rows = resolve_report_recipients(
-            db_path,
-            fallback_raw=fallback_recipients,
-            max_recipients=email_max_recipients(),
-        )
-    except Exception as exc:
-        LOG.warning("Subscriber resolution failed, using env fallback: %s", exc)
-        recipient_rows = [{"email": email, "source": "env", "unsubscribe_token": None} for email in parse_recipients(fallback_recipients)]
+    recipient_rows = [
+        {"email": email}
+        for email in parse_recipients(fallback_recipients)[: max(1, email_max_recipients())]
+    ]
     if not recipient_rows:
-        missing.append("TRADER_KOO_REPORT_EMAIL_TO or active subscribers")
+        missing.append("TRADER_KOO_REPORT_EMAIL_TO")
     if missing:
         raise RuntimeError(f"Missing email config for {transport}: {', '.join(missing)}")
 
@@ -206,15 +197,10 @@ def send_report_email(
                     continue
             except Exception as exc:
                 LOG.warning("Duplicate-send check failed for %s: %s", recipient, exc)
-        unsub_token = str(row.get("unsubscribe_token") or "").strip()
-        manage_url = None
-        if app_url and unsub_token:
-            manage_url = f"{app_url}/api/email/unsubscribe?token={quote(unsub_token)}"
         text_body, html_body = build_report_email_bodies(
             report,
             md_text,
             app_url=app_url,
-            manage_url=manage_url,
         )
         try:
             if transport == "resend":
@@ -286,7 +272,7 @@ def send_llm_failure_alert_email(
     *,
     db_path: Path,
 ) -> dict[str, Any]:
-    """Send degraded-LLM alert email to operator recipients (not subscribers)."""
+    """Send degraded-LLM alert email to operator recipients."""
     if not llm_alert_enabled():
         return {"attempted": False, "reason": "alerts_disabled"}
 

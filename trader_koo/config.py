@@ -412,14 +412,6 @@ class Config:
         self.admin_strict_api_key = env_bool("ADMIN_STRICT_API_KEY", True)
         self.trader_koo_api_key = env_str("TRADER_KOO_API_KEY", "", strip=False)
 
-        # Email token expiration (7 days = 168 hours)
-        self.email_token_expiry_hours = env_int(
-            "EMAIL_TOKEN_EXPIRY_HOURS",
-            168,
-            min_value=1,
-            max_value=8760  # 1 year max
-        )
-
         # CORS configuration - restrictive defaults
         self.cors_allowed_origins = self._parse_cors_origins(
             env_str("TRADER_KOO_CORS_ORIGINS", "")
