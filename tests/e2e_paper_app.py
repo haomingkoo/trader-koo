@@ -226,4 +226,3 @@ def methodology_stats_fixture():
         "legacy_paper_trades_total": 42,
         "legacy_win_rate": 0.5238,
     }
-
