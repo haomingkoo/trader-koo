@@ -423,7 +423,7 @@ const PIPELINE_STEPS: PipelineStep[] = [
     icon: Eye,
     label: "Pattern Scan",
     description:
-      "5-layer detection: rule-based geometry, candlestick patterns, hybrid scoring, CV proxy consensus, and YOLOv8 AI on chart images.",
+      "3-layer detection: rule-based geometry, candlestick patterns, and YOLOv8 AI on chart images.",
   },
   {
     icon: Brain,

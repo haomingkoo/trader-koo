@@ -532,36 +532,6 @@ export interface PatternRow {
   end_date: string;
 }
 
-export interface HybridPatternRow {
-  pattern: string;
-  status: string;
-  hybrid_confidence: number;
-  base_confidence: number;
-  candle_score: number;
-  volume_score: number;
-  breakout_score: number;
-  candle_bias: string;
-  vol_ratio: number;
-  start_date: string;
-  end_date: string;
-}
-
-export interface PatternOverlayRow {
-  source: string;
-  class_name: string;
-  status: string;
-  confidence: number;
-  start_date: string;
-  end_date: string;
-  x0_date?: string;
-  x1_date?: string;
-  y0?: number;
-  y1?: number;
-  y0b?: number;
-  y1b?: number;
-  notes?: string;
-}
-
 export interface CandlestickPatternRow {
   date: string;
   pattern: string;
@@ -687,8 +657,6 @@ export interface DashboardPayload {
   gaps: GapRow[];
   trendlines: TrendlineRow[];
   patterns: PatternRow[];
-  hybrid_patterns: HybridPatternRow[];
-  pattern_overlays: PatternOverlayRow[];
   candlestick_patterns: CandlestickPatternRow[];
   yolo_audit: YoloAuditRow[];
   yolo_patterns: YoloPatternRow[];
@@ -697,8 +665,6 @@ export interface DashboardPayload {
   options_summary: OptionsSummary;
   earnings_markers: EarningsMarker[];
   hmm_regime: HmmRegime | null;
-  cv_proxy_patterns?: PatternOverlayRow[];
-  hybrid_cv_compare?: Record<string, unknown>[];
   data_sources?: PriceDataSource;
   live_candle?: LiveCandle;
 }
@@ -712,16 +678,12 @@ export interface DashboardQuickPayload {
   gaps: GapRow[];
   trendlines: TrendlineRow[];
   patterns: PatternRow[];
-  hybrid_patterns: HybridPatternRow[];
-  pattern_overlays: PatternOverlayRow[];
   candlestick_patterns: CandlestickPatternRow[];
   yolo_audit: YoloAuditRow[];
   yolo_patterns: YoloPatternRow[];
   fundamentals: Fundamentals;
   options_summary: OptionsSummary;
   earnings_markers: EarningsMarker[];
-  cv_proxy_patterns?: PatternOverlayRow[];
-  hybrid_cv_compare?: Record<string, unknown>[];
   data_sources?: PriceDataSource;
   data_freshness?: {
     latest_price_date: string | null;

@@ -25,8 +25,6 @@ from fastapi import HTTPException
 
 from trader_koo.catalyst_data import get_ticker_earnings_markers
 from trader_koo.report.utils import nyse_holidays_for_year
-from trader_koo.cv.compare import HybridCVCompareConfig, compare_hybrid_vs_cv
-from trader_koo.cv.proxy_patterns import CVProxyConfig, detect_cv_proxy_patterns
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
 from trader_koo.llm_narrative import llm_status, maybe_rewrite_setup_copy
@@ -35,7 +33,6 @@ from trader_koo.report.setup_scoring import (
     _score_setup_from_confluence as _report_score_setup_from_confluence,
 )
 from trader_koo.structure.gaps import GapConfig, detect_gaps, select_gaps_for_display
-from trader_koo.structure.hybrid_patterns import HybridPatternConfig, score_hybrid_patterns
 from trader_koo.structure.levels import (
     LevelConfig,
     add_fallback_levels,
@@ -78,10 +75,6 @@ def _excluded_chart_payload(
         "trendlines": [],
         "patterns": [],
         "candlestick_patterns": [],
-        "hybrid_patterns": [],
-        "cv_proxy_patterns": [],
-        "hybrid_cv_compare": [],
-        "pattern_overlays": [],
         "yolo_patterns": [],
         "yolo_audit": [],
         "earnings_markers": [],
@@ -97,9 +90,6 @@ GAP_CFG = GapConfig()
 TREND_CFG = TrendlineConfig()
 PATTERN_CFG = PatternConfig()
 CANDLE_CFG = CandlePatternConfig()
-HYBRID_PATTERN_CFG = HybridPatternConfig()
-CV_PROXY_CFG = CVProxyConfig()
-HYBRID_CV_CMP_CFG = HybridCVCompareConfig()
 
 _MARKET_TZ_NAME = os.getenv("TRADER_KOO_MARKET_TZ", "America/New_York")
 try:
@@ -132,115 +122,6 @@ def _serialize_df(df: pd.DataFrame) -> list[dict[str, Any]]:
     if df is None or df.empty:
         return []
     return df.fillna("").to_dict(orient="records")
-
-
-# ---------------------------------------------------------------------------
-# Pattern overlays
-# ---------------------------------------------------------------------------
-
-def build_pattern_overlays(
-    patterns: pd.DataFrame,
-    hybrid_patterns: pd.DataFrame,
-    cv_proxy_patterns: pd.DataFrame,
-    max_rows: int = 10,
-) -> pd.DataFrame:
-    """Merge rule-based and CV-proxy patterns into a single overlay table."""
-    cols = [
-        "source",
-        "class_name",
-        "status",
-        "confidence",
-        "start_date",
-        "end_date",
-        "x0_date",
-        "x1_date",
-        "y0",
-        "y1",
-        "y0b",
-        "y1b",
-        "notes",
-    ]
-    empty = pd.DataFrame(columns=cols)
-
-    hp = hybrid_patterns.copy() if hybrid_patterns is not None else pd.DataFrame()
-    if not hp.empty:
-        hp["hybrid_confidence"] = pd.to_numeric(hp.get("hybrid_confidence"), errors="coerce")
-        hp = hp.sort_values("hybrid_confidence", ascending=False).drop_duplicates(subset=["pattern"])
-        hp = hp[["pattern", "hybrid_confidence"]]
-    else:
-        hp = pd.DataFrame(columns=["pattern", "hybrid_confidence"])
-
-    rule_df = patterns.copy() if patterns is not None else pd.DataFrame()
-    if not rule_df.empty:
-        rule_df = rule_df.merge(hp, on="pattern", how="left")
-        base_conf = pd.to_numeric(rule_df.get("confidence"), errors="coerce")
-        hybrid_conf = pd.to_numeric(rule_df.get("hybrid_confidence"), errors="coerce")
-        rule_df["confidence"] = hybrid_conf.where(hybrid_conf.notna(), base_conf)
-        rule_df["source"] = rule_df["hybrid_confidence"].apply(
-            lambda v: "hybrid_rule" if pd.notna(v) else "rule"
-        )
-        rule_df = rule_df.rename(columns={"pattern": "class_name"})
-        rule_df = rule_df[
-            [
-                "source",
-                "class_name",
-                "status",
-                "confidence",
-                "start_date",
-                "end_date",
-                "x0_date",
-                "x1_date",
-                "y0",
-                "y1",
-                "y0b",
-                "y1b",
-                "notes",
-            ]
-        ]
-    else:
-        rule_df = empty.copy()
-
-    cv_df = cv_proxy_patterns.copy() if cv_proxy_patterns is not None else pd.DataFrame()
-    if not cv_df.empty:
-        cv_df["source"] = "cv_proxy"
-        cv_df["confidence"] = pd.to_numeric(cv_df.get("cv_confidence"), errors="coerce")
-        cv_df = cv_df.rename(columns={"pattern": "class_name"})
-        cv_df = cv_df[
-            [
-                "source",
-                "class_name",
-                "status",
-                "confidence",
-                "start_date",
-                "end_date",
-                "x0_date",
-                "x1_date",
-                "y0",
-                "y1",
-                "y0b",
-                "y1b",
-                "notes",
-            ]
-        ]
-    else:
-        cv_df = empty.copy()
-
-    out = pd.concat([rule_df, cv_df], ignore_index=True)
-    if out.empty:
-        return empty
-
-    out["confidence"] = pd.to_numeric(out["confidence"], errors="coerce")
-    for c in ["y0", "y1", "y0b", "y1b"]:
-        out[c] = pd.to_numeric(out[c], errors="coerce")
-    out = out.dropna(subset=["x0_date", "x1_date", "y0", "y1", "y0b", "y1b"])
-    out = out[(out["x0_date"].astype(str).str.len() > 0) & (out["x1_date"].astype(str).str.len() > 0)]
-    if out.empty:
-        return empty
-
-    out = out.sort_values("confidence", ascending=False)
-    out = out.drop_duplicates(subset=["source", "class_name", "start_date", "end_date"]).head(max_rows)
-    out["confidence"] = out["confidence"].round(2)
-    return out[cols].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -983,10 +864,6 @@ def _prepare_model_and_features(
     pd.DataFrame,   # trendlines
     pd.DataFrame,   # patterns
     pd.DataFrame,   # candle_patterns
-    pd.DataFrame,   # hybrid_patterns
-    pd.DataFrame,   # cv_proxy_patterns
-    pd.DataFrame,   # hybrid_cv_compare
-    pd.DataFrame,   # pattern_overlays
     dict[str, Any],  # fund
 ]:
     """Compute price model, features, and technical structure.
@@ -1043,19 +920,6 @@ def _prepare_model_and_features(
     )
     patterns = detect_patterns(model, cfg=PATTERN_CFG)
     candle_patterns = detect_candlestick_patterns(model, cfg=CANDLE_CFG)
-    hybrid_patterns = score_hybrid_patterns(
-        model, patterns, candle_patterns, HYBRID_PATTERN_CFG
-    )
-    cv_proxy_patterns = detect_cv_proxy_patterns(model, cfg=CV_PROXY_CFG)
-    hybrid_cv_compare = compare_hybrid_vs_cv(
-        hybrid_patterns, cv_proxy_patterns, HYBRID_CV_CMP_CFG
-    )
-    pattern_overlays = build_pattern_overlays(
-        patterns=patterns,
-        hybrid_patterns=hybrid_patterns,
-        cv_proxy_patterns=cv_proxy_patterns,
-        max_rows=10,
-    )
 
     chart_rows = model[model["date"] >= view_cutoff].copy()
     for col in ["date"]:
@@ -1095,10 +959,6 @@ def _prepare_model_and_features(
         trendlines,
         patterns,
         candle_patterns,
-        hybrid_patterns,
-        cv_proxy_patterns,
-        hybrid_cv_compare,
-        pattern_overlays,
         fund,
     )
     if cache_key is not None:
@@ -1146,10 +1006,6 @@ def _build_dashboard_quick_payload(
         trendlines,
         patterns,
         candle_patterns,
-        hybrid_patterns,
-        cv_proxy_patterns,
-        hybrid_cv_compare,
-        pattern_overlays,
         fund,
     ) = _prepare_model_and_features(conn, ticker, months)
 
@@ -1176,10 +1032,6 @@ def _build_dashboard_quick_payload(
         "trendlines": _serialize_df(trendlines),
         "patterns": _serialize_df(patterns),
         "candlestick_patterns": _serialize_df(candle_patterns),
-        "hybrid_patterns": _serialize_df(hybrid_patterns),
-        "cv_proxy_patterns": _serialize_df(cv_proxy_patterns),
-        "hybrid_cv_compare": _serialize_df(hybrid_cv_compare),
-        "pattern_overlays": _serialize_df(pattern_overlays),
         "yolo_patterns": yolo_pats,
         "yolo_audit": yolo_aud,
         "earnings_markers": earnings_markers,
@@ -1193,9 +1045,6 @@ def _build_dashboard_quick_payload(
                 "trendline": TREND_CFG.__dict__,
                 "pattern": PATTERN_CFG.__dict__,
                 "candlestick_pattern": CANDLE_CFG.__dict__,
-                "hybrid_pattern": HYBRID_PATTERN_CFG.__dict__,
-                "cv_proxy_pattern": CV_PROXY_CFG.__dict__,
-                "hybrid_cv_compare": HYBRID_CV_CMP_CFG.__dict__,
             },
         },
     }
@@ -1276,10 +1125,6 @@ def _build_commentary_payload(
         _trendlines,
         _patterns,
         candle_patterns,
-        _hybrid_patterns,
-        _cv_proxy_patterns,
-        _hybrid_cv_compare,
-        _pattern_overlays,
         fund,
     ) = _prepare_model_and_features(conn, ticker, months)
 
@@ -1358,10 +1203,6 @@ def _build_dashboard_payload(
         trendlines,
         patterns,
         candle_patterns,
-        hybrid_patterns,
-        cv_proxy_patterns,
-        hybrid_cv_compare,
-        pattern_overlays,
         fund,
     ) = _prepare_model_and_features(conn, ticker, months)
 
@@ -1413,10 +1254,6 @@ def _build_dashboard_payload(
         "trendlines": _serialize_df(trendlines),
         "patterns": _serialize_df(patterns),
         "candlestick_patterns": _serialize_df(candle_patterns),
-        "hybrid_patterns": _serialize_df(hybrid_patterns),
-        "cv_proxy_patterns": _serialize_df(cv_proxy_patterns),
-        "hybrid_cv_compare": _serialize_df(hybrid_cv_compare),
-        "pattern_overlays": _serialize_df(pattern_overlays),
         "yolo_patterns": yolo_pats,
         "yolo_audit": yolo_aud,
         "chart_commentary": chart_commentary,
@@ -1433,9 +1270,6 @@ def _build_dashboard_payload(
                 "trendline": TREND_CFG.__dict__,
                 "pattern": PATTERN_CFG.__dict__,
                 "candlestick_pattern": CANDLE_CFG.__dict__,
-                "hybrid_pattern": HYBRID_PATTERN_CFG.__dict__,
-                "cv_proxy_pattern": CV_PROXY_CFG.__dict__,
-                "hybrid_cv_compare": HYBRID_CV_CMP_CFG.__dict__,
             },
         },
     }

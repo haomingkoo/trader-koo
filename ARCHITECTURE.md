@@ -261,18 +261,11 @@ This is the most compute-heavy endpoint. Everything runs synchronously in the re
  6. detect_trendlines()    →  regression lines through swing pivots
  7. detect_patterns()      →  flags, wedges (rule-based geometry)
  8. detect_candlestick_patterns()
- 9. score_hybrid_patterns()
-    - Blend rule confidence (50%) + candle (20%) + volume (15%) + breakout (15%)
-10. detect_cv_proxy_patterns()
-    - Independent image-geometry scorer for the same pattern classes
-11. compare_hybrid_vs_cv()
-    - Consensus confidence, agreement flag, confidence gap
-12. get_yolo_patterns()   →  SELECT from pre-computed yolo_patterns table
-13. Merge live candle from Finnhub WS (if available)
-14. Fetch fundamentals    →  latest finviz_fundamentals row
-15. Fetch options         →  latest options_iv rows
-16. Score ML model        →  LightGBM probability (if model .pkl exists)
-17. Merge pattern overlays (top 10 by confidence across all sources)
+ 9. get_yolo_patterns()   →  SELECT from pre-computed yolo_patterns table
+10. Merge live candle from Finnhub WS (if available)
+11. Fetch fundamentals    →  latest finviz_fundamentals row
+12. Fetch options         →  latest options_iv rows
+13. Score ML model        →  LightGBM probability (if model .pkl exists)
 18. Return JSON payload
 ```
 
@@ -306,18 +299,16 @@ A bar is a `pivot_high` if its high is the highest within ±3 bars (left=3, righ
 
 ---
 
-## Pattern detection (5 layers)
+## Pattern detection (3 layers)
 
-Five independent pattern detection systems run per ticker. Each produces its own confidence scores. The dashboard merges the top 10 detections across all layers by confidence.
+Three independent pattern detection systems run per ticker. Each produces its own confidence scores.
 
 ```
 Layer    Source                          Type             Speed
 ─────    ──────                          ────             ─────
   1      structure/patterns.py           Rule-based       Fast (in-request)
   2      features/candle_patterns.py     Candlestick      Fast (in-request)
-  3      structure/hybrid_patterns.py    Blended score    Fast (in-request)
-  4      cv/proxy_patterns.py            CV geometry      Fast (in-request)
-  5      scripts/run_yolo_patterns.py    YOLOv8 AI        Pre-computed (nightly)
+  3      scripts/run_yolo_patterns.py    YOLOv8 AI        Pre-computed (nightly)
 ```
 
 ### Layer 1: Rule-based (structure/patterns.py)
@@ -344,30 +335,7 @@ Classic single- and multi-bar candle signals. Each detection returns:
 - `confidence` (0–1, based on how cleanly the geometry fits)
 - `explanation` (human-readable rationale)
 
-Used primarily as an input signal to hybrid scoring rather than standalone.
-
-### Layer 3: Hybrid scoring (structure/hybrid_patterns.py)
-
-Merges the rule-based pattern list with candlestick signals to produce a blended confidence score:
-
-```
-hybrid_confidence = (
-    base_confidence × 0.50
-  + candle_score    × 0.20
-  + volume_score    × 0.15
-  + breakout_score  × 0.15
-)
-```
-
-- `candle_score`: 1.0 if a candle pattern at the pattern's end date agrees with the expected bias, else 0
-- `volume_score`: `min(volume_ratio / 1.5, 1.0)` where `volume_ratio = last_vol / avg_vol`
-- `breakout_score`: 1.0 if price has broken out of the pattern in the expected direction
-
-### Layer 4: CV proxy (cv/proxy_patterns.py)
-
-An independent scorer that uses the same geometric logic as layer 1 but is implemented from the perspective of "what would a trained CV model see". It produces the same pattern classes with its own confidence scores. The comparison between hybrid and CV scores (`cv/compare.py`) surfaces cases where both agree (high conviction) or disagree (uncertain signal).
-
-### Layer 5: YOLO AI (scripts/run_yolo_patterns.py)
+### Layer 3: YOLO AI (scripts/run_yolo_patterns.py)
 
 The only layer that uses a trained ML model. Rather than running inference on live requests (too slow at ~1–2 seconds per ticker), detections are pre-computed and stored in `yolo_patterns`.
 
@@ -448,7 +416,7 @@ The feature set covers price action, momentum, volatility, volume, structure, an
 - **Volatility**: ATR-14, Bollinger bandwidth, historical volatility (20d), VIX level
 - **Volume**: relative volume (vs 20d avg), OBV trend, volume-price divergence
 - **Structure**: support/resistance proximity, level touch count, gap proximity
-- **Patterns**: hybrid pattern confidence, YOLO detection count, pattern agreement score
+- **Patterns**: YOLO detection count, pattern agreement score
 - **Options**: put/call OI ratio, implied volatility percentile
 - **Macro**: Fed funds rate, yield curve slope, unemployment delta, ISM PMI
 - **Sector**: relative strength vs SPY, sector rotation score
