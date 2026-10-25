@@ -35,6 +35,7 @@ from PIL import Image, ImageDraw, ImageFont
 from trader_koo.scripts.run_yolo_patterns import (
     DEFAULT_LOOKBACK_DAYS,
     YOLO_MODEL_ID,
+    load_hf_yolo,
     get_price_df,
     render_chart,
     run_inference,
@@ -175,8 +176,7 @@ def main() -> None:
         _orig_load = _torch.load
         _torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": kw.get("weights_only", False)})
 
-        from ultralyticsplus import YOLO
-        model = YOLO(YOLO_MODEL_ID)
+        model = load_hf_yolo()
         model.overrides.update({
             "conf": args.conf,
             "iou": args.iou,

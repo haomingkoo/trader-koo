@@ -58,7 +58,7 @@ Nixpacks installs the single canonical production dependency manifest at
 `requirements.txt` before running `build.sh`. Development-only packages live in
 `requirements-dev.txt`, which includes that production manifest.
 
-The torch/torchvision pair must come from the same CPU index — installing them separately risks an ABI mismatch that breaks the `torchvision::nms` operator at runtime. The `opencv-python-headless` force-reinstall runs last because `sahi` (a transitive dependency of `ultralyticsplus`) installs the non-headless `opencv-python`, which requires `libGL.so.1` and fails on headless servers.
+The torch/torchvision pair must come from the same CPU index — installing them separately risks an ABI mismatch that breaks the `torchvision::nms` operator at runtime. The `opencv-python-headless` force-reinstall runs last because `ultralytics` installs the non-headless `opencv-python`, which requires `libGL.so.1` and fails on headless servers.
 
 **Runtime**: Python 3.11 via nixpacks. 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
 

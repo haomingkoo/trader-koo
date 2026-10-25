@@ -380,6 +380,15 @@ def px_to_bar_price(x_px: float, y_px: float, ai: dict) -> tuple[float, float]:
     return x_bar, price
 
 
+def load_hf_yolo(model_id: str = YOLO_MODEL_ID):
+    """Download a model's .pt weights from the Hugging Face Hub and load them with ultralytics."""
+    from huggingface_hub import hf_hub_download, list_repo_files
+    from ultralytics import YOLO
+
+    weights = next(f for f in list_repo_files(model_id) if f.endswith(".pt"))
+    return YOLO(hf_hub_download(model_id, weights))
+
+
 def run_inference(model, img_arr, ai: dict, dates: list) -> list[dict]:
     """Run YOLO and return detections in date/price space."""
     n = len(dates)
@@ -702,16 +711,14 @@ def main() -> None:
                 raise
 
             # PyTorch >= 2.6 defaults weights_only=True, which rejects legacy YOLO weights.
-            # Patch torch.load to keep the old behaviour before importing ultralyticsplus.
+            # Patch torch.load to keep the old behaviour before loading the weights.
             LOG.info("YOLO init step: importing torch")
             import torch as _torch
             _orig_load = _torch.load
             _torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": kw.get("weights_only", False)})
 
-            LOG.info("YOLO init step: importing ultralyticsplus.YOLO")
-            from ultralyticsplus import YOLO
             LOG.info("YOLO init step: constructing model")
-            model = YOLO(YOLO_MODEL_ID)
+            model = load_hf_yolo()
             model.overrides.update({
                 "imgsz": args.imgsz,
                 "conf": args.conf,

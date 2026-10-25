@@ -154,7 +154,7 @@ YOLO_MODEL_INIT_TIMEOUT_SEC="${TRADER_KOO_YOLO_MODEL_INIT_TIMEOUT_SEC:-600}"
 if [ "$RUN_YOLO" -eq 1 ]; then
 YOLO_PREFLIGHT_RC=0
 if "$PYTHON" - <<'PY' >> "$RUN_LOG" 2>&1; then
-import cv2, torch, ultralyticsplus
+import cv2, torch, ultralytics, huggingface_hub
 print(f"[YOLO] preflight ok cv2={cv2.__version__} torch={torch.__version__}")
 PY
     echo "$(date '+%Y-%m-%dT%H:%M:%S%z') [YOLO]  Preflight dependencies OK" >> "$RUN_LOG"
