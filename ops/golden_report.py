@@ -79,10 +79,17 @@ def snapshot(db_path: Path, out_dir: Path, now: datetime) -> Path:
         attempts.append(str(address))
         raise OSError(f"golden_report: network blocked ({address})")
 
+    # Block name resolution too, recording the hostname: resolved IPs vary between runs.
+    def blocked_getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+        attempts.append(f"{host}:{port}")
+        raise socket.gaierror(f"golden_report: network blocked ({host})")
+
     saved_env = os.environ.get("TRADER_KOO_LLM_ENABLED")
     os.environ["TRADER_KOO_LLM_ENABLED"] = "0"
     real_connect = socket.socket.connect
+    real_getaddrinfo = socket.getaddrinfo
     socket.socket.connect = blocked_connect  # type: ignore[method-assign]
+    socket.getaddrinfo = blocked_getaddrinfo  # type: ignore[assignment]
     try:
         with tempfile.TemporaryDirectory() as tmp, time_machine.travel(now, tick=False):
             work_db = Path(tmp) / "snapshot.db"
@@ -107,6 +114,7 @@ def snapshot(db_path: Path, out_dir: Path, now: datetime) -> Path:
             }
     finally:
         socket.socket.connect = real_connect  # type: ignore[method-assign]
+        socket.getaddrinfo = real_getaddrinfo  # type: ignore[assignment]
         if saved_env is None:
             os.environ.pop("TRADER_KOO_LLM_ENABLED", None)
         else:
@@ -117,7 +125,7 @@ def snapshot(db_path: Path, out_dir: Path, now: datetime) -> Path:
     (out_dir / "email.html").write_text(email_html)
     (out_dir / "paper.json").write_text(_dump(paper))
     (out_dir / "policy.json").write_text(_dump(policy))
-    (out_dir / "network.json").write_text(_dump(attempts))
+    (out_dir / "network.json").write_text(_dump(sorted(set(attempts))))
     return out_dir
 
 

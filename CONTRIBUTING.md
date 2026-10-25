@@ -56,3 +56,10 @@ That runs `pip check`, lists outdated Python packages, and reports outdated fron
 
 - Do not open public issues for undisclosed vulnerabilities.
 - Follow [SECURITY.md](SECURITY.md) for private reporting.
+
+To refresh the golden database, run `ops/golden_db_export.py` inside the Railway
+container (`railway ssh`), copy the gzip out, unpack it outside the repository
+(for example `~/dev/.golden/`) and pass it as `GOLDEN_DB`. The local
+development database is too old and incomplete for the report to reach
+scoring, so `make golden` without it only checks determinism and fail-closed
+behaviour.
