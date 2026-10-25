@@ -769,8 +769,6 @@ LEVEL_CFG = LevelConfig(level_tol_atr=0.40, primary_each_side=3)
 | `TrendlineConfig` | `lookback_bars=50`, `min_touches=2`, `touch_tolerance_pct=0.015` |
 | `PatternConfig` | `flag_pole_bars=8`, `min_pole_return=0.04`, `wedge_converge_ratio=0.35` |
 | `CandlePatternConfig` | `lookback_bars=20` |
-| `HybridPatternConfig` | `candle_weight=0.20`, `volume_weight=0.15`, `breakout_weight=0.15` |
-| `CVProxyConfig` | `lookback_bars=100`, `min_shape_r2=0.45`, `wedge_converge_ratio=0.65` |
 
 ---
 
