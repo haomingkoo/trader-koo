@@ -2,7 +2,7 @@ pandas==2.3.3
 requests==2.33.1
 yfinance==1.2.0
 finviz==2.0.0
-lxml==6.0.2
+lxml==6.1.0
 fastapi==0.135.3
 uvicorn==0.44.0
 apscheduler==3.11.2
