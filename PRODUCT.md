@@ -129,8 +129,13 @@ database and run the release-evidence copied-database verifier; a refusal report
 the admission-ledger contract, and the backup remains the rollback source. No
 automatic mapping is attempted because the old code does not contain enough
 information to infer a truthful replacement phase.
-Release database evidence uses the versioned `release-database-copy-v4`
-manifest. Failed contracts report the total count and an explicitly truncated,
+Release database evidence uses the versioned `release-database-copy-v5`
+manifest. It is paper-schema phase-aware: a copy stored at paper schema v4 is
+held to the `paper-schema-expand-v4` contract, and a copy stored at v5 is held
+to the uncached exact `verify_paper_schema_v5` result and frozen fingerprint
+(`paper-schema-contract-v5`). The v4 compatibility indexes, the v1 lineage
+backfill exception and the implicit campaign defaults are removed by the v5
+contract, so the expand-v4 checks are not applied to a v5 copy. Failed contracts report the total count and an explicitly truncated,
 ascending sample of at most 20 numeric attempt IDs with invariant categories.
 Required root fields are `schema`, source/copy hashes,
 `report_admission_contract`, and `passed`. Success names the verified migration;
@@ -150,9 +155,9 @@ sample to identify affected immutable rows, perform a separately reviewed repair
 or restore, and rerun copied-database verification before rollout.
 Failure variants identify the rejecting contract in `target_migration`. The
 normative field/type contract is
-`release-database-copy-v4.schema.json` at the repository root. Repository search
+`release-database-copy-v5.schema.json` at the repository root. Repository search
 found no runtime consumer of v1: CI and dark deploy only upload the artifact, so
-producer and schema move together in this release; historical v1/v2/v3 artifacts stay
+producer and schema move together in this release; historical v1/v2/v3/v4 artifacts stay
 immutable, rollback uses the prior producer, and dual emission is unnecessary.
 When a sample is truncated, operators must enumerate all invalid rows with a
 reviewed copy of the verifier predicate rather than repair only the sample.

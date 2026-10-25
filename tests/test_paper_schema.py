@@ -166,10 +166,10 @@ def test_release_copy_rescans_current_v4_admission_ledger(
         (output_dir / "database-migration-manifest.json").read_text()
     )
     Draft202012Validator(
-        json.loads(Path("release-database-copy-v4.schema.json").read_text())
+        json.loads(Path("release-database-copy-v5.schema.json").read_text())
     ).validate(failure)
     validator = Draft202012Validator(
-        json.loads(Path("release-database-copy-v4.schema.json").read_text())
+        json.loads(Path("release-database-copy-v5.schema.json").read_text())
     )
     if invalid_count == 1:
         clean_source = tmp_path / "clean-for-admission-variant.db"
@@ -202,9 +202,9 @@ def test_release_copy_rescans_current_v4_admission_ledger(
         ) == {
             "schema": "release-database-generation-error-v1",
             "error_code": "release_manifest_validation_failed",
-            "target_schema": "release-database-copy-v4",
+            "target_schema": "release-database-copy-v5",
         }
-    assert failure["schema"] == "release-database-copy-v4"
+    assert failure["schema"] == "release-database-copy-v5"
     assert failure["passed"] is False
     assert failure["report_admission_contract"] == {
         "passed": False,
@@ -237,7 +237,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
 
     manifest = migrate_copy(source, output_dir)
     validator = Draft202012Validator(
-        json.loads(Path("release-database-copy-v4.schema.json").read_text())
+        json.loads(Path("release-database-copy-v5.schema.json").read_text())
     )
     validator.validate(manifest)
     unexplained_failure = deepcopy(manifest)
@@ -309,7 +309,7 @@ def test_release_copy_records_verified_admission_contract(tmp_path: Path) -> Non
     with pytest.raises(ValidationError):
         validator.validate(contradictory_defaults)
 
-    assert manifest["schema"] == "release-database-copy-v4"
+    assert manifest["schema"] == "release-database-copy-v5"
     assert manifest["passed"] is True
     assert manifest["report_admission_contract"] == {
         "passed": True,
@@ -349,7 +349,7 @@ def test_release_copy_reports_real_schema_failure_before_accounting(
         (output_dir / "database-migration-manifest.json").read_text()
     )
     Draft202012Validator(
-        json.loads(Path("release-database-copy-v4.schema.json").read_text())
+        json.loads(Path("release-database-copy-v5.schema.json").read_text())
     ).validate(failure)
     assert failure["passed"] is False
     assert failure["schema_contract"]["passed"] is False
