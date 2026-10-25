@@ -56,6 +56,9 @@ def _fresh_v4(path: Path) -> None:
             [
                 ("SPY", "2026-08-24", 498, 501, 497, 500, 1_000_000),
                 ("SPY", "2026-08-25", 500, 503, 499, 502, 1_100_000),
+                # The critic fails closed without a VIX observation.
+                ("^VIX", "2026-08-24", 14, 14.5, 13.5, 14.0, 0),
+                ("^VIX", "2026-08-25", 14, 14.5, 13.5, 14.0, 0),
             ],
         )
         record_price_series_revision(

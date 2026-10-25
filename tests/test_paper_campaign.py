@@ -132,6 +132,12 @@ def _db(*, contracted: bool = False) -> sqlite3.Connection:
                UNIQUE(ticker, date)
            )"""
     )
+    # The critic fails closed when no VIX observation exists, so every business
+    # fixture supplies one; regime-specific behaviour is covered in test_critic.
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('^VIX','2026-08-18',14,14.5,13.5,14.0,0)"""
+    )
     ensure_price_series_revision_schema(conn)
     return conn
 
@@ -627,6 +633,76 @@ def test_missing_next_open_creates_pending_order_then_fills_actual_later_open():
     health = paper_trade_summary(conn)["campaign_health"]
     assert health["latest_report"]["admitted"] == 1
     assert health["latest_report"]["candidates"][0]["tradeability"] == "actionable"
+
+
+def test_filled_pending_order_persists_captured_market_context():
+    conn = _db()
+    _activate(conn)
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SPY','2026-08-19',640,645,639,641,1000000),
+                  ('SPY','2026-08-20',641,646,640,645,1000000),
+                  ('SPY','2026-08-21',645,650,644,649,1000000),
+                  ('^VIX','2026-08-21',14,14.5,13.5,14.0,0)"""
+    )
+    create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("CTX")], report_date="2026-08-21",
+        generated_ts="ctx-ts", report_run_id="ctx-run",
+    )
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('CTX','2026-08-24',152,160,151,158,1000000),
+                  ('SPY','2026-08-24',650,651,649,650,1000000)"""
+    )
+    record_price_series_revision(
+        conn, "CTX",
+        evidence={"provider": "fixture", "vendor_action_ledger_checked": True,
+                  "vendor_action_ledger": []},
+        fetch_timestamp="2026-08-24T00:00:00Z",
+    )
+
+    resolved = fill_pending_paper_orders(
+        conn, through_date="2026-08-24", schema_ready=True
+    )
+
+    assert resolved == {"filled": 1, "rejected": 0, "still_pending": 0}
+    assert conn.execute(
+        "SELECT vix_at_entry,regime_state_at_entry,debate_agreement_score,bot_version "
+        "FROM paper_trades WHERE ticker='CTX'"
+    ).fetchone() == (14.0, "bull_low_vol", 80.0, _build_config().bot_version)
+
+
+def test_continuation_long_is_refused_in_a_non_bull_regime():
+    """The regime gate must actually refuse an order, not just a unit-level call.
+
+    Most fixtures seed SPY only at the intended session, which is after the
+    market-context cutoff, so the regime resolves to '*_unknown' and the gate is
+    never reached. Seeding falling SPY history before the report date produces
+    'bear_normal', where a continuation long has no override available.
+    """
+    conn = _db()
+    _activate(conn)
+    conn.execute(
+        """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
+           VALUES ('SPY','2026-08-19',650,651,648,649,1000000),
+                  ('SPY','2026-08-20',648,649,644,645,1000000),
+                  ('SPY','2026-08-21',644,645,640,641,1000000),
+                  ('^VIX','2026-08-21',18,18.5,17.5,18.0,0)"""
+    )
+
+    create_paper_trades_from_report(
+        conn, setup_rows=[_candidate("BEARISH")], report_date="2026-08-21",
+        generated_ts="bear-ts", report_run_id="bear-run",
+    )
+
+    gate, reason_code = conn.execute(
+        "SELECT final_gate,reason_code FROM paper_candidate_decisions "
+        "WHERE report_run_id='bear-run'"
+    ).fetchone()
+
+    assert gate == "critic.regime_alignment"
+    assert reason_code == "critic_regime_alignment_rejected"
+    assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
 
 
 def test_pending_order_never_skips_a_missing_immediate_session_open():
