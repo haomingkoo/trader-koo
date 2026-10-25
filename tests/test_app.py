@@ -47,7 +47,7 @@ class TestAppFactory:
             "/api/opportunities",
             "/api/options/premium",
             "/api/paper-trades",
-            "/api/email/subscribe",
+            "/api/email/chart-preview",
             "/api/vix-glossary",
             "/api/market-summary",
         ]

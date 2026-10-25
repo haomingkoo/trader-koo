@@ -101,12 +101,6 @@ try:
 except ImportError:
     hyperliquid_router = None  # SDK not installed
 
-# Usage module helpers needed at startup
-from trader_koo.backend.routers.usage import (
-    ensure_analytics_schema,
-    ensure_feedback_schema,
-    prune_analytics_sessions,
-)
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -235,9 +229,6 @@ async def lifespan(_app: FastAPI):
     # Initialize database schemas (skip if DB doesn't exist yet)
     if DB_PATH.exists():
         LOG.info("Database found, initializing schemas...")
-        ensure_analytics_schema()
-        ensure_feedback_schema()
-        prune_analytics_sessions()
         ensure_subscriber_schema(DB_PATH)
         conn = sqlite3.connect(str(DB_PATH))
         try:

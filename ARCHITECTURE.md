@@ -85,14 +85,13 @@ Routes live under `trader_koo/backend/routers/`, except Hyperliquid, which is in
 | `report.py` | `/api/report` | Daily report, earnings calendar, sentiment, VIX metrics, macro data |
 | `opportunities.py` | `/api/opportunities` | Valuation screens (discount-to-target, PEG, relative strength) |
 | `paper_trades.py` | `/api/paper-trades` | Trade list, summary, detail, equity curve |
-| `email.py` | `/api/email` | Subscribe, unsubscribe, confirm, chart preview |
+| `email.py` | `/api/email` | Chart preview for report emails |
 | `crypto.py` | `/api/crypto` | Prices, history, indicators, structure analysis, correlation, open interest |
 | `trader_koo/hyperliquid/routes.py` | `/api/hyperliquid` | Whale tracking, configurable wallets, reload events, counter-trade signals |
 | `streaming.py` | `/api/streaming` | Equity tick prices, subscription management (Finnhub WS bridge) |
 | `data_sync.py` | `/api/data-sync` | Polymarket event ingestion |
 | `alerts.py` | `/api/alerts` | Alert history |
 | `options.py` | `/api/options` | Options premium proxy snapshots |
-| `usage.py` | `/api/usage` | Session tracking, setup feedback collection |
 | `admin/` | `/api/admin` | Split into per-concern modules (see below) |
 
 ### Admin sub-routers
@@ -105,7 +104,7 @@ The admin router is split for maintainability. All require `X-API-Key` authentic
 | `ml.py` | Model training, evaluation, feature importance |
 | `data.py` | DB inspection, cache management, data quality checks |
 | `system.py` | Logs, audit trail, health events, configuration |
-| `email_admin.py` | Subscriber management, delivery history, test sends |
+| `email_admin.py` | SMTP health, test sends |
 | `agents.py` | Agent observability traces |
 | `alert_quality.py` | Alert quality report |
 | `backups.py` | Create, list, and inspect backups |
@@ -217,17 +216,13 @@ Each run writes to `ingest_runs` (overall status) and `ingest_ticker_status` (pe
 
 | Table | Purpose |
 |-------|---------|
-| `ui_usage_sessions` | Frontend session tracking (page views, interactions) |
-| `setup_feedback` | User-submitted feedback from the setup flow |
 | `setup_call_evaluations` | LLM evaluation scores for setup call quality |
 
 ### Email system
 
 | Table | Purpose |
 |-------|---------|
-| `email_subscribers` | Subscriber list with confirmation status |
-| `email_subscriber_events` | Event log (subscribe, confirm, unsubscribe) |
-| `email_report_deliveries` | Delivery history (sent, bounced, opened) |
+| `email_report_deliveries` | Delivery history (sent, failed) |
 
 ### System / observability
 
@@ -569,7 +564,7 @@ Phase 3: Report generation (generate_daily_report.py)
     └── Publish the verified run manifest, then update compatibility copies
 ```
 
-Reports are served via `/api/daily-report` and optionally emailed to subscribers.
+Reports are served via `/api/daily-report` and optionally emailed to the recipients in `TRADER_KOO_REPORT_EMAIL_TO`.
 
 ---
 
@@ -660,13 +655,9 @@ The email system is entirely optional and disabled if `TRADER_KOO_SMTP_HOST` is 
 | `starttls` | Plain SMTP connection, then `STARTTLS` upgrade (port 587, default) |
 | `none` | Plain SMTP, no encryption (local/dev only) |
 
-### Subscriber management
+### Chart preview
 
-The email router supports a full subscribe/unsubscribe flow:
-- `POST /api/email/subscribe` — adds subscriber, sends confirmation email
-- `GET /api/email/confirm/{token}` — confirms subscription via one-time token
-- `POST /api/email/unsubscribe` — removes subscriber
-- `GET /api/email/chart-preview/{ticker}` — generates a chart image for email embedding
+- `GET /api/email/chart-preview` generates a signed chart image for email embedding.
 
 ### Gmail setup
 

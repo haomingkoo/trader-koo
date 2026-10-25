@@ -122,7 +122,6 @@ jobs:
           tests/test_audit_logging.py
           tests/test_cors_property.py
           tests/test_data_sync_security.py
-          tests/test_email_token_expiration_property.py
           tests/test_llm_validator_property.py
           tests/test_secret_redaction.py
           tests/test_secret_redaction_property.py

@@ -161,50 +161,6 @@ def _create_test_db() -> sqlite3.Connection:
             total_unrealized_pnl_pct REAL DEFAULT 0.0,
             snapshot_ts TEXT
         );
-
-        CREATE TABLE ui_usage_sessions (
-            session_id TEXT PRIMARY KEY,
-            visitor_id TEXT NOT NULL,
-            started_ts TEXT,
-            last_seen_ts TEXT,
-            active_ms INTEGER NOT NULL DEFAULT 0,
-            page_views_total INTEGER NOT NULL DEFAULT 0,
-            guide_views INTEGER NOT NULL DEFAULT 0,
-            report_views INTEGER NOT NULL DEFAULT 0,
-            earnings_views INTEGER NOT NULL DEFAULT 0,
-            chart_views INTEGER NOT NULL DEFAULT 0,
-            opportunities_views INTEGER NOT NULL DEFAULT 0,
-            chart_loads INTEGER NOT NULL DEFAULT 0,
-            last_tab TEXT,
-            last_ticker TEXT,
-            market TEXT,
-            path TEXT,
-            tz TEXT,
-            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE setup_feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            ticker TEXT NOT NULL,
-            asof TEXT,
-            verdict TEXT NOT NULL CHECK (verdict IN ('good', 'bad', 'neutral')),
-            source_surface TEXT,
-            note TEXT,
-            setup_tier TEXT,
-            setup_score REAL,
-            setup_family TEXT,
-            signal_bias TEXT,
-            actionability TEXT,
-            yolo_role TEXT,
-            yolo_recency TEXT,
-            visitor_id TEXT,
-            session_id TEXT,
-            client_ip TEXT,
-            user_agent TEXT,
-            context_json TEXT
-        );
     """)
     return conn
 
@@ -306,9 +262,6 @@ def test_app(tmp_path: Path, seeded_conn: sqlite3.Connection):
         patch("trader_koo.backend.routers.opportunities.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.options.get_conn", _fake_get_conn),
         patch("trader_koo.backend.routers.paper_trades.get_conn", _fake_get_conn),
-        patch("trader_koo.backend.routers.usage.get_conn", _fake_get_conn),
-        patch("trader_koo.backend.routers.usage.DB_PATH", tmp_db_file),
-        patch("trader_koo.backend.routers.email.DB_PATH", tmp_db_file),
         patch("trader_koo.backend.routers.email.get_conn", _fake_get_conn),
     ]
     for p in patches:

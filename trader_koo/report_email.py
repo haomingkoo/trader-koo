@@ -44,7 +44,6 @@ def build_report_email_bodies(
     md_text: str,
     *,
     app_url: str | None = None,
-    manage_url: str | None = None,
 ) -> tuple[str, str]:
     generated = str(report.get("generated_ts") or "unknown")
     ok = bool(report.get("ok"))
@@ -152,8 +151,6 @@ def build_report_email_bodies(
         text_lines += ["", f"Market holiday: {session.get('holiday_name') or '-'}"]
     if app_url:
         text_lines += ["", f"Dashboard: {app_url}"]
-    if manage_url:
-        text_lines += [f"Manage alerts: {manage_url}"]
     text_lines += ["", "Use the dashboard for the full report and chart context."]
     text_body = "\n".join(text_lines)
 
@@ -475,7 +472,6 @@ def build_report_email_bodies(
             </div>
             <div style="margin-top:14px;font-size:12px;line-height:18px;color:#6b7280;">
               {_esc("This dashboard is for research and education only. It is not financial advice.")}
-              {f"<br />Manage alerts: <a href='{_esc(manage_url)}' style='color:#0f5dd7;'>unsubscribe</a>" if manage_url else ""}
               {"<br />" + _esc(" • ".join(next_session_bits)) if next_session_bits else ""}
             </div>
           </div>

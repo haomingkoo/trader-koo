@@ -1,4 +1,4 @@
-"""Email dispatch, subscriber management, SMTP/Resend health."""
+"""Email dispatch and SMTP/Resend health."""
 from __future__ import annotations
 
 import datetime as dt
@@ -13,9 +13,7 @@ from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.services.report_loader import latest_daily_report_json
 from trader_koo.email_subscribers import (
     email_max_recipients,
-    email_subscribe_enabled,
     parse_recipients,
-    subscriber_counts,
 )
 from trader_koo.llm_health import (
     llm_alert_cooldown_min,
@@ -58,17 +56,6 @@ def smtp_health() -> dict[str, Any]:
     smtp = _smtp_settings()
     resend = _resend_settings()
     transport = _email_transport()
-    subs_enabled = email_subscribe_enabled()
-    subs = (
-        subscriber_counts(DB_PATH)
-        if subs_enabled
-        else {
-            "active": 0,
-            "pending": 0,
-            "unsubscribed": 0,
-            "total": 0,
-        }
-    )
     auto_email = str(
         os.getenv("TRADER_KOO_AUTO_EMAIL", "")
     ).strip().lower() in {"1", "true", "yes"}
@@ -110,8 +97,6 @@ def smtp_health() -> dict[str, Any]:
         "ok": len(missing) == 0,
         "auto_email_enabled": auto_email,
         "transport": transport,
-        "subscriber_registry_enabled": subs_enabled,
-        "subscriber_counts": subs,
         "email_max_recipients": email_max_recipients(),
         "missing": missing,
         "smtp": {
