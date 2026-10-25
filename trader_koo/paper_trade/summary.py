@@ -511,15 +511,19 @@ def _compute_spy_benchmark(
         end_dt = dt.datetime.strptime(last_exit_date, "%Y-%m-%d")
         period_days = max((end_dt - start_dt).days, 1)
 
-        # Add pro-rated SPY dividend yield (~1.8% annual)
-        spy_annual_dividend_yield = 1.8
-        dividend_pct = spy_annual_dividend_yield * period_days / 365
-        total_return_pct = round(price_return_pct + dividend_pct, 2)
-
+        # Both sides must be on the same basis or the comparison is meaningless.
+        # This used to add a hardcoded 1.8%/yr dividend to SPY, while the paper
+        # book earns none: update_market_db is never invoked with --auto-adjust,
+        # so price_daily is split-adjusted price only and a long held across an
+        # ex-dividend date loses the dividend with no offsetting cash credit.
+        # Crediting only the benchmark UNDERSTATED the strategy's alpha.
+        # Price-return on both sides until the total-return basis lands, at
+        # which point this should read the real distribution from
+        # price_corporate_actions rather than any constant.
         return {
-            "return_pct": total_return_pct,
+            "return_pct": round(price_return_pct, 2),
             "price_return_pct": round(price_return_pct, 2),
-            "dividend_pct": round(dividend_pct, 2),
+            "basis": "split_adjusted_price_only",
             "period_days": period_days,
             "start_price": round(start_price, 2),
             "end_price": round(end_price, 2),
