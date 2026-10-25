@@ -224,7 +224,9 @@ def test_write_reports_never_prunes_the_artifact_it_just_wrote(tmp_path: Path) -
     report = _report("AAA", "BBB", accepted=1)
     report["generated_ts"] = "2026-01-01T12:00:00Z"  # far outside any prune window
 
-    paths = write_reports(report, tmp_path, run_id="backfill-run", publish_latest=False)
+    # No run_id: a suffixed name is a managed artifact and is never pruned, so
+    # only a suffix-less artifact exercises the protect= path.
+    paths = write_reports(report, tmp_path, run_id=None, publish_latest=False)
 
     assert Path(paths["json_path"]).is_file(), "write_reports deleted its own artifact"
     assert Path(paths["md_path"]).is_file()
@@ -232,8 +234,12 @@ def test_write_reports_never_prunes_the_artifact_it_just_wrote(tmp_path: Path) -
 
 
 def test_write_reports_still_prunes_other_stale_snapshots(tmp_path: Path) -> None:
-    """Protecting the new artifact must not disable retention for the rest."""
-    stale = tmp_path / "daily_report_20260101T120000Z_old-run.json"
+    """Protecting the new artifact must not disable retention for the rest.
+
+    Suffixed (run_id) artifacts are managed and never pruned, so the stale
+    snapshot here is an unmanaged suffix-less one.
+    """
+    stale = tmp_path / "daily_report_20260101T120000Z.json"
     stale.write_text("{}", encoding="utf-8")
 
     report = _report("AAA", accepted=1)
