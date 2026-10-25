@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from trader_koo.llm.evaluation import (
     baseline_candidate,
     cache_identity,
@@ -277,3 +279,161 @@ def test_unsafe_evidence_never_calls_provider(tmp_path, monkeypatch) -> None:
     assert output == {}
     assert called is False
     assert not db_path.exists()
+
+
+def _grounded_errors(context, observation: str) -> list[str]:
+    return evaluate_setup_rewrite(_candidate(context, observation=observation), context)["errors"]
+
+
+@pytest.mark.parametrize("observation", [
+    "MCO: Price is down 1.55% today.",
+    "MCO closed 2.44% below the 20-day moving average.",
+    "MCO is 2.44% lower than its 20-day MA.",
+])
+def test_unsigned_magnitude_with_negative_word_matches_negative_fact(observation: str) -> None:
+    context = _context(ticker="MCO", pct_change=-1.55, pct_vs_ma20=-2.44)
+
+    assert _grounded_errors(context, observation) == []
+
+
+@pytest.mark.parametrize("observation", [
+    "MCO: Price is up 1.55% today.",
+    "MCO rose 1.55% today.",
+    "MCO moved 1.55% today.",
+    "MCO: Price is +1.55% today.",
+])
+def test_unsigned_magnitude_without_negative_word_rejects_negative_fact(observation: str) -> None:
+    context = _context(ticker="MCO", pct_change=-1.55)
+
+    assert _grounded_errors(context, observation) == ["unsupported_numeric_claim"]
+
+
+@pytest.mark.parametrize("observation", [
+    "MCO: the candle is bullish despite a 1.55% daily decline.",
+    "MCO is consolidating with a 1.55% decline.",
+    "MCO shows a 1.55% drop today.",
+    "MCO trades at a 2.44% discount to the 20-day MA.",
+    "MCO is consolidating near resistance with a 1.55% decline.",
+    "MCO is 2.44% below the MA20 with a 1.55% daily decline.",
+])
+def test_trailing_negative_noun_matches_negative_fact(observation: str) -> None:
+    context = _context(ticker="MCO", pct_change=-1.55, pct_vs_ma20=-2.44)
+
+    assert _grounded_errors(context, observation) == []
+
+
+@pytest.mark.parametrize("observation", [
+    "MCO shows a 1.55% daily gain.",
+    "MCO trades at a 2.44% premium to the 20-day MA.",
+])
+def test_trailing_positive_noun_rejects_negative_fact(observation: str) -> None:
+    context = _context(ticker="MCO", pct_change=-1.55, pct_vs_ma20=-2.44)
+
+    assert _grounded_errors(context, observation) == ["unsupported_numeric_claim"]
+
+
+def test_explicit_negative_sign_must_match_signed_fact() -> None:
+    context = _context(ticker="MCO", pct_change=1.55)
+
+    assert _grounded_errors(context, "MCO: Price is -1.55% today.") == ["unsupported_numeric_claim"]
+    assert _grounded_errors(context, "MCO: Price is +1.55% today.") == []
+
+
+def test_ungrounded_number_next_to_direction_word_is_still_rejected() -> None:
+    context = _context(ticker="MCO", pct_change=-1.55)
+
+    assert _grounded_errors(context, "MCO: Price is down 9.99% today.") == ["unsupported_numeric_claim"]
+
+
+@pytest.mark.parametrize("label", ["20-day", "50-day", "200-day", "52-week", "12-month"])
+def test_indicator_window_labels_are_not_numeric_claims(label: str) -> None:
+    context = _context(ticker="MCO")
+
+    assert _grounded_errors(context, f"MCO sits near its {label} average.") == []
+
+
+def test_window_label_exemption_does_not_hide_other_numbers() -> None:
+    context = _context(ticker="MCO")
+
+    assert _grounded_errors(
+        context, "MCO sits near its 20-day average of 999."
+    ) == ["unsupported_numeric_claim"]
+
+
+@pytest.mark.parametrize("text", [
+    "MCO forms a W-Bottom above the 20-day MA.",
+    "MCO holds MA20 and the EMA50.",
+    "MCO shows RSI and MACD divergence with the SMA200 nearby.",
+])
+def test_technical_acronyms_and_hyphenated_terms_are_not_tickers(text: str) -> None:
+    context = _context(ticker="MCO")
+
+    assert _grounded_errors(context, text) == []
+
+
+def test_unlisted_ticker_is_still_flagged_beside_acronyms() -> None:
+    context = _context(ticker="MCO")
+
+    assert _grounded_errors(
+        context, "MCO trails ZZZZ near the 20-day MA."
+    ) == ["unsupported_ticker_claim"]
+
+
+def test_versions_are_bumped_for_the_validator_change() -> None:
+    from trader_koo.llm.evaluation import CACHE_VERSION, EVALUATOR_VERSION
+
+    assert EVALUATOR_VERSION == "setup-grounding-v14"
+    assert CACHE_VERSION == "setup-rewrite-cache-v15"
+
+
+def test_positive_word_before_the_number_beats_a_trailing_negative_word() -> None:
+    context = _context(ticker="MCO", pct_change=-1.55)
+
+    assert _grounded_errors(
+        context, "MCO gained 1.55% off the low."
+    ) == ["unsupported_numeric_claim"]
+
+
+@pytest.mark.parametrize("observation", [
+    "MCO: Price down yet rallied 1.55% today.",
+    "MCO: Volume is down and price 1.55% today.",
+    "MCO: Price is not down 1.55% today.",
+    "MCO: Price isn't down 1.55% today.",
+    "MCO: Price down yet leapt 1.55% today.",
+    "MCO jumped 1.55% below the high.",
+    "MCO surged 1.55% below the high.",
+    "MCO: The 20-day MA is 2.44% below the price.",
+])
+def test_direction_must_frame_the_number_for_a_negative_fact(observation: str) -> None:
+    context = _context(ticker="MCO", pct_change=-1.55, pct_vs_ma20=-2.44)
+
+    assert _grounded_errors(context, observation) == ["unsupported_numeric_claim"]
+
+
+@pytest.mark.parametrize("observation", [
+    "MCO: Price is down by 1.55% today.",
+    "MCO: Price fell about 1.55% today.",
+    "MCO: A negative 1.55% day.",
+    "MCO closed 2.44% below the 20-day MA, down 1.55% today.",
+])
+def test_adjacent_direction_with_one_filler_is_accepted(observation: str) -> None:
+    context = _context(ticker="MCO", pct_change=-1.55, pct_vs_ma20=-2.44)
+
+    assert _grounded_errors(context, observation) == []
+
+
+@pytest.mark.parametrize("label", ["250-day", "999-day", "7-week", "36-month"])
+def test_unconventional_window_labels_are_still_numeric_claims(label: str) -> None:
+    context = _context(ticker="MCO")
+
+    assert _grounded_errors(
+        context, f"MCO sits near its {label} average."
+    ) == ["unsupported_numeric_claim"]
+
+
+def test_dollar_prefixed_day_label_is_still_a_numeric_claim() -> None:
+    context = _context(ticker="MCO")
+
+    assert _grounded_errors(
+        context, "MCO costs $20-day."
+    ) == ["unsupported_numeric_claim"]
