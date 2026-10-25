@@ -294,4 +294,3 @@ def replay_campaign(*, candidate_runs: list[dict[str, Any]], price_rows: list[di
         "decisions": decisions, "equity_curve": curve, "replay_live_parity": parity,
         "parity_mismatches": mismatches, "walk_forward": walk_forward, "held_out": held_out,
     }
-
