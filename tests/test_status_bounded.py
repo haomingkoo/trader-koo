@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 from trader_koo.backend.routers import system
 from trader_koo.backend.services.pipeline import invalidate_status_cache
-from trader_koo.llm_health import llm_health_summary_readonly
 
 
 def _status_dependencies():
@@ -17,7 +16,6 @@ def _status_dependencies():
         patch.object(system, "resolve_published_report", return_value=None),
         patch.object(system, "pipeline_status_snapshot", return_value={}),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
-        patch.object(system, "llm_status_readonly", return_value={"enabled": False}),
     )
 
 
@@ -66,7 +64,6 @@ def test_status_never_revalidates_full_price_history(seeded_conn, tmp_path: Path
         dependencies[0],
         dependencies[1],
         dependencies[2],
-        dependencies[3],
     ):
         payload = system.status()
 
@@ -104,7 +101,6 @@ def test_status_caches_at_completion_time(seeded_conn, tmp_path: Path) -> None:
         dependencies[0],
         dependencies[1],
         dependencies[2],
-        dependencies[3],
     ):
         system.status()
 
@@ -143,7 +139,6 @@ def test_retained_historical_symbol_does_not_inflate_current_cohort(
             return_value={"active": False, "stage": "idle"},
         ),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
-        patch.object(system, "llm_status_readonly", return_value={"enabled": False}),
     ):
         payload = system.status()
 
@@ -185,7 +180,6 @@ def test_current_cohort_unresolved_symbol_keeps_research_fail_closed(
         patch.object(system, "is_report_fresh", return_value=True),
         patch.object(system, "pipeline_status_snapshot", return_value={"active": False}),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
-        patch.object(system, "llm_status_readonly", return_value={"enabled": False}),
     ):
         payload = system.status()
 
@@ -265,7 +259,6 @@ def test_missing_successful_ingest_cohort_is_explicitly_unavailable(
         patch.object(system, "is_report_fresh", return_value=True),
         patch.object(system, "pipeline_status_snapshot", return_value={"active": False}),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
-        patch.object(system, "llm_status_readonly", return_value={"enabled": False}),
     ):
         payload = system.status()
 
@@ -301,7 +294,6 @@ def test_operational_failure_does_not_change_research_readiness(
             return_value={"active": False, "stage": "idle"},
         ),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
-        patch.object(system, "llm_status_readonly", return_value={"enabled": False}),
     ):
         payload = system.status()
 
@@ -331,41 +323,3 @@ def test_persisted_revision_summary_reads_only_price_identities(seeded_conn) -> 
     assert len(price_queries) == 1
     assert "select distinct ticker from price_daily" in price_queries[0]
     assert all(column not in price_queries[0] for column in (" open", " close", " high", " low", " volume"))
-
-
-def test_llm_health_readonly_does_not_initialize_schema(tmp_path: Path) -> None:
-    db_path = tmp_path / "health.db"
-    conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE llm_health_events (
-            id INTEGER PRIMARY KEY,
-            event_ts TEXT NOT NULL,
-            outcome TEXT NOT NULL,
-            source TEXT,
-            ticker TEXT,
-            reason TEXT,
-            error_class TEXT,
-            details TEXT
-        );
-        CREATE TABLE llm_health_state (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_ts TEXT NOT NULL
-        );
-        INSERT INTO llm_health_events (event_ts, outcome)
-        VALUES ('2026-08-26T00:00:00Z', 'success');
-        """
-    )
-    conn.commit()
-    conn.close()
-    before = db_path.read_bytes()
-
-    with patch(
-        "trader_koo.llm_health.ensure_llm_health_schema",
-        side_effect=AssertionError("DDL attempted"),
-    ):
-        summary = llm_health_summary_readonly(db_path, recent_limit=1)
-
-    assert summary["counts"]["success"] == 1
-    assert db_path.read_bytes() == before

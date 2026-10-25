@@ -109,7 +109,7 @@ and its causal limitations. A backtest never activates a paper campaign. See
 7. **VIX Analysis**, **Calendar** (earnings), **Options**, **Crypto**, **Hyperliquid**, and **Pred Markets** - one nav entry each for market views.
 8. **Methodology** - architecture, model logic, and operational design.
 
-`/experiments` and `/agent-observability` are routes without nav entries. The nav is defined in `trader_koo/frontend-v2/src/routes/routeConfig.tsx`.
+`/experiments` is a route without a nav entry. The nav is defined in `trader_koo/frontend-v2/src/routes/routeConfig.tsx`.
 
 ## Architecture
 

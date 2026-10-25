@@ -145,7 +145,6 @@ class SetupRewrite(BaseModel):
     """Schema for setup copy rewrite responses.
 
     Validates Requirements 2.1, 2.2, 7.4, 7.5.
-    Used by existing maybe_rewrite_setup_copy function.
     """
 
     observation: str = Field(

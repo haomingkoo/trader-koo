@@ -108,7 +108,6 @@ export interface PipelineStatus {
     fund_snapshot: string | null;
     options_snapshot: string | null;
   };
-  llm: Record<string, unknown>;
   service_meta: {
     service: string;
     contract: string;
@@ -600,8 +599,6 @@ export interface ChartCommentary {
   debate_disagreement_count: number | null;
   debate_safety_adjustment: number | null;
   commentary_context?: Record<string, unknown>;
-  narrative_trace?: Record<string, unknown>;
-  llm_ready_prompt?: string;
 }
 
 export interface Fundamentals {

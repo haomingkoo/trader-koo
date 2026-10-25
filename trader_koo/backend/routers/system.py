@@ -23,7 +23,6 @@ from trader_koo.backend.services.pipeline import (
     set_cached_status,
 )
 from trader_koo.backend.services.report_loader import is_report_fresh
-from trader_koo.llm_narrative import llm_status_readonly
 from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
@@ -265,24 +264,6 @@ def _sanitize_status_run(row: dict[str, Any] | None, *, expose_internal: bool) -
     } or None
 
 
-def _sanitize_status_llm(meta: dict[str, Any], *, expose_internal: bool) -> dict[str, Any]:
-    sanitized = sanitize_public_response(meta)
-    if expose_internal:
-        return sanitized
-
-    health = dict(meta.get("health") or {})
-    counts = dict(health.get("counts") or {})
-    sanitized["health"] = {
-        "degraded": bool(health.get("degraded")),
-        "degraded_threshold": health.get("degraded_threshold"),
-        "consecutive_failures": health.get("consecutive_failures"),
-        "last_success_ts": health.get("last_success_ts"),
-        "last_failure_ts": health.get("last_failure_ts"),
-        **({"counts": counts} if counts else {}),
-    }
-    return sanitized
-
-
 def _sanitize_status_payload(payload: dict[str, Any], *, expose_internal: bool) -> dict[str, Any]:
     sanitized = sanitize_public_response(payload)
     if expose_internal:
@@ -312,11 +293,6 @@ def _sanitize_status_payload(payload: dict[str, Any], *, expose_internal: bool) 
     pipeline.pop("stage_line", None)
     pipeline.pop("last_completed_line", None)
     sanitized["pipeline"] = pipeline
-
-    sanitized["llm"] = _sanitize_status_llm(
-        payload.get("llm") if isinstance(payload.get("llm"), dict) else {},
-        expose_internal=False,
-    )
     return sanitized
 
 
@@ -594,16 +570,6 @@ def status() -> dict[str, Any]:
         if resume_candidate:
             operational_warnings.append("post-ingest yolo/report recovery recommended")
 
-        llm_meta = llm_status_readonly()
-        llm_health_data = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
-        if llm_meta.get("enabled"):
-            if not llm_meta.get("ready"):
-                operational_warnings.append("llm not ready")
-            if llm_meta.get("runtime_disabled"):
-                operational_warnings.append("llm in runtime cooldown")
-            if llm_health_data.get("degraded"):
-                operational_warnings.append("llm degraded (rule fallback active)")
-
         warnings = [*operational_warnings, *research_warnings]
 
         activity = {
@@ -694,7 +660,6 @@ def status() -> dict[str, Any]:
             },
             "price_basis": price_basis,
             "activity": activity,
-            "llm": llm_meta,
             "latest_data": {
                 "price_date": latest_price_date,
                 "fund_snapshot": latest_fund_snapshot,

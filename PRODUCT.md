@@ -63,7 +63,7 @@ Target WCAG 2.1 AA contrast and keyboard operation. Never rely on color alone fo
   campaign status, including `active`; the sole bootstrap transition is
   `absent` to inactive `draft`. CI/CD never activates, resets, or rolls
   back the campaign. Activation is a separate authenticated, audited human action.
-- The Report, Chart, Paper Trades, Agent Traces, and Experiment Results journeys
+- The Report, Chart, Paper Trades, and Experiment Results journeys
   pass in Chromium with keyboard focus, non-color status labels, and no clipped
   decision text.
 

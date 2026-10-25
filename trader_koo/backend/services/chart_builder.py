@@ -27,7 +27,6 @@ from trader_koo.catalyst_data import get_ticker_earnings_markers
 from trader_koo.report.utils import nyse_holidays_for_year
 from trader_koo.features.candle_patterns import CandlePatternConfig, detect_candlestick_patterns
 from trader_koo.features.technical import FeatureConfig, add_basic_features, compute_pivots
-from trader_koo.llm_narrative import llm_status, maybe_rewrite_setup_copy
 from trader_koo.report.setup_scoring import (
     _describe_setup as _report_describe_setup,
     _score_setup_from_confluence as _report_score_setup_from_confluence,
@@ -531,24 +530,6 @@ def _build_chart_commentary_payload(
     if not (isinstance(setup_override, dict) and setup_override):
         row.update(_report_score_setup_from_confluence(row))
         row.update(_report_describe_setup(row))
-    baseline_narrative = {
-        "observation": row.get("observation"),
-        "action": row.get("action"),
-        "risk_note": row.get("risk_note"),
-        "technical_read": row.get("technical_read"),
-    }
-    prompt_instruction = (
-        "Summarize the chart in plain English using the freshest active YOLO pattern first, "
-        "then recent persistent YOLO context, then any stale historical context. "
-        "Explain trend, level location, candle confirmation, breakout/compression state, "
-        "and whether the setup is actionable now or only on confirmation."
-    )
-    llm_meta: dict[str, Any] = {}
-    try:
-        llm_meta = llm_status()
-    except Exception as exc:
-        LOG.warning("Failed to get LLM status for chart commentary: %s", exc)
-        llm_meta = {"error": str(exc)}
     row["narrative_source"] = "rule"
     if isinstance(setup_override, dict) and setup_override:
         override = dict(setup_override)
@@ -599,17 +580,6 @@ def _build_chart_commentary_payload(
         # independently recomputed tier.  This is the single-source-of-truth
         # fix: badges AND narrative now agree with the report.
         row.update(_report_describe_setup(row))
-    else:
-        llm_overrides = maybe_rewrite_setup_copy(row, source="chart_commentary")
-        if llm_overrides:
-            row.update(llm_overrides)
-            row["narrative_source"] = "llm"
-    final_narrative = {
-        "observation": row.get("observation"),
-        "action": row.get("action"),
-        "risk_note": row.get("risk_note"),
-        "technical_read": row.get("technical_read"),
-    }
 
     primary_audit = yolo_audit[0] if yolo_audit else None
     current_active = [item for item in yolo_audit if bool(item.get("active_now"))]
@@ -646,44 +616,6 @@ def _build_chart_commentary_payload(
     yolo_latest_close_in_pattern = row.get("yolo_latest_close_in_pattern")
     if yolo_latest_close_in_pattern is None and isinstance(primary_audit, dict):
         yolo_latest_close_in_pattern = primary_audit.get("latest_close_in_pattern")
-    llm_trace = {
-        "narrative_source": row.get("narrative_source"),
-        "baseline": baseline_narrative,
-        "final": final_narrative,
-        "changed_fields": {
-            "observation": baseline_narrative.get("observation") != final_narrative.get("observation"),
-            "action": baseline_narrative.get("action") != final_narrative.get("action"),
-            "risk_note": baseline_narrative.get("risk_note") != final_narrative.get("risk_note"),
-            "technical_read": baseline_narrative.get("technical_read") != final_narrative.get("technical_read"),
-        },
-        "llm_status": {
-            "enabled": bool(llm_meta.get("enabled")),
-            "ready": bool(llm_meta.get("ready")),
-            "runtime_disabled": bool(llm_meta.get("runtime_disabled")),
-            "runtime_disabled_remaining_sec": llm_meta.get("runtime_disabled_remaining_sec"),
-            "provider": llm_meta.get("provider"),
-            "temperature": llm_meta.get("temperature"),
-            "max_tokens": llm_meta.get("max_tokens"),
-            "timeout_sec": llm_meta.get("timeout_sec"),
-            "api_version": llm_meta.get("api_version"),
-        },
-        "rewrite_instruction": prompt_instruction,
-        "input_facts": {
-            "setup_family": row.get("setup_family"),
-            "signal_bias": row.get("signal_bias"),
-            "trend_state": row.get("trend_state"),
-            "level_context": row.get("level_context"),
-            "breakout_state": row.get("breakout_state"),
-            "structure_state": row.get("structure_state"),
-            "candle_bias": row.get("candle_bias"),
-            "yolo_pattern": row.get("yolo_pattern"),
-            "yolo_bias": row.get("yolo_bias"),
-            "yolo_recency": row.get("yolo_recency"),
-            "yolo_age_days": row.get("yolo_age_days"),
-            "yolo_direction_conflict": row.get("yolo_direction_conflict"),
-            "yolo_conflict_strength": row.get("yolo_conflict_strength"),
-        },
-    }
     return {
         "ticker": ticker,
         "asof": asof_date,
@@ -726,8 +658,6 @@ def _build_chart_commentary_payload(
             "candle": candle,
             "yolo": commentary_summary,
         },
-        "llm_ready_prompt": prompt_instruction,
-        "narrative_trace": llm_trace,
     }
 
 

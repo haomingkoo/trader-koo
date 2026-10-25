@@ -1,9 +1,8 @@
-"""System health, routes, LLM health/usage, data-source health, report stability,
+"""System health, routes, data-source health, report stability,
 usage/feedback summaries, setup evaluation, WebSocket health."""
 from __future__ import annotations
 
 import datetime as dt
-import os
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -11,14 +10,6 @@ from fastapi import APIRouter, Query, Request
 from trader_koo.backend.services.database import get_conn, table_exists
 from trader_koo.backend.services.report_loader import latest_daily_report_json
 from trader_koo.crypto.service import get_crypto_ws_health
-from trader_koo.llm_health import (
-    llm_alert_cooldown_min,
-    llm_alert_enabled,
-    llm_degraded_threshold,
-    llm_health_summary,
-    llm_token_usage_summary,
-)
-from trader_koo.llm_narrative import llm_status
 from trader_koo.middleware.auth import admin_route_inventory
 from trader_koo.streaming.service import get_equity_ws_health
 
@@ -45,43 +36,6 @@ def admin_routes(request: Request) -> dict[str, Any]:
         "all_protected": unprotected_count == 0,
         "routes": routes,
     }
-
-
-@router.get("/api/admin/llm-health")
-def admin_llm_health(
-    recent_limit: int = Query(default=25, ge=1, le=200),
-) -> dict[str, Any]:
-    """Return LLM runtime/config health plus recent persisted failure/success events."""
-    health = llm_health_summary(DB_PATH, recent_limit=recent_limit)
-    status_data = llm_status()
-    return {
-        "ok": True,
-        "status": status_data,
-        "health": health,
-        "alert": {
-            "enabled": llm_alert_enabled(),
-            "cooldown_min": llm_alert_cooldown_min(),
-            "degraded_threshold": llm_degraded_threshold(),
-            "has_override_recipients": bool(
-                str(
-                    os.getenv("TRADER_KOO_LLM_FAIL_ALERT_TO", "") or ""
-                ).strip()
-                or str(
-                    os.getenv("TRADER_KOO_LLM_ALERT_TO", "") or ""
-                ).strip()
-            ),
-        },
-    }
-
-
-@router.get("/api/admin/llm-usage")
-def admin_llm_usage(
-    days: int = Query(default=30, ge=1, le=3650),
-    limit: int = Query(default=50, ge=1, le=500),
-) -> dict[str, Any]:
-    """Return persisted LLM token usage/cost estimates."""
-    summary = llm_token_usage_summary(DB_PATH, days=days, limit=limit)
-    return {"ok": True, **summary}
 
 
 @router.get("/api/admin/setup-eval-summary")

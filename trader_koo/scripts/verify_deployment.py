@@ -39,9 +39,9 @@ def verify(
     release_status, release = _get(base_url, "/api/release")
     health_status, health = _get(base_url, "/api/health")
     status_code, status = _get(base_url, "/api/status")
-    unauth_code, _ = _get(base_url, "/api/admin/agent-observability")
+    unauth_code, _ = _get(base_url, "/api/admin/routes")
     auth_code, agents = _get(
-        base_url, "/api/admin/agent-observability", api_key=api_key,
+        base_url, "/api/admin/routes", api_key=api_key,
     )
     paper_status, paper = _get(base_url, "/api/paper-trades/summary")
     campaign = paper.get("campaign_health") or {}
@@ -62,7 +62,7 @@ def verify(
             and "git_sha" not in status.get("service_meta", {})
         ),
         "admin_rejects_missing_key": unauth_code in {401, 403},
-        "admin_accepts_valid_key": auth_code == 200 and agents.get("ok") is True,
+        "admin_accepts_valid_key": auth_code == 200 and agents.get("total", 0) > 0,
         "paper_summary": paper_status == 200 and paper.get("ok") is True,
         "campaign_v2_status_preserved": (
             paper_status == 200

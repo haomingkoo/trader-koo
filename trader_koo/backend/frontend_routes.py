@@ -15,6 +15,5 @@ SPA_ROUTE_PATHS = frozenset(
         "methodology",
         "alerts",
         "experiments",
-        "agent-observability",
     }
 )

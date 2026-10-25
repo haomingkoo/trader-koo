@@ -15,7 +15,6 @@ import pandas as pd
 
 from trader_koo.catalyst_data import build_earnings_calendar_payload
 from trader_koo.db.price_contract import research_eligible_tickers, research_price_contract
-from trader_koo.llm_narrative import llm_enabled, llm_status
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.paper_trades import (
     PAPER_TRADE_ENABLED,
@@ -45,7 +44,6 @@ from trader_koo.report.setup_scoring import (
     _apply_agreement_tier_adjustment,
     _apply_debate_guardrails,
     _apply_debate_payload,
-    _apply_llm_narrative_overrides,
     _apply_news_research_context,
     _apply_options_research_context,
     _apply_setup_eval_fields,
@@ -103,19 +101,6 @@ def _warn_if_latest_session_thin(conn: sqlite3.Connection, covered: int) -> None
     if universe and covered < universe * MIN_LATEST_SESSION_COVERAGE:
         LOG.warning("Latest session covers %d of %d recently active tickers", covered, universe)
         _report_warnings.append("market_breadth_latest_session_thin")
-
-
-def _llm_health_codes(llm_meta: dict[str, Any]) -> list[str]:
-    """Advisory LLM status codes; these never block report publication."""
-    health = llm_meta.get("health") if isinstance(llm_meta.get("health"), dict) else {}
-    codes = []
-    if not llm_meta.get("ready"):
-        codes.append("llm_not_ready")
-    if llm_meta.get("runtime_disabled"):
-        codes.append("llm_runtime_cooldown")
-    if health.get("degraded"):
-        codes.append("llm_degraded")
-    return codes
 
 
 def _green_barrier_coverage_requires_warning(coverage: dict[str, Any]) -> bool:
@@ -1088,7 +1073,6 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
             if isinstance(row, dict):
                 _apply_agreement_tier_adjustment(row)
         _apply_debate_guardrails(setup_rows)
-        _apply_llm_narrative_overrides(setup_rows, source="daily_report")
         signals["setup_quality_top"] = setup_rows[:40]
         signals["watchlist_candidates"] = [
             {
@@ -1205,7 +1189,6 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                     reverse=True,
                 )
 
-                _apply_llm_narrative_overrides(setup_rows, source="daily_report")
                 signals["setup_quality_all"] = setup_rows
                 signals["setup_quality_top"] = setup_rows[:40]
                 signals["suggestions"] = build_suggestions(signals["setup_quality_top"])
@@ -1401,7 +1384,6 @@ def fetch_report_payload(
         "generated_ts": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "meta": {
             "report_kind": report_kind_norm,
-            "llm": llm_status(),
             "report_run": {
                 "run_id": report_run_id,
                 "state": "started" if report_run_id else "unlinked_legacy",
@@ -1689,13 +1671,6 @@ def fetch_report_payload(
             _report_warnings.append("tonight_key_changes_failed")
             payload["signals"]["tonight_key_changes"] = []
 
-        # Refresh LLM status after signal narrative pass so this snapshot reflects current runtime state.
-        try:
-            payload["meta"]["llm"] = llm_status()
-        except Exception as exc:
-            LOG.warning("LLM status refresh failed: %s", exc)
-            payload["meta"]["llm"] = {}
-
         # Basic health guardrails.
         price_age = payload["freshness"]["price_age_days"]
         fund_age  = payload["freshness"]["fund_age_hours"]
@@ -1721,11 +1696,6 @@ def fetch_report_payload(
             )
         ):
             payload["warnings"].append("yolo_data_stale")
-
-        # LLM health is advisory: record it in meta.llm, never in publication-blocking warnings.
-        llm_meta = payload["meta"].get("llm")
-        if isinstance(llm_meta, dict) and llm_enabled():
-            llm_meta["health_codes"] = _llm_health_codes(llm_meta)
 
         payload["risk_filters"] = build_no_trade_conditions(payload)
         signals = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}

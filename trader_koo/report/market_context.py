@@ -221,32 +221,11 @@ def _build_regime_llm_commentary(regime: dict[str, Any]) -> dict[str, Any]:
     if asof_date:
         cache_source = f"regime_context_{asof_date}"
 
-    row: dict[str, Any] = {}
-    try:
-        from trader_koo.llm_narrative import llm_enabled, maybe_rewrite_setup_copy
-        if llm_enabled():
-            row = maybe_rewrite_setup_copy(
-                {
-                    "observation": summary,
-                    "action": action,
-                    "risk_note": risk_note,
-                    "signal_bias": health_state.replace("_", " "),
-                    "setup_family": "regime_context",
-                    "ticker": "^VIX",
-                    "score": float(health.get("score") or 50.0),
-                },
-                source=cache_source,
-            ) or {}
-    except Exception:
-        row = {}
-
-    model_observation = str(row.get("observation") or "").strip()
-    model_contributed = bool(model_observation and model_observation != summary.strip())
     return {
-        "source": "llm" if model_contributed else "rule",
-        "observation": str(row.get("observation") or summary),
-        "action": str(row.get("action") or action),
-        "risk_note": str(row.get("risk_note") or risk_note or "context_only_signal"),
+        "source": "rule",
+        "observation": summary,
+        "action": action,
+        "risk_note": risk_note or "context_only_signal",
     }
 
 

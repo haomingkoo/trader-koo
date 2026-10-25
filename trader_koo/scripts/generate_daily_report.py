@@ -20,7 +20,6 @@ from trader_koo.report.email_dispatch import (
     _email_transport,
     _resend_cfg,
     _smtp_cfg,
-    send_llm_failure_alert_email,
     send_report_email,
 )
 from trader_koo.report.generator import fetch_report_payload
@@ -138,11 +137,6 @@ def main() -> None:
             "to": None,
             "state": "pending_after_publication" if args.send_email else "disabled",
         }
-        llm_alert_meta: dict[str, Any] = {
-            "attempted": False,
-            "reason": "pending_after_publication",
-        }
-        report["llm_alert"] = llm_alert_meta
         report["email"] = email_meta
         warnings = report.get("warnings")
         if not isinstance(warnings, list):
@@ -213,18 +207,6 @@ def main() -> None:
                 email_meta.update({"state": "failed", "error": str(exc)})
                 LOG.error("Email dispatch failed after publication: %s", exc)
 
-        try:
-            llm_alert_meta = send_llm_failure_alert_email(report, db_path=db_path)
-        except Exception as exc:
-            llm_alert_meta = {
-                "attempted": True,
-                "reason": "dispatch_error",
-                "sent_count": 0,
-                "failed_count": 0,
-                "error": str(exc),
-            }
-            LOG.error("LLM failure alert email failed after publication: %s", exc)
-
         print(
             json.dumps(
                 {
@@ -239,9 +221,6 @@ def main() -> None:
                     "email_attempted": email_meta.get("attempted", False),
                     "email_sent": email_meta.get("sent", False),
                     "email_error": email_meta.get("error"),
-                    "llm_alert_attempted": llm_alert_meta.get("attempted", False),
-                    "llm_alert_reason": llm_alert_meta.get("reason"),
-                    "llm_alert_sent_count": int(llm_alert_meta.get("sent_count") or 0),
                 },
                 indent=2,
             )
