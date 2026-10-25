@@ -25,7 +25,8 @@ Railway Service (single process)
 │
 ├── APScheduler (BackgroundScheduler, in-process)
 │   ├── Mon–Fri 22:00 UTC: daily_update.sh (ingest → YOLO → report)
-│   └── Saturday 00:30 UTC: YOLO full seed (daily + weekly timeframes)
+│   ├── Saturday 00:30 UTC: YOLO full seed (daily + weekly timeframes)
+│   └── Other jobs: see trader_koo/backend/services/scheduler.py
 │
 └── /data/ (Railway persistent volume)
     ├── trader_koo.db    (SQLite app data)
@@ -63,7 +64,7 @@ The torch/torchvision pair must come from the same CPU index — installing them
 
 ### First-run DB seed
 
-`start.sh` checks for `/data/trader_koo.db`. If it doesn't exist, it runs `update_market_db.py` with `--price-lookback-days 365` to pull a full year of history for all ~510 S&P 500 + context tickers. This takes ~20–30 min but only happens once — subsequent deploys skip it.
+`start.sh` checks for `/data/trader_koo.db`. If it doesn't exist, it creates an empty schema, starts `update_market_db.py` in the background (`nohup`, log at `/data/logs/seed.log`) with `--price-lookback-days 365`, and starts the server without waiting. The seed pulls a full year of history for all ~510 S&P 500 + context tickers, takes ~20–30 min, and only happens once. Subsequent deploys skip it.
 
 YOLO patterns are seeded separately via `POST /api/admin/run-yolo-seed` after the first deploy.
 
@@ -75,7 +76,7 @@ The YOLOv8 model (`foduucom/stockmarket-pattern-detection-yolov8`) is downloaded
 
 ## Backend routers
 
-All routes live under `trader_koo/backend/routers/`. The app factory in `main.py` (~600 lines) mounts them along with middleware and static file serving.
+Routes live under `trader_koo/backend/routers/`, except Hyperliquid, which is in the separate `trader_koo/hyperliquid/` package. The app factory in `main.py` (~600 lines) mounts them along with middleware and static file serving.
 
 | Router | Path prefix | Purpose |
 |--------|-------------|---------|
@@ -86,15 +87,17 @@ All routes live under `trader_koo/backend/routers/`. The app factory in `main.py
 | `paper_trades.py` | `/api/paper-trades` | Trade list, summary, detail, equity curve |
 | `email.py` | `/api/email` | Subscribe, unsubscribe, confirm, chart preview |
 | `crypto.py` | `/api/crypto` | Prices, history, indicators, structure analysis, correlation, open interest |
-| `hyperliquid/routes.py` | `/api/hyperliquid` | Whale tracking, configurable wallets, reload events, counter-trade signals |
+| `trader_koo/hyperliquid/routes.py` | `/api/hyperliquid` | Whale tracking, configurable wallets, reload events, counter-trade signals |
 | `streaming.py` | `/api/streaming` | Equity tick prices, subscription management (Finnhub WS bridge) |
 | `data_sync.py` | `/api/data-sync` | Polymarket event ingestion |
+| `alerts.py` | `/api/alerts` | Alert history |
+| `options.py` | `/api/options` | Options premium proxy snapshots |
 | `usage.py` | `/api/usage` | Session tracking, setup feedback collection |
-| `admin/` | `/api/admin` | Split into 5 modules (see below) |
+| `admin/` | `/api/admin` | Split into per-concern modules (see below) |
 
 ### Admin sub-routers
 
-The admin router is split for maintainability. All require `X-API-Key` authentication.
+The admin router is split for maintainability. All require `X-API-Key` authentication. See `trader_koo/backend/routers/admin/` for the current module list.
 
 | Module | Responsibilities |
 |--------|-----------------|
@@ -103,6 +106,14 @@ The admin router is split for maintainability. All require `X-API-Key` authentic
 | `data.py` | DB inspection, cache management, data quality checks |
 | `system.py` | Logs, audit trail, health events, configuration |
 | `email_admin.py` | Subscriber management, delivery history, test sends |
+| `agents.py` | Agent observability traces |
+| `alert_quality.py` | Alert quality report |
+| `backups.py` | Create, list, and inspect backups |
+| `crypto.py` | Crypto backfill and data status |
+| `maintenance.py` | Maintenance requests and status |
+| `market_monitor.py` | Market spikes, market snapshot, spike alert test |
+| `paper_campaigns.py` | Paper campaign approvals and transitions |
+| `telegram.py` | Telegram alert history and test send |
 
 ---
 
@@ -426,20 +437,7 @@ On mobile, labels are shortened using a compact map (`"Head and shoulders bottom
 
 The `trader_koo/ml/` directory implements a LightGBM-based binary classifier for next-day directional prediction.
 
-```
-trader_koo/ml/
-├── features.py          51 features across 12 categories
-├── labels.py            Triple-barrier labeling (profit/stop/time)
-├── trainer.py           LightGBM walk-forward with purged validation
-├── scorer.py            Real-time scoring for dashboard integration
-├── backtest.py          Walk-forward backtest with equity curve
-├── macro_features.py    FRED-sourced macro indicators
-├── external_data.py     FRED API client with caching
-├── sector_rotation.py   Sector-relative momentum features
-├── meta_label.py        Meta-labeling for false positive filtering
-├── shap_analysis.py     SHAP feature importance and explanations
-└── drift_detection.py   Feature distribution drift monitoring
-```
+See the `trader_koo/ml/` directory for modules (features, labels, trainer, scorer, benchmark, meta-label, validation registry, rule baseline).
 
 ### Feature engineering (51 features, 12 categories)
 
@@ -460,22 +458,15 @@ The feature set covers price action, momentum, volatility, volume, structure, an
 
 ### Labeling
 
-Triple-barrier method labels each sample as 1 (profitable) or 0 (not):
-- **Take-profit barrier**: price rises `2 × ATR` within the holding period
-- **Stop-loss barrier**: price falls `1 × ATR` within the holding period
-- **Time barrier**: 10 trading days — if neither barrier is hit, label based on final return sign
+`generate_triple_barrier_labels` in `labels.py` labels each (ticker, entry date) pair as 1 (profitable) or 0 (not). The profit and stop barriers scale with trailing daily volatility through `profit_mult` and `stop_mult`. The stop is checked first when both barriers fall in the same bar. A time barrier at `max_holding_days` falls back to the sign of the final return.
 
 ### Training
 
-Walk-forward validation with purged gaps to prevent look-ahead bias:
-- Train on expanding window (min 252 days)
-- Purge 5-day gap between train and validation sets
-- Validate on next 63 trading days (~1 quarter)
-- Final model: LightGBM with class-weight balancing
+`train_walk_forward` in `trainer.py` uses walk-forward validation with a purge gap between train and validation windows to prevent look-ahead bias. `run_benchmark` in `benchmark.py` sets its own train, test, step, and embargo defaults. Read the symbols for current window sizes.
 
 ### Meta-labeling
 
-A second-stage LightGBM model that predicts whether the primary model's "buy" signal is a true positive. This acts as a false-positive filter — only trades where both the primary model and meta-model agree get through.
+`meta_label.py` exposes `build_meta_labels_from_oos`, which builds second-stage labels from out-of-sample primary predictions, and `train_meta_model`, which fits the second-stage LightGBM model on them.
 
 ### Model serving
 
@@ -565,9 +556,9 @@ The debate layer contributes structured commentary and approval state, but the f
 
 ### Position sizing
 
-Risk is set from the initial stop distance and tier-based sizing:
+Risk is set from the initial stop distance and a fixed risk budget:
 - Initial stop: ATR-aware stop with support/resistance adjustments and minimum distance floor
-- Position size: tier-based notional with caution, volatility, and earnings haircuts
+- Position size: `risk_per_trade_pct` divided by stop distance, then capped at the tier ceiling (`compute_position_plan` in `paper_trade/decision.py`), with caution, volatility, and earnings haircuts
 - Risk budget: persisted per trade via `stop_distance_pct` / `risk_budget_pct`
 - Trailing: graduated stop logic at breakeven, mid, and tight-profit thresholds
 
@@ -821,8 +812,10 @@ APScheduler `BackgroundScheduler` runs inside the FastAPI process.
 
 | Schedule | Trigger | Job |
 |----------|---------|-----|
-| Mon–Fri 22:00 UTC | `CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="UTC")` | `daily_update.sh` (ingest + YOLO + report) |
-| Saturday 00:30 UTC | `CronTrigger(hour=0, minute=30, day_of_week="sat", timezone="UTC")` | YOLO full seed (all tickers, both timeframes) |
+| Mon–Fri 22:00 UTC | `CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="UTC")` | `daily_update` runs `daily_update.sh` (ingest + YOLO + report) |
+| Saturday 00:30 UTC | `CronTrigger(hour=0, minute=30, day_of_week="sat", timezone="UTC")` | `weekly_yolo`: YOLO full seed (all tickers, both timeframes) |
+
+Other jobs registered in the same file include `preopen_report_watchdog`, `weekly_backup`, `polymarket_snapshot`, `storage_cleanup`, `crypto_health_check`, `hyperliquid_poll`, `derivatives_snapshot`, `calibration_pulse`, and `memory_cleanup`. Some are conditional: `morning_summary`, `spike_alerts`, `macro_alert`, and `site_health_check` need `TELEGRAM_BOT_TOKEN`, and `options_iv_snapshot` needs its snapshot config enabled. `trader_koo/backend/services/scheduler.py` is authoritative for the job list, triggers, and conditions.
 
 22:00 UTC covers all US market closes (Mon–Fri 4pm ET = 21:00 UTC in EDT / 22:00 UTC in EST — the schedule uses 22:00 as a conservative post-close time).
 
@@ -850,6 +843,6 @@ test count here; use the exact CI run for the commit being evaluated.
 | Area | Limitation | Mitigation / Future plan |
 |------|-----------|--------------------------|
 | **Database** | SQLite: fine for single-process, would need Postgres for multi-worker | Acceptable for current single-service architecture |
-| **YOLO model** | Pre-trained HuggingFace model, not fine-tuned on gold labels yet | CV label pipeline exists; gold-label fine-tuning is planned |
+| **YOLO model** | Pre-trained HuggingFace model, not fine-tuned | No fine-tuning is planned; the CV label-curation pipeline was removed |
 | **Research evidence** | Current empirical evidence is not decision-eligible | Keep performance claims within `RESEARCH_STATUS.md` |
 | **Daily cron** | In-process APScheduler — if process restarts mid-run, job is lost | For higher reliability, could move to Railway cron or GitHub Actions |

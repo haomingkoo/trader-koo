@@ -106,8 +106,10 @@ and its causal limitations. A backtest never activates a paper campaign. See
 4. **Opportunities** - ranked research candidates and setup filters.
 5. **Paper Trades** - simulated trade journal with critic review and outcomes.
 6. **Alerts** - Telegram alerts, market spikes, and system events.
-7. **Markets** - VIX, options, crypto, Hyperliquid, and prediction-market views.
+7. **VIX Analysis**, **Calendar** (earnings), **Options**, **Crypto**, **Hyperliquid**, and **Pred Markets** - one nav entry each for market views.
 8. **Methodology** - architecture, model logic, and operational design.
+
+`/experiments` and `/agent-observability` are routes without nav entries. The nav is defined in `trader_koo/frontend-v2/src/routes/routeConfig.tsx`.
 
 ## Architecture
 

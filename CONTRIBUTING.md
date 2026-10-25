@@ -25,6 +25,8 @@ Run the same baseline that GitHub Actions enforces before opening a PR:
 make ci
 ```
 
+Run it inside the activated `.venv`, or pass `PYTHON=.venv/bin/python`. System Python lacks hmmlearn. Install the hooks with `make hooks-install`, otherwise the repo-hygiene job catches what you cannot run locally. Unset `FINNHUB_API_KEY` before running pytest, and check production llm-health before concluding the LLM is broken from a stale local `.env` key.
+
 That currently covers:
 
 - Python bytecode sanity checks for `trader_koo/` and `tests/`
