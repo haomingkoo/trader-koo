@@ -33,6 +33,9 @@ That currently covers:
 - Full backend test suite
 - Frontend production build
 - Pre-commit hygiene and secret scanning
+- `make guardrails`: file size, bare-number and duplicate-code counts may only fall from `ops/guardrails_baseline.json`, plus the import-linter layer contract
+
+For changes that move or restructure backend modules, run `make golden BASE=origin/main`. It snapshots the report, email and paper decisions on a copy of the local price database at a frozen clock with the network blocked, and prints `golden: identical` when the branch matches main. Rename a moved file's entry in `ops/guardrails_baseline.json` in the same PR, and lower the baseline with `python -m ops.guardrails baseline` after shrinking a file.
 
 To inspect dependency freshness locally:
 
