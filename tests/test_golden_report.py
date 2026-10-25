@@ -19,6 +19,16 @@ NOW = datetime(2026, 10, 23, 22, 0, tzinfo=timezone.utc)
 SNAPSHOT_FILES = ("report.json", "email.txt", "email.html", "paper.json", "policy.json")
 
 
+def _has_prices(path: Path) -> bool:
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return conn.execute("SELECT 1 FROM price_daily LIMIT 1").fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.close()
+
+
 def _local_db() -> Path | None:
     # The price databases are untracked, so a worktree finds them in the main checkout.
     roots = [REPO, *[p for p in REPO.parents if (p / "trader_koo" / "data").exists()][:1]]
@@ -27,7 +37,7 @@ def _local_db() -> Path | None:
         for root in roots
         for rel in ("trader_koo/data/trader_koo.db", "data/prod_paper_price.db")
     ]
-    existing = [p for p in candidates if p.is_file()]
+    existing = [p for p in candidates if p.is_file() and _has_prices(p)]
     return max(existing, key=lambda p: p.stat().st_mtime) if existing else None
 
 
