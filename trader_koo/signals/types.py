@@ -6,18 +6,21 @@ uniformly by the scoring and ensemble systems.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Annotated, Literal
+
+from pydantic import Field
+from pydantic.dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class SignalOutput:
-    """One directional signal from any source."""
+    """One directional signal from any source, validated on construction."""
 
     signal_type: str        # e.g., "yolo_pattern", "candle", "trend", "mean_reversion"
-    bias: str               # "bullish" | "bearish" | "neutral"
-    confidence: float       # 0-100
+    bias: Literal["bullish", "bearish", "neutral"]
+    confidence: Annotated[float, Field(ge=0, le=100)]
     reasoning: str          # human-readable explanation
-    weight: float = 1.0     # relative importance (default 1.0)
+    weight: Annotated[float, Field(ge=0)] = 1.0     # relative importance
 
 
 def aggregate_signals(signals: list[SignalOutput]) -> dict[str, float | str | int]:
