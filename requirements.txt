@@ -18,7 +18,7 @@ hmmlearn==0.3.3
 scikit-learn==1.8.0
 lightgbm==4.6.0
 shap==0.51.0
-Pillow==12.2.0
+Pillow==13.0.0
 python-multipart==0.0.24
 httpx==0.28.1
 exchange-calendars==4.13.2
