@@ -2,7 +2,7 @@ PYTHON ?= python3
 PIP ?= $(PYTHON) -m pip
 FRONTEND_DIR := trader_koo/frontend-v2
 
-.PHONY: backend-install frontend-install hooks-install backend-check test frontend-build dependency-status precommit ci
+.PHONY: backend-install frontend-install hooks-install backend-check test frontend-build dependency-status precommit golden guardrails ci
 
 backend-install:
 	$(PIP) install --upgrade pip
@@ -35,4 +35,11 @@ dependency-status:
 precommit:
 	pre-commit run --all-files
 
-ci: backend-check test frontend-build precommit
+golden:
+	PYTHON=$(PYTHON) ops/golden_diff.sh $(or $(BASE),origin/main)
+
+guardrails:
+	$(PYTHON) -m ops.guardrails check
+	$(PYTHON) -c "from importlinter.cli import lint_imports_command as m; m()" --config .importlinter
+
+ci: backend-check test frontend-build precommit guardrails

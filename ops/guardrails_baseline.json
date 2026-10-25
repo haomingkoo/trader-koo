@@ -1,0 +1,557 @@
+{
+ "duplicate_blocks": 11,
+ "files": {
+  "trader_koo/analysis/green_barrier.py": {
+   "bare_numbers": 114,
+   "lines": 427
+  },
+  "trader_koo/analysis/technical_ensemble.py": {
+   "bare_numbers": 96,
+   "lines": 366
+  },
+  "trader_koo/audit/api.py": {
+   "bare_numbers": 7,
+   "lines": 224
+  },
+  "trader_koo/audit/export.py": {
+   "bare_numbers": 1,
+   "lines": 72
+  },
+  "trader_koo/audit/middleware.py": {
+   "bare_numbers": 1,
+   "lines": 148
+  },
+  "trader_koo/audit/schema.py": {
+   "bare_numbers": 1,
+   "lines": 147
+  },
+  "trader_koo/backend/main.py": {
+   "bare_numbers": 3,
+   "lines": 656
+  },
+  "trader_koo/backend/routers/admin/_shared.py": {
+   "bare_numbers": 1,
+   "lines": 55
+  },
+  "trader_koo/backend/routers/admin/alert_quality.py": {
+   "bare_numbers": 9,
+   "lines": 199
+  },
+  "trader_koo/backend/routers/admin/backups.py": {
+   "bare_numbers": 1,
+   "lines": 65
+  },
+  "trader_koo/backend/routers/admin/crypto.py": {
+   "bare_numbers": 6,
+   "lines": 74
+  },
+  "trader_koo/backend/routers/admin/data.py": {
+   "bare_numbers": 12,
+   "lines": 465
+  },
+  "trader_koo/backend/routers/admin/email_admin.py": {
+   "bare_numbers": 3,
+   "lines": 222
+  },
+  "trader_koo/backend/routers/admin/maintenance.py": {
+   "bare_numbers": 12,
+   "lines": 66
+  },
+  "trader_koo/backend/routers/admin/market_monitor.py": {
+   "bare_numbers": 2,
+   "lines": 64
+  },
+  "trader_koo/backend/routers/admin/paper_campaigns.py": {
+   "bare_numbers": 15,
+   "lines": 89
+  },
+  "trader_koo/backend/routers/admin/pipeline.py": {
+   "bare_numbers": 22,
+   "lines": 381
+  },
+  "trader_koo/backend/routers/admin/system.py": {
+   "bare_numbers": 3,
+   "lines": 302
+  },
+  "trader_koo/backend/routers/admin/telegram.py": {
+   "bare_numbers": 2,
+   "lines": 54
+  },
+  "trader_koo/backend/routers/alerts.py": {
+   "bare_numbers": 14,
+   "lines": 257
+  },
+  "trader_koo/backend/routers/crypto.py": {
+   "bare_numbers": 25,
+   "lines": 400
+  },
+  "trader_koo/backend/routers/dashboard.py": {
+   "bare_numbers": 8,
+   "lines": 136
+  },
+  "trader_koo/backend/routers/data_sync.py": {
+   "bare_numbers": 5,
+   "lines": 223
+  },
+  "trader_koo/backend/routers/email.py": {
+   "bare_numbers": 14,
+   "lines": 170
+  },
+  "trader_koo/backend/routers/opportunities.py": {
+   "bare_numbers": 11,
+   "lines": 127
+  },
+  "trader_koo/backend/routers/report.py": {
+   "bare_numbers": 9,
+   "lines": 285
+  },
+  "trader_koo/backend/routers/streaming.py": {
+   "bare_numbers": 2,
+   "lines": 136
+  },
+  "trader_koo/backend/routers/system.py": {
+   "bare_numbers": 11,
+   "lines": 769
+  },
+  "trader_koo/backend/services/chart_builder.py": {
+   "bare_numbers": 56,
+   "lines": 1255
+  },
+  "trader_koo/backend/services/database.py": {
+   "bare_numbers": 27,
+   "lines": 579
+  },
+  "trader_koo/backend/services/maintenance.py": {
+   "bare_numbers": 13,
+   "lines": 1267
+  },
+  "trader_koo/backend/services/market_data.py": {
+   "bare_numbers": 10,
+   "lines": 344
+  },
+  "trader_koo/backend/services/pipeline.py": {
+   "bare_numbers": 21,
+   "lines": 1219
+  },
+  "trader_koo/backend/services/report_loader.py": {
+   "bare_numbers": 10,
+   "lines": 628
+  },
+  "trader_koo/backend/services/scheduler.py": {
+   "bare_numbers": 39,
+   "lines": 1199
+  },
+  "trader_koo/backend/utils.py": {
+   "bare_numbers": 4,
+   "lines": 156
+  },
+  "trader_koo/catalyst_data.py": {
+   "bare_numbers": 63,
+   "lines": 1191
+  },
+  "trader_koo/config.py": {
+   "bare_numbers": 0,
+   "lines": 547
+  },
+  "trader_koo/crypto/aggregator.py": {
+   "bare_numbers": 11,
+   "lines": 230
+  },
+  "trader_koo/crypto/binance_history.py": {
+   "bare_numbers": 8,
+   "lines": 153
+  },
+  "trader_koo/crypto/binance_oi.py": {
+   "bare_numbers": 4,
+   "lines": 140
+  },
+  "trader_koo/crypto/binance_ws.py": {
+   "bare_numbers": 9,
+   "lines": 408
+  },
+  "trader_koo/crypto/derivatives.py": {
+   "bare_numbers": 21,
+   "lines": 485
+  },
+  "trader_koo/crypto/indicators.py": {
+   "bare_numbers": 20,
+   "lines": 162
+  },
+  "trader_koo/crypto/market_insights.py": {
+   "bare_numbers": 33,
+   "lines": 478
+  },
+  "trader_koo/crypto/service.py": {
+   "bare_numbers": 60,
+   "lines": 901
+  },
+  "trader_koo/crypto/storage.py": {
+   "bare_numbers": 19,
+   "lines": 173
+  },
+  "trader_koo/crypto/structure.py": {
+   "bare_numbers": 49,
+   "lines": 264
+  },
+  "trader_koo/db/price_contract.py": {
+   "bare_numbers": 12,
+   "lines": 261
+  },
+  "trader_koo/db/report_price_contract.py": {
+   "bare_numbers": 1,
+   "lines": 130
+  },
+  "trader_koo/db/sources.py": {
+   "bare_numbers": 14,
+   "lines": 560
+  },
+  "trader_koo/debate_engine.py": {
+   "bare_numbers": 169,
+   "lines": 621
+  },
+  "trader_koo/email_chart_preview.py": {
+   "bare_numbers": 118,
+   "lines": 368
+  },
+  "trader_koo/email_subscribers.py": {
+   "bare_numbers": 6,
+   "lines": 153
+  },
+  "trader_koo/features/candle_patterns.py": {
+   "bare_numbers": 35,
+   "lines": 221
+  },
+  "trader_koo/features/technical.py": {
+   "bare_numbers": 4,
+   "lines": 51
+  },
+  "trader_koo/hyperliquid/collect_history.py": {
+   "bare_numbers": 17,
+   "lines": 307
+  },
+  "trader_koo/hyperliquid/routes.py": {
+   "bare_numbers": 21,
+   "lines": 367
+  },
+  "trader_koo/hyperliquid/study.py": {
+   "bare_numbers": 32,
+   "lines": 456
+  },
+  "trader_koo/hyperliquid/tracker.py": {
+   "bare_numbers": 60,
+   "lines": 1697
+  },
+  "trader_koo/llm/sanitizer.py": {
+   "bare_numbers": 2,
+   "lines": 233
+  },
+  "trader_koo/llm/schemas.py": {
+   "bare_numbers": 16,
+   "lines": 173
+  },
+  "trader_koo/llm/validator.py": {
+   "bare_numbers": 4,
+   "lines": 272
+  },
+  "trader_koo/middleware/auth.py": {
+   "bare_numbers": 12,
+   "lines": 262
+  },
+  "trader_koo/middleware/cors.py": {
+   "bare_numbers": 3,
+   "lines": 165
+  },
+  "trader_koo/ml/features.py": {
+   "bare_numbers": 0,
+   "lines": 22
+  },
+  "trader_koo/news_sentiment.py": {
+   "bare_numbers": 21,
+   "lines": 567
+  },
+  "trader_koo/notifications/alert_engine.py": {
+   "bare_numbers": 18,
+   "lines": 558
+  },
+  "trader_koo/notifications/bot_commands.py": {
+   "bare_numbers": 36,
+   "lines": 869
+  },
+  "trader_koo/notifications/finnhub.py": {
+   "bare_numbers": 2,
+   "lines": 51
+  },
+  "trader_koo/notifications/formatting.py": {
+   "bare_numbers": 2,
+   "lines": 16
+  },
+  "trader_koo/notifications/health_check.py": {
+   "bare_numbers": 9,
+   "lines": 184
+  },
+  "trader_koo/notifications/macro_monitor.py": {
+   "bare_numbers": 41,
+   "lines": 612
+  },
+  "trader_koo/notifications/market_monitor.py": {
+   "bare_numbers": 28,
+   "lines": 721
+  },
+  "trader_koo/notifications/morning_summary.py": {
+   "bare_numbers": 53,
+   "lines": 1034
+  },
+  "trader_koo/notifications/options_digest.py": {
+   "bare_numbers": 7,
+   "lines": 231
+  },
+  "trader_koo/notifications/telegram.py": {
+   "bare_numbers": 7,
+   "lines": 292
+  },
+  "trader_koo/options_research.py": {
+   "bare_numbers": 28,
+   "lines": 1044
+  },
+  "trader_koo/paper_trade/campaign.py": {
+   "bare_numbers": 0,
+   "lines": 619
+  },
+  "trader_koo/paper_trade/critic.py": {
+   "bare_numbers": 0,
+   "lines": 550
+  },
+  "trader_koo/paper_trade/decision.py": {
+   "bare_numbers": 0,
+   "lines": 427
+  },
+  "trader_koo/paper_trade/schema.py": {
+   "bare_numbers": 0,
+   "lines": 1211
+  },
+  "trader_koo/paper_trade/schema_v5_migration.py": {
+   "bare_numbers": 0,
+   "lines": 910
+  },
+  "trader_koo/paper_trade/schema_v5_verifier.py": {
+   "bare_numbers": 0,
+   "lines": 616
+  },
+  "trader_koo/paper_trade/shadow.py": {
+   "bare_numbers": 0,
+   "lines": 650
+  },
+  "trader_koo/paper_trade/summary.py": {
+   "bare_numbers": 0,
+   "lines": 1088
+  },
+  "trader_koo/paper_trade/trading.py": {
+   "bare_numbers": 0,
+   "lines": 2260
+  },
+  "trader_koo/polymarket.py": {
+   "bare_numbers": 4,
+   "lines": 295
+  },
+  "trader_koo/ratelimit/api.py": {
+   "bare_numbers": 4,
+   "lines": 223
+  },
+  "trader_koo/ratelimit/middleware.py": {
+   "bare_numbers": 1,
+   "lines": 202
+  },
+  "trader_koo/ratelimit/service.py": {
+   "bare_numbers": 4,
+   "lines": 273
+  },
+  "trader_koo/report/calibration_pulse.py": {
+   "bare_numbers": 28,
+   "lines": 542
+  },
+  "trader_koo/report/email_dispatch.py": {
+   "bare_numbers": 12,
+   "lines": 262
+  },
+  "trader_koo/report/generator.py": {
+   "bare_numbers": 120,
+   "lines": 1746
+  },
+  "trader_koo/report/market_context.py": {
+   "bare_numbers": 154,
+   "lines": 1192
+  },
+  "trader_koo/report/pattern_analysis.py": {
+   "bare_numbers": 15,
+   "lines": 335
+  },
+  "trader_koo/report/runs.py": {
+   "bare_numbers": 10,
+   "lines": 1146
+  },
+  "trader_koo/report/serializer.py": {
+   "bare_numbers": 16,
+   "lines": 666
+  },
+  "trader_koo/report/setup_scoring.py": {
+   "bare_numbers": 268,
+   "lines": 2693
+  },
+  "trader_koo/report/suggestions.py": {
+   "bare_numbers": 24,
+   "lines": 188
+  },
+  "trader_koo/report/utils.py": {
+   "bare_numbers": 68,
+   "lines": 375
+  },
+  "trader_koo/report_email.py": {
+   "bare_numbers": 20,
+   "lines": 902
+  },
+  "trader_koo/research/experiment_results.py": {
+   "bare_numbers": 2,
+   "lines": 310
+  },
+  "trader_koo/research/next_open_baseline.py": {
+   "bare_numbers": 31,
+   "lines": 1292
+  },
+  "trader_koo/research/strategy_evidence.py": {
+   "bare_numbers": 4,
+   "lines": 179
+  },
+  "trader_koo/rss_news.py": {
+   "bare_numbers": 26,
+   "lines": 612
+  },
+  "trader_koo/scripts/backup_db.py": {
+   "bare_numbers": 8,
+   "lines": 198
+  },
+  "trader_koo/scripts/cache_logos.py": {
+   "bare_numbers": 3,
+   "lines": 124
+  },
+  "trader_koo/scripts/cleanup_storage.py": {
+   "bare_numbers": 38,
+   "lines": 457
+  },
+  "trader_koo/scripts/generate_daily_report.py": {
+   "bare_numbers": 1,
+   "lines": 241
+  },
+  "trader_koo/scripts/paper_schema_maintenance.py": {
+   "bare_numbers": 1,
+   "lines": 86
+  },
+  "trader_koo/scripts/release_evidence.py": {
+   "bare_numbers": 37,
+   "lines": 539
+  },
+  "trader_koo/scripts/run_next_open_baseline.py": {
+   "bare_numbers": 2,
+   "lines": 56
+  },
+  "trader_koo/scripts/run_yolo_patterns.py": {
+   "bare_numbers": 12,
+   "lines": 791
+  },
+  "trader_koo/scripts/snapshot_options_iv.py": {
+   "bare_numbers": 2,
+   "lines": 118
+  },
+  "trader_koo/scripts/sync_prod_data.py": {
+   "bare_numbers": 11,
+   "lines": 181
+  },
+  "trader_koo/scripts/system_check.py": {
+   "bare_numbers": 27,
+   "lines": 282
+  },
+  "trader_koo/scripts/test_yolo_visual.py": {
+   "bare_numbers": 54,
+   "lines": 248
+  },
+  "trader_koo/scripts/update_market_db.py": {
+   "bare_numbers": 39,
+   "lines": 1895
+  },
+  "trader_koo/scripts/verify_deployment.py": {
+   "bare_numbers": 11,
+   "lines": 121
+  },
+  "trader_koo/sector_rotation.py": {
+   "bare_numbers": 8,
+   "lines": 265
+  },
+  "trader_koo/security/endpoint_validator.py": {
+   "bare_numbers": 1,
+   "lines": 124
+  },
+  "trader_koo/security/error_middleware.py": {
+   "bare_numbers": 1,
+   "lines": 82
+  },
+  "trader_koo/security/redaction.py": {
+   "bare_numbers": 3,
+   "lines": 210
+  },
+  "trader_koo/signals/types.py": {
+   "bare_numbers": 2,
+   "lines": 76
+  },
+  "trader_koo/social_sentiment.py": {
+   "bare_numbers": 18,
+   "lines": 286
+  },
+  "trader_koo/streaming/finnhub_ws.py": {
+   "bare_numbers": 5,
+   "lines": 317
+  },
+  "trader_koo/streaming/live_candle.py": {
+   "bare_numbers": 1,
+   "lines": 116
+  },
+  "trader_koo/streaming/service.py": {
+   "bare_numbers": 5,
+   "lines": 251
+  },
+  "trader_koo/structure/fear_greed.py": {
+   "bare_numbers": 46,
+   "lines": 735
+  },
+  "trader_koo/structure/gaps.py": {
+   "bare_numbers": 3,
+   "lines": 107
+  },
+  "trader_koo/structure/hmm_regime.py": {
+   "bare_numbers": 70,
+   "lines": 493
+  },
+  "trader_koo/structure/levels.py": {
+   "bare_numbers": 13,
+   "lines": 319
+  },
+  "trader_koo/structure/patterns.py": {
+   "bare_numbers": 28,
+   "lines": 207
+  },
+  "trader_koo/structure/trendlines.py": {
+   "bare_numbers": 16,
+   "lines": 190
+  },
+  "trader_koo/structure/vix_analysis.py": {
+   "bare_numbers": 20,
+   "lines": 455
+  },
+  "trader_koo/structure/vix_metrics.py": {
+   "bare_numbers": 44,
+   "lines": 276
+  },
+  "trader_koo/structure/vix_patterns.py": {
+   "bare_numbers": 21,
+   "lines": 472
+  }
+ }
+}
