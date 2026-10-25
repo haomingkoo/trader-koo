@@ -27,15 +27,11 @@
   },
   "trader_koo/backend/main.py": {
    "bare_numbers": 3,
-   "lines": 665
+   "lines": 656
   },
   "trader_koo/backend/routers/admin/_shared.py": {
    "bare_numbers": 1,
    "lines": 55
-  },
-  "trader_koo/backend/routers/admin/agents.py": {
-   "bare_numbers": 3,
-   "lines": 27
   },
   "trader_koo/backend/routers/admin/alert_quality.py": {
    "bare_numbers": 9,
@@ -54,8 +50,8 @@
    "lines": 465
   },
   "trader_koo/backend/routers/admin/email_admin.py": {
-   "bare_numbers": 4,
-   "lines": 269
+   "bare_numbers": 3,
+   "lines": 222
   },
   "trader_koo/backend/routers/admin/maintenance.py": {
    "bare_numbers": 12,
@@ -64,10 +60,6 @@
   "trader_koo/backend/routers/admin/market_monitor.py": {
    "bare_numbers": 2,
    "lines": 64
-  },
-  "trader_koo/backend/routers/admin/ml.py": {
-   "bare_numbers": 12,
-   "lines": 829
   },
   "trader_koo/backend/routers/admin/paper_campaigns.py": {
    "bare_numbers": 15,
@@ -78,8 +70,8 @@
    "lines": 381
   },
   "trader_koo/backend/routers/admin/system.py": {
-   "bare_numbers": 9,
-   "lines": 348
+   "bare_numbers": 3,
+   "lines": 302
   },
   "trader_koo/backend/routers/admin/telegram.py": {
    "bare_numbers": 2,
@@ -98,12 +90,12 @@
    "lines": 136
   },
   "trader_koo/backend/routers/data_sync.py": {
-   "bare_numbers": 12,
-   "lines": 312
+   "bare_numbers": 5,
+   "lines": 223
   },
   "trader_koo/backend/routers/email.py": {
-   "bare_numbers": 26,
-   "lines": 491
+   "bare_numbers": 14,
+   "lines": 170
   },
   "trader_koo/backend/routers/opportunities.py": {
    "bare_numbers": 11,
@@ -119,15 +111,11 @@
   },
   "trader_koo/backend/routers/system.py": {
    "bare_numbers": 11,
-   "lines": 838
-  },
-  "trader_koo/backend/routers/usage.py": {
-   "bare_numbers": 1,
-   "lines": 129
+   "lines": 769
   },
   "trader_koo/backend/services/chart_builder.py": {
-   "bare_numbers": 58,
-   "lines": 1491
+   "bare_numbers": 56,
+   "lines": 1255
   },
   "trader_koo/backend/services/database.py": {
    "bare_numbers": 27,
@@ -155,7 +143,7 @@
   },
   "trader_koo/backend/utils.py": {
    "bare_numbers": 4,
-   "lines": 178
+   "lines": 156
   },
   "trader_koo/catalyst_data.py": {
    "bare_numbers": 63,
@@ -163,7 +151,7 @@
   },
   "trader_koo/config.py": {
    "bare_numbers": 0,
-   "lines": 555
+   "lines": 547
   },
   "trader_koo/crypto/aggregator.py": {
    "bare_numbers": 11,
@@ -205,14 +193,6 @@
    "bare_numbers": 49,
    "lines": 264
   },
-  "trader_koo/cv/compare.py": {
-   "bare_numbers": 1,
-   "lines": 75
-  },
-  "trader_koo/cv/proxy_patterns.py": {
-   "bare_numbers": 113,
-   "lines": 733
-  },
   "trader_koo/db/price_contract.py": {
    "bare_numbers": 12,
    "lines": 261
@@ -234,8 +214,8 @@
    "lines": 368
   },
   "trader_koo/email_subscribers.py": {
-   "bare_numbers": 28,
-   "lines": 791
+   "bare_numbers": 6,
+   "lines": 153
   },
   "trader_koo/features/candle_patterns.py": {
    "bare_numbers": 35,
@@ -261,33 +241,17 @@
    "bare_numbers": 60,
    "lines": 1697
   },
-  "trader_koo/llm/evaluation.py": {
-   "bare_numbers": 21,
-   "lines": 324
-  },
-  "trader_koo/llm/observability.py": {
-   "bare_numbers": 16,
-   "lines": 473
-  },
   "trader_koo/llm/sanitizer.py": {
    "bare_numbers": 2,
    "lines": 233
   },
   "trader_koo/llm/schemas.py": {
    "bare_numbers": 16,
-   "lines": 174
+   "lines": 173
   },
   "trader_koo/llm/validator.py": {
    "bare_numbers": 4,
    "lines": 272
-  },
-  "trader_koo/llm_health.py": {
-   "bare_numbers": 45,
-   "lines": 702
-  },
-  "trader_koo/llm_narrative.py": {
-   "bare_numbers": 26,
-   "lines": 637
   },
   "trader_koo/middleware/auth.py": {
    "bare_numbers": 12,
@@ -297,65 +261,9 @@
    "bare_numbers": 3,
    "lines": 165
   },
-  "trader_koo/ml/backtest.py": {
-   "bare_numbers": 20,
-   "lines": 649
-  },
-  "trader_koo/ml/benchmark.py": {
-   "bare_numbers": 42,
-   "lines": 321
-  },
-  "trader_koo/ml/drift_detection.py": {
-   "bare_numbers": 7,
-   "lines": 123
-  },
-  "trader_koo/ml/external_data.py": {
-   "bare_numbers": 14,
-   "lines": 700
-  },
   "trader_koo/ml/features.py": {
-   "bare_numbers": 66,
-   "lines": 949
-  },
-  "trader_koo/ml/labels.py": {
-   "bare_numbers": 7,
-   "lines": 188
-  },
-  "trader_koo/ml/macro_features.py": {
-   "bare_numbers": 59,
-   "lines": 244
-  },
-  "trader_koo/ml/meta_label.py": {
-   "bare_numbers": 20,
-   "lines": 163
-  },
-  "trader_koo/ml/rule_baseline.py": {
-   "bare_numbers": 71,
-   "lines": 655
-  },
-  "trader_koo/ml/scorer.py": {
-   "bare_numbers": 7,
-   "lines": 356
-  },
-  "trader_koo/ml/sector_rotation.py": {
-   "bare_numbers": 8,
-   "lines": 265
-  },
-  "trader_koo/ml/sentiment_cache.py": {
-   "bare_numbers": 7,
-   "lines": 386
-  },
-  "trader_koo/ml/shap_analysis.py": {
-   "bare_numbers": 8,
-   "lines": 89
-  },
-  "trader_koo/ml/trainer.py": {
-   "bare_numbers": 38,
-   "lines": 644
-  },
-  "trader_koo/ml/validation_registry.py": {
-   "bare_numbers": 6,
-   "lines": 468
+   "bare_numbers": 0,
+   "lines": 22
   },
   "trader_koo/news_sentiment.py": {
    "bare_numbers": 21,
@@ -439,7 +347,11 @@
   },
   "trader_koo/paper_trade/trading.py": {
    "bare_numbers": 0,
-   "lines": 2292
+   "lines": 2260
+  },
+  "trader_koo/polymarket.py": {
+   "bare_numbers": 4,
+   "lines": 295
   },
   "trader_koo/ratelimit/api.py": {
    "bare_numbers": 4,
@@ -458,16 +370,16 @@
    "lines": 542
   },
   "trader_koo/report/email_dispatch.py": {
-   "bare_numbers": 14,
-   "lines": 418
+   "bare_numbers": 12,
+   "lines": 262
   },
   "trader_koo/report/generator.py": {
    "bare_numbers": 120,
-   "lines": 1776
+   "lines": 1746
   },
   "trader_koo/report/market_context.py": {
-   "bare_numbers": 155,
-   "lines": 1213
+   "bare_numbers": 154,
+   "lines": 1192
   },
   "trader_koo/report/pattern_analysis.py": {
    "bare_numbers": 15,
@@ -479,11 +391,11 @@
   },
   "trader_koo/report/serializer.py": {
    "bare_numbers": 16,
-   "lines": 695
+   "lines": 666
   },
   "trader_koo/report/setup_scoring.py": {
    "bare_numbers": 268,
-   "lines": 2725
+   "lines": 2693
   },
   "trader_koo/report/suggestions.py": {
    "bare_numbers": 24,
@@ -495,23 +407,11 @@
   },
   "trader_koo/report_email.py": {
    "bare_numbers": 20,
-   "lines": 906
-  },
-  "trader_koo/research/challenger_executor.py": {
-   "bare_numbers": 65,
-   "lines": 673
-  },
-  "trader_koo/research/challenger_preregistration.py": {
-   "bare_numbers": 18,
-   "lines": 105
-  },
-  "trader_koo/research/challenger_tournament.py": {
-   "bare_numbers": 11,
-   "lines": 315
+   "lines": 902
   },
   "trader_koo/research/experiment_results.py": {
    "bare_numbers": 2,
-   "lines": 319
+   "lines": 310
   },
   "trader_koo/research/next_open_baseline.py": {
    "bare_numbers": 31,
@@ -520,10 +420,6 @@
   "trader_koo/research/strategy_evidence.py": {
    "bare_numbers": 4,
    "lines": 179
-  },
-  "trader_koo/research/universe_membership.py": {
-   "bare_numbers": 5,
-   "lines": 202
   },
   "trader_koo/rss_news.py": {
    "bare_numbers": 26,
@@ -543,7 +439,7 @@
   },
   "trader_koo/scripts/generate_daily_report.py": {
    "bare_numbers": 1,
-   "lines": 262
+   "lines": 241
   },
   "trader_koo/scripts/paper_schema_maintenance.py": {
    "bare_numbers": 1,
@@ -557,10 +453,6 @@
    "bare_numbers": 2,
    "lines": 56
   },
-  "trader_koo/scripts/run_walk_forward_validation.py": {
-   "bare_numbers": 11,
-   "lines": 230
-  },
   "trader_koo/scripts/run_yolo_patterns.py": {
    "bare_numbers": 12,
    "lines": 791
@@ -570,12 +462,12 @@
    "lines": 118
   },
   "trader_koo/scripts/sync_prod_data.py": {
-   "bare_numbers": 16,
-   "lines": 254
+   "bare_numbers": 11,
+   "lines": 181
   },
   "trader_koo/scripts/system_check.py": {
-   "bare_numbers": 28,
-   "lines": 316
+   "bare_numbers": 27,
+   "lines": 282
   },
   "trader_koo/scripts/test_yolo_visual.py": {
    "bare_numbers": 54,
@@ -588,6 +480,10 @@
   "trader_koo/scripts/verify_deployment.py": {
    "bare_numbers": 11,
    "lines": 121
+  },
+  "trader_koo/sector_rotation.py": {
+   "bare_numbers": 8,
+   "lines": 265
   },
   "trader_koo/security/endpoint_validator.py": {
    "bare_numbers": 1,
@@ -632,10 +528,6 @@
   "trader_koo/structure/hmm_regime.py": {
    "bare_numbers": 70,
    "lines": 493
-  },
-  "trader_koo/structure/hybrid_patterns.py": {
-   "bare_numbers": 20,
-   "lines": 169
   },
   "trader_koo/structure/levels.py": {
    "bare_numbers": 13,
