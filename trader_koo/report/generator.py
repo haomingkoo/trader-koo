@@ -87,6 +87,23 @@ YOLO_MIN_DAILY_COVERAGE = 0.90
 # fetch_report_payload() call.
 _report_warnings: list[str] = []
 
+# Movers and breadth only use tickers priced on the latest session. If fewer
+# than this share of recently active tickers are covered, flag it in the report.
+MIN_LATEST_SESSION_COVERAGE = 0.8
+RECENT_ACTIVITY_DAYS = 30
+
+
+def _warn_if_latest_session_thin(conn: sqlite3.Connection, covered: int) -> None:
+    """Warn when the latest session prices far fewer tickers than were recently active."""
+    universe = conn.execute(
+        "SELECT COUNT(DISTINCT ticker) FROM price_daily "
+        "WHERE date >= date((SELECT MAX(date) FROM price_daily), ?)",
+        (f"-{RECENT_ACTIVITY_DAYS} days",),
+    ).fetchone()[0]
+    if universe and covered < universe * MIN_LATEST_SESSION_COVERAGE:
+        LOG.warning("Latest session covers %d of %d recently active tickers", covered, universe)
+        _report_warnings.append("market_breadth_latest_session_thin")
+
 
 def _llm_health_codes(llm_meta: dict[str, Any]) -> list[str]:
     """Advisory LLM status codes; these never block report publication."""
@@ -392,6 +409,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
             FROM latest_close lc
             JOIN range_52w r ON lc.ticker = r.ticker
             WHERE lc.close > 0 AND r.high_52w > 0 AND r.low_52w > 0
+              AND lc.date = (SELECT MAX(date) FROM price_daily)
         """).fetchall()
         near_high: list[dict] = []
         near_low: list[dict] = []
@@ -467,6 +485,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
             JOIN prev p ON p.ticker = l.ticker
             LEFT JOIN range_52w r ON r.ticker = l.ticker
             WHERE l.close > 0 AND p.prev_close > 0
+              AND l.date = (SELECT MAX(date) FROM price_daily)
             """
         ).fetchall()
 
@@ -550,6 +569,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
             "large_move_count": len(signals["large_moves_today"]),
         }
         movers_all = movers
+        _warn_if_latest_session_thin(conn, len(movers))
     except Exception as exc:
         LOG.warning("Large moves / market breadth computation failed: %s", exc)
         _report_warnings.append("market_breadth_failed")
@@ -1523,6 +1543,7 @@ def fetch_report_payload(
             "price_basis_unresolved",
             "green_barrier_incomplete_coverage",
             "green_barrier_scan_failed",
+            "market_breadth_latest_session_thin",
         ):
             if warning in _report_warnings:
                 payload["warnings"].append(warning)

@@ -539,3 +539,133 @@ def test_yolo_coverage_ignores_tickers_excluded_from_research_universe(
     payload = fetch_report_payload(**kwargs)
 
     assert "yolo_data_stale" not in payload["warnings"]
+
+
+LATEST_SESSION = "2026-10-23"
+STALE_SESSION = "2026-07-17"
+
+
+def _add_bars(conn: sqlite3.Connection, ticker: str, prev: tuple[str, float], last: tuple[str, float]) -> None:
+    for date, close in (prev, last):
+        conn.execute(
+            "INSERT INTO price_daily (ticker, date, open, high, low, close, volume, data_source) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1000, 'test')",
+            (ticker, date, close, close, close, close),
+        )
+
+
+def _signals_with_stale_ticker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    stray_future_bar: bool = False, lone_future_bar: bool = False,
+) -> dict:
+    from trader_koo.report import generator
+
+    db_path = tmp_path / "signals.db"
+    _create_minimal_report_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM price_daily")
+    conn.execute("DROP TABLE ingest_runs")
+    conn.executescript(
+        """
+        CREATE TABLE ingest_runs (
+            run_id TEXT PRIMARY KEY, started_ts TEXT, status TEXT,
+            tickers_failed INTEGER, args_json TEXT
+        );
+        CREATE TABLE ingest_ticker_status (run_id TEXT, ticker TEXT, status TEXT);
+        INSERT INTO ingest_runs VALUES ('r1', '2026-10-23T22:00:00Z', 'ok', 0, '{"use_sp500": 1}');
+        """
+    )
+    tickers = {"UPP": 103.0, "DWN": 98.0, "STALE": 88.56}
+    for ticker in tickers:
+        conn.execute("INSERT INTO ingest_ticker_status VALUES ('r1', ?, 'ok')", (ticker,))
+    _add_bars(conn, "UPP", ("2026-10-22", 100.0), (LATEST_SESSION, 103.0))
+    _add_bars(conn, "DWN", ("2026-10-22", 100.0), (LATEST_SESSION, 98.0))
+    _add_bars(conn, "STALE", ("2026-07-16", 100.0), (STALE_SESSION, 88.56))
+    if stray_future_bar:
+        _add_bars(conn, "UPP", ("2026-10-29", 103.0), ("2026-10-30", 104.0))
+    if lone_future_bar:
+        conn.execute(
+            "INSERT INTO price_daily (ticker, date, open, high, low, close, volume, data_source) "
+            "VALUES ('NEW', '2026-10-30', 1, 1, 1, 1, 1, 'test')"
+        )
+    conn.commit()
+    monkeypatch.setattr(generator, "research_eligible_tickers", lambda _conn: set(tickers))
+    monkeypatch.setattr(generator, "research_price_contract", lambda *_a, **_k: {"eligible": True})
+    try:
+        return generator._fetch_signals_snapshot(conn)
+    finally:
+        conn.close()
+
+
+def test_movers_exclude_tickers_whose_latest_bar_is_not_the_latest_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch)
+
+    losers = [m["ticker"] for m in signals["movers_down_today"]]
+    assert losers == ["DWN"]
+    assert [m["ticker"] for m in signals["movers_up_today"]] == ["UPP"]
+
+
+def test_breadth_counts_only_tickers_on_the_latest_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    breadth = _signals_with_stale_ticker(tmp_path, monkeypatch)["market_breadth"]
+
+    assert (breadth["total_tickers"], breadth["advancers"], breadth["decliners"]) == (2, 1, 1)
+
+
+def test_large_moves_exclude_stale_tickers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch)
+
+    assert "STALE" not in [m["ticker"] for m in signals["large_moves_today"]]
+
+
+def test_sector_heatmap_excludes_stale_tickers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch)
+
+    assert sum(row["tickers"] for row in signals["sector_heatmap"]) == 2
+
+
+def test_near_52w_lists_exclude_stale_tickers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch)
+
+    near = [r["ticker"] for r in signals["near_52w_high"] + signals["near_52w_low"]]
+    assert "STALE" not in near
+    assert "UPP" in near
+
+
+def test_breadth_warns_when_latest_session_covers_few_tickers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trader_koo.report import generator
+
+    monkeypatch.setattr(generator, "_report_warnings", [])
+
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch, stray_future_bar=True)
+
+    assert signals["market_breadth"]["total_tickers"] == 1
+    assert "market_breadth_latest_session_thin" in generator._report_warnings
+
+
+def test_breadth_does_not_warn_when_latest_session_is_fully_covered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trader_koo.report import generator
+
+    monkeypatch.setattr(generator, "_report_warnings", [])
+
+    _signals_with_stale_ticker(tmp_path, monkeypatch)
+
+    assert "market_breadth_latest_session_thin" not in generator._report_warnings
+
+
+def test_breadth_warns_and_is_empty_when_latest_session_has_no_comparable_bars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trader_koo.report import generator
+
+    monkeypatch.setattr(generator, "_report_warnings", [])
+
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch, lone_future_bar=True)
+
+    assert signals["market_breadth"]["total_tickers"] == 0
+    assert "market_breadth_latest_session_thin" in generator._report_warnings
