@@ -79,6 +79,9 @@ from trader_koo.report.utils import (
 
 LOG = logging.getLogger(__name__)
 
+# Share of tickers holding the latest price bar that daily YOLO must have processed.
+YOLO_MIN_DAILY_COVERAGE = 0.90
+
 # Accumulates warnings from except blocks during report generation so the
 # frontend can surface which sections degraded.  Reset at the start of each
 # fetch_report_payload() call.
@@ -1319,6 +1322,50 @@ def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
             conn.rollback()
 
 
+def _price_contract_excluded(signals: Any) -> set[str]:
+    contract = signals.get("price_contract") if isinstance(signals, dict) else None
+    excluded = contract.get("excluded_tickers") if isinstance(contract, dict) else None
+    return {str(t) for t in excluded or []}
+
+
+def _yolo_daily_coverage_ok(
+    conn: sqlite3.Connection, price_date: str, excluded: set[str]
+) -> bool:
+    """True when daily YOLO processed enough tickers that hold the latest price bar.
+
+    A ticker counts as processed when it has a daily pattern row or an ok/skipped
+    run event for that as-of date. Zero-detection tickers only leave an event.
+    """
+    expected = {
+        str(r[0])
+        for r in conn.execute(
+            "SELECT ticker FROM price_daily GROUP BY ticker HAVING MAX(date) = ?",
+            (price_date,),
+        )
+    } - excluded
+    if not expected:
+        return True
+    covered = {
+        str(r[0])
+        for r in conn.execute(
+            "SELECT ticker FROM yolo_patterns WHERE timeframe = 'daily' AND as_of_date = ?",
+            (price_date,),
+        )
+    }
+    try:
+        covered |= {
+            str(r[0])
+            for r in conn.execute(
+                "SELECT ticker FROM yolo_run_events WHERE timeframe = 'daily' "
+                "AND as_of_date = ? AND status IN ('ok', 'skipped')",
+                (price_date,),
+            )
+        }
+    except sqlite3.OperationalError:
+        pass  # events table absent: pattern rows are the only coverage evidence
+    return len(expected & covered) / len(expected) >= YOLO_MIN_DAILY_COVERAGE
+
+
 def fetch_report_payload(
     db_path: Path,
     run_log: Path,
@@ -1384,7 +1431,8 @@ def fetch_report_payload(
                 (SELECT MAX(date) FROM price_daily) AS latest_price_date,
                 (SELECT MAX(snapshot_ts) FROM finviz_fundamentals) AS latest_fund_snapshot,
                 (SELECT MAX(snapshot_ts) FROM options_iv) AS latest_opt_snapshot,
-                (SELECT MAX(detected_ts) FROM yolo_patterns) AS latest_yolo_ts
+                (SELECT MAX(detected_ts) FROM yolo_patterns) AS latest_yolo_ts,
+                (SELECT MAX(as_of_date) FROM yolo_patterns WHERE timeframe = 'daily') AS latest_yolo_daily_as_of
             """
         ).fetchone()
         payload["counts"] = {
@@ -1399,6 +1447,7 @@ def fetch_report_payload(
             "fund_snapshot": counts["latest_fund_snapshot"] if counts else None,
             "options_snapshot": counts["latest_opt_snapshot"] if counts else None,
             "yolo_detected_ts": counts["latest_yolo_ts"] if counts else None,
+            "yolo_as_of_date": counts["latest_yolo_daily_as_of"] if counts else None,
         }
         price_age = days_since_date(counts["latest_price_date"], now) if counts else None
         fund_age = hours_since(counts["latest_fund_snapshot"], now) if counts else None
@@ -1629,7 +1678,8 @@ def fetch_report_payload(
         # Basic health guardrails.
         price_age = payload["freshness"]["price_age_days"]
         fund_age  = payload["freshness"]["fund_age_hours"]
-        yolo_age  = payload["freshness"]["yolo_age_hours"]
+        yolo_as_of = str(payload["latest_data"].get("yolo_as_of_date") or "")[:10]
+        price_date = str(payload["latest_data"].get("price_date") or "")[:10]
         if price_age is None:
             payload["warnings"].append("price_data_missing")
         elif isinstance(price_age, (int, float)) and price_age > 3:
@@ -1638,9 +1688,17 @@ def fetch_report_payload(
             payload["warnings"].append("fundamentals_missing")
         elif isinstance(fund_age, (int, float)) and fund_age > 48:
             payload["warnings"].append("fundamentals_stale")
-        if yolo_age is None:
+        # YOLO only writes rows for tickers with a new candle, so detected_ts age
+        # grows over weekends. Current means daily patterns reach the latest bar
+        # date and cover most of the tickers that have that bar.
+        if not yolo_as_of:
             payload["warnings"].append("yolo_data_missing")
-        elif isinstance(yolo_age, (int, float)) and yolo_age > 30:
+        elif price_date and (
+            yolo_as_of < price_date
+            or not _yolo_daily_coverage_ok(
+                conn, price_date, _price_contract_excluded(payload["signals"])
+            )
+        ):
             payload["warnings"].append("yolo_data_stale")
 
         # LLM health is advisory: record it in meta.llm, never in publication-blocking warnings.
