@@ -1,13 +1,12 @@
 """Paper-campaign adapter for the canonical portfolio execution ledger."""
 from __future__ import annotations
 
-import json
 import math
 import statistics
 from collections import defaultdict
 from typing import Any
 
-from trader_koo.paper_trade.campaign import canonical_hash, decide_candidate, record_promotion_experiment
+from trader_koo.paper_trade.campaign import canonical_hash, decide_candidate
 from trader_koo.paper_trade.chronology import (
     next_scheduled_session_after,
     publication_precedes_session_open,
@@ -295,79 +294,3 @@ def replay_campaign(*, candidate_runs: list[dict[str, Any]], price_rows: list[di
         "decisions": decisions, "equity_curve": curve, "replay_live_parity": parity,
         "parity_mismatches": mismatches, "walk_forward": walk_forward, "held_out": held_out,
     }
-
-
-def replay_and_seal_promotion(conn, *, experiment_id: str, preregistration_id: str,
-                              campaign_id: str, candidate_runs: list[dict[str, Any]],
-                              price_rows: list[dict[str, Any]], spy_rows: list[dict[str, Any]],
-                              config: PaperTradeConfig) -> dict[str, Any]:
-    """Compare replay with sealed live facts, then persist promotion evidence."""
-    run_ids = sorted({str(run["report_run_id"]) for run in candidate_runs})
-    if not run_ids:
-        raise ValueError("promotion parity requires sealed live report runs")
-    placeholders = ",".join("?" for _ in run_ids)
-    from trader_koo.paper_trade.trading import _require_published_canonical_report
-
-    publication_by_run = {
-        run_id: str(
-            _require_published_canonical_report(
-                conn, run_id, require_current=False
-            )["published_ts"]
-        )
-        for run_id in run_ids
-    }
-    live_rows = conn.execute(
-        f"""SELECT d.report_run_id,d.candidate_rank,
-                   CASE WHEN d.disposition='pending' AND po.status='filled'
-                        THEN json_extract(ev.payload_json,'$.decision.disposition')
-                        WHEN d.disposition='pending' AND po.status='rejected'
-                        THEN 'rejected' ELSE d.disposition END,
-                   CASE WHEN d.disposition='pending' AND ev.payload_json IS NOT NULL
-                        THEN json_extract(ev.payload_json,'$.decision.inputs_hash')
-                        ELSE d.inputs_hash END,
-                   d.inputs_json
-            FROM paper_candidate_decisions d
-            LEFT JOIN paper_pending_orders po
-              ON po.report_run_id=d.report_run_id AND po.campaign_id=d.campaign_id
-             AND po.candidate_rank=d.candidate_rank
-            LEFT JOIN paper_order_events ev
-              ON ev.order_id=po.order_id AND ev.event_type IN ('filled','rejected')
-            WHERE d.campaign_id=? AND d.report_run_id IN ({placeholders})
-            ORDER BY d.report_run_id,d.candidate_rank""",
-        (campaign_id, *run_ids),
-    ).fetchall()
-    expected_execution = {
-        f"{row[0]}:{row[1]}": {"disposition": row[2], "inputs_hash": row[3]}
-        for row in live_rows
-    }
-    if len(expected_execution) != sum(len(run.get("candidates") or []) for run in candidate_runs):
-        raise ValueError("promotion parity requires one sealed live fact per candidate")
-    live_inputs = {
-        (str(row[0]), int(row[1])): json.loads(str(row[4])) for row in live_rows
-    }
-    sealed_candidate_runs = []
-    for run in candidate_runs:
-        run_id = str(run["report_run_id"])
-        sealed_candidates = []
-        for rank, _candidate in enumerate(run.get("candidates") or [], start=1):
-            evidence = live_inputs[(run_id, rank)]
-            sealed_candidates.append({
-                "__sealed_candidate": evidence["candidate"],
-                "__sealed_context": evidence["context"],
-            })
-        sealed_candidate_runs.append({
-            **run,
-            "published_ts": publication_by_run[run_id],
-            "candidates": sealed_candidates,
-        })
-    result = replay_campaign(candidate_runs=sealed_candidate_runs, price_rows=price_rows, spy_rows=spy_rows,
-                             config=config, expected_execution=expected_execution)
-    evidence = record_promotion_experiment(
-        conn, experiment_id=experiment_id, preregistration_id=preregistration_id,
-        campaign_id=campaign_id, policy_version=config.decision_version,
-        policy_hash=result["policy_hash"], dataset_hash=result["dataset_hash"],
-        metrics={**result["metrics"], "engine_version": result["engine_version"],
-                 "walk_forward": result["walk_forward"], "held_out": result["held_out"]},
-        parity_status=result["replay_live_parity"],
-    )
-    return {**result, "promotion_evidence": evidence}

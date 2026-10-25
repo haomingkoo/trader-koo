@@ -6,10 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from trader_koo.research.challenger_tournament import (
-    _implementation_hash,
-    _implementation_manifest,
-)
 from trader_koo.research.next_open_baseline import (
     artifact_state as baseline_state,
     canonical_json_bytes,
@@ -81,15 +77,10 @@ def _load_tournament(path: Path = TOURNAMENT_PATH) -> dict[str, Any]:
             **unavailable,
             "warnings": ["tournament_artifact_hash_mismatch"],
         }
-    if str(payload.get("implementation_sha256") or "") != _implementation_hash():
-        return _historical_tournament(
-            payload, "tournament_implementation_hash_mismatch", path,
-        )
-    if payload.get("implementation_manifest") != _implementation_manifest():
-        return _historical_tournament(
-            payload, "tournament_implementation_manifest_mismatch", path,
-        )
-    return {"available": True, "artifact_path": str(path), **payload}
+    # The executor that produced this artifact was deleted, so it can no longer be re-verified.
+    return _historical_tournament(
+        payload, "tournament_implementation_hash_mismatch", path,
+    )
 
 
 def _baseline_result() -> dict[str, Any]:

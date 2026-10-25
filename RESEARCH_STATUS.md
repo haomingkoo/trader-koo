@@ -40,7 +40,9 @@ performance claim.
 The checked-in challenger artifact is immutable historical evidence. Its
 negative result is useful: the fixed current-universe dataset lacks verified
 total-return basis, point-in-time membership, and complete price-revision
-lineage, so the runner correctly refuses to produce performance metrics.
+lineage, so the runner correctly refused to produce performance metrics. The
+runner has since been deleted; the artifact is served read-only and can no
+longer be re-verified against its implementation hash.
 
 ## Supported language
 

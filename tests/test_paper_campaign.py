@@ -32,7 +32,7 @@ from trader_koo.paper_trades import _build_config
 from trader_koo.paper_trades import create_paper_trades_from_report as _create_paper_trades_from_report
 from trader_koo.paper_trades import fill_pending_paper_orders
 from trader_koo.paper_trades import paper_trade_summary
-from trader_koo.paper_trade.replay import replay_and_seal_promotion, replay_campaign
+from trader_koo.paper_trade.replay import replay_campaign
 from trader_koo.paper_trade.trading import (
     ReportLineageError,
     _require_published_canonical_report,
@@ -1023,129 +1023,6 @@ def test_outer_admission_persists_lineage_failure_without_candidate_writes(
                VALUES (?,'succeeded','forged','forged','2026-08-21T12:00:00Z')""",
             (run_id,),
         )
-
-
-def test_promotion_verifies_lineage_before_candidate_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    conn = _db()
-
-    def reject_lineage(*args, **kwargs):
-        raise ReportLineageError(
-            "report_not_verified_published", "unverified promotion fixture"
-        )
-
-    monkeypatch.setattr(
-        "trader_koo.paper_trade.trading._require_published_canonical_report",
-        reject_lineage,
-    )
-
-    with pytest.raises(ReportLineageError) as error:
-        replay_and_seal_promotion(
-            conn,
-            experiment_id="blocked-exp",
-            preregistration_id="blocked-prereg",
-            campaign_id="paper-v2",
-            candidate_runs=[{
-                "report_run_id": "unverified-run",
-                "report_date": "2026-08-21",
-                "candidates": [_candidate("BLOCKED")],
-            }],
-            price_rows=[],
-            spy_rows=[],
-            config=_build_config(),
-        )
-
-    assert error.value.code == "report_not_verified_published"
-    assert conn.execute("SELECT COUNT(*) FROM paper_campaign_experiments").fetchone()[0] == 0
-
-
-def test_promotion_rejects_corrupted_published_artifact_before_candidate_evidence() -> None:
-    conn = _db()
-    run_id = "corrupted-promotion-run"
-    _publish(conn, run_id, [_candidate("CORRUPT")])
-    artifact_path = Path(conn.execute(
-        "SELECT artifact_path FROM report_runs WHERE run_id=?", (run_id,)
-    ).fetchone()[0])
-    artifact_path.write_text("{}", encoding="utf-8")
-
-    with pytest.raises(ReportLineageError) as error:
-        replay_and_seal_promotion(
-            conn,
-            experiment_id="corrupted-exp",
-            preregistration_id="corrupted-prereg",
-            campaign_id="paper-v2",
-            candidate_runs=[{
-                "report_run_id": run_id,
-                "report_date": "2026-08-21",
-                "candidates": [_candidate("CORRUPT")],
-            }],
-            price_rows=[],
-            spy_rows=[],
-            config=_build_config(),
-        )
-
-    assert error.value.code == "report_publication_lineage_invalid"
-    assert conn.execute("SELECT COUNT(*) FROM paper_campaign_experiments").fetchone()[0] == 0
-
-
-def test_historical_promotion_accepts_superseded_verified_lineage(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    conn = _db()
-    candidate = _candidate("HIST")
-    create_paper_trades_from_report(
-        conn, setup_rows=[candidate], report_date="2026-08-21",
-        generated_ts="historical-ts", report_run_id="historical-run",
-    )
-    conn.commit()
-    _publish(conn, "replacement-run", [_candidate("NEXT")])
-
-    historical = _require_published_canonical_report(
-        conn, "historical-run", require_current=False
-    )
-    assert historical["is_canonical"] is False
-    with pytest.raises(ReportLineageError) as error:
-        _require_published_canonical_report(
-            conn, "historical-run", require_current=True
-        )
-    assert error.value.code == "report_not_current_publication"
-
-    config = _build_config()
-    policy_hash = canonical_hash(config_snapshot(config))
-    dataset_hash = "b" * 64
-    record_experiment_preregistration(
-        conn, preregistration_id="historical-prereg", campaign_id="paper-v2",
-        policy_version=config.decision_version, policy_hash=policy_hash,
-        dataset_hash=dataset_hash,
-        gates={
-            "risk_gates": {"max_drawdown_pct": 10.0},
-            "active_return_gate": {"minimum_pct": 0.0},
-        },
-    )
-    metrics = _promotion_metrics()
-    monkeypatch.setattr(
-        "trader_koo.paper_trade.replay.replay_campaign",
-        lambda **kwargs: {
-            "policy_hash": policy_hash, "dataset_hash": dataset_hash,
-            "metrics": metrics, "engine_version": metrics["engine_version"],
-            "walk_forward": metrics["walk_forward"], "held_out": metrics["held_out"],
-            "replay_live_parity": "matched", "decisions": [], "trades": [],
-        },
-    )
-    result = replay_and_seal_promotion(
-        conn, experiment_id="historical-exp",
-        preregistration_id="historical-prereg", campaign_id="paper-v2",
-        candidate_runs=[{
-            "report_run_id": "historical-run", "report_date": "2026-08-21",
-            "candidates": [candidate],
-        }],
-        price_rows=[], spy_rows=[], config=config,
-    )
-    assert result["promotion_evidence"]["experiment_id"] == "historical-exp"
-    assert conn.execute(
-        "SELECT COUNT(*) FROM paper_campaign_experiments WHERE experiment_id='historical-exp'"
-    ).fetchone()[0] == 1
 
 
 def test_chronological_replay_models_costs_overlap_exits_and_parity():
