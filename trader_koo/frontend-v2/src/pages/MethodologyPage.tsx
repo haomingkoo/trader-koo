@@ -2,7 +2,6 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import {
   Database,
   Eye,
-  Brain,
   MessageSquare,
   ShieldCheck,
   PlayCircle,
@@ -26,12 +25,6 @@ interface MethodologyStats {
   ok: boolean;
   tickers_tracked: number;
   patterns_detected_today: number;
-  ml_features: number;
-  ml_auc: number | null;
-  ml_fold_count: number | null;
-  ml_min_auc: number;
-  ml_enabled: boolean;
-  ml_predictions_closed: number;
   paper_trades_total: number;
   paper_trades_open: number;
   win_rate: number | null;
@@ -426,12 +419,6 @@ const PIPELINE_STEPS: PipelineStep[] = [
       "3-layer detection: rule-based geometry, candlestick patterns, and YOLOv8 AI on chart images.",
   },
   {
-    icon: Brain,
-    label: "ML Filter",
-    description:
-      "Inactive LightGBM observation layer. It records research predictions but cannot filter, size, or veto trades until its activation gates pass.",
-  },
-  {
     icon: MessageSquare,
     label: "Rule Review",
     description:
@@ -600,10 +587,6 @@ export default function MethodologyPage() {
                 label="Patterns Today"
                 value={stats.patterns_detected_today.toLocaleString()}
               />
-              <StatCard
-                label="ML Features"
-                value={String(stats.ml_features)}
-              />
             </div>
           </Reveal>
         )}
@@ -630,7 +613,7 @@ export default function MethodologyPage() {
           step={0}
           icon={Layers}
           title="Pipeline Overview"
-          subtitle="Six configured stages describe the intended flow. Campaign v2 is active; ML remains an observation-only challenger."
+          subtitle="Five configured stages describe the intended flow."
         />
 
         <Reveal delay={300}>
@@ -789,157 +772,11 @@ export default function MethodologyPage() {
       </section>
 
       {/* ============================================================ */}
-      {/* Section 3: ML Pipeline                                        */}
+      {/* Section 3: Multi-Angle Rule Review                            */}
       {/* ============================================================ */}
       <section className="py-20 border-t border-[var(--line)]">
         <SectionHeading
           step={3}
-          icon={Brain}
-          title="ML Pipeline"
-          subtitle="A LightGBM observation layer that records predicted win probabilities for every setup. Currently inactive — it does not gate any trade decision until the activation criteria below are met."
-        />
-
-        <Reveal delay={50}>
-          <div className="mt-6 mb-2 rounded-xl border border-[var(--amber)]/40 bg-[rgba(248,194,78,0.06)] px-5 py-3.5 max-w-[640px]">
-            <div className="flex items-start gap-2.5">
-              <AlertTriangle
-                size={16}
-                className="mt-0.5 shrink-0 text-[var(--amber)]"
-              />
-              <p className="text-xs leading-relaxed text-[var(--muted)]">
-                <strong className="text-[var(--amber)]">Status: observation only.</strong>{" "}
-                The components below describe what the model records and how it&apos;s
-                built. None currently gate trade entries.
-              </p>
-            </div>
-          </div>
-        </Reveal>
-
-        <div className="grid gap-4 sm:grid-cols-2 mt-8">
-          <Reveal delay={0}>
-            <VizPanel className="h-full">
-              <div className="mb-2 text-xs font-bold uppercase tracking-[1.5px] text-[var(--accent)]">
-                Feature Engineering
-              </div>
-              <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-                Slim default set of 7&ndash;15 cross-sectionally ranked features
-                (full 51-feature set available). Includes volume-confirmed
-                momentum, ATR expansion, gap percentage, multi-horizon returns,
-                volatility, VIX regime, macro indicators, and sector rotation.
-                All per-ticker features use cross-sectional rank normalization.
-              </p>
-            </VizPanel>
-          </Reveal>
-          <Reveal delay={100}>
-            <VizPanel className="h-full">
-              <div className="mb-2 text-xs font-bold uppercase tracking-[1.5px] text-[var(--accent)]">
-                Labeling Strategy
-              </div>
-              <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-                Triple-barrier method: 2x ATR profit target, 2x ATR stop loss,
-                10-day time barrier. Labels check intraday high/low for barrier
-                touches (not just close). Three target modes: return sign,
-                barrier hit, and cross-sectional rank.
-              </p>
-            </VizPanel>
-          </Reveal>
-          <Reveal delay={200}>
-            <VizPanel className="h-full">
-              <div className="mb-2 text-xs font-bold uppercase tracking-[1.5px] text-[var(--accent)]">
-                Training Process
-              </div>
-              <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-                LightGBM walk-forward with purged validation windows (no data
-                leakage) and early stopping (50 rounds, lr=0.01, 15 leaves,
-                depth 3). The model is retrained periodically on expanding
-                windows. SHAP values provide feature importance for
-                interpretability.
-              </p>
-            </VizPanel>
-          </Reveal>
-          <Reveal delay={300}>
-            <VizPanel className="h-full">
-              <div className="mb-2 text-xs font-bold uppercase tracking-[1.5px] text-[var(--accent)]">
-                Meta-Labeling Filter
-              </div>
-              <p className="text-[13px] leading-[1.7] text-[var(--muted)]">
-                A secondary model is being evaluated as a possible future filter.
-                It does not currently adjust position size or veto setups.
-              </p>
-            </VizPanel>
-          </Reveal>
-        </div>
-
-        <Reveal delay={400}>
-          <div className="mt-6 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-5">
-            <div className="mb-3 flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-bold uppercase tracking-[1.5px] text-[var(--text)]">
-                Activation Criteria
-              </span>
-              <span className="rounded-full bg-[var(--amber)]/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--amber)]">
-                Not Met
-              </span>
-              <span className="font-mono text-[10px] text-[var(--muted)]">
-                AUC {stats?.ml_auc != null ? stats.ml_auc : "N/A"}
-              </span>
-            </div>
-            <p className="text-xs leading-relaxed text-[var(--muted)] mb-4">
-              Before this layer is allowed to influence position sizing or
-              veto setups, all six criteria below must clear. Until then it
-              runs in observation mode and is logged for post-hoc
-              calibration only.
-            </p>
-            <ul className="space-y-2 text-[12px]">
-              {[
-                {
-                  label: `AUC > ${stats?.ml_min_auc ?? 0.55} across 5+ walk-forward folds`,
-                  current: stats?.ml_auc != null
-                    ? `currently ${stats.ml_auc} across ${stats.ml_fold_count ?? "unknown"} folds`
-                    : "no registered validation run",
-                  status: stats?.ml_auc != null && stats.ml_auc <= stats.ml_min_auc ? "fail" as const : "pending" as const,
-                },
-                {
-                  label: "\u2265 20 closed trades with predictions populated",
-                  current: `currently ${stats?.ml_predictions_closed ?? 0}`,
-                  status: (stats?.ml_predictions_closed ?? 0) < 20 ? "fail" as const : "pending" as const,
-                },
-                {
-                  label: "ml_enabled config flag flipped on",
-                  current: `currently ${stats?.ml_enabled ?? false}`,
-                  status: stats?.ml_enabled ? "pending" as const : "fail" as const,
-                },
-                { label: "Calibration: 60% predicted \u2248 60% actual win rate", current: "needs sample", status: "pending" as const },
-                { label: "Feature audit: macro_sp500_ret_63d not top feature", current: "untested", status: "pending" as const },
-                { label: "No-leakage audit: FRED vintage + OOS meta-model", current: "untested", status: "pending" as const },
-              ].map((row) => (
-                <li key={row.label} className="flex items-start gap-2.5">
-                  <span
-                    className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-bold ${
-                      row.status === "fail"
-                        ? "bg-[var(--red)]/15 text-[var(--red)]"
-                        : "bg-[var(--line)] text-[var(--muted)]"
-                    }`}
-                    aria-label={row.status === "fail" ? "Failed" : "Pending evidence"}
-                  >
-                    {row.status === "fail" ? "\u2715" : "\u2013"}
-                  </span>
-                  <div className="min-w-0">
-                    <span className="text-[var(--text)]">{row.label}</span>
-                    <span className="ml-2 text-[10px] text-[var(--muted)]">({row.current})</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </Reveal>
-      </section>
-
-      {/* ============================================================ */}
-      {/* Section 4: Multi-Angle Rule Review                            */}
-      {/* ============================================================ */}
-      <section className="py-20 border-t border-[var(--line)]">
-        <SectionHeading
-          step={4}
           icon={MessageSquare}
           title="Multi-Angle Rule Review"
           subtitle="Five deterministic rule lenses produce structured views."
@@ -998,11 +835,11 @@ export default function MethodologyPage() {
       </section>
 
       {/* ============================================================ */}
-      {/* Section 5: Risk Gating                                        */}
+      {/* Section 4: Risk Gating                                        */}
       {/* ============================================================ */}
       <section className="py-20 border-t border-[var(--line)]">
         <SectionHeading
-          step={5}
+          step={4}
           icon={ShieldCheck}
           title="Risk Gating"
           subtitle="Multiple risk filters must pass before a setup can open a paper trade."
@@ -1057,11 +894,11 @@ export default function MethodologyPage() {
       </section>
 
       {/* ============================================================ */}
-      {/* Section 6: Paper Trade Execution                              */}
+      {/* Section 5: Paper Trade Execution                              */}
       {/* ============================================================ */}
       <section className="py-20 border-t border-[var(--line)]">
         <SectionHeading
-          step={6}
+          step={5}
           icon={PlayCircle}
           title="Paper Trade Execution"
           subtitle="Setups that pass all gates open simulated trades with full lifecycle tracking."
@@ -1148,11 +985,11 @@ export default function MethodologyPage() {
       </section>
 
       {/* ============================================================ */}
-      {/* Section 7: Daily Pipeline                                     */}
+      {/* Section 6: Daily Pipeline                                     */}
       {/* ============================================================ */}
       <section className="py-20 border-t border-[var(--line)]">
         <SectionHeading
-          step={7}
+          step={6}
           icon={Clock}
           title="Daily Pipeline"
           subtitle="Configured Monday-to-Friday schedule. A schedule is not proof that the latest report completed or was published."
@@ -1174,7 +1011,7 @@ export default function MethodologyPage() {
             <TimelineStep
               time="22:10 UTC"
               label="Report Generation"
-              detail="Setup rankings, risk filters, macro context, and multi-angle rule review for top setups. ML observation scores are recorded but do not gate trades."
+              detail="Setup rankings, risk filters, macro context, and multi-angle rule review for top setups."
               delay={200}
             />
             <TimelineStep

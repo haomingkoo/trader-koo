@@ -261,7 +261,7 @@ def _check_portfolio_concentration(
     # Check sector concentration (max 1 open position per sector)
     sector_unknown = False
     try:
-        from trader_koo.ml.sector_rotation import build_sector_map_from_db
+        from trader_koo.sector_rotation import build_sector_map_from_db
 
         sector_map = build_sector_map_from_db(conn)
         new_sector = sector_map.get(ticker.upper())

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download production data from Railway for local ML training.
+"""Download production data from Railway for local analysis.
 
 Usage:
     # Download all default tables as SQLite (recommended):
@@ -10,9 +10,6 @@ Usage:
 
     # Download as CSV files instead:
     python -m trader_koo.scripts.sync_prod_data --format csv
-
-    # Upload a trained model to production:
-    python -m trader_koo.scripts.sync_prod_data --upload-model data/models/swing_lgbm_latest.txt
 
     # Show what's available on prod:
     python -m trader_koo.scripts.sync_prod_data --info
@@ -145,58 +142,6 @@ def cmd_download_csv(tables: str) -> None:
     print("Done.\n")
 
 
-def cmd_upload_model(model_path: str) -> None:
-    """Upload a trained model file to production."""
-    file_path = Path(model_path)
-    if not file_path.exists():
-        print(f"ERROR: File not found: {file_path}")
-        sys.exit(1)
-
-    size_mb = file_path.stat().st_size / (1024 * 1024)
-    print(f"Uploading {file_path.name} ({size_mb:.2f} MB) to {PROD_URL}")
-
-    # Build multipart form data manually (no requests dependency)
-    boundary = "----TraderKooModelUpload"
-    body = bytearray()
-    body.extend(f"--{boundary}\r\n".encode())
-    body.extend(
-        f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode()
-    )
-    body.extend(b"Content-Type: application/octet-stream\r\n\r\n")
-    body.extend(file_path.read_bytes())
-    body.extend(f"\r\n--{boundary}--\r\n".encode())
-
-    url = f"{PROD_URL}/api/admin/upload/model"
-    headers = _headers()
-    headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
-
-    req = urllib.request.Request(url, data=bytes(body), headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read())
-            print(f"  Uploaded to: {result.get('path')}")
-            print(f"  Size: {result.get('size_bytes', 0):,} bytes")
-            print("Done.\n")
-    except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
-        print(f"ERROR: {exc.code} {exc.reason}")
-        print(f"  Response: {body_text[:500]}")
-        sys.exit(1)
-
-
-def cmd_list_models() -> None:
-    """List model files on production."""
-    data = json.loads(_api_request("/api/admin/models/list"))
-    models = data.get("models", [])
-    print(f"\nModels in {data.get('model_dir', '?')}:")
-    if not models:
-        print("  (none)")
-    for m in models:
-        size_kb = m["size_bytes"] / 1024
-        print(f"  {m['name']:<40} {size_kb:>8.1f} KB")
-    print()
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Sync data between production Railway and local machine.",
@@ -219,29 +164,11 @@ def main() -> None:
         action="store_true",
         help="Show production table info and exit",
     )
-    parser.add_argument(
-        "--upload-model",
-        metavar="PATH",
-        help="Upload a trained model file to production",
-    )
-    parser.add_argument(
-        "--list-models",
-        action="store_true",
-        help="List model files on production",
-    )
 
     args = parser.parse_args()
 
     if args.info:
         cmd_info()
-        return
-
-    if args.list_models:
-        cmd_list_models()
-        return
-
-    if args.upload_model:
-        cmd_upload_model(args.upload_model)
         return
 
     if args.format == "sqlite":

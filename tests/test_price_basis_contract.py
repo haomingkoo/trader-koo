@@ -22,8 +22,6 @@ from trader_koo.scripts.update_market_db import (
 )
 from trader_koo.db.price_contract import record_price_series_revision, research_price_contract
 from trader_koo.db.report_price_contract import require_expected_price_contract
-from trader_koo.ml.benchmark import run_benchmark
-from trader_koo.ml.trainer import build_dataset
 from trader_koo.report import generator as report_generator
 from trader_koo.scripts.run_yolo_patterns import ensure_yolo_table, save_detections
 
@@ -555,7 +553,7 @@ def test_requested_missing_ticker_fails_contract_closed() -> None:
     assert contract["missing_tickers"] == ["MISSING"]
 
 
-def test_report_and_ml_consumers_fail_closed_for_unresolved_basis() -> None:
+def test_report_consumer_fails_closed_for_unresolved_basis() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
     prices = DataSourceManager._normalize_ohlcv(_continuous_prices().iloc[:30])
@@ -571,16 +569,6 @@ def test_report_and_ml_consumers_fail_closed_for_unresolved_basis() -> None:
     assert "hmm_regime_by_ticker" not in signals
     assert signals["price_contract"]["eligible"] is False
     assert "price_basis_unresolved" in report_generator._report_warnings
-
-    with pytest.raises(ValueError, match="not research eligible"):
-        build_dataset(
-            conn,
-            start_date="2024-01-01",
-            end_date="2026-01-01",
-        )
-    benchmark = run_benchmark(conn, start_date="2024-01-01")
-    assert benchmark["ok"] is False
-    assert benchmark["price_contract"]["eligible"] is False
 
 
 def test_yolo_persistence_fails_closed_for_unresolved_basis() -> None:

@@ -190,40 +190,6 @@ def check_gates(report: Report, conn: sqlite3.Connection) -> None:
     except sqlite3.Error as exc:
         report.add("Gates", "sector coverage", FAIL, str(exc))
 
-    # ML observation: the activation gate needs closed trades carrying a prediction.
-    try:
-        closed = conn.execute(
-            "SELECT COUNT(*) FROM paper_trades WHERE status != 'open'"
-        ).fetchone()[0]
-        scored = conn.execute(
-            "SELECT COUNT(*) FROM paper_trades WHERE status != 'open' "
-            "AND ml_predicted_win_prob IS NOT NULL"
-        ).fetchone()[0]
-        if closed and scored == 0:
-            state, detail = FAIL, f"0 of {closed} closed trades carry a prediction — observation mode is not recording"
-        elif scored < 20:
-            state, detail = WARN, f"{scored}/20 closed trades scored (activation gate needs 20)"
-        else:
-            state, detail = PASS, f"{scored} closed trades scored"
-        report.add("Gates", "ML observation", state, detail)
-    except sqlite3.Error as exc:
-        report.add("Gates", "ML observation", WARN, f"unavailable: {exc}")
-
-    # Champion promotion: a registry that has never produced an eligible run.
-    try:
-        total = conn.execute("SELECT COUNT(*) FROM ml_validation_runs").fetchone()[0]
-        eligible = conn.execute(
-            "SELECT COUNT(*) FROM ml_validation_runs WHERE champion_eligible = 1"
-        ).fetchone()[0]
-        if total == 0:
-            report.add("Gates", "ML promotion", WARN, "no validation runs recorded yet")
-        elif eligible == 0:
-            report.add("Gates", "ML promotion", WARN, f"0 of {total} runs ever reached champion_eligible")
-        else:
-            report.add("Gates", "ML promotion", PASS, f"{eligible}/{total} runs eligible")
-    except sqlite3.Error as exc:
-        report.add("Gates", "ML promotion", WARN, f"unavailable: {exc}")
-
 
 def check_campaign(report: Report, conn: sqlite3.Connection) -> None:
     try:

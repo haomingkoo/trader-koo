@@ -8,7 +8,7 @@ This document explains how trader-koo is built — the data flow, module respons
 
 Full-stack S&P 500 + crypto analysis dashboard. Live at [trader.kooexperience.com](https://trader.kooexperience.com), deployed on Railway (asia-southeast1).
 
-The entire system — API server, WebSocket clients, background scheduler, and ML pipelines — runs in a single process on a single Railway service. No separate worker, no message queue, no external database.
+The entire system — API server, WebSocket clients, background scheduler — runs in a single process on a single Railway service. No separate worker, no message queue, no external database.
 
 ```
 Railway Service (single process)
@@ -30,7 +30,6 @@ Railway Service (single process)
 │
 └── /data/ (Railway persistent volume)
     ├── trader_koo.db    (SQLite app data)
-    ├── models/          (LightGBM .pkl files)
     ├── reports/         (daily JSON + MD archives)
     ├── logs/            (structured log files)
     └── .ultralytics/    (YOLO model cache)
@@ -101,7 +100,6 @@ The admin router is split for maintainability. All require `X-API-Key` authentic
 | Module | Responsibilities |
 |--------|-----------------|
 | `pipeline.py` | Trigger updates, pipeline status, YOLO seed/status |
-| `ml.py` | Model training, evaluation, feature importance |
 | `data.py` | DB inspection, cache management, data quality checks |
 | `system.py` | Logs, audit trail, health events, configuration |
 | `email_admin.py` | SMTP health, test sends |
@@ -256,7 +254,6 @@ This is the most compute-heavy endpoint. Everything runs synchronously in the re
 10. Merge live candle from Finnhub WS (if available)
 11. Fetch fundamentals    →  latest finviz_fundamentals row
 12. Fetch options         →  latest options_iv rows
-13. Score ML model        →  LightGBM probability (if model .pkl exists)
 18. Return JSON payload
 ```
 
@@ -392,46 +389,6 @@ On mobile, labels are shortened using a compact map (`"Head and shoulders bottom
 
 ---
 
-## ML pipeline
-
-The `trader_koo/ml/` directory implements a LightGBM-based binary classifier for next-day directional prediction.
-
-See the `trader_koo/ml/` directory for modules (features, labels, trainer, scorer, benchmark, meta-label, validation registry, rule baseline).
-
-### Feature engineering (51 features, 12 categories)
-
-The feature set covers price action, momentum, volatility, volume, structure, and macro:
-
-- **Price**: returns (1d, 5d, 20d), distance from MA (20/50/200), distance from 52-week high/low
-- **Momentum**: RSI-14, MACD signal/histogram, Stochastic %K/%D, rate of change
-- **Volatility**: ATR-14, Bollinger bandwidth, historical volatility (20d), VIX level
-- **Volume**: relative volume (vs 20d avg), OBV trend, volume-price divergence
-- **Structure**: support/resistance proximity, level touch count, gap proximity
-- **Patterns**: YOLO detection count, pattern agreement score
-- **Options**: put/call OI ratio, implied volatility percentile
-- **Macro**: Fed funds rate, yield curve slope, unemployment delta, ISM PMI
-- **Sector**: relative strength vs SPY, sector rotation score
-- **Calendar**: day of week, month, days to earnings
-- **Regime**: HMM regime state (bull/bear/neutral)
-- **Sentiment**: news sentiment score (when Alpha Vantage available)
-
-### Labeling
-
-`generate_triple_barrier_labels` in `labels.py` labels each (ticker, entry date) pair as 1 (profitable) or 0 (not). The profit and stop barriers scale with trailing daily volatility through `profit_mult` and `stop_mult`. The stop is checked first when both barriers fall in the same bar. A time barrier at `max_holding_days` falls back to the sign of the final return.
-
-### Training
-
-`train_walk_forward` in `trainer.py` uses walk-forward validation with a purge gap between train and validation windows to prevent look-ahead bias. `run_benchmark` in `benchmark.py` sets its own train, test, step, and embargo defaults. Read the symbols for current window sizes.
-
-### Meta-labeling
-
-`meta_label.py` exposes `build_meta_labels_from_oos`, which builds second-stage labels from out-of-sample primary predictions, and `train_meta_model`, which fits the second-stage LightGBM model on them.
-
-### Model serving
-
-Trained models are saved as `.pkl` files in `/data/models/`. The scorer loads the latest model at request time and returns a probability. If no model file exists, the ML score is omitted from the dashboard payload.
-
----
 
 ## Crypto subsystem
 
@@ -499,7 +456,7 @@ The live tick price is merged into the dashboard chart payload as a real-time "c
 
 ## Paper trading
 
-The paper trading system simulates trades with full lifecycle tracking, used to evaluate the ML model and pattern detection signals in forward-test conditions.
+The paper trading system simulates trades with full lifecycle tracking, used to evaluate pattern detection signals in forward-test conditions.
 
 ### Decision pipeline
 

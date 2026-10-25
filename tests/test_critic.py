@@ -628,7 +628,7 @@ def test_sector_gate_blocks_second_position_once_sector_is_known():
     import json
 
     from trader_koo.paper_trade.critic import _check_portfolio_concentration
-    import trader_koo.ml.sector_rotation as sector_rotation
+    import trader_koo.sector_rotation as sector_rotation
 
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -672,7 +672,7 @@ def test_finviz_sector_rows_are_read_positionally_not_by_value_search():
     which dropped live coverage to 70%. Reading by position and validating both
     fields resolves the whole universe.
     """
-    from trader_koo.ml.sector_rotation import _FINVIZ_SECTOR_TO_INTERNAL
+    from trader_koo.sector_rotation import _FINVIZ_SECTOR_TO_INTERNAL
 
     # Verbatim shape returned by the installed finviz build.
     row = ["1", "A", "AAPL", "Apple Inc", "Technology", "Consumer Electronics", "USA"]
@@ -699,7 +699,7 @@ def test_sector_gate_cannot_evaluate_when_an_open_position_is_unresolved():
     import json
 
     from trader_koo.paper_trade.critic import _check_portfolio_concentration
-    import trader_koo.ml.sector_rotation as sector_rotation
+    import trader_koo.sector_rotation as sector_rotation
 
     conn = sqlite3.connect(":memory:")
     conn.execute(

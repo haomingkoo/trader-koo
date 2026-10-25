@@ -25,7 +25,7 @@ from trader_koo.backend.routers.admin.market_monitor import (
     router as market_monitor_router,
 )
 from trader_koo.backend.routers.admin.maintenance import router as maintenance_router
-from trader_koo.backend.routers.admin.ml import router as ml_router
+from trader_koo.backend.routers.admin.paper_trades import router as paper_trades_router
 from trader_koo.backend.routers.admin.pipeline import (
     router as pipeline_router,
 )
@@ -45,7 +45,7 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 router.include_router(alert_quality_router)
 router.include_router(pipeline_router)
 router.include_router(paper_campaigns_router)
-router.include_router(ml_router)
+router.include_router(paper_trades_router)
 router.include_router(data_router)
 router.include_router(email_router)
 router.include_router(system_router)

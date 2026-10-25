@@ -791,7 +791,7 @@ def prime_finviz_sectors(tickers: list[str]) -> int:
     stays unknown and the critic reports the gate as unevaluated rather than
     reporting a clean pass.
     """
-    from trader_koo.ml.sector_rotation import _FINVIZ_SECTOR_TO_INTERNAL
+    from trader_koo.sector_rotation import _FINVIZ_SECTOR_TO_INTERNAL
 
     known_sectors = set(_FINVIZ_SECTOR_TO_INTERNAL)
     wanted = [t.upper() for t in tickers]

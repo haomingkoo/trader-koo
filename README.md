@@ -121,9 +121,9 @@ flowchart LR
   API --> WS[Equity and crypto WebSockets]
   API --> Scheduler[APScheduler jobs]
   Scheduler --> Providers[Market data providers]
-  Scheduler --> ML[ML, pattern, critic pipeline]
+  Scheduler --> Pipeline[Pattern and critic pipeline]
   Providers --> DB
-  ML --> Reports
+  Pipeline --> Reports
   API --> Telegram[Telegram bot and alerts]
   UI --> Paper[Paper trade audit trail]
   Paper --> DB
@@ -140,7 +140,7 @@ service. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system map.
 | Backend | FastAPI, APScheduler, SQLite |
 | Frontend | React 19, Vite, TypeScript, Tailwind |
 | Charts | Plotly |
-| ML/research | LightGBM, SHAP, rule-based pattern logic, validation reports |
+| Research | Rule-based pattern logic, validation reports |
 | Data | yfinance, Finnhub, Binance, Finviz, FRED, Polymarket where configured |
 | Notifications | Telegram Bot API |
 | Deploy | Railway/Nixpacks, single service with persistent volume |

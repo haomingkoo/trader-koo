@@ -1,7 +1,6 @@
 ---
 paths:
   - "trader_koo/paper_trade/**"
-  - "trader_koo/ml/**"
   - "trader_koo/paper_trades.py"
   - "trader_koo/config.py"
   - "tests/test_critic.py"
@@ -9,18 +8,8 @@ paths:
 
 # Feature Activation Checklist
 
-Before promoting any experimental system (ML gating, new regime filter, new sizing model)
+Before promoting any experimental system (new regime filter, new sizing model)
 from observation → production, all items must be checked.
-
-## ML Gating Activation
-
-The promotion gates and their thresholds live in `trader_koo/ml/validation_registry.py`. That file is the authority, so do not restate its numbers here. All registered gates must pass first. Checks the registry does not cover:
-
-1. **Closed-trade evidence**: enough closed paper trades with `ml_predicted_win_prob` populated to evaluate calibration (count trades, not calendar days). This does not replace the registry's trade-count gate.
-2. **Calibration**: Plot calibration curve — predicted win prob 0.6 should correspond to ~60% actual win rate
-3. **Feature audit**: `macro_sp500_ret_63d` must NOT be the top feature — that predicts market direction, not cross-sectional alpha
-4. **No leakage**: Confirm FRED vintage data, OOS meta-model, and imputation do not look forward
-5. **Config flag**: Change `ml_enabled: bool = False` → `True` in `PaperTradeConfig` only after the registry gates and all above pass. `ml_observe` (default `True`) scores trades and populates `ml_predicted_win_prob` independently of `ml_enabled`, so observation does not wait for activation.
 
 ## New Regime Filter Activation
 

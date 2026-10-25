@@ -33,9 +33,8 @@ performance claim.
 - yfinance survivorship measurement: a large share of 2016-2026 S&P 500 names are gone,
   many sampled departed names return zero bars, and tickers get recycled
   (FB, APC). Both findings support the no-alpha language below.
-- LightGBM remains observation-only. It cannot veto, rank, or size Campaign v2
-  trades until a separate leakage-safe qualification clears the fixed
-  walk-forward, held-out, calibration, provenance, cost, and benchmark gates.
+- The LightGBM stack was removed. It never had a qualified model and never
+  vetoed, ranked, or sized Campaign v2 trades.
 
 The checked-in challenger artifact is immutable historical evidence. Its
 negative result is useful: the fixed current-universe dataset lacks verified

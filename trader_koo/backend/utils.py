@@ -110,28 +110,6 @@ def client_ip(request: Request) -> str:
     return "-"
 
 
-def resolve_child_filename(base_dir: Path, target_name: str) -> tuple[str, Path]:
-    """Validate a file name and keep the resolved path inside ``base_dir``."""
-    candidate = str(target_name or "").strip()
-    if not candidate:
-        raise ValueError("Filename is required.")
-    if any(sep in candidate for sep in ("/", "\\")):
-        raise ValueError("Filename must not include directory components.")
-
-    candidate_path = Path(candidate)
-    if candidate_path.is_absolute() or candidate_path.name != candidate or candidate in {".", ".."}:
-        raise ValueError("Filename must be a plain file name without directories.")
-
-    safe_name = candidate_path.name
-    dest_root = base_dir.resolve()
-    dest_path = (dest_root / safe_name).resolve()
-    try:
-        dest_path.relative_to(dest_root)
-    except ValueError as exc:
-        raise ValueError("Filename resolves outside the target directory.") from exc
-    return safe_name, dest_path
-
-
 def normalize_update_mode(mode: str | None) -> str | None:
     """Map pipeline mode aliases to canonical names (full | yolo | report)."""
     value = str(mode or "full").strip().lower()

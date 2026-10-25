@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from trader_koo.report.runs import current_code_version
+from trader_koo.research.universe_membership import ML_CONTEXT_TICKERS
 
-from trader_koo.ml.features import ML_CONTEXT_TICKERS
 
 SCHEMA_VERSION = "2.0"
 METHOD = "setup_calls_next_open_to_tenth_close"
