@@ -261,27 +261,35 @@ def _check_portfolio_concentration(
 
         sector_map = build_sector_map_from_db(conn)
         new_sector = sector_map.get(ticker.upper())
-        if new_sector:
-            open_sectors = [sector_map.get(str(r[0]).upper()) for r in open_trades]
+        open_sectors = [sector_map.get(str(r[0]).upper()) for r in open_trades]
+        # The gate needs the candidate AND every open position. An unresolved
+        # open position maps to None, never equals new_sector, and so silently
+        # lowers same_sector -- the candidate would be admitted alongside a
+        # same-sector holding the map simply could not see.
+        unresolved = [
+            str(r[0]).upper() for r, s in zip(open_trades, open_sectors) if not s
+        ]
+        if not new_sector:
+            sector_unknown = f"no sector known for {ticker.upper()}"
+        elif unresolved:
+            sector_unknown = f"open position(s) unresolved: {', '.join(sorted(unresolved))}"
+        else:
             same_sector = sum(1 for s in open_sectors if s == new_sector)
             if same_sector >= 1:
                 return False, (
                     f"Sector overweight: already holding a position in '{new_sector}'. "
                     "Diversify across sectors."
                 )
-        else:
-            sector_unknown = True
-    except Exception:
-        sector_unknown = True
+    except Exception as exc:
+        sector_unknown = f"sector map unavailable: {exc}"
 
     if sector_unknown:
-        # The sector source (finviz raw_json) carries no Sector field, so the map
-        # falls back to a 46-entry hardcoded list against a ~500-ticker universe.
-        # The gate then silently passes. Surface that instead of hiding it: this
-        # is why several same-sector positions can be open at once.
+        # Surfaced rather than hidden: an unevaluated gate must not read as a
+        # clean pass. This is how several same-sector positions came to be open
+        # at once while the rule said "max 1 per sector".
         return True, (
             f"Portfolio OK: {open_count}/{max_open} open, {same_dir} {direction} "
-            f"(SECTOR GATE NOT EVALUATED — no sector known for {ticker.upper()})"
+            f"(SECTOR GATE NOT EVALUATED — {sector_unknown})"
         )
 
     return True, f"Portfolio OK: {open_count}/{max_open} open, {same_dir} {direction}"

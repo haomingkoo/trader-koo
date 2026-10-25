@@ -809,12 +809,18 @@ def prime_finviz_sectors(tickers: list[str]) -> int:
             LOG.warning("Finviz sector chunk failed (%d tickers): %s", len(chunk), exc)
             continue
         for row in rows:
-            # The installed finviz build misaligns its column headers by one, so
-            # identify both fields by value instead of trusting the key names.
+            # The installed finviz build misaligns its column headers, so read by
+            # position and validate, rather than trusting the key names:
+            #   [row_no, <stray first letter>, ticker, company, sector, industry, ...]
+            # Searching for "the first value that is a requested ticker" looked
+            # safer but was wrong: A, C, F, K, M, O, T and V are real S&P 500
+            # tickers, so that stray letter column won and coverage collapsed to
+            # 70%. Positional plus validation resolves 503/503.
             values = [str(v).strip() for v in row.values()]
-            ticker = next((v for v in values if v in chunk), None)
-            sector = next((v for v in values if v in known_sectors), None)
-            if ticker and sector:
+            if len(values) < 5:
+                continue
+            ticker, sector = values[2], values[4]
+            if ticker in chunk and sector in known_sectors:
                 _SECTOR_BY_TICKER[ticker] = sector
 
     LOG.info("Finviz sectors resolved for %d/%d tickers", len(_SECTOR_BY_TICKER), len(wanted))
