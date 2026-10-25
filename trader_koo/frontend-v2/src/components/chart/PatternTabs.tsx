@@ -2,7 +2,6 @@ import { useState } from "react";
 import type {
   CandlestickPatternRow,
   DashboardPayload,
-  HybridPatternRow,
   PatternRow,
 } from "../../api/types";
 import Table from "../ui/Table";
@@ -16,15 +15,13 @@ export default function PatternTabs({
   payload,
   formatNumber,
 }: PatternTabsProps) {
-  const [activeTab, setActiveTab] = useState<"rule" | "hybrid" | "candlestick">("rule");
+  const [activeTab, setActiveTab] = useState<"rule" | "candlestick">("rule");
 
   const rulePatterns = payload.patterns ?? [];
-  const hybridPatterns = payload.hybrid_patterns ?? [];
   const candlestickPatterns = payload.candlestick_patterns ?? [];
 
   const tabs = [
     { key: "rule" as const, label: `Rule (${rulePatterns.length})` },
-    { key: "hybrid" as const, label: `Hybrid (${hybridPatterns.length})` },
     {
       key: "candlestick" as const,
       label: `Candlestick (${candlestickPatterns.length})`,
@@ -41,33 +38,6 @@ export default function PatternTabs({
     {
       key: "confidence",
       label: "Confidence",
-      render: (value: unknown) => formatNumber(value as number | null, 2),
-    },
-    { key: "start_date", label: "Start" },
-    { key: "end_date", label: "End" },
-  ];
-
-  const hybridColumns: Array<{
-    key: keyof HybridPatternRow & string;
-    label: string;
-    render?: (value: unknown) => React.ReactNode;
-  }> = [
-    { key: "pattern", label: "Pattern" },
-    { key: "status", label: "Status" },
-    {
-      key: "hybrid_confidence",
-      label: "Hybrid Conf",
-      render: (value: unknown) => formatNumber(value as number | null, 2),
-    },
-    {
-      key: "base_confidence",
-      label: "Base Conf",
-      render: (value: unknown) => formatNumber(value as number | null, 2),
-    },
-    { key: "candle_bias", label: "Candle Bias" },
-    {
-      key: "vol_ratio",
-      label: "Vol Ratio",
       render: (value: unknown) => formatNumber(value as number | null, 2),
     },
     { key: "start_date", label: "Start" },
@@ -118,19 +88,6 @@ export default function PatternTabs({
         ) : (
           <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
             No rule patterns detected.
-          </div>
-        )
-      )}
-      {activeTab === "hybrid" && (
-        hybridPatterns.length > 0 ? (
-          <Table
-            columns={hybridColumns}
-            data={hybridPatterns as unknown as Record<string, unknown>[]}
-            sortable
-          />
-        ) : (
-          <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
-            No hybrid patterns detected.
           </div>
         )
       )}

@@ -423,7 +423,7 @@ const PIPELINE_STEPS: PipelineStep[] = [
     icon: Eye,
     label: "Pattern Scan",
     description:
-      "5-layer detection: rule-based geometry, candlestick patterns, hybrid scoring, CV proxy consensus, and YOLOv8 AI on chart images.",
+      "3-layer detection: rule-based geometry, candlestick patterns, and YOLOv8 AI on chart images.",
   },
   {
     icon: Brain,
@@ -763,8 +763,8 @@ export default function MethodologyPage() {
         <SectionHeading
           step={2}
           icon={Eye}
-          title="Pattern Detection (5 Layers)"
-          subtitle="Patterns are scored through multiple independent detection systems that vote together."
+          title="Pattern Detection (3 Layers)"
+          subtitle="Patterns are scored through multiple independent detection systems."
         />
         <div className="space-y-4 mt-8">
           <LayerCard
@@ -781,21 +781,9 @@ export default function MethodologyPage() {
           />
           <LayerCard
             layer={3}
-            title="Hybrid Scoring"
-            description="Combines all signals into a weighted composite: 50% rule-based geometry + 20% candlestick + 15% volume confirmation + 15% breakout proximity."
-            delay={200}
-          />
-          <LayerCard
-            layer={4}
-            title="CV Proxy (Consensus)"
-            description="An independent geometry scorer re-evaluates the same price data with different parameters, providing a second opinion for consensus validation."
-            delay={300}
-          />
-          <LayerCard
-            layer={5}
             title="YOLOv8 AI Detection"
             description="Pre-computed dual-timeframe scan (daily 180d + weekly 730d). Price charts are rendered as images, run through a fine-tuned YOLOv8 model, and bounding-box coordinates are mapped back to price/date levels."
-            delay={400}
+            delay={200}
           />
         </div>
       </section>
