@@ -10,7 +10,7 @@ session's back-adjusted open; costs are bps of traded notional per side.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,7 @@ class Schedule:
     exec_idx: list[int]
     targets: list[list[str]]
     dropped_no_open: int = 0
+    blocked_spinoff: int = 0  # buys skipped because the name's spin-off ex-date falls in the holding period
 
 
 @dataclass
@@ -51,6 +52,7 @@ class Result:
     trade_notional: np.ndarray    # notional of every fill (cost = bps * notional)
     period_returns: list[np.ndarray]  # open-to-open return of each held name, per period
     period_idx: list[int]         # fill session of each period in period_returns
+    exits: list[tuple[int, int]] = field(default_factory=list)  # (session, column) of spin-off exits
 
 
 def select_holdings(scores: pd.Series, held: dict[str, int], exec_idx: int, rules: Rules) -> list[str]:
@@ -69,36 +71,65 @@ def select_holdings(scores: pd.Series, held: dict[str, int], exec_idx: int, rule
     return sorted(keep + fill)
 
 
+def _next_fill(review_idx: list[int], i: int, n_sessions: int, end_idx: int | None) -> int:
+    """First session of the next holding period (exclusive end of this one)."""
+    nxt = review_idx[i + 1] + 1 if i + 1 < len(review_idx) else n_sessions
+    return nxt if end_idx is None else min(nxt, end_idx + 1)
+
+
+def _exited_since(market: Market, ticker: str, lo: int, hi: int) -> bool:
+    col = market.columns.get(ticker)
+    return col is not None and market.exit_between(col, lo, hi) is not None
+
+
 def build_schedule(market: Market, review_idx: list[int], rules: Rules,
-                   score_fn: Callable[[int, list[str]], pd.Series]) -> Schedule:
-    """Run selection at each review (signal at close of idx, fill at the open of idx+1)."""
+                   score_fn: Callable[[int, list[str]], pd.Series],
+                   end_idx: int | None = None) -> Schedule:
+    """Run selection at each review (signal at close of idx, fill at the open of idx+1).
+
+    A name whose spin-off ex-date falls inside the coming holding period is not
+    bought (the next-ranked name takes its place); a name already held is kept and
+    sold at the close before the ex-date by ``simulate``.
+    """
     held: dict[str, int] = {}
     out = Schedule([], [])
-    for s in review_idx:
+    prev_e = 0
+    for i, s in enumerate(review_idx):
         e = s + 1
         if e >= len(market.sessions):
             break
+        nxt = _next_fill(review_idx, i, len(market.sessions), end_idx)
+        held = {t: v for t, v in held.items() if not _exited_since(market, t, prev_e, e - 1)}
         scores = score_fn(s, market.universe(s))
-        chosen = select_holdings(scores, held, e, rules)
+        blocked = [t for t in scores.index if t not in held and _exited_since(market, t, e, nxt - 1)]
+        out.blocked_spinoff += len(blocked)
+        chosen = select_holdings(scores.drop(blocked), held, e, rules)
         open_row = market.adj_open.iloc[e]
         tradable = [t for t in chosen if t in held or np.isfinite(open_row[t])]
         out.dropped_no_open += len(chosen) - len(tradable)
         held = {t: held.get(t, e) for t in tradable}
         out.exec_idx.append(e)
         out.targets.append(tradable)
+        prev_e = e
     return out
 
 
-def equal_weight_schedule(market: Market, review_idx: list[int]) -> Schedule:
+def equal_weight_schedule(market: Market, review_idx: list[int], end_idx: int | None = None) -> Schedule:
     """Benchmark schedule: every member with a close at the review and an open at the fill."""
     out = Schedule([], [])
-    for s in review_idx:
+    prev: set[str] = set()
+    for i, s in enumerate(review_idx):
         e = s + 1
         if e >= len(market.sessions):
             break
+        nxt = _next_fill(review_idx, i, len(market.sessions), end_idx)
         open_row = market.adj_open.iloc[e]
+        names = [t for t in market.universe(s) if np.isfinite(open_row[t])]
+        keep = [t for t in names if t in prev or not _exited_since(market, t, e, nxt - 1)]
+        out.blocked_spinoff += len(names) - len(keep)
         out.exec_idx.append(e)
-        out.targets.append([t for t in market.universe(s) if np.isfinite(open_row[t])])
+        out.targets.append(keep)
+        prev = {t for t in keep if not _exited_since(market, t, e, nxt - 1)}
     return out
 
 
@@ -120,6 +151,7 @@ def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float) 
     t_amt: list[float] = []
     period_ret: list[np.ndarray] = []
     period_idx: list[int] = []
+    result_exits: list[tuple[int, int]] = []
     for k, e in enumerate(ex):
         if e > end_idx:
             break
@@ -142,13 +174,29 @@ def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float) 
         held = np.nonzero(pos)[0]
         if len(held):
             ratio = C[e:nxt, held] / O[e, held]
+            sold = []  # (position in held, exit session, gross proceeds multiple)
+            for j, col in enumerate(held):
+                q = market.exit_between(int(col), e, nxt - 1)
+                if q is not None:  # sold at the close before a spin-off ex-date, then idle cash
+                    gross = ratio[q - e, j]
+                    ratio[q - e:, j] = gross * (1 - c)
+                    sold.append((j, int(col), q, gross))
+                    t_idx.append(q)
+                    t_amt.append(float(pos[col] * gross))
+                    result_exits.append((q, int(col)))
             eq_parts.append(cash + (ratio * pos[held]).sum(axis=1))
+            pos = pos.copy()
+            for j, col, q, gross in sold:
+                cash += pos[col] * gross * (1 - c)
+                pos[col] = 0.0
             if nxt <= end_idx:
                 grow = O[nxt, held] / O[e, held]
+                for j, col, q, gross in sold:
+                    grow[j] = gross
                 period_ret.append(grow - 1.0)
                 period_idx.append(e)
-                pos = pos.copy()
-                pos[held] = pos[held] * grow
+                still = pos[held] > 0
+                pos[held[still]] = pos[held[still]] * grow[still]
         else:
             eq_parts.append(np.full(nxt - e, cash))
             if nxt <= end_idx:
@@ -156,7 +204,7 @@ def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float) 
                 period_idx.append(e)
     first = ex[0]
     equity_path = np.concatenate(eq_parts) if eq_parts else np.array([])
-    return Result(first, equity_path, np.array(t_idx, dtype=int), np.array(t_amt), period_ret, period_idx)
+    return Result(first, equity_path, np.array(t_idx, dtype=int), np.array(t_amt), period_ret, period_idx, result_exits)
 
 
 def buy_and_hold(market: Market, ticker: str, first_idx: int, end_idx: int) -> np.ndarray:

@@ -31,6 +31,11 @@ To refresh later, repeat the command with a newer export. The state file
 `--retry-terminal` to retry tickers that were settled earlier, `--tickers` for a
 subset and `--coverage-only` to probe yfinance without writing.
 
+Benchmark and context symbols are not index members, so the membership file never
+lists them. `--context-symbols SPY,QQQ,^VIX,^IRX` adds them as members from
+`--start`. They use the same fetch path and the same no-modification checks as every
+other ticker. To backfill only these, also pass `--tickers SPY,QQQ,^VIX,^IRX`.
+
 ## What it does and refuses to do
 
 - Universe: S&P 500 members at any time since 2010-01-01 from

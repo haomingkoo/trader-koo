@@ -312,3 +312,69 @@ def test_flagged_moves_keep_real_losses_except_on_split_dates(tmp_path):
     assert rows.loc["JNJ", "treatment"] == "real move kept"
     assert rows.loc["KO", "treatment"] == "0% day or NaN"
     assert len(mkt.flagged_in(0, i - 1)) == 0  # rows after the window are not counted
+
+
+# ---- spin-offs -----------------------------------------------------------------------------
+
+def _spin_market(tmp_path, ex_idx=150, effect="raw_drop"):
+    prices, actions = _fixture_frames()
+    dates = sorted(prices["date"].unique())
+    ex = dates[ex_idx]
+    p2 = prices.copy()
+    m = (p2["ticker"] == "AAPL") & (p2["date"] >= ex)
+    p2.loc[m, ["open", "close"]] = p2.loc[m, ["open", "close"]] * 0.2  # holders keep the spun-off shares
+    csv = tmp_path / "spin.csv"
+    csv.write_text(
+        "parent_ticker,ex_date,spun_off,kind,date_basis,price_effect,source_url\n"
+        f"AAPL,{ex},TestCo,spinoff,regular_way_start,{effect},https://example.com/8k\n")
+    db = _build_db(str(tmp_path / "spin.db"), p2, actions)
+    return load_market(db, csv), ex_idx
+
+
+def test_spinoffs_csv_is_complete_and_sourced():
+    from trader_koo.research.bench.spinoffs import load_spinoffs
+
+    frame = load_spinoffs()
+    assert len(frame) >= 20
+    assert frame["source_url"].str.startswith("https://").all()
+    assert {"CTVA"} <= set(frame.loc[frame["price_effect"] == "raw_drop", "parent_ticker"])
+    assert frame.loc[frame["kind"] == "spinoff", "ex_date"].min() >= "2010-01-01"
+
+
+def test_holding_is_sold_before_a_spinoff_ex_date_and_no_loss_is_booked(tmp_path):
+    mkt, x = _spin_market(tmp_path)
+    col = mkt.columns["AAPL"]
+    assert mkt.exits[col] == [x - 1]
+    ret = mkt.adj_close["AAPL"].iloc[x] / mkt.adj_close["AAPL"].iloc[x - 1] - 1
+    assert ret == pytest.approx(0.0)  # raw -80% drop is neutralised in the chain
+    sched = Schedule([x - 20], [["AAPL", "MSFT"]])
+    res = simulate(mkt, sched, x + 10, 0.0)
+    assert res.exits == [(x - 1, col)]
+    assert res.trade_idx.tolist().count(x - 1) == 1
+
+
+def test_spinoff_leaves_equity_flat_for_the_exited_half(tmp_path):
+    mkt, x = _spin_market(tmp_path)
+    start = x - 20
+    both = simulate(mkt, Schedule([start], [["AAPL", "MSFT"]]), x + 10, 0.0)
+    only_msft = simulate(mkt, Schedule([start], [["MSFT"]]), x + 10, 0.0)
+    aapl_leg = both.equity - 0.5 * only_msft.equity  # MSFT half is half of a MSFT-only book
+    i = x - 1 - start
+    assert aapl_leg[i:] == pytest.approx(np.full(len(aapl_leg) - i, aapl_leg[i]))  # idle cash after the exit
+    assert aapl_leg[i] > 0.3
+
+
+def test_buy_is_skipped_when_the_ex_date_is_inside_the_holding_period(tmp_path):
+    mkt, x = _spin_market(tmp_path)
+    rules = Rules(top_n=20, buffer_n=40, review_every=10, min_hold=0)
+    score = lambda s, uni: pd.Series(1.0, index=uni)  # noqa: E731
+    # review at x-5 fills at x-4 and the next fill is x+6: the ex-date x is inside and AAPL is not held
+    sched = build_schedule(mkt, [x - 5, x + 5], rules, score, end_idx=x + 20)
+    assert "AAPL" not in sched.targets[0]
+    assert "AAPL" in sched.targets[1]  # after the ex-date it is buyable again
+    assert sched.blocked_spinoff == 1
+    ew = equal_weight_schedule(mkt, [x - 5, x + 5], x + 20)
+    assert "AAPL" not in ew.targets[0] and "AAPL" in ew.targets[1]
+    # already held ahead of the exit: kept in the target, sold mid-period by simulate
+    held = build_schedule(mkt, [x - 30, x - 5], rules, score, end_idx=x + 20)
+    assert "AAPL" in held.targets[0] and "AAPL" in held.targets[1] and held.blocked_spinoff == 0

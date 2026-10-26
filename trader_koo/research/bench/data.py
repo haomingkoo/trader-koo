@@ -30,6 +30,7 @@ import pandas as pd
 from trader_koo.db.membership import members_on
 from trader_koo.db.total_return import load_total_return_inputs, total_return_series
 from trader_koo.fundamentals.pit import Fact, fundamentals_as_of, ttm_as_of
+from trader_koo.research.bench.spinoffs import NEUTRALISED, load_spinoffs
 
 BENCHMARK_TICKER = "SPY"
 KEEP_REAL_MOVE_FLAGS = ("dividend_off_calendar", "special_dividend", "unexplained_move")
@@ -93,7 +94,7 @@ class Market:
 
     def __init__(self, adj_open: pd.DataFrame, adj_close: pd.DataFrame,
                  conn: sqlite3.Connection, flagged: pd.DataFrame | None = None,
-                 price_tickers: set[str] | None = None):
+                 price_tickers: set[str] | None = None, spinoffs: pd.DataFrame | None = None):
         self.adj_open, self.adj_close, self.conn = adj_open, adj_close, conn
         self.sessions: list[str] = list(adj_close.index)
         self.flagged = flagged if flagged is not None else pd.DataFrame(
@@ -103,6 +104,23 @@ class Market:
         self.open_ff, self.close_ff = adj_open.ffill(), adj_close.ffill()
         self.columns = {t: i for i, t in enumerate(adj_close.columns)}
         self._members: dict[str, set[str]] = {}
+        # Exit session (close of the session before the ex-date) per held column; see spinoffs.py.
+        self.exits: dict[int, list[int]] = {}
+        self.exit_events: dict[tuple[int, int], dict] = {}
+        for r in (spinoffs if spinoffs is not None else pd.DataFrame()).itertuples():
+            x = int(np.searchsorted(self.sessions, r.ex_date, side="left"))
+            if r.parent_ticker in self.columns and 0 < x < len(self.sessions):
+                col = self.columns[r.parent_ticker]
+                self.exits.setdefault(col, []).append(x - 1)
+                self.exit_events[(col, x - 1)] = {"ticker": r.parent_ticker, "ex_date": r.ex_date,
+                                                  "exit_date": self.sessions[x - 1], "spun_off": r.spun_off,
+                                                  "kind": r.kind}
+        for lst in self.exits.values():
+            lst.sort()
+
+    def exit_between(self, col: int, lo: int, hi: int) -> int | None:
+        """First spin-off exit session q with lo <= q <= hi for column ``col``, else None."""
+        return next((q for q in self.exits.get(col, ()) if lo <= q <= hi), None)
 
     def flagged_in(self, lo: int, hi: int) -> pd.DataFrame:
         """Flagged price rows dated inside sessions[lo..hi]; later rows are not counted."""
@@ -131,7 +149,7 @@ class Market:
         return len(names - self.price_tickers), len(names)
 
 
-def load_market(db_path: str | Path) -> Market:
+def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) -> Market:
     conn = connect_ro(db_path)
     if not _has_table(conn, "sp500_membership"):
         conn.close()
@@ -148,12 +166,18 @@ def load_market(db_path: str | Path) -> Market:
     real = (tr["close"] + tr["dividend"]) / prev - 1.0
     keep_real = tr["flag"].isin(KEEP_REAL_MOVE_FLAGS) & (prev > 0) & (tr["close"] > 0)
     ret = tr["total_return"].where(~keep_real, real)
+    # A listed spin-off whose raw drop is still in the data is not a loss: 0% on that day.
+    spin = load_spinoffs(spinoffs_path) if spinoffs_path else load_spinoffs()
+    neutral = {(r.parent_ticker, r.ex_date) for r in spin.itertuples() if r.price_effect == NEUTRALISED}
+    is_neutral = pd.Series([(t, d) in neutral for t, d in zip(tr["ticker"], tr["date"])], index=tr.index)
+    ret = ret.where(~is_neutral, 0.0)
     tr = tr.assign(growth=1.0 + ret.fillna(0.0))
     tr["adj_close"] = tr.groupby("ticker")["growth"].cumprod()
     tr.loc[~(tr["close"] > 0), "adj_close"] = np.nan
     flagged = tr.loc[tr["flag"] != "", ["ticker", "date", "flag"]].assign(
         move=real[tr["flag"] != ""],
-        treatment=np.where(keep_real[tr["flag"] != ""], "real move kept", "0% day or NaN"))
+        treatment=np.where(is_neutral[tr["flag"] != ""], "listed spin-off, 0% (spinoffs.csv)",
+                           np.where(keep_real[tr["flag"] != ""], "real move kept", "0% day or NaN")))
     flagged = flagged[flagged["flag"] != "dividend_off_calendar"].reset_index(drop=True)
     adj_close = tr.pivot(index="date", columns="ticker", values="adj_close").sort_index()
     raw_close = tr.pivot(index="date", columns="ticker", values="close").sort_index()
@@ -167,4 +191,4 @@ def load_market(db_path: str | Path) -> Market:
     calendar = adj_close.index[adj_close[BENCHMARK_TICKER].notna()]
     return Market(adj_open.loc[calendar], adj_close.loc[calendar], conn,
                   flagged=flagged[flagged["date"].isin(calendar)],
-                  price_tickers=set(tr["ticker"].unique()))
+                  price_tickers=set(tr["ticker"].unique()), spinoffs=spin)

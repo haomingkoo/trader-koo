@@ -32,6 +32,7 @@ from trader_koo.price_backfill.core import (
     DEFAULT_FLOOR,
     DEFAULT_WARMUP_DAYS,
     Spell,
+    add_context_symbols,
     load_membership,
     run_backfill,
     _day,
@@ -135,6 +136,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--backoff-sec", type=float, default=cfg.BACKOFF_SEC)
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--tickers", default="", help="Comma separated subset (price_daily format, e.g. BRK-B).")
+    p.add_argument(
+        "--context-symbols", default="",
+        help="Comma separated non-member symbols to backfill from --start (e.g. SPY,QQQ,^VIX,^IRX). "
+             "Same fetch path and never modifies existing rows; combine with --tickers to run only these.",
+    )
     p.add_argument("--state", type=Path, default=None, help="Resume file. Default: <db>.backfill_state.json")
     p.add_argument("--retry-terminal", action="store_true", help="Retry tickers already settled in the state file.")
     p.add_argument("--coverage-only", action="store_true", help="Probe yfinance for every symbol; write nothing.")
@@ -146,6 +152,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     membership = load_membership(ensure_membership_file(args.membership_csv), floor=args.start)
+    membership = add_context_symbols(membership, args.context_symbols.split(","), floor=args.start)
     only = {t.strip().upper() for t in args.tickers.split(",") if t.strip()} or None
     report: dict = {"membership_source": MEMBERSHIP_URL, "symbols": len(membership)}
 

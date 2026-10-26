@@ -102,5 +102,8 @@ def markdown(report: dict) -> str:
     lines += [f"Names lacking data: {d['entries_dropped_no_open']} entries skipped for no open price; "
               f"{d['flagged_price_rows']} price rows flagged in the window "
               f"({d['flagged_zeroed_or_nan']} treated as 0% or NaN, the rest keep their real move).", ""]
+    lines += [f"Spin-off handling: {len(d['spinoff_exits'])} holdings sold at the close before a listed "
+              f"spin-off ex-date, {d['spinoff_buys_blocked']} buys skipped because an ex-date fell in the "
+              f"holding period (trader_koo/research/bench/spinoffs.csv).", ""]
     lines += [f"- {c}" for c in report["caveats"]]
     return "\n".join(lines)

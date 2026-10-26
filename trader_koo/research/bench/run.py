@@ -127,22 +127,23 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
     reviews = list(range(start, end, rules.review_every))
     cand_sched = build_schedule(
         market, reviews, rules,
-        lambda s, uni: signal(market.sessions[s], uni, market.view(market.sessions[s])))
+        lambda s, uni: signal(market.sessions[s], uni, market.view(market.sessions[s])), end)
     keep = next((i for i, t in enumerate(cand_sched.targets) if t), None)
     if keep is None:
         raise ValueError("the candidate never selected a name in this range")
-    cand_sched = Schedule(cand_sched.exec_idx[keep:], cand_sched.targets[keep:], cand_sched.dropped_no_open)
+    cand_sched = Schedule(cand_sched.exec_idx[keep:], cand_sched.targets[keep:], cand_sched.dropped_no_open,
+                          cand_sched.blocked_spinoff)
     reviews = [e - 1 for e in cand_sched.exec_idx]
     first = cand_sched.exec_idx[0]
 
     cand = simulate(market, cand_sched, end, cfg.cost_bps)
     stress = simulate(market, cand_sched, end, cfg.stress_bps)
-    ew = simulate(market, equal_weight_schedule(market, reviews), end, cfg.cost_bps)
+    ew = simulate(market, equal_weight_schedule(market, reviews, end), end, cfg.cost_bps)
     spy = buy_and_hold(market, BENCHMARK_TICKER, first, end)
     rng = np.random.default_rng(seed)
     rand = [
         simulate(market, build_schedule(
-            market, reviews, rules, lambda s, uni: pd.Series(rng.random(len(uni)), index=uni)),
+            market, reviews, rules, lambda s, uni: pd.Series(rng.random(len(uni)), index=uni), end),
             end, cfg.cost_bps)
         for _ in range(cfg.n_random)
     ]
@@ -156,7 +157,10 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
         out["sealed"] = _window_block(market, first, max(boundary, first), end, cand, stress, ew, spy, rand)
     missing, members = market.members_without_prices(first, end)
     flagged = market.flagged_in(first, end)
+    exits = [{**market.exit_events[(col, q)], "strategy_exit": True}
+             for q, col in sorted(cand.exits) if first <= q <= end]
     out["data"] = {"entries_dropped_no_open": cand_sched.dropped_no_open,
+                   "spinoff_exits": exits, "spinoff_buys_blocked": cand_sched.blocked_spinoff,
                    "flagged_price_rows": len(flagged),
                    "flagged_zeroed_or_nan": int((flagged["treatment"] != "real move kept").sum()),
                    "flagged": flagged.round({"move": MOVE_DIGITS}).to_dict("records"),
