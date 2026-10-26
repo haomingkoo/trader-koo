@@ -62,11 +62,31 @@ def test_window_excludes_nightly_report_and_weekend_sessions():
     assert universe_session_date(dt.datetime(2026, 10, 26, 1, 0, tzinfo=utc)) is None  # Sun evening's tail
 
 
+def test_holiday_evenings_are_not_sessions():
+    utc = dt.timezone.utc
+    thanksgiving = dt.datetime(2026, 11, 26, 23, 45, tzinfo=utc)
+    assert universe_session_date(thanksgiving) is None
+    assert universe_session_date(dt.datetime(2026, 11, 27, 1, 0, tzinfo=utc)) is None  # its after-midnight tail
+    assert universe_session_date(dt.datetime(2026, 11, 25, 23, 45, tzinfo=utc)) == dt.date(2026, 11, 25)
+    assert universe_session_date(dt.datetime(2026, 12, 25, 23, 45, tzinfo=utc)) is None  # Christmas
+
+
+def test_early_close_day_is_a_session():
+    utc = dt.timezone.utc
+    # Black Friday closes 13:00 ET but is still a session
+    assert universe_session_date(dt.datetime(2026, 11, 27, 23, 45, tzinfo=utc)) == dt.date(2026, 11, 27)
+    # at 19:00 UTC (14:00 EST) the early-closed day has finished; at 17:00 UTC (12:00 EST) it has not
+    assert latest_session_date(dt.datetime(2026, 11, 27, 19, 0, tzinfo=utc)) == dt.date(2026, 11, 27)
+    assert latest_session_date(dt.datetime(2026, 11, 27, 17, 0, tzinfo=utc)) == dt.date(2026, 11, 25)
+
+
 def test_latest_session_date_for_manual_runs():
     utc = dt.timezone.utc
     assert latest_session_date(dt.datetime(2026, 10, 26, 21, 0, tzinfo=utc)) == dt.date(2026, 10, 26)
     assert latest_session_date(dt.datetime(2026, 10, 26, 11, 45, tzinfo=utc)) == dt.date(2026, 10, 23)
     assert latest_session_date(dt.datetime(2026, 10, 25, 15, 0, tzinfo=utc)) == dt.date(2026, 10, 23)
+    # Friday after Thanksgiving morning: latest completed session skips the holiday
+    assert latest_session_date(dt.datetime(2026, 11, 27, 14, 0, tzinfo=utc)) == dt.date(2026, 11, 25)
 
 
 def _ledger() -> sqlite3.Connection:

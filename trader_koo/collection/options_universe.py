@@ -8,20 +8,22 @@ rotation into ``options_iv`` is unchanged.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
+import exchange_calendars as xcals
+
 from trader_koo.collection.config import (
     RATE_SYMBOL,
-    UNIVERSE_CLOSE_HOUR_ET,
     UNIVERSE_NEAREST_EXPIRIES,
     UNIVERSE_TARGET_DAYS,
     UNIVERSE_WINDOW_END_UTC,
     UNIVERSE_WINDOW_START_UTC,
-    WEEKEND_DAYS,
 )
 from trader_koo.collection.options_metrics import Chain, compute_daily_metrics
 from trader_koo.options_research import (
@@ -29,6 +31,7 @@ from trader_koo.options_research import (
     normalize_options_tickers,
 )
 
+LOG = logging.getLogger(__name__)
 _NY = ZoneInfo("America/New_York")
 METRIC_COLUMNS = (
     "spot", "rate", "iv_30d", "iv_60d", "iv_90d", "put_skew_25d", "cp_iv_spread",
@@ -96,11 +99,29 @@ def _days_until(expiry: str, today: dt.date) -> int | None:
         return None
 
 
+@lru_cache(maxsize=1)
+def _xnys():
+    return xcals.get_calendar("XNYS")
+
+
+def is_xnys_session(day: dt.date) -> bool:
+    """True when ``day`` is an NYSE session (holidays and weekends are not).
+
+    The calendar only covers a bounded range; outside it the day is treated as
+    not a session and the reason is logged.
+    """
+    try:
+        return bool(_xnys().is_session(day.isoformat()))
+    except ValueError as exc:
+        LOG.warning("XNYS calendar cannot answer for %s: %s", day, exc)
+        return False
+
+
 def universe_session_date(now: dt.datetime) -> dt.date | None:
     """US session date a run at ``now`` belongs to, or None outside the window.
 
-    The window runs from 23:45 UTC on a Mon-Fri evening to 03:00 UTC the next
-    morning; that evening's UTC date is the session date.
+    The window runs from 23:45 UTC on an XNYS-session evening to 03:00 UTC the
+    next morning; that evening's UTC date is the session date.
     """
     now = now.astimezone(dt.timezone.utc)
     if now.time() >= UNIVERSE_WINDOW_START_UTC:
@@ -109,16 +130,16 @@ def universe_session_date(now: dt.datetime) -> dt.date | None:
         anchor = now.date() - dt.timedelta(days=1)
     else:
         return None
-    return None if anchor.weekday() in WEEKEND_DAYS else anchor
+    return anchor if is_xnys_session(anchor) else None
 
 
 def latest_session_date(now: dt.datetime) -> dt.date:
-    """Most recent weekday whose US close (16:00 ET) has passed; for manual runs."""
-    et = now.astimezone(_NY)
-    day = et.date() if et.hour >= UNIVERSE_CLOSE_HOUR_ET else et.date() - dt.timedelta(days=1)
-    while day.weekday() in WEEKEND_DAYS:
-        day -= dt.timedelta(days=1)
-    return day
+    """Most recent XNYS session that has already closed (early closes honoured)."""
+    cal = _xnys()
+    session = cal.date_to_session(now.astimezone(_NY).date().isoformat(), direction="previous")
+    if cal.session_close(session).to_pydatetime() > now:
+        session = cal.previous_session(session)
+    return session.date()
 
 
 def load_ingest_universe(conn: sqlite3.Connection, *, max_tickers: int | None = None) -> list[str]:

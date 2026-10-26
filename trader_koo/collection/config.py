@@ -9,15 +9,13 @@ from trader_koo.config import DEFAULT_LOG_DIR, env_bool, env_float, env_int, env
 
 # Full-universe option-metrics job. End-of-day option quotes do not change
 # between the close and the next pre-market, so it runs after the nightly report
-# window (21:30 to 23:30 UTC). It starts 23:45 UTC on Mon-Fri evenings, stamps
+# window (21:30 to 23:30 UTC). It starts 23:45 UTC on XNYS-session evenings, stamps
 # rows with that evening's US session date, and hard-stops at 03:00 UTC.
 UNIVERSE_CRON_HOUR_UTC = 23
 UNIVERSE_CRON_MINUTE_UTC = 45
 UNIVERSE_WINDOW_START_UTC = dt.time(23, 45)
 UNIVERSE_WINDOW_END_UTC = dt.time(3, 0)
 UNIVERSE_WAIT_POLL_SEC = 180
-UNIVERSE_CLOSE_HOUR_ET = 16
-WEEKEND_DAYS = (5, 6)
 UNIVERSE_DEFAULT_MAX_TICKERS = 600
 UNIVERSE_MAX_TICKERS_LIMIT = 1000
 UNIVERSE_DEFAULT_WORKERS = 2
