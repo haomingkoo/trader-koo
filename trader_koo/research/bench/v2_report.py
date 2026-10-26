@@ -47,5 +47,7 @@ def markdown(out: dict) -> str:
     d = out["data"]
     lines += ["", "## Data", "", "Substitutions and skips while loading the price matrix:", "", "```",
               json.dumps({**d["load_counts"], **d["substitutions"]}, indent=1), "```", "",
-              "Index-member days removed by the data-quality filter (per ticker and rule) are in the run's JSON output.", ""]
+              "A counter that is zero is omitted. Index-member days removed by the data-quality filter "
+              "(`quality.py`; the same rules and the same stored series as hypotheses v1) inside the window, by rule:", "",
+              "```", json.dumps(d["exclusion_by_rule"], indent=1), "```", ""]
     return "\n".join(lines)

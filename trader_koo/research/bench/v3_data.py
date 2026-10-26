@@ -8,7 +8,6 @@ total-return series. Every row that is dropped or left empty is counted in ``dia
 from __future__ import annotations
 
 import csv
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 

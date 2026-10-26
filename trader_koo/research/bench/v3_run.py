@@ -111,7 +111,8 @@ def run_v3(db_path: str | Path, ledger_path: str | Path, frame: Frame | None = N
     out = {"family": FAMILY, "seed": seed, "config": config, "boundary": boundary, "evaluations": evals,
            "verdicts": verdicts, "holm": {"m": len(PRIMARY), "adjusted_p": dict(zip(PRIMARY, adj)),
                                           "rejected": dict(zip(PRIMARY, rejected))},
-           "data": {"basis": f.basis, "substitutions": f.diag.as_dict(), "fomc_years_missing": f.fomc_missing}}
+           "data": {"basis": f.basis, "substitutions": f.diag.as_dict(), "fomc_years_missing": f.fomc_missing,
+                    "fomc_days_in_window": None if f.fomc is None else int(f.fomc.sum())}}
     out["markdown"] = v3_report.markdown(out)
     summary = {k: {"n_independent": evals[k].n_independent if k in evals else None,
                    "effect": None if k not in evals or evals[k].effect is None else round(evals[k].effect, _E.report_digits),

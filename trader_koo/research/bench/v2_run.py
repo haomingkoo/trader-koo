@@ -156,6 +156,15 @@ def verdict(res: dict, level: float, adj_p: float) -> dict:
             "interval": ci, "adj_p": adj_p, "checks": checks, "why": "; ".join(failed) or "criteria 1 to 4 met"}
 
 
+def _by_rule(rows: list[dict]) -> dict:
+    out: dict = {}
+    for r in rows:
+        d = out.setdefault(r["rule"], {"tickers": 0, "member_days": 0})
+        d["tickers"] += 1
+        d["member_days"] += int(r["member_days"])
+    return out
+
+
 def run_v2(db_path: str | Path, ledger_path: str | Path, market: Market | None = None) -> dict:
     boundary = sealed_boundary(ledger_path)
     market = market or load_market(db_path)
@@ -197,7 +206,7 @@ def run_v2(db_path: str | Path, ledger_path: str | Path, market: Market | None =
     verdicts = {k: verdict(results[k], levels[i], adj[i]) for i, k in enumerate(KEYS)}
     out = {"family": FAMILY, "seed": seed, "config": config, "boundary": boundary, "results": results,
            "verdicts": verdicts, "data": {"load_counts": load_counts, "substitutions": {**market.load_diag.as_dict()},
-                                          "exclusions": market.exclusion_summary(0, last)}}
+                                          "exclusion_by_rule": _by_rule(market.exclusion_summary(0, last))}}
     out["markdown"] = v2_report.markdown(out)
     summary = {k: {"trades": results[k]["n_trades"], "mean_net": round(results[k]["mean_net"], _E.report_digits),
                    "excess": round(results[k]["excess"], _E.report_digits), "adjusted_p": round(adj[i], _E.report_digits),

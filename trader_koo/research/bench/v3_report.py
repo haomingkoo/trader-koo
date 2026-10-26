@@ -65,6 +65,8 @@ def markdown(out: dict) -> str:
     d = out["data"]
     lines += ["", "## Data", "", f"Price basis: `{json.dumps(d['basis'])}`. SPY, QQQ and ^VIX are the stored daily bars of the "
               "research database (price only, so ex-dividend gaps are in the closes).", "",
+              f"Scheduled FOMC decision days on sessions in the window: {d['fomc_days_in_window']} "
+              "(`docs/research/fomc-decision-dates-2010-2023.csv`). A counter that is zero is omitted.", "",
               "Substitutions, rejections and skips:", "", "```", json.dumps(d["substitutions"], indent=1), "```"]
     dropped = {k: (e.n_no_outcome, e.extra) for k, e in ev.items() if e.n_no_outcome or e.extra}
     lines += ["", "Signals dropped because their outcome window leaves the development window, and test-specific counts:", "",
