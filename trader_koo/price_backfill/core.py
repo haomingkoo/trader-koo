@@ -378,5 +378,3 @@ def run_backfill(
         if out["status"] != "up_to_date" and pace_sec:
             sleep_fn(pace_sec)
     return results
-
-

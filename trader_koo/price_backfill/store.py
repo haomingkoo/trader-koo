@@ -48,5 +48,3 @@ def save_state(path: Optional[Path], state: dict) -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(state, sort_keys=True, indent=1))
         tmp.replace(path)
-
-
