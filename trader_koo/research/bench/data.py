@@ -37,6 +37,7 @@ from trader_koo.research.bench.spinoffs import NEUTRALISED, load_spinoffs
 BENCHMARK_TICKER = "SPY"
 SPLIT_TYPES = ("split", "reverse_split")
 SPLIT_ROUND = 6
+YEAR_CHARS = 4
 KEEP_REAL_MOVE_FLAGS = ("dividend_off_calendar", "special_dividend", "unexplained_move")
 
 
@@ -190,7 +191,7 @@ class Market:
     def members_by_year(self, lo: int, hi: int) -> list[dict]:
         """Per calendar year in sessions[lo..hi]: distinct index members that year and how many have any close."""
         mem = pd.read_sql_query("SELECT ticker, start_date, end_date FROM sp500_membership", self.conn)
-        years = np.array([d[:4] for d in self.sessions[lo:hi + 1]])
+        years = np.array([d[:YEAR_CHARS] for d in self.sessions[lo:hi + 1]])
         out = []
         for y in sorted(set(years)):
             idx = np.nonzero(years == y)[0] + lo

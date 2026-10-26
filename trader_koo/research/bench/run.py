@@ -29,6 +29,7 @@ DEFAULT_N_RANDOM = 200
 ANNUAL_RULES = (5, 5, 0)  # H4: five names, no buffer, no minimum hold
 SUMMARY_DIGITS = 10
 MOVE_DIGITS = 4
+YEAR_CHARS = 4
 PCT_LOW = 5
 PCT_MID = 50
 PCT_HIGH = 95
@@ -177,7 +178,7 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
     out["coverage"] = {
         "reviews": len(cov), "mean_universe": float(cov["universe"].mean()), "mean_scored": float(cov["scored"].mean()),
         "by_year": [{"year": int(y), "mean_universe": float(g["universe"].mean()), "mean_scored": float(g["scored"].mean())}
-                    for y, g in cov.groupby(cov["date"].str[:4])]}
+                    for y, g in cov.groupby(cov["date"].str[:YEAR_CHARS])]}
     out["members_by_year"] = market.members_by_year(first, end)
     out["exclusions"] = market.exclusion_summary(first, end)
     out["data"] = {"entries_dropped_no_open": cand_sched.dropped_no_open,

@@ -35,6 +35,8 @@ YEAR_SPAN_DAYS = (350, 380)      # accepted distance between two TTM period ends
 QUARTER_LAG_DAYS = 46            # TTM ending at or before P - 46d is the one ending near P - 91d
 QUARTER_SPAN_DAYS = (76, 106)    # accepted distance between TTM period ends one quarter apart
 VOL_WINDOW = 252
+MOM_LOOKBACK = 252
+MOM_SKIP = 21
 SHORT_FLOAT_TOP_DECILE = 0.9
 SHARE_CHECK_FILINGS = 9
 SHARE_CHECK_MIN_PRIOR = 2
@@ -211,7 +213,7 @@ def accelerating_fundamentals(params: dict):
 
 def momentum_confirmed_by_earnings(params: dict):
     """H3: 12-1 total return among names with positive year-on-year TTM diluted EPS growth."""
-    lookback, skip = int(params.get("lookback", 252)), int(params.get("skip", 21))
+    lookback, skip = int(params.get("lookback", MOM_LOOKBACK)), int(params.get("skip", MOM_SKIP))
 
     def signal(as_of: str, universe: list[str], data: AsOfView) -> pd.Series:
         px = data.close.reindex(columns=universe)
@@ -240,7 +242,7 @@ def low_volatility(params: dict):
         px = data.close.reindex(columns=universe)
         if len(px) <= window:
             return pd.Series(np.nan, index=universe)
-        ret = px.iloc[-window - 1:].pct_change().iloc[1:]
+        ret = px.iloc[-window - 1:].pct_change(fill_method=None).iloc[1:]
         return -ret.std(ddof=1).where(ret.notna().all())
 
     return signal
