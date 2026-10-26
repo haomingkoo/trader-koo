@@ -2,13 +2,14 @@
 
 A signal is ``signal(as_of_date, universe, data) -> pd.Series`` of scores per
 ticker (higher is better, NaN means unscorable). ``data`` is an ``AsOfView``: it
-holds prices up to ``as_of_date`` and SEC facts filed on or before it. A signal
+holds prices up to ``as_of_date`` and SEC facts filed before it (usable from the next session). A signal
 may use nothing else. ``assert_no_lookahead`` re-scores after corrupting every
-price after ``as_of_date`` and every SEC fact filed after it; any change in the
+price after ``as_of_date`` and every SEC fact filed on or after it; any change in the
 scores is look-ahead.
 """
 from __future__ import annotations
 
+import datetime as dt
 import sqlite3
 from collections.abc import Callable
 
@@ -58,24 +59,60 @@ def make_signal(name: str, params: dict) -> Signal:
     return CANDIDATES[name](params)
 
 
+def _main_db_file(conn: sqlite3.Connection) -> str | None:
+    for _, name, path in conn.execute("PRAGMA database_list"):
+        if name == "main":
+            return path or None
+    return None
+
+
+def _view_sql(conn: sqlite3.Connection, table: str, as_of: str) -> str:
+    """SELECT over ``src.<table>`` with the later-dated numeric columns corrupted."""
+    cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+    if table == "price_daily":
+        scale = {c: f"{c} * 3.0" for c in ("open", "high", "low", "close", "adj_close") if c in cols}
+        when = f"date > '{as_of}'"
+    elif table == "sec_fundamentals":
+        scale = {"value": "value * 7.0 + 13.0"}
+        when = f"filed_date >= '{as_of}'"  # a filing dated as_of is not usable until the next session
+    else:
+        return f"SELECT * FROM src.{table}"
+    sel = ", ".join(f"CASE WHEN {when} THEN {scale[c]} ELSE {c} END AS {c}" if c in scale else c for c in cols)
+    return f"SELECT {sel} FROM src.{table}"
+
+
 def _perturbed_conn(conn: sqlite3.Connection, as_of: str) -> sqlite3.Connection:
-    """In-memory copy of the database with later prices and later-filed SEC facts corrupted."""
-    mem = sqlite3.connect(":memory:")
-    conn.backup(mem)
-    tables = {r[0] for r in mem.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "sec_fundamentals" in tables:
-        mem.execute("UPDATE sec_fundamentals SET value = value * 7.0 + 13.0 WHERE filed_date > ?", (as_of,))
-    if "price_daily" in tables:
-        mem.execute("UPDATE price_daily SET open = open * 3.0, close = close * 3.0 WHERE date > ?", (as_of,))
-    return mem
+    """Read-only window on the database in which later prices and later-filed SEC facts are corrupted.
+
+    Nothing is copied: the database is attached read-only and every table is
+    re-exposed as a TEMP view of the same name, with the perturbation inside the
+    view for price_daily and sec_fundamentals. This works on a multi-GB file.
+    An in-memory source (tests) falls back to a backup copy.
+    """
+    dt.date.fromisoformat(as_of)  # the date is inlined into view SQL
+    path = _main_db_file(conn)
+    if path is None:  # in-memory source: no file to attach, so corrupt a backup copy in place
+        mem = sqlite3.connect(":memory:")
+        conn.backup(mem)
+        for (name,) in mem.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+            if name == "sec_fundamentals":
+                mem.execute("UPDATE sec_fundamentals SET value = value * 7.0 + 13.0 WHERE filed_date >= ?", (as_of,))
+            elif name == "price_daily":
+                mem.execute("UPDATE price_daily SET open = open * 3.0, close = close * 3.0 WHERE date > ?", (as_of,))
+        return mem
+    out = sqlite3.connect(":memory:", uri=True)
+    out.execute("ATTACH DATABASE ? AS src", (f"file:{path}?mode=ro",))
+    for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+        out.execute(f'CREATE TEMP VIEW "{name}" AS {_view_sql(conn, name, as_of)}')
+    return out
 
 
 def assert_no_lookahead(signal: Signal, market: Market, as_of: str, universe: list[str],
                         seed: int = 0) -> None:
     """Raise LookaheadError if scores change when data after ``as_of`` is corrupted.
 
-    Copies the database into memory to corrupt it, so run it on fixtures or a
-    modest database rather than in a loop over a large one.
+    The corruption is done by views over a read-only attach, so it costs no
+    memory proportional to the database and works on the full research file.
     """
     base = signal(as_of, universe, market.view(as_of))
     rng = np.random.default_rng(seed)

@@ -2,14 +2,24 @@
 
 Prices are built from the dividend/split total-return chain in
 ``trader_koo.db.total_return``: ``adj_close`` compounds the total-return series
-and ``adj_open = adj_close * open / close`` so opens and closes share one basis
-and dividends are inside the price. Rows the chain flags (special dividends,
-unexplained jumps) are treated as a 0% day rather than letting a data error move
-the result; the count is reported. Off-calendar dividends are the exception: their day keeps
-the real close-to-close move plus the dividend. Nothing here writes to the database.
+forward from each ticker's first row, so the value on day t depends only on rows
+up to t. A dividend or split after t never changes anything a signal sees at t
+(no back-adjustment). ``adj_open = adj_close * open / close`` puts opens and
+closes on one basis with dividends inside the price.
+
+Flagged rows. A flag only means the chain could not vouch for the move, not that
+the move is wrong. Treating it as 0% hides real crashes (FISV -44%, CNC -40%) as
+easily as real jumps. The policy here: a row flagged ``move_on_split_date`` (the
+close is probably not split-adjusted) is a 0% day; ``bad_close`` is NaN; every
+other flag (special dividend, unexplained move, off-calendar dividend) keeps the
+real close-to-close move plus the dividend. Excluding the ticker for the window
+would be hindsight (it uses the future jump to decide), so it is not done. Every
+flagged row inside the run window is listed in the report so a human can judge it.
+Nothing here writes to the database.
 """
 from __future__ import annotations
 
+import datetime as dt
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +32,7 @@ from trader_koo.db.total_return import load_total_return_inputs, total_return_se
 from trader_koo.fundamentals.pit import Fact, fundamentals_as_of, ttm_as_of
 
 BENCHMARK_TICKER = "SPY"
+KEEP_REAL_MOVE_FLAGS = ("dividend_off_calendar", "special_dividend", "unexplained_move")
 
 
 def connect_ro(db_path: str | Path) -> sqlite3.Connection:
@@ -34,13 +45,26 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
+def filing_cutoff(as_of: str) -> str:
+    """Latest filed_date usable at the close of session ``as_of``: the calendar day before it.
+
+    A filing dated d is usable from the first session after d. For a session
+    ``as_of`` that is exactly filed_date < as_of, so a Friday filing is usable
+    Monday, a weekend filing Monday, and a filing dated ``as_of`` itself not yet.
+    """
+    return (dt.date.fromisoformat(as_of) - dt.timedelta(days=1)).isoformat()
+
+
 @dataclass
 class AsOfView:
     """What a signal may see on ``as_of``: data knowable at that day's close.
 
-    ``close`` and ``open`` are back-adjusted frames (dates x tickers) cut at
-    ``as_of`` inclusive. ``conn`` is exposed for read-only queries, but SEC facts
-    must go through ``fundamentals``/``ttm``, which enforce filed_date <= as_of.
+    ``close`` and ``open`` are total-return-adjusted frames (dates x tickers) cut
+    at ``as_of`` inclusive; each value uses only corporate actions with ex-date
+    up to its own date. ``conn`` is exposed for read-only queries, but SEC facts
+    must go through ``fundamentals``/``ttm``: a fact filed on day d is usable
+    from the next session after d (filings can land after the close), so the
+    cutoff is filed_date < as_of.
     """
 
     as_of: str
@@ -49,10 +73,14 @@ class AsOfView:
     conn: sqlite3.Connection | None = None
 
     def fundamentals(self, ticker: str, tag, kind: str | None = None) -> Fact | None:
-        return fundamentals_as_of(self._need_conn(), ticker, self.as_of, tag, kind)
+        return fundamentals_as_of(self._need_conn(), ticker, self.filing_cutoff, tag, kind)
 
     def ttm(self, ticker: str, tag) -> Fact | None:
-        return ttm_as_of(self._need_conn(), ticker, self.as_of, tag)
+        return ttm_as_of(self._need_conn(), ticker, self.filing_cutoff, tag)
+
+    @property
+    def filing_cutoff(self) -> str:
+        return filing_cutoff(self.as_of)
 
     def _need_conn(self) -> sqlite3.Connection:
         if self.conn is None:
@@ -64,16 +92,23 @@ class Market:
     """All sessions, adjusted prices and point-in-time membership of one DB."""
 
     def __init__(self, adj_open: pd.DataFrame, adj_close: pd.DataFrame,
-                 conn: sqlite3.Connection, flagged_rows: int = 0,
+                 conn: sqlite3.Connection, flagged: pd.DataFrame | None = None,
                  price_tickers: set[str] | None = None):
         self.adj_open, self.adj_close, self.conn = adj_open, adj_close, conn
         self.sessions: list[str] = list(adj_close.index)
-        self.flagged_rows = flagged_rows
+        self.flagged = flagged if flagged is not None else pd.DataFrame(
+            columns=["ticker", "date", "flag", "move", "treatment"])
         self.price_tickers = price_tickers if price_tickers is not None else set(adj_close.columns)
         # Forward-filled copies value held positions across data gaps only.
         self.open_ff, self.close_ff = adj_open.ffill(), adj_close.ffill()
         self.columns = {t: i for i, t in enumerate(adj_close.columns)}
         self._members: dict[str, set[str]] = {}
+
+    def flagged_in(self, lo: int, hi: int) -> pd.DataFrame:
+        """Flagged price rows dated inside sessions[lo..hi]; later rows are not counted."""
+        a, b = self.sessions[lo], self.sessions[hi]
+        f = self.flagged
+        return f[(f["date"] >= a) & (f["date"] <= b)]
 
     def view(self, as_of: str) -> AsOfView:
         return AsOfView(as_of, self.adj_close.loc[:as_of], self.adj_open.loc[:as_of], self.conn)
@@ -107,14 +142,19 @@ def load_market(db_path: str | Path) -> Market:
         "SELECT ticker, date, open FROM price_daily "
         "WHERE COALESCE(adjustment_basis,'split_adjusted_price_only')='split_adjusted_price_only' "
         "AND ticker NOT LIKE '^%'", conn)
-    # A dividend dated off the trading calendar lands on the next session and the chain
-    # leaves that day's return empty; the move is real, so rebuild it from close and dividend.
+    # Keep the real move (plus dividend) on every flagged row except a move on a split date,
+    # where the close is probably not split-adjusted; see the module doc for why not 0%.
     prev = tr.groupby("ticker")["close"].shift(1)
-    off = (tr["flag"] == "dividend_off_calendar") & (prev > 0)
-    ret = tr["total_return"].where(~off, (tr["close"] + tr["dividend"]) / prev - 1.0)
+    real = (tr["close"] + tr["dividend"]) / prev - 1.0
+    keep_real = tr["flag"].isin(KEEP_REAL_MOVE_FLAGS) & (prev > 0) & (tr["close"] > 0)
+    ret = tr["total_return"].where(~keep_real, real)
     tr = tr.assign(growth=1.0 + ret.fillna(0.0))
     tr["adj_close"] = tr.groupby("ticker")["growth"].cumprod()
     tr.loc[~(tr["close"] > 0), "adj_close"] = np.nan
+    flagged = tr.loc[tr["flag"] != "", ["ticker", "date", "flag"]].assign(
+        move=real[tr["flag"] != ""],
+        treatment=np.where(keep_real[tr["flag"] != ""], "real move kept", "0% day or NaN"))
+    flagged = flagged[flagged["flag"] != "dividend_off_calendar"].reset_index(drop=True)
     adj_close = tr.pivot(index="date", columns="ticker", values="adj_close").sort_index()
     raw_close = tr.pivot(index="date", columns="ticker", values="close").sort_index()
     raw_open = opens.pivot(index="date", columns="ticker", values="open").reindex(
@@ -126,5 +166,5 @@ def load_market(db_path: str | Path) -> Market:
         raise LookupError(f"{BENCHMARK_TICKER} prices are required for the benchmark")
     calendar = adj_close.index[adj_close[BENCHMARK_TICKER].notna()]
     return Market(adj_open.loc[calendar], adj_close.loc[calendar], conn,
-                  flagged_rows=int(((tr["flag"] != "") & ~off).sum()),
+                  flagged=flagged[flagged["date"].isin(calendar)],
                   price_tickers=set(tr["ticker"].unique()))

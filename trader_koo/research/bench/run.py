@@ -27,6 +27,7 @@ DEFAULT_COST_BPS = 10.0
 DEFAULT_STRESS_BPS = 20.0
 DEFAULT_N_RANDOM = 200
 SUMMARY_DIGITS = 10
+MOVE_DIGITS = 4
 PCT_LOW = 5
 PCT_MID = 50
 PCT_HIGH = 95
@@ -37,7 +38,8 @@ SURVIVORSHIP = (
 )
 CAVEATS = [
     "Research only; a backtest proves software behaviour on this data, not future performance.",
-    "Flagged price rows (special dividends, unexplained jumps) are treated as 0% days.",
+    "Flagged price rows keep their real move except moves on split dates (0% day) and bad closes "
+    "(NaN); each is listed under data.flagged. A flagged spin-off or data error can still move results.",
     "Held names that lose their price are valued flat at the last price until the next review.",
 ]
 
@@ -102,7 +104,7 @@ def _window_block(market: Market, first: int, lo: int, hi: int, cand: Result, st
 
 def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict:
     n = len(market.sessions)
-    boundary = ledger.seal_boundary(n)
+    boundary = int(np.searchsorted(market.sessions, ledger.pinned_boundary(ledger_path, market.sessions), side="left"))
     start = _index_at_or_after(market.sessions, cfg.start, 0)
     default_end = n - 1 if cfg.open_sealed else boundary - 1
     end = default_end if cfg.end is None else int(np.searchsorted(market.sessions, cfg.end, side="right")) - 1
@@ -135,7 +137,7 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
 
     cand = simulate(market, cand_sched, end, cfg.cost_bps)
     stress = simulate(market, cand_sched, end, cfg.stress_bps)
-    ew = simulate(market, equal_weight_schedule(market, reviews), end, cfg.cost_bps, rebalance=True)
+    ew = simulate(market, equal_weight_schedule(market, reviews), end, cfg.cost_bps)
     spy = buy_and_hold(market, BENCHMARK_TICKER, first, end)
     rng = np.random.default_rng(seed)
     rand = [
@@ -153,8 +155,12 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
     if cfg.open_sealed and end >= boundary:
         out["sealed"] = _window_block(market, first, max(boundary, first), end, cand, stress, ew, spy, rand)
     missing, members = market.members_without_prices(first, end)
+    flagged = market.flagged_in(first, end)
     out["data"] = {"entries_dropped_no_open": cand_sched.dropped_no_open,
-                   "flagged_price_rows": market.flagged_rows,
+                   "flagged_price_rows": len(flagged),
+                   "flagged_zeroed_or_nan": int((flagged["treatment"] != "real move kept").sum()),
+                   "flagged": flagged.round({"move": MOVE_DIGITS}).to_dict("records"),
+                   "sealed_boundary": market.sessions[boundary],
                    "members_without_prices": missing, "members_in_window": members}
     out["caveats"] = [SURVIVORSHIP.format(n=missing, m=members)] + CAVEATS
     out["markdown"] = report.markdown(out)
@@ -172,7 +178,7 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
     out["summary"] = summary
     ledger.append(ledger_path, {
         **base, "event": "run", "trial_id": ledger.short_id(base),
-        "params_hash": ledger.sha(cfg.params), "sealed_opened": cfg.open_sealed,
+        "params_hash": ledger.sha(cfg.params), "sealed_opened": cfg.open_sealed, "sealed_boundary": market.sessions[boundary],
         "date_range": [market.sessions[first], market.sessions[end]],
         "costs_bps": {"per_side": cfg.cost_bps, "stress": cfg.stress_bps},
         "universe": cfg.universe, "n_sessions": n, "summary": summary,

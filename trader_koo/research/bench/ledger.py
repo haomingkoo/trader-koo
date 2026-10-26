@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 SEAL_FRACTION = 0.2
@@ -51,8 +52,27 @@ def code_version() -> str:
 
 
 def seal_boundary(n_sessions: int) -> int:
-    """First sealed session index: the last 20% of all sessions in the database."""
+    """First sealed session index of the last 20% of sessions; used once, to pin the date."""
     return int(n_sessions * (1 - SEAL_FRACTION))
+
+
+def pinned_boundary(path: str | Path, sessions: list[str]) -> str:
+    """Date of the first sealed session, fixed by the first ledger contact and never recomputed.
+
+    Deriving the boundary from the current session count would slide it forward
+    every time data is appended, pulling formerly sealed days into development.
+    The first call writes a ``seal`` entry; later calls (and replays) read it back.
+    """
+    for e in read(path):
+        if e.get("event") == "seal":
+            if e["boundary_date"] > sessions[-1]:
+                raise ValueError(f"ledger seals {e['boundary_date']} but the data ends {sessions[-1]}; wrong ledger?")
+            return e["boundary_date"]
+    boundary = sessions[seal_boundary(len(sessions))]
+    append(path, {"event": "seal", "boundary_date": boundary, "n_sessions": len(sessions),
+                  "first_session": sessions[0], "last_session": sessions[-1],
+                  "seal_fraction": SEAL_FRACTION, "timestamp": datetime.now(timezone.utc).isoformat()})
+    return boundary
 
 
 def append(path: str | Path, entry: dict) -> None:

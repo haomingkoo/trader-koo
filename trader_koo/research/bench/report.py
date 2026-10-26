@@ -100,6 +100,7 @@ def markdown(report: dict) -> str:
         lines.append("")
     d = report["data"]
     lines += [f"Names lacking data: {d['entries_dropped_no_open']} entries skipped for no open price; "
-              f"{d['flagged_price_rows']} price rows flagged and treated as 0% days.", ""]
+              f"{d['flagged_price_rows']} price rows flagged in the window "
+              f"({d['flagged_zeroed_or_nan']} treated as 0% or NaN, the rest keep their real move).", ""]
     lines += [f"- {c}" for c in report["caveats"]]
     return "\n".join(lines)

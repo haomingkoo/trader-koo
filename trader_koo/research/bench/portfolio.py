@@ -23,6 +23,7 @@ DEFAULT_BUFFER_N = 40
 DEFAULT_REVIEW_EVERY = 10
 DEFAULT_MIN_HOLD = 20
 BPS_PER_UNIT = 10_000
+COST_SOLVE_ITERATIONS = 8
 
 
 @dataclass(frozen=True)
@@ -101,9 +102,14 @@ def equal_weight_schedule(market: Market, review_idx: list[int]) -> Schedule:
     return out
 
 
-def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float,
-             rebalance: bool = False) -> Result:
-    """Value the schedule. ``rebalance`` resets weights to equal at every fill (benchmarks)."""
+def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float) -> Result:
+    """Value the schedule, resetting to equal weight across the targets at every fill.
+
+    The design says "equal weight", so each review trades every position back to
+    1/len(targets) and pays costs on all of it. Letting winners drift instead
+    (buy and hold between name changes) overweights past winners and compares
+    badly against a benchmark that does rebalance.
+    """
     c = cost_bps / BPS_PER_UNIT
     ex, tg = schedule.exec_idx, schedule.targets
     O, C = market.open_ff.to_numpy(), market.close_ff.to_numpy()
@@ -120,25 +126,15 @@ def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float,
         nxt = min(ex[k + 1], end_idx + 1) if k + 1 < len(ex) else end_idx + 1
         want = np.array([cols[t] for t in tg[k]], dtype=int)
         equity = cash + pos.sum()
-        if rebalance:
-            target = np.zeros_like(pos)
-            if len(want):
-                target[want] = equity / len(want)
-            traded = np.abs(target - pos)
-            cost = c * traded.sum()
-            new_pos = target * ((1 - cost / equity) if len(want) else 1.0)
-            cash = equity - cost - new_pos.sum()
-        else:
-            sells = pos.copy()
-            sells[want] = 0
-            cash += sells.sum() * (1 - c)
-            buys = np.zeros_like(pos)
-            new = want[pos[want] == 0]
-            if len(new):
-                buys[new] = min(equity / len(want), cash / (1 + c) / len(new))
-                cash -= buys.sum() * (1 + c)
-            traded = sells + buys
-            new_pos = pos - sells + buys
+        target = np.zeros_like(pos)
+        if len(want):
+            target[want] = equity / len(want)
+        scale = 1.0
+        for _ in range(COST_SOLVE_ITERATIONS):  # fee is charged on what is actually traded, after the fee
+            scale = 1.0 - c * np.abs(scale * target - pos).sum() / equity if len(want) else 1.0
+        new_pos = target * scale
+        traded = np.abs(new_pos - pos)
+        cash = equity - c * traded.sum() - new_pos.sum()
         for i in np.nonzero(traded)[0]:
             t_idx.append(e)
             t_amt.append(float(traded[i]))
