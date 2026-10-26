@@ -17,7 +17,6 @@ close is within 4bp/yr for every sampled ticker.
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from pathlib import Path
 
@@ -25,10 +24,9 @@ import numpy as np
 import pandas as pd
 
 TR_VERSION = "tr-v1-from-yfinance-actions-v1"
-# Thresholds are part of the pinned TR_VERSION; changing them means a new version.
-_THRESHOLDS = json.loads('{"max_abs_daily_move": 0.40, "max_dividend_fraction": 0.10}')
-MAX_ABS_DAILY_MOVE = _THRESHOLDS["max_abs_daily_move"]
-MAX_DIVIDEND_FRACTION = _THRESHOLDS["max_dividend_fraction"]
+# The two thresholds below are part of TR_VERSION; changing either means a new version.
+MAX_ABS_DAILY_MOVE = 0.40  # fraction of prior close; larger one-day moves are treated as unexplained
+MAX_DIVIDEND_FRACTION = 0.10  # fraction of prior close; larger dividends are treated as special
 OUT_COLUMNS = ["ticker", "date", "close", "dividend", "total_return", "tr_index", "segment", "flag"]
 
 
