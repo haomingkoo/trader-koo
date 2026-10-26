@@ -1,10 +1,12 @@
-"""Scheduler job: archive option chains for the whole ingest universe after the close."""
+"""Scheduler job: archive option chains for the whole ingest universe after the nightly window."""
 from __future__ import annotations
 
 import datetime as dt
 import logging
 import subprocess
 import sys
+import time
+from typing import Callable
 
 from trader_koo.backend.services import scheduler as sched
 from trader_koo.backend.services.maintenance import (
@@ -14,26 +16,33 @@ from trader_koo.backend.services.maintenance import (
 )
 from trader_koo.backend.services.pipeline import read_active_pipeline_run
 from trader_koo.collection.config import (
-    UNIVERSE_CRON_HOUR_ET,
-    UNIVERSE_CRON_MINUTE_ET,
+    UNIVERSE_CRON_HOUR_UTC,
+    UNIVERSE_CRON_MINUTE_UTC,
+    UNIVERSE_WAIT_POLL_SEC,
     get_options_universe_config,
 )
-from trader_koo.collection.options_universe import universe_window_open
+from trader_koo.collection.options_universe import universe_session_date
 
 LOG = logging.getLogger(__name__)
 JOB_ID = "options_iv_universe_snapshot"
 
 
-def run_options_universe_snapshot(now_utc: dt.datetime | None = None) -> str:
+def run_options_universe_snapshot(
+    now_utc: dt.datetime | None = None,
+    *,
+    clock: Callable[[], dt.datetime] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
     """Run the universe snapshot script; return why it did not run, or ok/failed.
 
-    This never reserves a pipeline run (that would make the 22:00 daily_update
-    skip). It refuses to start, and the script stops, when the post-close window
-    is closed or a pipeline run is active.
+    Starts at 23:45 UTC. If a pipeline run (the nightly daily_update) is still
+    active it waits, re-checking every few minutes, and gives up for the day at
+    03:00 UTC. It never reserves a pipeline run, so it cannot make a daily_update
+    skip.
     """
-    now = now_utc or dt.datetime.now(dt.timezone.utc)
-    if not universe_window_open(now):
-        sched._append_run_log("OPTIONS_IV", "Universe snapshot skipped: outside post-close window")
+    clock = clock or (lambda: now_utc or dt.datetime.now(dt.timezone.utc))
+    if universe_session_date(clock()) is None:
+        sched._append_run_log("OPTIONS_IV", "Universe snapshot skipped: outside 23:45-03:00 UTC window")
         return "outside_window"
     try:
         blocked = writers_blocked(sched.DB_PATH)
@@ -43,12 +52,20 @@ def run_options_universe_snapshot(now_utc: dt.datetime | None = None) -> str:
     if blocked:
         sched._append_run_log("OPTIONS_IV", "Universe snapshot skipped: maintenance intent")
         return "maintenance"
-    active = read_active_pipeline_run(sched.DB_PATH)
-    if active is not None:
-        sched._append_run_log(
-            "OPTIONS_IV", f"Universe snapshot skipped: pipeline run active run_id={active.get('run_id')}"
-        )
-        return "pipeline_active"
+    waited = False
+    while (active := read_active_pipeline_run(sched.DB_PATH)) is not None:
+        if not waited:
+            sched._append_run_log(
+                "OPTIONS_IV",
+                f"Universe snapshot waiting for pipeline run run_id={active.get('run_id')}",
+            )
+            waited = True
+        sleep(UNIVERSE_WAIT_POLL_SEC)
+        if universe_session_date(clock()) is None:
+            sched._append_run_log(
+                "OPTIONS_IV", "Universe snapshot gave up for the day: pipeline still active at window end"
+            )
+            return "gave_up"
 
     cfg = get_options_universe_config()
     cmd = [
@@ -88,12 +105,12 @@ def register_options_universe_job(scheduler) -> None:
     scheduler.add_job(
         run_options_universe_snapshot,
         CronTrigger(
-            hour=UNIVERSE_CRON_HOUR_ET,
-            minute=UNIVERSE_CRON_MINUTE_ET,
+            hour=UNIVERSE_CRON_HOUR_UTC,
+            minute=UNIVERSE_CRON_MINUTE_UTC,
             day_of_week="mon-fri",
-            timezone="America/New_York",
+            timezone="UTC",
         ),
         id=JOB_ID,
         replace_existing=True,
     )
-    LOG.info("Options IV universe snapshot registered: Mon-Fri after the US close (America/New_York)")
+    LOG.info("Options IV universe snapshot registered: Mon-Fri 23:45 UTC (session of that day)")

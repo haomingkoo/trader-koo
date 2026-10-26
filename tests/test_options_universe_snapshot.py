@@ -10,10 +10,11 @@ import pytest
 
 from trader_koo.collection.options_universe import (
     ensure_options_daily_metrics_schema,
+    latest_session_date,
     load_ingest_universe,
     select_metric_expiries,
     snapshot_universe,
-    universe_window_open,
+    universe_session_date,
 )
 
 TODAY = dt.date(2026, 10, 26)
@@ -42,14 +43,30 @@ def test_select_expiries_without_far_expiries_and_past_dates():
     assert select_metric_expiries([], TODAY, nearest=2, target_days=(30,)) == []
 
 
-def test_window_guard_stops_before_nightly_report():
+def test_session_date_is_the_evening_the_run_started_on():
     utc = dt.timezone.utc
-    assert universe_window_open(dt.datetime(2026, 10, 26, 20, 10, tzinfo=utc))
-    assert not universe_window_open(dt.datetime(2026, 10, 26, 21, 25, tzinfo=utc))
-    assert not universe_window_open(dt.datetime(2026, 10, 24, 20, 10, tzinfo=utc))  # Saturday
-    assert not universe_window_open(dt.datetime(2026, 10, 26, 19, 0, tzinfo=utc))  # before close
-    assert universe_window_open(dt.datetime(2026, 11, 3, 21, 10, tzinfo=utc))  # EST close is 21:00
-    assert not universe_window_open(dt.datetime(2026, 11, 3, 20, 10, tzinfo=utc))
+    assert universe_session_date(dt.datetime(2026, 10, 26, 23, 45, tzinfo=utc)) == dt.date(2026, 10, 26)
+    # after midnight UTC the run still belongs to the previous evening's session
+    assert universe_session_date(dt.datetime(2026, 10, 27, 1, 30, tzinfo=utc)) == dt.date(2026, 10, 26)
+    # Friday evening session may run into Saturday UTC morning
+    assert universe_session_date(dt.datetime(2026, 10, 24, 1, 0, tzinfo=utc)) == dt.date(2026, 10, 23)
+
+
+def test_window_excludes_nightly_report_and_weekend_sessions():
+    utc = dt.timezone.utc
+    for hour, minute in ((21, 30), (22, 0), (23, 30), (23, 44), (3, 0), (12, 0)):
+        assert universe_session_date(dt.datetime(2026, 10, 27, hour, minute, tzinfo=utc)) is None
+    assert universe_session_date(dt.datetime(2026, 10, 24, 23, 45, tzinfo=utc)) is None  # Saturday evening
+    assert universe_session_date(dt.datetime(2026, 10, 25, 23, 45, tzinfo=utc)) is None  # Sunday evening
+    assert universe_session_date(dt.datetime(2026, 10, 25, 1, 0, tzinfo=utc)) is None  # Sat evening's tail
+    assert universe_session_date(dt.datetime(2026, 10, 26, 1, 0, tzinfo=utc)) is None  # Sun evening's tail
+
+
+def test_latest_session_date_for_manual_runs():
+    utc = dt.timezone.utc
+    assert latest_session_date(dt.datetime(2026, 10, 26, 21, 0, tzinfo=utc)) == dt.date(2026, 10, 26)
+    assert latest_session_date(dt.datetime(2026, 10, 26, 11, 45, tzinfo=utc)) == dt.date(2026, 10, 23)
+    assert latest_session_date(dt.datetime(2026, 10, 25, 15, 0, tzinfo=utc)) == dt.date(2026, 10, 23)
 
 
 def _ledger() -> sqlite3.Connection:

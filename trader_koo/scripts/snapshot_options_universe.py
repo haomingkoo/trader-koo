@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Store daily option metrics (options_daily_metrics) for the whole ingest universe.
 
-Runs after the US close and stops before the nightly report window, or earlier
-if a pipeline run becomes active. Nothing here changes trading or report logic.
+Runs after the nightly report window (23:45 to 03:00 UTC), stamps rows with that
+evening's US session date, and stops early if a pipeline run becomes active. Nothing here changes trading or report logic.
 """
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from trader_koo.collection.options_universe import (
     fetch_rate,
     load_ingest_universe,
     snapshot_universe,
-    universe_window_open,
+    latest_session_date,
+    universe_session_date,
 )
 from trader_koo.config import DEFAULT_DB_PATH, env_path, env_str
 from trader_koo.scripts.snapshot_options_iv import setup_logging
@@ -53,9 +54,14 @@ def main() -> None:
     db_path = Path(args.db_path)
     target_days = tuple(int(d) for d in args.target_days.split(",") if d.strip())
 
+    start = dt.datetime.now(dt.timezone.utc)
+    session = latest_session_date(start) if args.ignore_window else universe_session_date(start)
+    if session is None:
+        raise SystemExit("outside the options universe window; use --ignore-window for a manual run")
+
     def should_stop() -> bool:
-        if not args.ignore_window and not universe_window_open(dt.datetime.now(dt.timezone.utc)):
-            LOG.warning("Options universe snapshot stopping: outside post-close window")
+        if not args.ignore_window and universe_session_date(dt.datetime.now(dt.timezone.utc)) is None:
+            LOG.warning("Options universe snapshot stopping: outside the 23:45-03:00 UTC window")
             return True
         active = read_active_pipeline_run(db_path)
         if active is not None:
@@ -81,6 +87,7 @@ def main() -> None:
         summary = snapshot_universe(
             conn,
             tickers,
+            today=session,
             nearest=args.max_expiries,
             target_days=target_days,
             force=args.force,

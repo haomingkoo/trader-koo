@@ -16,10 +16,11 @@ from zoneinfo import ZoneInfo
 
 from trader_koo.collection.config import (
     RATE_SYMBOL,
+    UNIVERSE_CLOSE_HOUR_ET,
     UNIVERSE_NEAREST_EXPIRIES,
     UNIVERSE_TARGET_DAYS,
-    UNIVERSE_WINDOW_CLOSE_UTC,
-    UNIVERSE_WINDOW_OPEN_ET,
+    UNIVERSE_WINDOW_END_UTC,
+    UNIVERSE_WINDOW_START_UTC,
     WEEKEND_DAYS,
 )
 from trader_koo.collection.options_metrics import Chain, compute_daily_metrics
@@ -95,13 +96,29 @@ def _days_until(expiry: str, today: dt.date) -> int | None:
         return None
 
 
-def universe_window_open(now: dt.datetime) -> bool:
-    """True on weekdays after the US close and before the nightly report window."""
+def universe_session_date(now: dt.datetime) -> dt.date | None:
+    """US session date a run at ``now`` belongs to, or None outside the window.
+
+    The window runs from 23:45 UTC on a Mon-Fri evening to 03:00 UTC the next
+    morning; that evening's UTC date is the session date.
+    """
     now = now.astimezone(dt.timezone.utc)
+    if now.time() >= UNIVERSE_WINDOW_START_UTC:
+        anchor = now.date()
+    elif now.time() < UNIVERSE_WINDOW_END_UTC:
+        anchor = now.date() - dt.timedelta(days=1)
+    else:
+        return None
+    return None if anchor.weekday() in WEEKEND_DAYS else anchor
+
+
+def latest_session_date(now: dt.datetime) -> dt.date:
+    """Most recent weekday whose US close (16:00 ET) has passed; for manual runs."""
     et = now.astimezone(_NY)
-    if et.weekday() in WEEKEND_DAYS:
-        return False
-    return et.time() >= UNIVERSE_WINDOW_OPEN_ET and now.time() < UNIVERSE_WINDOW_CLOSE_UTC
+    day = et.date() if et.hour >= UNIVERSE_CLOSE_HOUR_ET else et.date() - dt.timedelta(days=1)
+    while day.weekday() in WEEKEND_DAYS:
+        day -= dt.timedelta(days=1)
+    return day
 
 
 def load_ingest_universe(conn: sqlite3.Connection, *, max_tickers: int | None = None) -> list[str]:

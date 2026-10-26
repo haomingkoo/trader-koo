@@ -7,13 +7,16 @@ from pathlib import Path
 
 from trader_koo.config import DEFAULT_LOG_DIR, env_bool, env_float, env_int, env_path
 
-# Full-universe option-chain job. 16:10 New York follows the US close through
-# DST changes. The job refuses to run at or after 21:25 UTC because the nightly
-# report window starts at 21:30 UTC.
-UNIVERSE_CRON_HOUR_ET = 16
-UNIVERSE_CRON_MINUTE_ET = 10
-UNIVERSE_WINDOW_OPEN_ET = dt.time(16, 5)
-UNIVERSE_WINDOW_CLOSE_UTC = dt.time(21, 25)
+# Full-universe option-metrics job. End-of-day option quotes do not change
+# between the close and the next pre-market, so it runs after the nightly report
+# window (21:30 to 23:30 UTC). It starts 23:45 UTC on Mon-Fri evenings, stamps
+# rows with that evening's US session date, and hard-stops at 03:00 UTC.
+UNIVERSE_CRON_HOUR_UTC = 23
+UNIVERSE_CRON_MINUTE_UTC = 45
+UNIVERSE_WINDOW_START_UTC = dt.time(23, 45)
+UNIVERSE_WINDOW_END_UTC = dt.time(3, 0)
+UNIVERSE_WAIT_POLL_SEC = 180
+UNIVERSE_CLOSE_HOUR_ET = 16
 WEEKEND_DAYS = (5, 6)
 UNIVERSE_DEFAULT_MAX_TICKERS = 600
 UNIVERSE_MAX_TICKERS_LIMIT = 1000
