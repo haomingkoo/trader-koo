@@ -65,8 +65,17 @@ simulator.
   prices.
 - **Signal timing**: a signal on date t uses only data knowable at the close of
   t (prices to t, fundamentals with `filed_date <= t`). Entry at the next open.
-- **Costs**: 10 bps per side plus 20 bps stress case; short borrow cost for any
-  short leg.
+- **Costs and slippage** (owner asked for slippage to be modelled, not assumed):
+  - Spread cost per trade from each stock's typical bid-ask spread (estimated
+    from daily high-low with a published estimator such as Corwin-Schultz when
+    quotes are unavailable), with a floor of 5 bps per side.
+  - Market impact growing with order size over 20-day average dollar volume
+    (square-root impact model), and a hard cap of 1% of average daily volume
+    per order.
+  - Next-open gap: fills at the next open, so the close-to-open move after a
+    signal is part of the measured result, never assumed away.
+  - Stress case at twice the estimated cost; every candidate must pass it.
+  - Short borrow cost for any short leg.
 - **Returns**: total return, measured against SPY total return and against an
   equal-weight universe return.
 - **Validation**: expanding walk-forward by year; purge and embargo equal to the
@@ -106,6 +115,19 @@ horizon, rebalance) in the trial ledger before its first run.
 **Events and flows**
 9. Earnings-window premium and earnings-announcement return drift.
 10. Index additions and deletions (mechanical flows).
+
+**Fade the crowd** (owner's lesson from crypto: two Hyperliquid wallets were
+reliably wrong, so fading them was the signal)
+10a. High short interest (Finviz short float, days to cover): short sellers
+     tend to be the informed side, so heavily shorted names are avoided or
+     faded. Point-in-time only from 2026-02 snapshots, so a forward pilot.
+10b. Retail herding proxies: spikes in options call volume and open interest
+     on popular names, and large one-day retail-style surges. Fade after the
+     spike; test once options history allows.
+10c. First, measure the crypto evidence itself: the Hyperliquid counter-signal
+     table has about 96,000 rows but no outcomes were ever recorded. Score the
+     stored signals against later prices to check whether fading those
+     wallets paid, before carrying the idea further.
 
 **Options (pilot only until history accumulates)**
 11. Change in implied volatility and call-put IV spread, monthly.
