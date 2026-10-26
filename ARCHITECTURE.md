@@ -183,6 +183,16 @@ Each run writes to `ingest_runs` (overall status) and `ingest_ticker_status` (pe
 | `finviz_fundamentals` | Fundamental snapshots | `ticker, snapshot_ts, pe, peg, eps_ttm, target_price, discount_pct` |
 | `options_iv` | Options chain aggregates | `ticker, snapshot_ts, option_type, implied_vol, open_interest` |
 
+### SEC point-in-time fundamentals (research only, not read by trading or reports)
+
+| Table | Purpose |
+|-------|---------|
+| `sec_fundamentals` | Raw XBRL facts from EDGAR `companyfacts`; one row per `(cik, tag, unit, period_start, period_end, accession)`, so originally filed and restated values coexist and a value is knowable only from its `filed_date` |
+| `sec_cik_map` | `(ticker, cik)`; a ticker can carry a predecessor CIK after a holding-company reorganisation (XOM) |
+| `sec_fetch_status` | Per-CIK fetch status and tags present (resume state and coverage) |
+
+`trader_koo/fundamentals/` holds the loader, the as-of accessors (`fundamentals_as_of`, `ttm_as_of`, TTM rule in `pit.py`) and the tag list with fallbacks (`config.py`). Load with `python -m trader_koo.scripts.load_sec_fundamentals --db-path <scratch.db>`; it requires an explicit DB path and runs at 4 requests/s against SEC's 10/s limit. Banks and insurers lack some tags (gross profit, capex); absence is recorded, never filled.
+
 ### Pattern detection
 
 | Table | Purpose |
