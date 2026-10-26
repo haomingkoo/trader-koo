@@ -23,12 +23,15 @@ EXTRA_GRACE = dt.timedelta(hours=2)
 FETCH_ATTEMPTS = 3
 FETCH_TIMEOUT_SEC = 20
 RETRY_SLEEP_SEC = 10
+# The site firewall answers 403 to the default Python-urllib User-Agent.
+USER_AGENT = "trader-koo-freshness-monitor/1.0 (+https://github.com/haomingkoo/trader-koo)"
 
 
 def fetch_json(url: str, timeout: int, attempts: int) -> dict[str, Any]:
     for attempt in range(1, attempts + 1):
         try:
-            with urllib.request.urlopen(url, timeout=timeout) as resp:
+            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request, timeout=timeout) as resp:
                 return json.load(resp)
         except (OSError, ValueError):
             if attempt == attempts:
