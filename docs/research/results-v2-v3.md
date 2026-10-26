@@ -2,8 +2,8 @@
 
 Recorded 2026-10-27 for the rules frozen in `hypotheses-v2-saty.md` and `hypotheses-v3-market-timing.md`.
 Both runs read only sessions before the pinned seal (2023-06-12) and append to the bench trial ledger
-(`/Users/koohaoming/dev/.research/bench_trial_ledger.jsonl`). A frozen copy of the four ledger lines (two superseded, two final) is
-`ledger-v2-v3.jsonl` (sha256 `cc68c43c01adb3bff4cab5e4cede38580c4ce3d4fc401da4bca2cccec7e90e4b`). This is a research result on historical data. It is not a claim of alpha.
+(`/Users/koohaoming/dev/.research/bench_trial_ledger.jsonl`). A frozen copy of the six ledger lines (two runs of each family before the final one) is
+`ledger-v2-v3.jsonl` (sha256 `86b14598c493bf9485af004a1d78364cd475d7ee3ad6a25e2462d74d8a719e01`). This is a research result on historical data. It is not a claim of alpha.
 
 **Outcome: nothing earned the right to open the sealed window.** The sealed window was not opened
 (`sealed_opened: false` on every entry). Criterion 3 of v3 and criterion 5 of v2 were therefore not evaluated for any
@@ -26,10 +26,10 @@ hypothesis.
 |---|---|
 | database | a copy of `trader_koo_research.db` (opened read-only; the original was not written) |
 | seal | boundary `2023-06-12`, read from the ledger's `seal` entry, never moved. Last session used: 2023-06-09 (3,382 sessions from 2010-01-04) |
-| code version | final runs `86ba26e74e5631fdc6c636f58d671fc379968fed` (clean tree). Earlier runs, before a change to the report text only: `92f7811854e44a529ac981865e67d1f8fc0e61d4` |
+| code version | final runs `b63d6f20061ef4d68109bbae4a00ce9dfbf2a48f` (clean tree). Earlier runs: `92f7811854e44a529ac981865e67d1f8fc0e61d4` and `86ba26e74e5631fdc6c636f58d671fc379968fed` |
 | settings sha256 | `5840ccb1451187909343e6f593b87568f1885ebbe5de38f0384e9d11ff49059e` (the `[event_study]` section is new in this change) |
-| final trial ids | v2 `e7168b67e8f6`, v3 `f0094291be03` |
-| earlier trial ids | v2 `43b073599be4`, v3 `bcf2c20b4329`: every number is identical, only the report text differed |
+| final trial ids | v2 `4a14f5be8295`, v3 `46bd59794dec` |
+| earlier trial ids | v2 `43b073599be4`, v3 `bcf2c20b4329` (first run); v2 `e7168b67e8f6`, v3 `f0094291be03` (second run). Every number is identical across the three runs; only the report text and the code layout (named constants) changed |
 | seeds | derived from each run's config (v2 4203974023, v3 3704069732), one more per test from the test key |
 | bootstrap | 10,000 resamples of 5-session moving blocks (v2: blocks of entry dates), seeds recorded |
 | FOMC dates | `fomc-decision-dates-2010-2023.csv`: 125 rows compiled on 2026-10-27 from the Federal Reserve's FOMC historical-materials pages (one `source_url` per row, one page per year to 2020) and its meeting-calendar page for 2021 to 2023. 111 scheduled meetings (decision day = last day of the meeting). Conference calls, unscheduled meetings, notation votes and the cancelled March 2020 meeting are listed with their kind and not used. All 14 years were sourced, so H10 was not blocked. |
@@ -271,7 +271,7 @@ A counter that is zero is omitted. Index-member days removed by the data-quality
 }
 ```
 
-ledger trial_id (v2): e7168b67e8f6
+ledger trial_id (v2): 4a14f5be8295
 
 ### Hypotheses v3 event study (v3), development window
 
@@ -456,4 +456,4 @@ Signals dropped because their outcome window leaves the development window, and 
 }
 ```
 
-ledger trial_id (v3): f0094291be03
+ledger trial_id (v3): 46bd59794dec
