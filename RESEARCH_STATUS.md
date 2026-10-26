@@ -45,6 +45,12 @@ performance claim.
   history. Values, trial ids and caveats: `docs/research/results-v1.md`, with the
   frozen ledger lines in `docs/research/ledger-v1.jsonl`. This is a software and
   data result, not evidence of alpha.
+- Hypotheses versions 2 and 3 (`hypotheses-v2-saty.md`, `hypotheses-v3-market-timing.md`) ran as event studies on the
+  development window only (2010-01-04 or 2011-01-03 to 2023-06-09), on a copy of the research database, with the sealed
+  window unopened. v2 S1 to S3 all failed their pass rules (S3 beat its state baseline but not the placebo, and was negative
+  at 20 bps). In v3 only H11 (Friday VIX declines against other weekdays) met the development criteria, the stated 85% of H2
+  was falsified, H4, H10 and one H6 cell were insufficient, and the rest failed. No result is evidence of alpha; values,
+  trial ids and the readings taken where the documents were silent: `docs/research/results-v2-v3.md`.
 
 The checked-in challenger artifact is immutable historical evidence. Its
 negative result is useful: the fixed current-universe dataset lacks verified

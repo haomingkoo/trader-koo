@@ -4,7 +4,8 @@
 # every new bench ledger entry.
 #
 # Not here: the numbers inside the pre-registered hypothesis signals (docs/research/hypotheses-v*.md).
-# Those are part of the registration and live next to each signal in trader_koo/research/bench/hypotheses.py.
+# Those are part of the registration and live next to each signal in trader_koo/research/bench/hypotheses.py
+# (v1), v2_signals.py (v2) and v3_*.py (v3).
 
 [bench]
 cost_bps = { value = 10.0, unit = "bps of traded notional per side", reason = "hypotheses-v1 common rules: costs" }
@@ -36,6 +37,20 @@ lookahead_noise_high = { value = 5.0, unit = "multiplier", reason = "upper bound
 lookahead_price_factor = { value = 3.0, unit = "multiplier", reason = "later stored prices are multiplied by this in the look-ahead guard database view" }
 lookahead_fact_scale = { value = 7.0, unit = "multiplier", reason = "later SEC fact values are multiplied by this in the look-ahead guard" }
 lookahead_fact_shift = { value = 13.0, unit = "units of the fact", reason = "then shifted by this, so a leak cannot cancel out" }
+
+[event_study]
+spacing_sessions = { value = 5, unit = "sessions", reason = "hypotheses-v3 common rules: a signal with an earlier signal fewer than this many sessions before it is not an independent event" }
+min_independent = { value = 30, unit = "events", reason = "hypotheses-v3 common rules: fewer independent events than this is insufficient, never a pass" }
+bootstrap_block = { value = 5, unit = "sessions", reason = "hypotheses-v3 common rules: moving-block bootstrap, 5-session blocks (also used for v2 trade bootstraps)" }
+bootstrap_resamples = { value = 10000, unit = "resamples", reason = "hypotheses-v3 common rules: 10,000 resamples" }
+alpha = { value = 0.05, unit = "probability", reason = "hypotheses-v3 common rules: 95% intervals; Holm family-wise level; hypotheses-v2 pass rule p < 0.05" }
+pass_margin = { value = 0.05, unit = "fraction (percentage points / 100)", reason = "hypotheses-v3 common rules: effect over the matched baseline of at least +5 percentage points" }
+placebo_draws = { value = 1000, unit = "draws", reason = "hypotheses-v2 common rules: 1,000 seeded placebo draws" }
+placebo_pct_high = { value = 95, unit = "percentile", reason = "hypotheses-v2 pass rule: beat the placebo above its 95th percentile" }
+min_positive_year_share = { value = 0.6, unit = "fraction of years", reason = "hypotheses-v2 pass rule: positive in at least 60% of walk-forward years" }
+first_walk_forward_year = { value = 2011, unit = "calendar year", reason = "hypotheses-v2 common rules: walk-forward by calendar year from 2011; earlier sessions only warm up the averages" }
+report_digits = { value = 4, unit = "decimal places", reason = "rounding of rates and effects in the event-study report and ledger summary" }
+max_report_items = { value = 40, unit = "items", reason = "longest list of dropped or substituted items written into the markdown report" }
 
 [quality]
 zero_volume_run_sessions = { value = 5, unit = "consecutive rows", reason = "data-quality rule R1: a run of zero or missing volume this long is invalid" }

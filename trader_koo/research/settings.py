@@ -65,6 +65,22 @@ class BenchSettings:
 
 
 @dataclass(frozen=True)
+class EventStudySettings:
+    spacing_sessions: int
+    min_independent: int
+    bootstrap_block: int
+    bootstrap_resamples: int
+    alpha: float
+    pass_margin: float
+    placebo_draws: int
+    placebo_pct_high: int
+    min_positive_year_share: float
+    first_walk_forward_year: int
+    report_digits: int
+    max_report_items: int
+
+
+@dataclass(frozen=True)
 class QualitySettings:
     zero_volume_run_sessions: int
     seam_move_fraction: float
@@ -167,6 +183,7 @@ class CollectionSettings:
 @dataclass(frozen=True)
 class ResearchSettings:
     bench: BenchSettings
+    event_study: EventStudySettings
     quality: QualitySettings
     total_return: TotalReturnSettings
     fundamentals: FundamentalsSettings
@@ -232,6 +249,11 @@ def _validate(s: ResearchSettings) -> None:
         problems.append("bench needs 0 < top_n <= buffer_n")
     if min(b.review_every, b.n_random, b.share_check_filings) < 1 or b.min_hold < 0:
         problems.append("bench counts must be positive")
+    e = s.event_study
+    if not 0.0 < e.alpha < 1.0 or not 0.0 < e.min_positive_year_share <= 1.0:
+        problems.append("event_study.alpha and min_positive_year_share must be fractions")
+    if min(e.spacing_sessions, e.min_independent, e.bootstrap_block, e.bootstrap_resamples, e.placebo_draws) < 1:
+        problems.append("event_study counts must be positive")
     if q.zero_volume_run_sessions < 1 or q.erratic_moves_per_year < 1:
         problems.append("quality counts must be positive")
     for name in ("quarter_days", "ytd_days", "annual_days"):
