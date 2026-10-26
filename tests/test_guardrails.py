@@ -71,3 +71,15 @@ def test_seed_records_only_files_that_violate():
         "clean.py": {"lines": 10, "bare_numbers": 0},
     }
     assert set(seed_baseline(current)) == {"big.py", "num.py"}
+
+
+def test_module_level_named_constants_are_not_bare(tmp_path):
+    (tmp_path / "trader_koo").mkdir()
+    (tmp_path / "trader_koo" / "m.py").write_text(
+        "MAX_DAILY_MOVE = 0.40\n"
+        "SPECIAL_DIVIDEND_RATIO: float = 0.10\n"
+        "WINDOWS = (21, 63)\n"
+        "lower_case = 0.35\n"
+        "def f(x):\n    return x > 0.35\n"
+    )
+    assert scan(tmp_path)["trader_koo/m.py"]["bare_numbers"] == 2

@@ -31,11 +31,24 @@ DUPLICATE_CMD = [
 Counts = dict[str, dict[str, int]]
 
 
+def _named_constant_ids(tree: ast.Module) -> set[int]:
+    """Literals that are the value of a module-level UPPER_CASE constant: named, so not magic."""
+    named: set[int] = set()
+    for stmt in tree.body:
+        targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target] if isinstance(stmt, ast.AnnAssign) else []
+        if targets and stmt.value is not None and all(isinstance(t, ast.Name) and t.id.isupper() for t in targets):
+            named.update(id(node) for node in ast.walk(stmt.value))
+    return named
+
+
 def _bare_numbers(source: str) -> int:
+    tree = ast.parse(source)
+    named = _named_constant_ids(tree)
     count = 0
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if (
-            isinstance(node, ast.Constant)
+            id(node) not in named
+            and isinstance(node, ast.Constant)
             and isinstance(node.value, (int, float))
             and not isinstance(node.value, bool)
             and node.value not in ALLOWED_NUMBERS
