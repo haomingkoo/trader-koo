@@ -112,7 +112,7 @@ export default function MacroStrip() {
   const regimeStyle = REGIME_STYLES[regime.regime] ?? REGIME_STYLES.UNKNOWN;
 
   return (
-    <div className="flex w-full items-center gap-3 overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-[11.5px] scrollbar-none">
+    <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-[11.5px]">
       {/* Regime badge */}
       {regime.regime !== "UNKNOWN" && regime.confidence >= 40 && (
         <>
@@ -122,14 +122,12 @@ export default function MacroStrip() {
           >
             {regime.regime.replace("_", " ")}
           </span>
-          <span className="text-[var(--line)]">|</span>
         </>
       )}
 
       {/* Instrument chips */}
-      {orderedInstruments.map((inst, index) => (
-        <span key={inst.ticker} className="flex items-center gap-3 whitespace-nowrap">
-          {index > 0 && <span className="text-[var(--line)]">|</span>}
+      {orderedInstruments.map((inst) => (
+        <span key={inst.ticker} className="flex items-center whitespace-nowrap">
           <MacroPriceChip instrument={inst} />
         </span>
       ))}

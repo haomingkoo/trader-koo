@@ -86,10 +86,10 @@ export default function GaugeSvg({
           </>
         );
       })()}
-      <text x={cx - r} y={cy + 18} textAnchor="middle" fontSize={9} fill="var(--muted)" opacity={0.6}>
+      <text x={cx - r} y={cy + 18} textAnchor="middle" fontSize={9} fill="var(--muted)">
         0
       </text>
-      <text x={cx + r} y={cy + 18} textAnchor="middle" fontSize={9} fill="var(--muted)" opacity={0.6}>
+      <text x={cx + r} y={cy + 18} textAnchor="middle" fontSize={9} fill="var(--muted)">
         {max}
       </text>
       <line
@@ -121,7 +121,7 @@ export default function GaugeSvg({
         textAnchor="middle"
         fontSize={11}
         fontWeight={700}
-        fill={zoneColor}
+        fill="var(--text)"
         style={{ textTransform: "uppercase", letterSpacing: "0.12em" }}
       >
         {zoneLabel}

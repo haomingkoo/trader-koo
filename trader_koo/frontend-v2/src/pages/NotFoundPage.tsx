@@ -11,7 +11,7 @@ export default function NotFoundPage() {
       <div className="text-lg text-[var(--muted)]">Page not found</div>
       <Link
         to="/"
-        className="rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--blue)]"
+        className="rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-[var(--on-fill)] transition-colors hover:bg-[var(--blue)]"
       >
         Back to Dashboard
       </Link>
