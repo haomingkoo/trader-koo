@@ -86,6 +86,7 @@ def markdown(report: dict) -> str:
             ("Turnover (annual, one-way)", f"{b['turnover']:.2f}x"),
             ("Hit rate of holdings vs equal-weight", _pct(b["hit_rate"])),
             ("Years beating SPY", _pct(b["pct_years_beating_spy"])),
+            ("Years beating SPY and equal-weight", _pct(b["pct_years_beating_both"])),
             ("Random-control percentile (n=%d)" % report["n_random"], f"{b['random']['percentile']:.1f}"),
             ("Random control CAGR p5 / median / p95",
              " / ".join(_pct(b["random"][k]) for k in ("p5", "p50", "p95"))),
@@ -102,6 +103,13 @@ def markdown(report: dict) -> str:
     lines += [f"Names lacking data: {d['entries_dropped_no_open']} entries skipped for no open price; "
               f"{d['flagged_price_rows']} price rows flagged in the window "
               f"({d['flagged_zeroed_or_nan']} treated as 0% or NaN, the rest keep their real move).", ""]
+    cov = report.get("coverage")
+    if cov:
+        lines += [f"Scored names per review: {cov['mean_scored']:.0f} of {cov['mean_universe']:.0f} universe members "
+                  f"on average over {cov['reviews']} reviews.", ""]
+    ex = report.get("exclusions") or []
+    lines += [f"Data-quality filter (trader_koo/research/bench/quality.py): {len(ex)} ticker-rule pairs, "
+              f"{d.get('excluded_member_days', 0)} index-member days removed from every portfolio and benchmark.", ""]
     lines += [f"Spin-off handling: {len(d['spinoff_exits'])} holdings sold at the close before a listed "
               f"spin-off ex-date, {d['spinoff_buys_blocked']} buys skipped because an ex-date fell in the "
               f"holding period (trader_koo/research/bench/spinoffs.csv).", ""]

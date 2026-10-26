@@ -71,6 +71,12 @@ def select_holdings(scores: pd.Series, held: dict[str, int], exec_idx: int, rule
     return sorted(keep + fill)
 
 
+def annual_reviews(sessions: list[str], start: int, end: int) -> list[int]:
+    """Indices in [start - 1, end) of the last session of a calendar year (the next session is in a new year)."""
+    return [i for i in range(max(start - 1, 0), min(end, len(sessions) - 1))
+            if sessions[i][:4] != sessions[i + 1][:4]]
+
+
 def _next_fill(review_idx: list[int], i: int, n_sessions: int, end_idx: int | None) -> int:
     """First session of the next holding period (exclusive end of this one)."""
     nxt = review_idx[i + 1] + 1 if i + 1 < len(review_idx) else n_sessions

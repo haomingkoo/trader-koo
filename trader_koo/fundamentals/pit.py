@@ -113,8 +113,11 @@ def _near(a: str, b: dt.date) -> bool:
     return abs((_day(a) - b).days) <= cfg.MATCH_TOLERANCE_DAYS
 
 
-def _ttm_one(conn: sqlite3.Connection, ticker: str, as_of: str, tag: str) -> Fact | None:
+def _ttm_one(conn: sqlite3.Connection, ticker: str, as_of: str, tag: str,
+             period_end_max: str | None = None) -> Fact | None:
     facts = _known_durations(conn, ticker, as_of, tag)
+    if period_end_max is not None:
+        facts = [f for f in facts if f.period_end <= period_end_max]
     annual = [f for f in facts if cfg.ANNUAL_DAYS[0] <= _span(f) <= cfg.ANNUAL_DAYS[1]]
     if not annual:
         return None
@@ -141,12 +144,18 @@ def _ttm_one(conn: sqlite3.Connection, ticker: str, as_of: str, tag: str) -> Fac
 
 
 def ttm_as_of(
-    conn: sqlite3.Connection, ticker: str, as_of_date: str, tag: str | Sequence[str]
+    conn: sqlite3.Connection, ticker: str, as_of_date: str, tag: str | Sequence[str],
+    period_end_max: str | None = None,
 ) -> Fact | None:
-    """Trailing-twelve-month flow value knowable at as_of_date (rule in module doc)."""
+    """Trailing-twelve-month flow value knowable at as_of_date (rule in module doc).
+
+    ``period_end_max`` asks for the TTM ending at or before that date, using only
+    facts filed by ``as_of_date``: the TTM of an earlier year as the filings known
+    now report it (restatements and split-adjusted comparatives included).
+    """
     best: Fact | None = None
     for candidate in _tags(tag):
-        fact = _ttm_one(conn, ticker, as_of_date, candidate)
+        fact = _ttm_one(conn, ticker, as_of_date, candidate, period_end_max)
         if fact and (best is None or fact.period_end > best.period_end):
             best = fact
     return best

@@ -25,9 +25,9 @@ FIX = Path(__file__).parent / "fixtures" / "research_bench"
 
 def _build_db(path: str, prices: pd.DataFrame, actions: pd.DataFrame, extra_facts=()) -> str:
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, open REAL, close REAL, adjustment_basis TEXT)")
+    conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, open REAL, close REAL, volume REAL, adjustment_basis TEXT)")
     conn.execute("CREATE TABLE price_corporate_actions (ticker TEXT, action_date TEXT, action_type TEXT, value REAL)")
-    prices.assign(adjustment_basis=None).to_sql("price_daily", conn, if_exists="append", index=False)
+    prices.assign(volume=1e6, adjustment_basis=None).to_sql("price_daily", conn, if_exists="append", index=False)
     actions.to_sql("price_corporate_actions", conn, if_exists="append", index=False)
     ensure_membership_schema(conn)
     members = sorted(set(prices["ticker"]) - {"SPY"})

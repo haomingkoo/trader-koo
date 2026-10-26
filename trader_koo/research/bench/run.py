@@ -19,13 +19,14 @@ import pandas as pd
 from . import ledger, report
 from .data import BENCHMARK_TICKER, Market
 from .portfolio import (DEFAULT_BUFFER_N, DEFAULT_MIN_HOLD, DEFAULT_REVIEW_EVERY, DEFAULT_TOP_N,
-                        Result, Rules, Schedule, build_schedule, buy_and_hold,
+                        Result, Rules, Schedule, annual_reviews, build_schedule, buy_and_hold,
                         equal_weight_schedule, simulate)
-from .signals import make_signal
+from .signals import ANNUAL_CANDIDATES, make_signal
 
 DEFAULT_COST_BPS = 10.0
 DEFAULT_STRESS_BPS = 20.0
 DEFAULT_N_RANDOM = 200
+ANNUAL_RULES = (5, 5, 0)  # H4: five names, no buffer, no minimum hold
 SUMMARY_DIGITS = 10
 MOVE_DIGITS = 4
 PCT_LOW = 5
@@ -63,6 +64,10 @@ class BenchConfig:
     def rules(self) -> Rules:
         return Rules(self.top_n, self.buffer_n, self.review_every, self.min_hold)
 
+    def validate(self) -> None:
+        if self.candidate in ANNUAL_CANDIDATES and (self.top_n, self.buffer_n, self.min_hold) != ANNUAL_RULES:
+            raise ValueError(f"{self.candidate} is registered with top_n, buffer_n, min_hold = {ANNUAL_RULES}")
+
     def seed_basis(self) -> dict:
         return dataclasses.asdict(self)
 
@@ -85,6 +90,7 @@ def _window_block(market: Market, first: int, lo: int, hi: int, cand: Result, st
     cagr = st["strategy"]["cagr"]
     years = report.by_year(market.sessions[lo:hi + 1], r)
     beats = [y["strategy"] > y["spy"] for y in years]
+    beats_both = [y["strategy"] > y["spy"] and y["strategy"] > y["equal_weight"] for y in years]
     return {
         "start": market.sessions[lo], "end": market.sessions[hi], "sessions": hi - lo + 1,
         "strategy": st["strategy"], "spy": st["spy"], "equal_weight": st["equal_weight"],
@@ -94,6 +100,7 @@ def _window_block(market: Market, first: int, lo: int, hi: int, cand: Result, st
         "turnover": report.turnover(cand, cand.equity[p0:p1 + 1], lo, hi),
         "hit_rate": report.hit_rate(cand, ew, lo, hi),
         "pct_years_beating_spy": float(np.mean(beats)) if beats else None,
+        "pct_years_beating_both": float(np.mean(beats_both)) if beats_both else None,
         "years": years,
         "random": {"n": len(rand), "percentile": float(100.0 * np.mean(rc <= cagr)) if len(rc) else None,
                    "p5": float(np.percentile(rc, PCT_LOW)), "p50": float(np.percentile(rc, PCT_MID)),
@@ -103,6 +110,7 @@ def _window_block(market: Market, first: int, lo: int, hi: int, cand: Result, st
 
 
 def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict:
+    cfg.validate()
     n = len(market.sessions)
     boundary = int(np.searchsorted(market.sessions, ledger.pinned_boundary(ledger_path, market.sessions), side="left"))
     start = _index_at_or_after(market.sessions, cfg.start, 0)
@@ -124,10 +132,16 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
 
     signal = make_signal(cfg.candidate, cfg.params)
     rules = cfg.rules()
-    reviews = list(range(start, end, rules.review_every))
-    cand_sched = build_schedule(
-        market, reviews, rules,
-        lambda s, uni: signal(market.sessions[s], uni, market.view(market.sessions[s])), end)
+    reviews = (annual_reviews(market.sessions, start, end) if cfg.candidate in ANNUAL_CANDIDATES
+               else list(range(start, end, rules.review_every)))
+    coverage: list[tuple[str, int, int]] = []
+
+    def score(s: int, uni: list[str]) -> pd.Series:
+        out_ = signal(market.sessions[s], uni, market.view(market.sessions[s]))
+        coverage.append((market.sessions[s], len(uni), int(out_.notna().sum())))
+        return out_
+
+    cand_sched = build_schedule(market, reviews, rules, score, end)
     keep = next((i for i, t in enumerate(cand_sched.targets) if t), None)
     if keep is None:
         raise ValueError("the candidate never selected a name in this range")
@@ -159,9 +173,16 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
     flagged = market.flagged_in(first, end)
     exits = [{**market.exit_events[(col, q)], "strategy_exit": True}
              for q, col in sorted(cand.exits) if first <= q <= end]
+    cov = pd.DataFrame(coverage, columns=["date", "universe", "scored"])
+    out["coverage"] = {
+        "reviews": len(cov), "mean_universe": float(cov["universe"].mean()), "mean_scored": float(cov["scored"].mean()),
+        "by_year": [{"year": int(y), "mean_universe": float(g["universe"].mean()), "mean_scored": float(g["scored"].mean())}
+                    for y, g in cov.groupby(cov["date"].str[:4])]}
+    out["exclusions"] = market.exclusion_summary(first, end)
     out["data"] = {"entries_dropped_no_open": cand_sched.dropped_no_open,
                    "spinoff_exits": exits, "spinoff_buys_blocked": cand_sched.blocked_spinoff,
                    "flagged_price_rows": len(flagged),
+                   "excluded_member_days": int(sum(e["member_days"] for e in out["exclusions"])),
                    "flagged_zeroed_or_nan": int((flagged["treatment"] != "real move kept").sum()),
                    "flagged": flagged.round({"move": MOVE_DIGITS}).to_dict("records"),
                    "sealed_boundary": market.sessions[boundary],
@@ -170,7 +191,8 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
     out["markdown"] = report.markdown(out)
 
     summary = {k: out["dev"][k] for k in
-               ("excess_vs_spy", "excess_vs_equal_weight", "turnover", "hit_rate", "pct_years_beating_spy")}
+               ("excess_vs_spy", "excess_vs_equal_weight", "turnover", "hit_rate", "pct_years_beating_spy",
+                "pct_years_beating_both")}
     summary.update(cagr=out["dev"]["strategy"]["cagr"], sharpe=out["dev"]["strategy"]["sharpe"],
                    max_drawdown=out["dev"]["strategy"]["max_drawdown"],
                    random_percentile=out["dev"]["random"]["percentile"],

@@ -30,6 +30,7 @@ import pandas as pd
 from trader_koo.db.membership import members_on
 from trader_koo.db.total_return import load_total_return_inputs, total_return_series
 from trader_koo.fundamentals.pit import Fact, fundamentals_as_of, ttm_as_of
+from trader_koo.research.bench import quality
 from trader_koo.research.bench.spinoffs import NEUTRALISED, load_spinoffs
 
 BENCHMARK_TICKER = "SPY"
@@ -76,8 +77,8 @@ class AsOfView:
     def fundamentals(self, ticker: str, tag, kind: str | None = None) -> Fact | None:
         return fundamentals_as_of(self._need_conn(), ticker, self.filing_cutoff, tag, kind)
 
-    def ttm(self, ticker: str, tag) -> Fact | None:
-        return ttm_as_of(self._need_conn(), ticker, self.filing_cutoff, tag)
+    def ttm(self, ticker: str, tag, period_end_max: str | None = None) -> Fact | None:
+        return ttm_as_of(self._need_conn(), ticker, self.filing_cutoff, tag, period_end_max)
 
     @property
     def filing_cutoff(self) -> str:
@@ -94,8 +95,10 @@ class Market:
 
     def __init__(self, adj_open: pd.DataFrame, adj_close: pd.DataFrame,
                  conn: sqlite3.Connection, flagged: pd.DataFrame | None = None,
-                 price_tickers: set[str] | None = None, spinoffs: pd.DataFrame | None = None):
+                 price_tickers: set[str] | None = None, spinoffs: pd.DataFrame | None = None,
+                 exclusions: pd.DataFrame | None = None):
         self.adj_open, self.adj_close, self.conn = adj_open, adj_close, conn
+        self.exclusions = exclusions if exclusions is not None else pd.DataFrame(columns=quality.COLUMNS)
         self.sessions: list[str] = list(adj_close.index)
         self.flagged = flagged if flagged is not None else pd.DataFrame(
             columns=["ticker", "date", "flag", "move", "treatment"])
@@ -128,6 +131,21 @@ class Market:
         f = self.flagged
         return f[(f["date"] >= a) & (f["date"] <= b)]
 
+    def exclusion_summary(self, lo: int, hi: int) -> list[dict]:
+        """Per (ticker, rule): index-member days inside sessions[lo..hi] removed by the validity filter."""
+        a, b = self.sessions[lo], self.sessions[hi]
+        ex = self.exclusions
+        ex = ex[(ex["date"] >= a) & (ex["date"] <= b) & ex["date"].isin(self.sessions)]
+        if ex.empty:
+            return []
+        mem = pd.read_sql_query("SELECT ticker, start_date, end_date FROM sp500_membership", self.conn)
+        j = ex.merge(mem, on="ticker")
+        j = j[(j["start_date"] <= j["date"]) & (j["end_date"].isna() | (j["end_date"] > j["date"]))]
+        j = j.drop_duplicates(["ticker", "date", "rule"])
+        g = j.groupby(["ticker", "rule"]).agg(member_days=("date", "size"), first=("date", "min"),
+                                              last=("date", "max")).reset_index()
+        return g.sort_values(["rule", "ticker"]).to_dict("records")
+
     def view(self, as_of: str) -> AsOfView:
         return AsOfView(as_of, self.adj_close.loc[:as_of], self.adj_open.loc[:as_of], self.conn)
 
@@ -156,6 +174,9 @@ def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) ->
         raise LookupError("database has no sp500_membership table; the bench needs point-in-time membership")
     prices, actions = load_total_return_inputs(db_path)
     tr = total_return_series(prices, actions)
+    if not any(r[1] == "volume" for r in conn.execute("PRAGMA table_info(price_daily)")):
+        conn.close()
+        raise LookupError("price_daily has no volume column; the data-quality filter needs it")
     opens = pd.read_sql_query(
         "SELECT ticker, date, open FROM price_daily "
         "WHERE COALESCE(adjustment_basis,'split_adjusted_price_only')='split_adjusted_price_only' "
@@ -185,10 +206,21 @@ def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) ->
         index=adj_close.index, columns=adj_close.columns)
     raw_open = raw_open.where(raw_open > 0)
     adj_open = adj_close * (raw_open / raw_close)
+    # Validity filter (quality.py): flagged ticker-days have no price, for every candidate and benchmark alike.
+    volumes = pd.read_sql_query(
+        "SELECT ticker, date, volume FROM price_daily "
+        "WHERE COALESCE(adjustment_basis,'split_adjusted_price_only')='split_adjusted_price_only' "
+        "AND ticker NOT LIKE '^%'", conn)
+    bad = quality.invalid_rows(tr[["ticker", "date", "close"]].merge(volumes, on=["ticker", "date"], how="left"),
+                               quality.junction_date(conn))
+    for t, d in bad[["ticker", "date"]].drop_duplicates().itertuples(index=False):
+        if t in adj_close.columns and d in adj_close.index:
+            adj_close.loc[d, t] = np.nan
+            adj_open.loc[d, t] = np.nan
     if BENCHMARK_TICKER not in adj_close.columns:
         conn.close()
         raise LookupError(f"{BENCHMARK_TICKER} prices are required for the benchmark")
     calendar = adj_close.index[adj_close[BENCHMARK_TICKER].notna()]
     return Market(adj_open.loc[calendar], adj_close.loc[calendar], conn,
                   flagged=flagged[flagged["date"].isin(calendar)],
-                  price_tickers=set(tr["ticker"].unique()), spinoffs=spin)
+                  price_tickers=set(tr["ticker"].unique()), spinoffs=spin, exclusions=bad)
