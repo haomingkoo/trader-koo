@@ -79,3 +79,27 @@ def test_workflow_runs_the_monitor_on_a_schedule():
     assert "ops/check_prod_freshness.py" in text
     assert "vars.TRADER_KOO_PRODUCTION_URL" in text
     assert "contents: read" in text
+
+
+def test_fetch_sends_explicit_user_agent(monkeypatch):
+    # The site firewall answers 403 to the default Python-urllib User-Agent.
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, *args):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        seen["ua"] = request.get_header("User-agent")
+        return _Resp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    assert mod.fetch_json("https://example.invalid/api/health", 1, 1) == {"ok": True}
+    assert seen["ua"] == mod.USER_AGENT
+    assert "Python-urllib" not in seen["ua"]
