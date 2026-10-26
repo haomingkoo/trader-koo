@@ -15,12 +15,28 @@ import numpy as np
 import pandas as pd
 
 # S1: stack EMA8 > EMA21 > EMA48 > EMA200 and close > EMA200; pullback low <= EMA21 <= close; exit below EMA48 or 20 sessions.
-S1_SPANS, S1_EXIT_SPAN, S1_MAX_HOLD = (8, 21, 48, 200), 48, 20
+S1_FAST = 8
+S1_MID = 21
+S1_SLOW = 48
+S1_LONG = 200
+S1_EXIT_SPAN = 48
+S1_MAX_HOLD = 20
 # S2: EMA8 crosses above EMA13 with close > EMA21; first retest of EMA13 within 10 sessions; exit below EMA21 or 20 sessions.
-S2_FAST, S2_SLOW, S2_TREND, S2_RETEST_WINDOW, S2_EXIT_SPAN, S2_MAX_HOLD = 8, 13, 21, 10, 21, 20
+S2_FAST = 8
+S2_SLOW = 13
+S2_TREND = 21
+S2_RETEST_WINDOW = 10
+S2_EXIT_SPAN = 21
+S2_MAX_HOLD = 20
 # S3: Bollinger(21, 2) inside pivot +/- 2 ATR14 is compression; expansion in an uptrend EMA21 > EMA48; no compression in
 # the previous 20 sessions for the baseline; exit after 10 sessions.
-S3_BB_WINDOW, S3_BB_K, S3_ATR_WINDOW, S3_ATR_K, S3_QUIET_LOOKBACK, S3_TREND, S3_HOLD = 21, 2.0, 14, 2.0, 20, (21, 48), 10
+S3_BB_WINDOW = 21
+S3_BB_K = 2.0
+S3_ATR_WINDOW = 14
+S3_ATR_K = 2.0
+S3_QUIET_LOOKBACK = 20
+S3_TREND = (21, 48)
+S3_HOLD = 10
 
 
 @dataclass
@@ -56,9 +72,9 @@ def next_true(mask: np.ndarray) -> np.ndarray:
 
 
 def s1(p: Prices) -> dict:
-    e = {n: ema(p.close, n) for n in (*S1_SPANS, S1_EXIT_SPAN)}
-    stack = (e[8] > e[21]) & (e[21] > e[48]) & (e[48] > e[200]) & (p.close > e[200])
-    pull = (p.low <= e[21]) & (p.close >= e[21])
+    e = {n: ema(p.close, n) for n in (S1_FAST, S1_MID, S1_SLOW, S1_LONG, S1_EXIT_SPAN)}
+    stack = (e[S1_FAST] > e[S1_MID]) & (e[S1_MID] > e[S1_SLOW]) & (e[S1_SLOW] > e[S1_LONG]) & (p.close > e[S1_LONG])
+    pull = (p.low <= e[S1_MID]) & (p.close >= e[S1_MID])
     return {"signal": stack & pull & p.member, "state": stack & ~pull & p.member, "exit_ema": e[S1_EXIT_SPAN]}
 
 

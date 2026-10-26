@@ -23,6 +23,11 @@ from trader_koo.research.settings import get as _settings
 _E = _settings().event_study
 CHUNK_CELLS = 4_000_000  # array cells held at once while bootstrapping; memory bound only, no effect on results
 NEVER = np.iinfo(np.int64).max
+N_PARTS = 4  # event count, event hits, baseline count, baseline hits
+EV_N = 0
+EV_HIT = 1
+BASE_N = 2
+BASE_HIT = 3
 
 
 def independent(signal: np.ndarray, strict: bool = False) -> np.ndarray:
@@ -57,7 +62,7 @@ def estimate(ev: np.ndarray, ev_hit: np.ndarray, base: np.ndarray, base_hit: np.
 def point(parts: np.ndarray) -> dict:
     """Full-sample estimate from ``parts`` shaped (4, strata, sessions)."""
     s = parts.sum(-1).T  # (strata, 4)
-    rate_ev, rate_base, effect = estimate(s[:, 0], s[:, 1], s[:, 2], s[:, 3])
+    rate_ev, rate_base, effect = estimate(s[:, EV_N], s[:, EV_HIT], s[:, BASE_N], s[:, BASE_HIT])
     return {"n_events": float(s[:, 0].sum()), "rate_event": float(rate_ev), "rate_base": float(rate_base),
             "effect": float(effect)}
 
@@ -76,15 +81,15 @@ def bootstrap(parts: np.ndarray, seed: int, block: int = _E.bootstrap_block,
         raise ValueError(f"{n} sessions are fewer than one block of {block}")
     n_blocks = -(-n // block)
     rem = n - (n_blocks - 1) * block
-    cs = np.concatenate([np.zeros((4, k, 1)), parts.cumsum(-1)], axis=-1)
+    cs = np.concatenate([np.zeros((N_PARTS, k, 1)), parts.cumsum(-1)], axis=-1)
     rng = np.random.default_rng(seed)
-    chunk = max(1, CHUNK_CELLS // (4 * k * n_blocks))
+    chunk = max(1, CHUNK_CELLS // (N_PARTS * k * n_blocks))
     eff, rate = [], []
     for lo in range(0, resamples, chunk):
         starts = rng.integers(0, n - block + 1, size=(min(chunk, resamples - lo), n_blocks))
         head = starts[:, :-1]
         tot = (cs[:, :, head + block] - cs[:, :, head]).sum(-1) + cs[:, :, starts[:, -1] + rem] - cs[:, :, starts[:, -1]]
-        rate_ev, _, effect = estimate(tot[0].T, tot[1].T, tot[2].T, tot[3].T)
+        rate_ev, _, effect = estimate(tot[EV_N].T, tot[EV_HIT].T, tot[BASE_N].T, tot[BASE_HIT].T)
         eff.append(effect)
         rate.append(rate_ev)
     effect, rate_event = np.concatenate(eff), np.concatenate(rate)

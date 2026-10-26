@@ -9,6 +9,8 @@ import pandas as pd
 
 from .eventstudy import Spec
 
+TERCILES = 3
+
 
 def fwd(x: np.ndarray, k: int) -> np.ndarray:
     """x[t+k] at index t (NaN past the end of the window). Outcomes only."""
@@ -76,7 +78,7 @@ def gt_after(c: np.ndarray, k: int) -> np.ndarray:
 
 def terciles(x: np.ndarray, window: int) -> np.ndarray:
     """0, 1, 2 for x(t) at or below, between and above the trailing-window 1/3 and 2/3 quantiles (window includes t); -1 if undefined."""
-    lo, hi = rquantile(x, window, 1 / 3), rquantile(x, window, 2 / 3)
+    lo, hi = rquantile(x, window, 1 / TERCILES), rquantile(x, window, 2 / TERCILES)
     t = (x > lo).astype(int) + (x > hi).astype(int)
     return np.where(np.isfinite(lo) & np.isfinite(hi) & np.isfinite(x), t, -1)
 

@@ -10,23 +10,41 @@ import pandas as pd
 
 from .eventstudy import Spec
 from .v3_data import Frame
-from .v3_ops import (bands_width, fwd, gt_after, holds, lt_after, outcome, pct_change, rmax, rmin, rquantile,
+from .v3_ops import (TERCILES, bands_width, fwd, gt_after, holds, lt_after, outcome, pct_change, rmax, rmin, rquantile,
                      single, terciles)
 
 # H1: signal VIX one-day change <= -15%; matched band -15% to -5%; variants -12% and -20%.
-H1_DROP, H1_BAND_LOW, H1_BAND_HIGH, H1_VARIANTS = -0.15, -0.15, -0.05, (-0.12, -0.20)
+H1_DROP = -0.15
+H1_BAND_LOW = -0.15
+H1_BAND_HIGH = -0.05
+H1_VARIANTS = (-0.12, -0.20)
 # H2: signal VIX one-day change >= +20%; matched band +8% to +20%; stated claim 85%; variants +25% and +40%.
-H2_JUMP, H2_BAND_LOW, H2_CLAIM, H2_VARIANTS = 0.20, 0.08, 0.85, (0.25, 0.40)
+H2_JUMP = 0.20
+H2_BAND_LOW = 0.08
+H2_CLAIM = 0.85
+H2_VARIANTS = (0.25, 0.40)
 # H3: Bollinger(20, 2) width at or below the trailing-252 10th percentile; outcome VIX +5% in 3 sessions;
 # secondary max close >= 1.10 x close; variants 5th and 20th percentile, horizons 2 and 5.
-BB_WINDOW, BB_K, BB_TRAIL, H3_PCT, H3_HORIZON, H3_RISE, H3_SPIKE = 20, 2.0, 252, 0.10, 3, 0.05, 1.10
-H3_PCT_VARIANTS, H3_HORIZON_VARIANTS = (0.05, 0.20), (2, 5)
+BB_WINDOW = 20
+BB_K = 2.0
+BB_TRAIL = 252
+H3_PCT = 0.10
+H3_HORIZON = 3
+H3_RISE = 0.05
+H3_SPIKE = 1.10
+H3_PCT_VARIANTS = (0.05, 0.20)
+H3_HORIZON_VARIANTS = (2, 5)
 # H4: SPY and VIX compressed, outcome a close 3% or more away within 10 sessions; terciles of 20-session realised vol.
-H4_EXCURSION, H4_HORIZON, H4_VOL_WINDOW = 0.03, 10, 20
+H4_EXCURSION = 0.03
+H4_HORIZON = 10
+H4_VOL_WINDOW = 20
 # H7: SPY close at a 10-session low and VIX below its 10-session closing high; outcome SPY higher after 3; variants 5, 20.
-H7_WINDOW, H7_HORIZON, H7_VARIANTS = 10, 3, (5, 20)
+H7_WINDOW = 10
+H7_HORIZON = 3
+H7_VARIANTS = (5, 20)
 # H11: Fridays, VIX down on the day; stated claim 85% (the 2024+ claim is checked in the sealed window only).
-H11_WEEKDAY, H11_CLAIM = 4, 0.85
+H11_WEEKDAY = 4
+H11_CLAIM = 0.85
 
 
 def _one_day(f: Frame) -> tuple[np.ndarray, np.ndarray]:
@@ -84,9 +102,9 @@ def h3(f: Frame) -> list[Spec]:
     def build(key, title, role, pct, k, out_fn=_rise):
         comp = compression(vix, pct)
         sig = comp & (tier >= 0)
-        base = np.stack([(tier == j) & ~comp for j in range(3)])
+        base = np.stack([(tier == j) & ~comp for j in range(TERCILES)])
         o = out_fn(vix, k)
-        return Spec(key, title, role, sig, np.maximum(tier, 0), np.tile(o, (3, 1)), base,
+        return Spec(key, title, role, sig, np.maximum(tier, 0), np.tile(o, (TERCILES, 1)), base,
                     note="matched baseline: not compressed, same VIX tercile of the trailing 252 sessions")
 
     specs.append(build("H3", "VIX compressed: VIX +5% or more after 3 sessions", "primary", H3_PCT, H3_HORIZON))
@@ -113,9 +131,9 @@ def h4(f: Frame) -> list[Spec]:
     fw = np.stack([fwd(spy, j) for j in range(1, H4_HORIZON + 1)])
     move = np.abs(fw / spy - 1.0)
     o = outcome(move.max(axis=0) >= H4_EXCURSION, *fw, spy)
-    base = np.stack([(tier == j) & ~spy_comp for j in range(3)])
+    base = np.stack([(tier == j) & ~spy_comp for j in range(TERCILES)])
     return [Spec("H4", "VIX and SPY compressed: SPY close 3% or more from close(t) within 10 sessions", "primary",
-                 sig & (tier >= 0), np.maximum(tier, 0), np.tile(o, (3, 1)), base,
+                 sig & (tier >= 0), np.maximum(tier, 0), np.tile(o, (TERCILES, 1)), base,
                  note="matched baseline: SPY not compressed, same tercile of 20-session realised volatility")]
 
 

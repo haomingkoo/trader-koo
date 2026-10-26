@@ -13,19 +13,43 @@ from .v3_ops import ema, fwd, gt_after, holds, lag, lt_after, outcome, pct_chang
 
 # H5: range of the closes over t-20..t-1 no wider than 5% of their mean, held 10 sessions; outcome at 5 sessions;
 # variants QQQ and horizons 3 and 10. Claim tested: a wick break is at least 5 points weaker than a close break.
-H5_WINDOW, H5_MAX_WIDTH, H5_HELD, H5_HORIZON, H5_HORIZONS, H5_WEAKER = 20, 0.05, 10, 5, (3, 10), 0.05
+H5_WINDOW = 20
+H5_MAX_WIDTH = 0.05
+H5_HELD = 10
+H5_HORIZON = 5
+H5_HORIZONS = (3, 10)
+H5_WEAKER = 0.05
 # H6: tail at least 2x the body and half the range, close in the far half, within 2% of the 60-session extreme.
-H6_BODY_MULT, H6_RANGE_SHARE, H6_EXTREME_WINDOW, H6_EXTREME_BAND, H6_HORIZON = 2.0, 0.5, 60, 0.02, 2
-H6_HORIZONS, H6_MULTS = (1, 3), (1.5, 3.0)
+H6_BODY_MULT = 2.0
+H6_RANGE_SHARE = 0.5
+H6_EXTREME_WINDOW = 60
+H6_EXTREME_BAND = 0.02
+H6_HORIZON = 2
+H6_HORIZONS = (1, 3)
+H6_MULTS = (1.5, 3.0)
 # H8: close above the 5 DMA, 8 EMA, 10 DMA, 20 DMA, 21 EMA and 50 DMA; outcome SPY lower after 5; matched: below >= 4 of 6.
-H8_HORIZON, H8_MATCH_BELOW, H8_FALSIFY_MARGIN = 5, 4, 0.03
+H8_SMA_WINDOWS = (5, 10, 20, 50)
+H8_EMA_SPANS = (8, 21)
+H8_HORIZON = 5
+H8_MATCH_BELOW = 4
+H8_FALSIFY_MARGIN = 0.03
 # H9: close below the 8 EMA and 5 DMA on volume above its 20-session average, the day after the H8 state.
-H9_EMA, H9_SMA, H9_VOLUME_WINDOW, H9_HORIZON, H9_SECONDARY = 8, 5, 20, 5, 10
+H9_EMA = 8
+H9_SMA = 5
+H9_VOLUME_WINDOW = 20
+H9_HORIZON = 5
+H9_SECONDARY = 10
 # H10: FOMC decision day with a return of -0.5% or lower; outcome next close higher; stated claim 83%.
-H10_DROP, H10_CLAIM = -0.005, 0.83
+H10_DROP = -0.005
+H10_CLAIM = 0.83
 # H13: range under 0.60% of the previous close on t and t-1; pivot = highest high of sessions 4-5; outcomes at
 # sessions 8-9 (closes) and 8-19 (lows). Published (trigger, matched) rates: (a) 44.2% vs 30.1%; (b) 38.4% vs 31.6% at 2.36%.
-H13_RANGE, H13_PIVOT, H13_CLOSE_DAYS, H13_LOW_DAYS, H13_DEPTH, H13_ALT_DEPTH = 0.0060, (4, 5), (8, 9), (8, 19), 0.0236, 0.02124
+H13_RANGE = 0.0060
+H13_PIVOT = (4, 5)
+H13_CLOSE_DAYS = (8, 9)
+H13_LOW_DAYS = (8, 19)
+H13_DEPTH = 0.0236
+H13_ALT_DEPTH = 0.02124
 H13_PUBLISHED_LIFT = {"a": 0.442 - 0.301, "b": 0.384 - 0.316}
 H13_MONTHS = 12
 
@@ -36,8 +60,8 @@ def _bars(f: Frame, t: str):
 
 
 def averages(c: np.ndarray) -> np.ndarray:
-    """(6, N): 5 DMA, 8 EMA, 10 DMA, 20 DMA, 21 EMA, 50 DMA."""
-    return np.stack([sma(c, 5), ema(c, 8), sma(c, 10), sma(c, 20), ema(c, 21), sma(c, 50)])
+    """(6, N): the 5, 10, 20 and 50 DMA and the 8 and 21 EMA."""
+    return np.stack([*(sma(c, n) for n in H8_SMA_WINDOWS), *(ema(c, n) for n in H8_EMA_SPANS)])
 
 
 def all_above(c: np.ndarray) -> np.ndarray:

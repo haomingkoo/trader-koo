@@ -375,3 +375,16 @@ def test_evaluate_every_spec_runs_and_reports_counts(specs):
         assert ev.n_signals >= ev.n_all >= ev.n_independent >= 0
         if ev.effect is not None:
             assert -1.0 <= ev.effect <= 1.0
+
+
+def test_cli_events_runs_v3_and_writes_json(tmp_path, capsys):
+    from trader_koo.research.bench.__main__ import main
+
+    path = tmp_path / "ledger.jsonl"
+    ledger.append(path, {"event": "seal", "boundary_date": "2012-10-01"})
+    code = main(["events", "--db", _db(tmp_path / "e.db"), "--family", "v3", "--ledger", str(path),
+                 "--json-out", str(tmp_path / "out")])
+    text = capsys.readouterr().out
+    assert code == 0 and "Hypotheses v3 event study" in text and "ledger trial_id (v3)" in text
+    assert (tmp_path / "out" / "events-v3.json").exists() and ledger.read(path)[-1]["event"] == "event_study_run"
+    assert main(["events", "--db", _db(tmp_path / "f.db"), "--family", "v3", "--ledger", str(tmp_path / "none.jsonl")]) == 3

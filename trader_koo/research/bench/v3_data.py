@@ -22,7 +22,9 @@ VIX = "^VIX"
 FIELDS = ("open", "high", "low", "close", "volume")
 BASIS = "split_adjusted_price_only"
 FOMC_FILE = Path(__file__).resolve().parents[3] / "docs" / "research" / "fomc-decision-dates-2010-2023.csv"
-FOMC_FIRST_YEAR, FOMC_LAST_YEAR = 2010, 2023  # hypotheses-v3 H10: "2010 to 2023"
+FOMC_FIRST_YEAR = 2010
+YEAR_CHARS = 4  # ISO date prefix width
+FOMC_LAST_YEAR = 2023
 FOMC_KIND = "scheduled"
 
 
@@ -54,7 +56,7 @@ def load_fomc(path: Path = FOMC_FILE) -> tuple[set[str], list[int]]:
     with open(path, newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     dates = {r["date"] for r in rows if r["kind"] == FOMC_KIND}
-    years = {d[:4] for d in dates}
+    years = {d[:YEAR_CHARS] for d in dates}
     missing = [y for y in range(FOMC_FIRST_YEAR, FOMC_LAST_YEAR + 1) if str(y) not in years]
     return dates, missing
 

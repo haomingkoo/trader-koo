@@ -7,6 +7,9 @@ from trader_koo.research.settings import get as _settings
 
 _E = _settings().event_study
 _B = _settings().bench
+HEADER = ("| hypothesis | trades | mean net | mean gross | state baseline net | excess | Holm p | Holm interval | "
+          "placebo percentile (p95) | years net > 0 | years excess > 0 | net at stress | excess at stress | SPY | "
+          "equal weight | verdict |")
 
 
 def _p(x) -> str:
@@ -23,9 +26,7 @@ def markdown(out: dict) -> str:
              f"Entries {cfg['first_entry_session']} to {cfg['last_session']}; sealed window starts {out['boundary']} and was "
              f"not opened. Seed {out['seed']}; {_E.bootstrap_resamples} resamples of {_E.bootstrap_block}-session blocks of "
              f"entry dates; Holm over {len(res)} hypotheses.", "",
-             "| hypothesis | trades | mean net | mean gross | state baseline net | excess | Holm p | Holm interval | "
-             "placebo percentile (p95) | years net > 0 | years excess > 0 | net at stress | excess at stress | SPY | "
-             "equal weight | verdict |", "|" + "---|" * 16]
+             HEADER, "|" + "---|" * (HEADER.count("|") - 1)]
     for k, r in res.items():
         v = ver[k]
         if r.get("p") is None:
