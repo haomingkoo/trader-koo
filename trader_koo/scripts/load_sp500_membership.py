@@ -11,7 +11,10 @@ report and never repaired.
 
 ``--check-only`` builds the table in memory and writes nothing to any database.
 Without it the table is written to ``--db-path``, which is required (there is
-no default, so the production database is never touched by accident).
+no default). The table is meant for the separate research database on the
+workstation, not production: the production volume is near capacity, so do not
+point ``--db-path`` at it. The table is additive and nothing in the app creates
+or reads it.
 """
 from __future__ import annotations
 
@@ -41,7 +44,7 @@ def _year(iso: str) -> str:
 
 def _fetch(url: str) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=chk.THRESHOLDS["fetch_timeout_sec"]) as response:  # noqa: S310 - fixed https URLs
+    with urllib.request.urlopen(request, timeout=chk.FETCH_TIMEOUT_SEC) as response:  # noqa: S310 - fixed https URLs
         return response.read().decode("utf-8")
 
 

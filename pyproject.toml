@@ -22,7 +22,6 @@ include = ["trader_koo*"]
 
 [tool.setuptools.package-data]
 "trader_koo.research" = ["*.json"]
-"trader_koo.db" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -8,20 +8,18 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import io
-import json
 import sqlite3
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from trader_koo.db.membership import members_on, normalize_ticker
 
-THRESHOLDS = json.loads(Path(__file__).with_name("membership_thresholds.json").read_text())
-MEMBERSHIP_COUNT_MIN = THRESHOLDS["count_min"]
-MEMBERSHIP_COUNT_MAX = THRESHOLDS["count_max"]
-MEMBERSHIP_DATE_TOLERANCE_DAYS = THRESHOLDS["date_tolerance_days"]
-MEMBERSHIP_FIRST_YEAR = THRESHOLDS["first_year"]
+MEMBERSHIP_COUNT_MIN = 495  # members; the index holds ~500 names, fewer means missing rows
+MEMBERSHIP_COUNT_MAX = 510  # members; more means overlapping or unclosed intervals
+MEMBERSHIP_DATE_TOLERANCE_DAYS = 5  # days; Wikipedia and the CSV may differ by effective vs announced date
+MEMBERSHIP_FIRST_YEAR = 2018  # calendar year; start of the price history the bench uses
+FETCH_TIMEOUT_SEC = 60  # seconds; bound on each download so the CLI cannot hang
 
 Event = dict[str, str]  # {"kind": "add"|"remove", "ticker": ..., "date": ISO}
 
