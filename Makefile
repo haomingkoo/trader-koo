@@ -2,7 +2,7 @@ PYTHON ?= python3
 PIP ?= $(PYTHON) -m pip
 FRONTEND_DIR := trader_koo/frontend-v2
 
-.PHONY: backend-install frontend-install hooks-install backend-check test frontend-build dependency-status precommit golden guardrails ci
+.PHONY: backend-install frontend-install hooks-install backend-check test frontend-build dependency-status precommit golden guardrails research-db ci
 
 backend-install:
 	$(PIP) install --upgrade pip
@@ -41,5 +41,10 @@ golden:
 guardrails:
 	$(PYTHON) -m ops.guardrails check
 	$(PYTHON) -c "from importlinter.cli import lint_imports_command as m; m()" --config .importlinter
+
+research-db:
+	@test -n "$(RESEARCH_DB)" -a -n "$(SOURCE_DB)" || { echo "usage: make research-db RESEARCH_DB=<file> SOURCE_DB=<prod export or golden copy> [TICKERS=A,B] [EARNINGS_SOURCE=both|finnhub|yfinance]"; exit 2; }
+	$(PYTHON) -m ops.build_research_db --db-path "$(RESEARCH_DB)" --source-db "$(SOURCE_DB)" \
+		$(if $(TICKERS),--tickers "$(TICKERS)") $(if $(EARNINGS_SOURCE),--earnings-source "$(EARNINGS_SOURCE)")
 
 ci: backend-check test frontend-build precommit guardrails
