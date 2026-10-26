@@ -5,6 +5,9 @@ facts filed before it (the usable-from-the-next-session cutoff). Interpretations
 the places where the registration text is silent are listed in the PR and noted
 next to the code that makes them.
 
+Share counts. Raw cover counts sometimes carry a wrong scale; ``accept_share_count`` rejects a
+count more than 3x away from the median of the nine filings before it and uses the next older one.
+
 Market cap. ``price_daily.close`` is stored split-adjusted to today, so the quote
 actually printed on the signal date t is ``close_stored(t) * prod(ratio of splits with
 ex-date > t)``. The share count S of the latest filing (filed_date f < t) is on the
@@ -33,7 +36,10 @@ QUARTER_LAG_DAYS = 46            # TTM ending at or before P - 46d is the one en
 QUARTER_SPAN_DAYS = (76, 106)    # accepted distance between TTM period ends one quarter apart
 VOL_WINDOW = 252
 SHORT_FLOAT_TOP_DECILE = 0.9
-SPLIT_TYPES = ("split", "reverse_split")
+SHARE_CHECK_FILINGS = 9
+SHARE_CHECK_MIN_PRIOR = 2
+SHARE_SCALE_LIMIT = 3.0
+SHARE_HISTORY_ROWS = 200
 _END_OF_TIME = "9999-12-31"
 _PRICE_BASIS = "COALESCE(adjustment_basis,'split_adjusted_price_only')='split_adjusted_price_only'"
 
@@ -53,26 +59,51 @@ def _shift(day: str, days: int) -> str:
     return (dt.date.fromisoformat(day) - dt.timedelta(days=days)).isoformat()
 
 
-def split_factor(conn: sqlite3.Connection, ticker: str, after: str, through: str = _END_OF_TIME) -> float:
+def split_factor(splits: list[tuple[str, float]], after: str, through: str = _END_OF_TIME) -> float:
     """Product of share-count ratios of splits with ``after`` < ex-date <= ``through``."""
-    rows = conn.execute(
-        "SELECT value FROM price_corporate_actions WHERE ticker=? AND action_type IN (?,?) "
-        "AND action_date > ? AND action_date <= ?", (ticker, *SPLIT_TYPES, after, through)).fetchall()
-    return float(np.prod([r[0] for r in rows])) if rows else 1.0
+    return float(np.prod([r for d, r in splits if after < d <= through])) if splits else 1.0
 
 
-def latest_filed_shares(data: AsOfView, ticker: str) -> tuple[float, str] | None:
-    """(share count, filed_date) of the share-count fact with the latest filed_date usable at ``as_of``.
+def accept_share_count(history: list[tuple[str, float]], splits: list[tuple[str, float]],
+                       rejected: list | None = None) -> tuple[float, str] | None:
+    """Newest filed share count that passes the scale check; ``history`` is (filed_date, count), newest first.
+
+    Raw XBRL cover counts sometimes carry a wrong scale (AEP, QCOM, GRMN filed 1000x). A count is
+    rejected when, against the median of the up to nine filings before it (each moved onto its
+    basis with splits whose ex-date falls between that filing and this one), it is more than
+    3x larger or smaller. The next older count is then tried. A count with fewer than two earlier
+    filings cannot be checked and is accepted. Rejected counts are appended to ``rejected``.
+    """
+    for i, (filed, count) in enumerate(history):
+        prior = [c * split_factor(splits, f, filed) for f, c in history[i + 1:i + 1 + SHARE_CHECK_FILINGS]]
+        if len(prior) < SHARE_CHECK_MIN_PRIOR or SHARE_SCALE_LIMIT ** -1 <= count / np.median(prior) <= SHARE_SCALE_LIMIT:
+            return count, filed
+        if rejected is not None:
+            rejected.append((filed, count))
+    return None
+
+
+def filed_share_counts(data: AsOfView, ticker: str) -> list[tuple[str, float]]:
+    """One share count per filing date usable at ``as_of`` (the later period end wins), newest first."""
+    tags = [t for _, t in cfg.CONCEPTS["shares_outstanding"]]
+    rows = data.conn.execute(
+        f"SELECT f.filed_date, f.value FROM sec_fundamentals f JOIN sec_cik_map m ON m.cik = f.cik "
+        f"WHERE m.ticker = ? AND f.tag IN ({','.join('?' * len(tags))}) AND f.filed_date <= ? AND f.value > 0 "
+        f"ORDER BY f.filed_date DESC, f.period_end DESC, f.accession DESC LIMIT ?",
+        (ticker.upper(), *tags, data.filing_cutoff, SHARE_HISTORY_ROWS)).fetchall()
+    out: list[tuple[str, float]] = []
+    for filed, value in rows:
+        if not out or out[-1][0] != filed:
+            out.append((filed, float(value)))
+    return out[:SHARE_CHECK_FILINGS + 2]
+
+
+def latest_filed_shares(data: AsOfView, ticker: str, rejected: list | None = None) -> tuple[float, str] | None:
+    """(share count, filed_date) of the latest filed share count usable at ``as_of`` that passes the scale check.
 
     Ties on filed_date go to the later period end (the cover-page count over the balance-sheet count).
     """
-    tags = [t for _, t in cfg.CONCEPTS["shares_outstanding"]]
-    row = data.conn.execute(
-        f"SELECT f.value, f.filed_date FROM sec_fundamentals f JOIN sec_cik_map m ON m.cik = f.cik "
-        f"WHERE m.ticker = ? AND f.tag IN ({','.join('?' * len(tags))}) AND f.filed_date <= ? AND f.value > 0 "
-        f"ORDER BY f.filed_date DESC, f.period_end DESC, f.accession DESC LIMIT 1",
-        (ticker.upper(), *tags, data.filing_cutoff)).fetchone()
-    return (float(row[0]), row[1]) if row else None
+    return accept_share_count(filed_share_counts(data, ticker), data.splits.get(ticker, []), rejected)
 
 
 def stored_closes(data: AsOfView) -> pd.Series:
@@ -93,8 +124,9 @@ def market_caps(data: AsOfView, universe: list[str]) -> pd.Series:
             out[t] = np.nan
             continue
         count, filed = shares
-        quote = closes[t] * split_factor(data.conn, t, data.as_of)
-        out[t] = quote * count * split_factor(data.conn, t, filed, data.as_of)
+        splits = data.splits.get(t, [])
+        quote = closes[t] * split_factor(splits, data.as_of)
+        out[t] = quote * count * split_factor(splits, filed, data.as_of)
     return pd.Series(out, index=universe, dtype=float)
 
 

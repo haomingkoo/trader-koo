@@ -130,7 +130,7 @@ def assert_no_lookahead(signal: Signal, market: Market, as_of: str, universe: li
     close.loc[later] = close.loc[later].to_numpy() * noise
     open_.loc[later] = open_.loc[later].to_numpy() * noise
     mem = _perturbed_conn(market.conn, as_of)
-    fake = Market(open_, close, mem, price_tickers=market.price_tickers)
+    fake = Market(open_, close, mem, price_tickers=market.price_tickers, splits=market.splits)
     try:
         pert = signal(as_of, universe, fake.view(as_of))
     finally:

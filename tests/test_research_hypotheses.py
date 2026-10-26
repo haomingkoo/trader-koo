@@ -17,6 +17,7 @@ from trader_koo.fundamentals.schema import ensure_sec_schema
 from trader_koo.research.bench import hypotheses as hyp
 from trader_koo.research.bench import quality
 from trader_koo.research.bench.data import AsOfView, load_market
+from trader_koo.research.bench.hypotheses import accept_share_count
 from trader_koo.research.bench.portfolio import Rules, annual_reviews, build_schedule
 from trader_koo.research.bench.run import BenchConfig, run_bench
 from trader_koo.research.bench.signals import assert_no_lookahead, make_signal
@@ -254,3 +255,38 @@ def test_filtered_days_leave_the_universe_for_everyone(market, tmp_path):
     (row,) = filtered.exclusion_summary(0, 200)
     assert (row["ticker"], row["rule"], row["member_days"], row["first"], row["last"]) == (
         "KO", "zero_volume_run", 6, dates[0], dates[-1])
+
+
+# ---- share-count scale check and split ledger -----------------------------------------------------
+
+def test_share_count_with_a_wrong_scale_is_rejected_and_the_next_older_is_used():
+    history = [("2012-09-24", 4.8e15), ("2012-06-26", 4.88e9), ("2012-03-30", 4.9e9), ("2011-12-20", 4.95e9),
+               ("2011-09-26", 4.96e9)]
+    rejected: list = []
+    assert accept_share_count(history, [], rejected) == (4.88e9, "2012-06-26")
+    assert rejected == [("2012-09-24", 4.8e15)]
+    assert accept_share_count(history[1:], [], None) == (4.88e9, "2012-06-26")  # a clean series is untouched
+
+
+def test_a_split_between_two_filings_is_not_a_scale_error():
+    history = [("2012-10-25", 1.125e10), ("2012-07-26", 2.25e9), ("2012-04-26", 2.26e9), ("2012-01-26", 2.27e9)]
+    assert accept_share_count(history, [("2012-08-13", 5.0)]) == (1.125e10, "2012-10-25")
+    assert accept_share_count(history, []) == (2.25e9, "2012-07-26")  # without the split on record it is rejected
+
+
+def test_a_count_with_too_little_history_is_accepted_unchecked():
+    assert accept_share_count([("2012-09-24", 4.8e15), ("2012-06-26", 4.88e9)], []) == (4.8e15, "2012-09-24")
+
+
+def test_split_ledger_adds_splits_missing_from_the_action_table(tmp_path):
+    path = _build(str(tmp_path / "led.db"))
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE price_series_revisions (ticker TEXT PRIMARY KEY, evidence_json TEXT)")
+    conn.execute("INSERT INTO price_series_revisions VALUES ('KO', ?)", (
+        '{"vendor_action_ledger":[{"action_date":"2020-04-23","action_type":"reverse_split","value":0.02},'
+        '{"action_date":"2020-05-01","action_type":"dividend","value":0.4}]}',))
+    conn.commit()
+    conn.close()
+    splits = load_market(path).splits
+    assert ("2020-04-23", 0.02) in splits["KO"] and not any(d == "2020-05-01" for d, _ in splits["KO"])
+    assert splits["KO"] == sorted(splits["KO"])

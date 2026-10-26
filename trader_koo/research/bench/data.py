@@ -20,6 +20,7 @@ Nothing here writes to the database.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,8 @@ from trader_koo.research.bench import quality
 from trader_koo.research.bench.spinoffs import NEUTRALISED, load_spinoffs
 
 BENCHMARK_TICKER = "SPY"
+SPLIT_TYPES = ("split", "reverse_split")
+SPLIT_ROUND = 6
 KEEP_REAL_MOVE_FLAGS = ("dividend_off_calendar", "special_dividend", "unexplained_move")
 
 
@@ -57,6 +60,31 @@ def filing_cutoff(as_of: str) -> str:
     return (dt.date.fromisoformat(as_of) - dt.timedelta(days=1)).isoformat()
 
 
+Splits = dict[str, list[tuple[str, float]]]
+
+
+def load_splits(conn: sqlite3.Connection) -> Splits:
+    """Share-count ratios of every split per ticker, sorted by ex-date: ticker -> [(ex_date, ratio)].
+
+    Union of ``price_corporate_actions`` and the vendor action ledger kept in
+    ``price_series_revisions.evidence_json``. The action table alone misses splits
+    the price loader did not need to apply (NKTR 1-for-15 in 2025, NBR 1-for-50 in 2020),
+    yet the stored closes are adjusted for them. Ratios above 1 add shares (a 2-for-1 is 2.0).
+    """
+    found: dict[str, set[tuple[str, float]]] = {}
+    if _has_table(conn, "price_corporate_actions"):
+        for t, d, v in conn.execute(
+                "SELECT ticker, action_date, value FROM price_corporate_actions WHERE action_type IN (?,?)",
+                SPLIT_TYPES):
+            found.setdefault(t, set()).add((d, round(float(v), SPLIT_ROUND)))
+    if _has_table(conn, "price_series_revisions"):
+        for t, raw in conn.execute("SELECT ticker, evidence_json FROM price_series_revisions"):
+            for a in json.loads(raw).get("vendor_action_ledger", []):
+                if a["action_type"] in SPLIT_TYPES:
+                    found.setdefault(t, set()).add((a["action_date"], round(float(a["value"]), SPLIT_ROUND)))
+    return {t: sorted(v) for t, v in found.items()}
+
+
 @dataclass
 class AsOfView:
     """What a signal may see on ``as_of``: data knowable at that day's close.
@@ -73,6 +101,7 @@ class AsOfView:
     close: pd.DataFrame
     open: pd.DataFrame
     conn: sqlite3.Connection | None = None
+    splits: Splits | None = None
 
     def fundamentals(self, ticker: str, tag, kind: str | None = None) -> Fact | None:
         return fundamentals_as_of(self._need_conn(), ticker, self.filing_cutoff, tag, kind)
@@ -96,8 +125,9 @@ class Market:
     def __init__(self, adj_open: pd.DataFrame, adj_close: pd.DataFrame,
                  conn: sqlite3.Connection, flagged: pd.DataFrame | None = None,
                  price_tickers: set[str] | None = None, spinoffs: pd.DataFrame | None = None,
-                 exclusions: pd.DataFrame | None = None):
+                 exclusions: pd.DataFrame | None = None, splits: Splits | None = None):
         self.adj_open, self.adj_close, self.conn = adj_open, adj_close, conn
+        self.splits = splits if splits is not None else {}
         self.exclusions = exclusions if exclusions is not None else pd.DataFrame(columns=quality.COLUMNS)
         self.sessions: list[str] = list(adj_close.index)
         self.flagged = flagged if flagged is not None else pd.DataFrame(
@@ -147,7 +177,7 @@ class Market:
         return g.sort_values(["rule", "ticker"]).to_dict("records")
 
     def view(self, as_of: str) -> AsOfView:
-        return AsOfView(as_of, self.adj_close.loc[:as_of], self.adj_open.loc[:as_of], self.conn)
+        return AsOfView(as_of, self.adj_close.loc[:as_of], self.adj_open.loc[:as_of], self.conn, self.splits)
 
     def universe(self, idx: int) -> list[str]:
         """Point-in-time members on session ``idx`` that have a close that day."""
@@ -223,4 +253,4 @@ def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) ->
     calendar = adj_close.index[adj_close[BENCHMARK_TICKER].notna()]
     return Market(adj_open.loc[calendar], adj_close.loc[calendar], conn,
                   flagged=flagged[flagged["date"].isin(calendar)],
-                  price_tickers=set(tr["ticker"].unique()), spinoffs=spin, exclusions=bad)
+                  price_tickers=set(tr["ticker"].unique()), spinoffs=spin, exclusions=bad, splits=load_splits(conn))
