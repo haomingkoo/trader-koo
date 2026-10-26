@@ -83,7 +83,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           </div>
           <button
             onClick={this.handleRetry}
-            className="rounded-lg border border-[var(--line)] bg-[var(--panel-hover)] px-4 py-2 text-sm font-medium text-[var(--text)] transition-colors hover:bg-[var(--accent)] hover:text-white"
+            className="rounded-lg border border-[var(--line)] bg-[var(--panel-hover)] px-4 py-2 text-sm font-medium text-[var(--text)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--on-fill)]"
           >
             {isChunkLoadError(this.state.error) ? "Reload app" : "Retry"}
           </button>

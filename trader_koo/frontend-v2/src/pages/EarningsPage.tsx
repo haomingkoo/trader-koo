@@ -265,7 +265,7 @@ export default function EarningsPage() {
                 onClick={() => setViewMode(mode)}
                 className={`rounded-md px-3 py-1 text-xs font-bold transition-colors ${
                   viewMode === mode
-                    ? "bg-[var(--accent)] text-white"
+                    ? "bg-[var(--accent)] text-[var(--on-fill)]"
                     : "text-[var(--muted)] hover:text-[var(--text)]"
                 }`}
               >

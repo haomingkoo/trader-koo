@@ -57,7 +57,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
           >
             HK
           </a>
-          <span className="text-[10px] font-medium text-[var(--muted)]">
+          <span className="text-xs font-medium text-[var(--muted)]">
             Trader Koo
           </span>
           <div className="ml-auto flex items-center gap-3">

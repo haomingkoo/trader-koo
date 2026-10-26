@@ -158,7 +158,7 @@ export default function GuidePage() {
           <div className="flex flex-wrap gap-2">
             <Link
               to="/report"
-              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+              className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[var(--on-fill)] transition-opacity hover:opacity-90"
             >
               Today's report <ArrowRight size={14} />
             </Link>

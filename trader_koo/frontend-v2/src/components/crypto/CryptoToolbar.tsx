@@ -64,7 +64,7 @@ export default function CryptoToolbar({
         className="flex w-full items-center justify-between rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2 sm:hidden"
       >
         <div className="flex items-center gap-2 text-xs font-semibold">
-          <span className="rounded bg-[var(--accent)] px-2 py-0.5 text-white">
+          <span className="rounded bg-[var(--accent)] px-2 py-0.5 text-[var(--on-fill)]">
             {selectedSymbol.split("-")[0]}
           </span>
           <span className="rounded bg-[var(--blue)] px-2 py-0.5 text-white">
@@ -105,7 +105,7 @@ export default function CryptoToolbar({
                   }}
                   className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
                     selectedSymbol === sym
-                      ? "bg-[var(--accent)] text-white"
+                      ? "bg-[var(--accent)] text-[var(--on-fill)]"
                       : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]"
                   }`}
                 >
@@ -130,7 +130,7 @@ export default function CryptoToolbar({
                   }}
                   className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
                     selectedInterval === iv.value
-                      ? "bg-[var(--blue)] text-white"
+                      ? "bg-[var(--blue)] text-[var(--on-fill)]"
                       : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]"
                   }`}
                 >
@@ -191,7 +191,7 @@ export default function CryptoToolbar({
                   onClick={() => onSelectSymbol(sym)}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     selectedSymbol === sym
-                      ? "bg-[var(--accent)] text-white"
+                      ? "bg-[var(--accent)] text-[var(--on-fill)]"
                       : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
                   }`}
                 >
@@ -206,7 +206,7 @@ export default function CryptoToolbar({
                   onClick={() => onSelectInterval(iv.value)}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     selectedInterval === iv.value
-                      ? "bg-[var(--blue)] text-white"
+                      ? "bg-[var(--blue)] text-[var(--on-fill)]"
                       : "border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
                   }`}
                 >

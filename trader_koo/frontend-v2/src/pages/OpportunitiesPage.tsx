@@ -188,7 +188,7 @@ export default function OpportunitiesPage() {
               onClick={() => setView(v)}
               className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                 view === v
-                  ? "bg-[var(--blue)] text-white"
+                  ? "bg-[var(--blue)] text-[var(--on-fill)]"
                   : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
               }`}
             >

@@ -333,7 +333,7 @@ export default function OptionsPage() {
                 onClick={() => setSortBy(mode)}
                 className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                   sortBy === mode
-                    ? "bg-[var(--blue)] text-white"
+                    ? "bg-[var(--blue)] text-[var(--on-fill)]"
                     : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
                 }`}
               >

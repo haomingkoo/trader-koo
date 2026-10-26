@@ -6,6 +6,23 @@ import Toast from "../ui/Toast";
 import type { AlertItem } from "../../api/types";
 
 const LAST_READ_KEY = "trader_koo_last_read_alert_ts";
+const TOASTED_KEY = "trader_koo_toasted_alert_ids";
+
+function readToasted(): string[] {
+  try {
+    return JSON.parse(sessionStorage.getItem(TOASTED_KEY) ?? "[]") as string[];
+  } catch {
+    return [];
+  }
+}
+
+function rememberToasted(id: string): void {
+  try {
+    sessionStorage.setItem(TOASTED_KEY, JSON.stringify([...readToasted(), id].slice(-50)));
+  } catch {
+    // sessionStorage unavailable (private mode): the toast just may repeat.
+  }
+}
 
 const TYPE_ICON: Record<string, typeof TrendingUp> = {
   price_alert: TrendingUp,
@@ -36,7 +53,7 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [lastRead, setLastRead] = useState(() => localStorage.getItem(LAST_READ_KEY) ?? "");
   const [toastAlert, setToastAlert] = useState<AlertItem | null>(null);
-  const prevCountRef = useRef<number>(0);
+  const baselineSetRef = useRef(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const alerts = useMemo(() => data?.alerts ?? [], [data?.alerts]);
@@ -45,16 +62,21 @@ export default function NotificationBell() {
     [alerts, lastRead],
   );
 
-  // Toast on new alerts
+  // Toast only alerts that arrive while the page is open. Alerts present on
+  // first load stay in the bell, and each alert is toasted at most once per session.
   useEffect(() => {
-    if (unreadCount > prevCountRef.current && prevCountRef.current >= 0 && alerts.length > 0) {
-      const timer = window.setTimeout(() => setToastAlert(alerts[0]), 0);
-      prevCountRef.current = unreadCount;
-      return () => window.clearTimeout(timer);
+    if (!data) return undefined;
+    if (!baselineSetRef.current) {
+      baselineSetRef.current = true;
+      alerts.forEach((a) => rememberToasted(String(a.id)));
+      return undefined;
     }
-    prevCountRef.current = unreadCount;
-    return undefined;
-  }, [alerts, unreadCount]);
+    const fresh = alerts.find((a) => !readToasted().includes(String(a.id)));
+    if (!fresh) return undefined;
+    rememberToasted(String(fresh.id));
+    const timer = window.setTimeout(() => setToastAlert(fresh), 0);
+    return () => window.clearTimeout(timer);
+  }, [data, alerts]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -115,7 +137,7 @@ export default function NotificationBell() {
         >
           <Bell size={14} />
           {hasAlerts && (
-            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--red)] text-[8px] font-bold text-white animate-pulse">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--red)] text-[10px] font-bold leading-none text-[var(--on-fill)]">
               {unreadCount > 9 ? "9+" : unreadCount}
             </span>
           )}

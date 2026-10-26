@@ -547,7 +547,7 @@ export default function HyperliquidPage() {
               onClick={() => setHistoryDays(d)}
               className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
                 historyDays === d
-                  ? "bg-[var(--accent)] text-white"
+                  ? "bg-[var(--accent)] text-[var(--on-fill)]"
                   : "bg-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]"
               }`}
             >

@@ -52,7 +52,7 @@ export default function ChartToolbar({
         <button
           onClick={onLoad}
           disabled={isLoading}
-          className="rounded-lg bg-[var(--accent)] px-4 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--blue)] disabled:opacity-50"
+          className="rounded-lg bg-[var(--accent)] px-4 py-1.5 text-sm font-semibold text-[var(--on-fill)] transition-colors hover:bg-[var(--blue)] disabled:opacity-50"
         >
           Load
         </button>
@@ -68,7 +68,7 @@ export default function ChartToolbar({
               aria-pressed={timeframe === tf}
               className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                 timeframe === tf
-                  ? "bg-[var(--blue)] text-white"
+                  ? "bg-[var(--blue)] text-[var(--on-fill)]"
                   : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
               }`}
             >

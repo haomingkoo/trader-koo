@@ -69,7 +69,7 @@ export default function PatternTabs({
             onClick={() => setActiveTab(tab.key)}
             className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
               activeTab === tab.key
-                ? "bg-[var(--accent)] text-white"
+                ? "bg-[var(--accent)] text-[var(--on-fill)]"
                 : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
             }`}
           >

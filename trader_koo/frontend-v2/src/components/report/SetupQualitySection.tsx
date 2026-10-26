@@ -424,7 +424,7 @@ export default function SetupQualitySection({
               aria-pressed={filterTier === tier}
               className={`rounded-md px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${
                 filterTier === tier
-                  ? "bg-[var(--accent)] text-white"
+                  ? "bg-[var(--accent)] text-[var(--on-fill)]"
                   : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
               }`}
             >

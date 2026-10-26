@@ -46,10 +46,11 @@ export function HistoryItem({ label, value }: { label: string; value: number | n
       <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
         {label}
       </div>
-      <div className="text-lg font-bold tabular-nums" style={{ color: zoneColor }}>
+      <div className="text-lg font-bold tabular-nums text-[var(--text)]">
         {value}
       </div>
-      <div className="text-[10px]" style={{ color: zoneColor }}>
+      <div className="flex items-center justify-center gap-1 text-[10px] text-[var(--muted)]">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: zoneColor }} />
         {zoneLabel}
       </div>
     </div>
@@ -70,15 +71,15 @@ export function ComponentRow({ component }: { component: FearGreedComponent }) {
         <span className="font-medium text-[var(--text)]">{String(component.name ?? "")}</span>
         <div className="flex items-center gap-2">
           {score !== null ? (
-            <span className="font-bold tabular-nums" style={{ color: barColor }}>
+            <span className="font-bold tabular-nums text-[var(--text)]">
               {score.toFixed(0)}
             </span>
           ) : (
             <span className="text-[var(--muted)]">{"\u2014"}</span>
           )}
           <span
-            className="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold"
-            style={{ color: barColor, backgroundColor: `${barColor}18` }}
+            className="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold text-[var(--text)]"
+            style={{ backgroundColor: `${barColor}30` }}
           >
             {String(component.signal ?? "")}
           </span>
@@ -138,16 +139,13 @@ export function NewsPulseCard({
   news,
   blendedScore,
   blendedLabel,
-  blendedColor,
   blendedSummary,
 }: {
   news: ExternalNewsSentiment;
   blendedScore: number | null;
   blendedLabel: string | null;
-  blendedColor: string | null;
   blendedSummary: string | null;
 }) {
-  const scoreColor = blendedColor ?? "var(--accent)";
   const status = statusBadgeTone(news.available, news.article_count, news.note);
 
   return (
@@ -204,11 +202,11 @@ export function NewsPulseCard({
           <div className="mt-1 flex items-end justify-between gap-3">
             <div>
               <div className="text-xs text-[var(--muted)]">{blendedSummary}</div>
-              <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: scoreColor }}>
+              <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text)]">
                 {blendedLabel}
               </div>
             </div>
-            <div className="text-2xl font-bold tabular-nums" style={{ color: scoreColor }}>
+            <div className="text-2xl font-bold tabular-nums text-[var(--text)]">
               {blendedScore}
             </div>
           </div>
