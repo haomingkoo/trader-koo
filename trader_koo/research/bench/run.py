@@ -178,6 +178,7 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
         "reviews": len(cov), "mean_universe": float(cov["universe"].mean()), "mean_scored": float(cov["scored"].mean()),
         "by_year": [{"year": int(y), "mean_universe": float(g["universe"].mean()), "mean_scored": float(g["scored"].mean())}
                     for y, g in cov.groupby(cov["date"].str[:4])]}
+    out["members_by_year"] = market.members_by_year(first, end)
     out["exclusions"] = market.exclusion_summary(first, end)
     out["data"] = {"entries_dropped_no_open": cand_sched.dropped_no_open,
                    "spinoff_exits": exits, "spinoff_buys_blocked": cand_sched.blocked_spinoff,

@@ -187,6 +187,20 @@ class Market:
         row = self.adj_close.iloc[idx]
         return sorted(t for t in self._members[d] if t in self.columns and np.isfinite(row[t]))
 
+    def members_by_year(self, lo: int, hi: int) -> list[dict]:
+        """Per calendar year in sessions[lo..hi]: distinct index members that year and how many have any close."""
+        mem = pd.read_sql_query("SELECT ticker, start_date, end_date FROM sp500_membership", self.conn)
+        years = np.array([d[:4] for d in self.sessions[lo:hi + 1]])
+        out = []
+        for y in sorted(set(years)):
+            idx = np.nonzero(years == y)[0] + lo
+            a, b = self.sessions[idx[0]], self.sessions[idx[-1]]
+            names = set(mem.loc[(mem["start_date"] <= b) & (mem["end_date"].isna() | (mem["end_date"] > a)), "ticker"])
+            window = self.adj_close.iloc[idx[0]:idx[-1] + 1]
+            priced = {t for t in names if t in self.columns and window[t].notna().any()}
+            out.append({"year": int(y), "members": len(names), "with_prices": len(priced)})
+        return out
+
     def members_without_prices(self, lo: int, hi: int) -> tuple[int, int]:
         """(members in the window with no price rows at all, members in the window)."""
         a, b = self.sessions[lo], self.sessions[hi]

@@ -94,10 +94,17 @@ def markdown(report: dict) -> str:
             ("Stress excess vs SPY", _pct(b["stress_excess_vs_spy"])),
         ]
         lines += [f"| {k} | {v} |" for k, v in rows]
-        lines += ["", "| year | strategy | SPY | equal-weight | excess vs SPY |", "|---|---|---|---|---|"]
+        cover = {m["year"]: m for m in report.get("members_by_year", [])}
+        lines += ["", "Excess vs the equal-weight universe is the primary comparison (same available stocks, same "
+                  "survivorship); excess vs SPY is inflated in early years because departed members have no prices.", "",
+                  "| year | strategy | equal-weight | excess vs equal-weight | SPY | excess vs SPY | members with prices |",
+                  "|---|---|---|---|---|---|---|"]
         for y in b["years"]:
-            lines.append(f"| {y['year']} | {_pct(y['strategy'])} | {_pct(y['spy'])} | "
-                         f"{_pct(y['equal_weight'])} | {_pct(y['strategy'] - y['spy'])} |")
+            c = cover.get(y["year"])
+            seen = "n/a" if c is None else str(c["with_prices"]) + "/" + str(c["members"])
+            lines.append(f"| {y['year']} | {_pct(y['strategy'])} | {_pct(y['equal_weight'])} | "
+                         f"{_pct(y['strategy'] - y['equal_weight'])} | {_pct(y['spy'])} | "
+                         f"{_pct(y['strategy'] - y['spy'])} | {seen} |")
         lines.append("")
     d = report["data"]
     lines += [f"Names lacking data: {d['entries_dropped_no_open']} entries skipped for no open price; "
