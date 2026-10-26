@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+import time_machine
 
 from trader_koo.report.generator import (
     _green_barrier_coverage_requires_warning,
@@ -413,11 +414,14 @@ def test_yolo_missing_reports_no_as_of_date_and_no_age(
     assert payload["freshness"]["yolo_age_hours"] is None
 
 
+# Monday before the US close, so Friday is the latest completed session. The
+# wall clock made this test fail every Monday evening after the close.
+@time_machine.travel(dt.datetime(2026, 10, 26, 14, 0, tzinfo=dt.timezone.utc), tick=False)
 def test_yolo_current_over_long_weekend_is_fresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=False)
-    friday = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=3)).isoformat()
+    friday = "2026-10-23"
     conn = sqlite3.connect(kwargs["db_path"])
     conn.execute("UPDATE price_daily SET date = ?", (friday,))
     conn.execute(
