@@ -20,6 +20,25 @@ def _ledger_path(args) -> Path:
     return Path(args.ledger) if args.ledger else Path(args.db).with_name("bench_trial_ledger.jsonl")
 
 
+def _events(args, path: Path) -> int:
+    from . import v2_run, v3_run
+    runs = {"v2": v2_run.run_v2, "v3": v3_run.run_v3}
+    for family in (("v2", "v3") if args.family == "all" else (args.family,)):
+        try:
+            out = runs[family](args.db, path)
+        except LookupError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        print(out["markdown"])
+        print(f"ledger trial_id ({family}): {out['trial_id']}\n")
+        if args.json_out:
+            keep = {k: out[k] for k in ("family", "seed", "config", "trial_id", "summary", "verdicts") if k in out}
+            target = Path(args.json_out)
+            target.mkdir(parents=True, exist_ok=True)
+            (target / f"events-{family}.json").write_text(json.dumps(keep, indent=1, default=str), encoding="utf-8")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     b = _settings().bench  # defaults of the run flags come from config/research.toml
     p = argparse.ArgumentParser(prog="trader_koo.research.bench")
@@ -45,8 +64,16 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--trial", required=True, help="trial_id of a ledger run entry")
     q.add_argument("--open-sealed", action="store_true", help="required to replay a sealed run")
     q.add_argument("--ledger")
+    e = sub.add_parser("events", help="run the event studies of hypotheses v2 and/or v3 on the development window")
+    e.add_argument("--db", required=True, help="a copy of the research database (opened read-only)")
+    e.add_argument("--family", choices=("v2", "v3", "all"), default="all")
+    e.add_argument("--ledger", help="trial ledger JSONL with the pinned seal (default: next to the database)")
+    e.add_argument("--json-out", help="write the machine-readable results of each family to this directory")
     args = p.parse_args(argv)
     path = _ledger_path(args)
+
+    if args.cmd == "events":
+        return _events(args, path)
 
     if args.cmd == "run":
         cfg = BenchConfig.from_settings(
