@@ -82,6 +82,23 @@ def load_membership(path: Path, *, floor: str) -> dict[str, list[Spell]]:
     return {ticker: sorted(spells) for ticker, spells in sorted(membership.items())}
 
 
+def add_context_symbols(
+    membership: dict[str, list[Spell]], symbols: list[str], *, floor: str
+) -> dict[str, list[Spell]]:
+    """Add benchmark/context symbols (SPY, QQQ, ^VIX, ^IRX) as always-present members.
+
+    They are not index members, so the membership file never lists them. Each is
+    treated as a current member from the floor, and goes through the same
+    window planning, fetch and no-modification safety checks as any member.
+    """
+    out = dict(membership)
+    for raw in symbols:
+        symbol = raw.strip().upper()
+        if symbol and symbol not in out:
+            out[symbol] = [Spell(floor, None)]
+    return dict(sorted(out.items()))
+
+
 def _day(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 

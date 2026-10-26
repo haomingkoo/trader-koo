@@ -1,0 +1,27 @@
+parent_ticker,ex_date,spun_off,kind,date_basis,price_effect,source_url
+COP,2012-05-01,Phillips 66,spinoff,next_session_after_distribution,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0001163165/000119312512200896/d341683d8k.htm
+ABT,2013-01-02,AbbVie,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0001551152/000104746914001154/a2217723z10-k.htm
+KMB,2014-11-03,Halyard Health,spinoff,regular_way_start,vendor_adjusted,https://avanos.investorroom.com/download/Halyard+Equity+Roadshow+Presentation_vF.pdf
+OXY,2014-12-01,California Resources,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/797468/000079746814000082/exhibit991.htm
+BAX,2015-07-01,Baxalta,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0001620546/000119312515375898/d80515d10q.htm
+EBAY,2015-07-20,PayPal Holdings,spinoff,ex_distribution_notice,vendor_adjusted,https://miaxglobal.com/sites/default/files/alert-files/EBAY_Distribution_37069.pdf
+HPQ,2015-11-02,Hewlett Packard Enterprise,spinoff,next_session_after_distribution,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0001645590/000119312515338732/d944600dex991.htm
+DHR,2016-07-05,Fortive,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0001659166/000119312516580101/d43850dex991.htm
+JCI,2016-10-31,Adient,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0000833444/000083344416000216/jciplc201610-k.htm
+YUM,2016-11-01,Yum China,spinoff,ex_distribution_notice,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0001673358/000156459017003681/yumc-10k_20161231.htm
+XRX,2017-01-03,Conduent,spinoff,regular_way_start,vendor_adjusted,https://investors.xerox.com/node/17881/html
+HLT,2017-01-04,Park Hotels & Resorts and Hilton Grand Vacations,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/0001674168/000156459018004106/hgv-10k_20171231.htm
+MET,2017-08-07,Brighthouse Financial,spinoff,ex_distribution_notice,vendor_adjusted,https://boxoptions.com/assets/BOXOnnMemo204150.pdf
+HON,2018-10-01,Garrett Motion,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/1735707/000156459019005824/gtx-10k_20181231.htm
+HON,2018-10-29,Resideo Technologies,spinoff,regular_way_start,vendor_adjusted,https://www.honeywell.com/us/en/news/press-releases/2018/10/honeywell-completes-spin-off-of-resideo-technologies-incpt
+RTX,2020-04-03,Carrier Global and Otis Worldwide,spinoff,ex_distribution_notice,vendor_adjusted,https://www.miaxglobal.com/sites/default/files/alert-files/UTX_Distribution_46673.pdf
+MRK,2021-06-03,Organon,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/1821825/000119312521180652/d49288d8k.htm
+IBM,2021-11-04,Kyndryl,spinoff,regular_way_start,vendor_adjusted,https://newsroom.ibm.com/2021-11-03-IBM-Completes-the-Separation-of-Kyndryl
+GE,2023-01-04,GE HealthCare,spinoff,regular_way_start,vendor_adjusted,https://www.businesswire.com/news/home/20230103005852/en
+DHR,2023-10-02,Veralto,spinoff,regular_way_start,vendor_adjusted,https://investors.danaher.com/2023-08-25-Danaher-Declares-pro-Rata-Dividend-of-Veralto-Common-Stock-and-Announces-Expected-When-issued-Trading-of-Veralto-Common-Stock
+MMM,2024-04-01,Solventum,spinoff,regular_way_start,vendor_adjusted,https://news.3m.com/2024-03-08-3M-Board-of-Directors-Approves-Spin-off-of-Solventum
+GE,2024-04-02,GE Vernova,spinoff,ex_distribution_notice,vendor_adjusted,https://ftp.nyse.com/Corporate%20Actions%20Data%20Samples/CORPORATE%20ACTIONS%20OF%20NYSE%20GROUP%20LISTINGS/EQY_US_NYSE_MKT_REF_INFONOTICES_20240401.txt
+HON,2025-10-30,Solstice Advanced Materials,spinoff,regular_way_start,vendor_adjusted,https://www.sec.gov/Archives/edgar/data/2064953/000206495326000008/sols-20251231.htm
+DD,2025-11-03,Qnity Electronics,spinoff,regular_way_start,vendor_adjusted,https://www.dupont.com/news/dupont-board-of-directors-approves-qnity-distribution.html
+CTVA,2025-06-02,Vylor (price-basis seam),backfill_seam,not_an_ex_date,raw_drop,https://www.sec.gov/Archives/edgar/data/0001755672/000119312526417064/ck0001755672-20261001.htm
+CTVA,2026-10-01,Vylor,spinoff,regular_way_start,raw_drop,https://www.sec.gov/Archives/edgar/data/0001755672/000119312526417064/ck0001755672-20261001.htm

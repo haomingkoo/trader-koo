@@ -391,3 +391,16 @@ def test_source_database_is_opened_read_only(tmp_path: Path) -> None:
     run_one(research, make_fetch())
     assert (tmp_path / "source.db").read_bytes() == digest
     assert research.execute("SELECT MIN(date) FROM price_daily WHERE ticker='AAA'").fetchone()[0] == "2010-01-01"
+
+
+def test_context_symbols_are_backfilled_without_touching_existing_rows(conn) -> None:
+    from trader_koo.price_backfill.core import add_context_symbols
+
+    seed_existing(conn, "SPY")
+    before = existing_rows(conn, "SPY")
+    membership = add_context_symbols({"AAA": CURRENT}, ["spy", " ", "AAA"], floor=FLOOR)
+    assert membership["SPY"] == [Spell(FLOOR, None)] and membership["AAA"] == CURRENT
+    out = run_one(conn, make_fetch(), spells=membership["SPY"], ticker="SPY")
+    assert out["status"] == "ok" and out["rows_added"] > 0
+    assert out["earliest_after"] < EXISTING_START
+    assert existing_rows(conn, "SPY") == before
