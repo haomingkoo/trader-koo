@@ -143,4 +143,3 @@ def test_coverage_and_survivorship_gap():
     assert cov == [{"year": "2024", "member_days": 3, "with_price": 2}]
     gap = chk.survivorship_gap(conn, "2024-01-01", "2024-12-31")
     assert gap == [{"ticker": "GONE", "member_days": 1, "last_end": "2024-01-03"}]
-
