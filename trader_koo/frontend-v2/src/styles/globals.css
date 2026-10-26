@@ -15,6 +15,7 @@
   --amber: #e8b85b;
   --blue: #7fb7ff;
   --accent: #82d4aa;
+  --on-fill: #0f1115;
   --shadow-soft: 0 18px 48px rgba(0, 0, 0, 0.22);
 }
 
@@ -28,11 +29,12 @@
   --muted: #667085;
   --text: #141922;
   --line: #dbe2ea;
-  --green: #05885f;
+  --green: #047857;
   --red: #c8323c;
-  --amber: #b87516;
+  --amber: #92580a;
   --blue: #2e6fd8;
   --accent: #16735b;
+  --on-fill: #ffffff;
   --shadow-soft: 0 18px 48px rgba(19, 31, 48, 0.08);
 }
 

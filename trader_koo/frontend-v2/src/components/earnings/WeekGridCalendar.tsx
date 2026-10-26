@@ -485,7 +485,7 @@ export default function WeekGridCalendar({ rows, economicEvents = [] }: WeekGrid
             onClick={() => setWeekOffset(0)}
             className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
               weekOffset === 0
-                ? "bg-[var(--blue)] text-white"
+                ? "bg-[var(--blue)] text-[var(--on-fill)]"
                 : "border border-[var(--line)] bg-[var(--panel)] text-[var(--muted)] hover:text-[var(--text)]"
             }`}
           >
@@ -518,7 +518,7 @@ export default function WeekGridCalendar({ rows, economicEvents = [] }: WeekGrid
               onClick={() => setRange(opt.value)}
               className={`rounded-md px-3 py-1 text-xs font-bold transition-colors ${
                 range === opt.value
-                  ? "bg-[var(--accent)] text-white"
+                  ? "bg-[var(--accent)] text-[var(--on-fill)]"
                   : "text-[var(--muted)] hover:text-[var(--text)]"
               }`}
             >

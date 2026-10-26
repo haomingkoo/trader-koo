@@ -141,15 +141,15 @@ export default function PipelineStatusBadge({
         Pipeline
       </span>
       <div className="flex items-center gap-1.5" aria-label="Pipeline status: Ingest, YOLO, Report">
-        <span className="flex items-center gap-1 text-[9px] text-[var(--muted)]">
+        <span className="flex items-center gap-1 text-[11px] text-[var(--muted)]">
           <PipelineDot state={states.ingest} /> Ingest
         </span>
-        <span className="text-[var(--line)]" aria-hidden="true">&rarr;</span>
-        <span className="flex items-center gap-1 text-[9px] text-[var(--muted)]">
+        <span className="text-[var(--muted)]" aria-hidden="true">&rarr;</span>
+        <span className="flex items-center gap-1 text-[11px] text-[var(--muted)]">
           <PipelineDot state={states.yolo} /> YOLO
         </span>
-        <span className="text-[var(--line)]" aria-hidden="true">&rarr;</span>
-        <span className="flex items-center gap-1 text-[9px] text-[var(--muted)]">
+        <span className="text-[var(--muted)]" aria-hidden="true">&rarr;</span>
+        <span className="flex items-center gap-1 text-[11px] text-[var(--muted)]">
           <PipelineDot state={states.report} /> Report
         </span>
       </div>

@@ -369,7 +369,7 @@ function TradeNotes({ trade }: { trade: PaperTrade }) {
             type="button"
             onClick={save}
             disabled={mutation.isPending}
-            className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] font-medium text-[var(--on-fill)] hover:opacity-90 disabled:opacity-50"
           >
             {mutation.isPending ? "Saving..." : "Save"}
           </button>

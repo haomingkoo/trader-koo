@@ -63,7 +63,7 @@ export default function Toast({ alert, onDismiss }: ToastProps) {
 
   return (
     <div
-      className={`fixed right-4 top-4 z-[9999] max-w-sm cursor-pointer transition-all duration-300 ease-out ${
+      className={`fixed bottom-4 left-4 right-4 z-[9999] sm:left-auto sm:w-96 cursor-pointer transition-all duration-300 ease-out ${
         visible
           ? "translate-x-0 opacity-100"
           : "translate-x-full opacity-0"

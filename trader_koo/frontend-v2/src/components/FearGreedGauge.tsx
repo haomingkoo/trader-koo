@@ -51,7 +51,6 @@ export default function FearGreedGauge() {
     social_sentiment,
     blended_score,
     blended_label,
-    blended_color,
     blended_summary,
   } = data;
 
@@ -60,7 +59,7 @@ export default function FearGreedGauge() {
       {/* Compact header: gauge + score — stacks on mobile */}
       <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start sm:gap-4">
         <div className="shrink-0">
-          <GaugeSvg score={score} scoreColor={color} />
+          <GaugeSvg score={score} scoreColor="var(--text)" />
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -68,12 +67,12 @@ export default function FearGreedGauge() {
               Market Sentiment
             </span>
             <span
-              className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
-              style={{ color, backgroundColor: `${color}18` }}
+              className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text)]"
+              style={{ borderColor: color, backgroundColor: `${color}30` }}
             >
               {label}
             </span>
-            <span className="text-lg font-bold tabular-nums" style={{ color }}>
+            <span className="text-lg font-bold tabular-nums text-[var(--text)]">
               {score}
             </span>
           </div>
@@ -118,7 +117,6 @@ export default function FearGreedGauge() {
             news={external_news}
             blendedScore={blended_score}
             blendedLabel={blended_label}
-            blendedColor={blended_color}
             blendedSummary={blended_summary}
           />
           <SocialPulseCard social={social_sentiment} />

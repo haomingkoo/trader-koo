@@ -71,7 +71,6 @@ export default function ClockStrip() {
         </span>
         <span className="tabular-nums text-[var(--text)]">{localTime}</span>
       </div>
-      <span className="hidden text-[var(--line)] md:inline">|</span>
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text)] opacity-70">
           NY
