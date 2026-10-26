@@ -23,6 +23,7 @@ DEFAULT_BUFFER_N = 40
 DEFAULT_REVIEW_EVERY = 10
 DEFAULT_MIN_HOLD = 20
 BPS_PER_UNIT = 10_000
+YEAR_CHARS = 4
 COST_SOLVE_ITERATIONS = 8
 
 
@@ -69,6 +70,12 @@ def select_holdings(scores: pd.Series, held: dict[str, int], exec_idx: int, rule
     keep = keep[: rules.top_n]
     fill = [t for t in ranked.index if t not in set(keep)][: max(rules.top_n - len(keep), 0)]
     return sorted(keep + fill)
+
+
+def annual_reviews(sessions: list[str], start: int, end: int) -> list[int]:
+    """Indices in [start - 1, end) of the last session of a calendar year (the next session is in a new year)."""
+    return [i for i in range(max(start - 1, 0), min(end, len(sessions) - 1))
+            if sessions[i][:YEAR_CHARS] != sessions[i + 1][:YEAR_CHARS]]
 
 
 def _next_fill(review_idx: list[int], i: int, n_sessions: int, end_idx: int | None) -> int:

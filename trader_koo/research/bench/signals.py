@@ -16,6 +16,7 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
+from . import hypotheses
 from .data import AsOfView, Market
 
 DEFAULT_LOOKBACK = 252
@@ -50,7 +51,14 @@ def momentum_12_1(params: dict) -> Signal:
 CANDIDATES: dict[str, Callable[[dict], Signal]] = {
     "equal_weight": equal_weight,
     "momentum_12_1": momentum_12_1,
+    "low_volatility": hypotheses.low_volatility,
+    "h1_quality_fair_price": hypotheses.quality_at_fair_price,
+    "h2_accelerating_fundamentals": hypotheses.accelerating_fundamentals,
+    "h3_momentum_confirmed": hypotheses.momentum_confirmed_by_earnings,
+    "h4_market_cap_leaders": hypotheses.market_cap_leaders,
 }
+# Candidates that rebalance on the last session of each calendar year instead of every N sessions.
+ANNUAL_CANDIDATES = frozenset({"h4_market_cap_leaders"})
 
 
 def make_signal(name: str, params: dict) -> Signal:
@@ -122,7 +130,7 @@ def assert_no_lookahead(signal: Signal, market: Market, as_of: str, universe: li
     close.loc[later] = close.loc[later].to_numpy() * noise
     open_.loc[later] = open_.loc[later].to_numpy() * noise
     mem = _perturbed_conn(market.conn, as_of)
-    fake = Market(open_, close, mem, price_tickers=market.price_tickers)
+    fake = Market(open_, close, mem, price_tickers=market.price_tickers, splits=market.splits)
     try:
         pert = signal(as_of, universe, fake.view(as_of))
     finally:
