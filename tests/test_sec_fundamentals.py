@@ -76,7 +76,7 @@ def conn():
 @pytest.fixture()
 def loaded(conn):
     client = _client({_url(AAPL_CIK): [FakeResp(200, _load("companyfacts_aapl.json"))]})
-    assert fetch_cik(conn, client, AAPL_CIK) == "ok"
+    assert fetch_cik(conn, client, AAPL_CIK).status == "ok"
     return conn
 
 
@@ -161,7 +161,8 @@ def test_load_universe_resumes_and_dedupes_shared_cik(conn):
     assert googl == conn.execute("SELECT cik FROM sec_cik_map WHERE ticker='GOOG'").fetchone()[0]
     client = _client({_url(AAPL_CIK): [FakeResp(200, _load("companyfacts_aapl.json"))], _url(googl): [FakeResp(404)]})
     counts = load_universe(conn, client, ["AAPL", "GOOG", "GOOGL", "ZZZZ"])
-    assert counts == {"ok": 1, "no_facts": 1, "error": 0, "skipped": 1, "unmapped": 1}
+    assert counts == {"ok": 1, "empty": 0, "no_facts": 1, "error": 0, "skipped": 1, "unmapped": 1,
+                      "duplicate_facts_ignored": counts["duplicate_facts_ignored"]}
     again = _client({})
     counts = load_universe(conn, again, ["AAPL", "GOOGL"])
     assert counts["skipped"] == 2 and again.session.calls == []
@@ -179,7 +180,8 @@ def test_ticker_spelling_and_universe(tmp_path):
     u = sqlite3.connect(tmp_path / "u.db")
     u.execute("CREATE TABLE finviz_fundamentals (ticker TEXT)")
     u.executemany("INSERT INTO finviz_fundamentals VALUES (?)", [("AAPL",), ("AAPL",), ("BRK-B",), ("^VIX",)])
-    assert universe_tickers(u) == ["AAPL", "BRK-B"]
+    with pytest.raises(LookupError):  # departed members would silently be missing
+        universe_tickers(u)
     u.execute("CREATE TABLE sp500_membership (ticker TEXT)")
     u.execute("INSERT INTO sp500_membership VALUES ('FB')")
     assert universe_tickers(u) == ["AAPL", "BRK-B", "FB"]
@@ -263,3 +265,38 @@ def test_ttm_fails_closed_when_a_component_is_missing(loaded):
     # No complete prior fiscal year exists in the data at this date.
     assert ttm_as_of(loaded, "AAPL", "2022-07-01", "NetIncomeLoss") is None
     assert ttm_as_of(loaded, "AAPL", "2026-08-01", "CommonStockSharesOutstanding") is None
+
+
+# --- no hidden fallbacks ---------------------------------------------------
+
+def test_payload_without_facts_is_an_error_not_an_empty_success(conn):
+    client = _client({_url(AAPL_CIK): [FakeResp(200, {"cik": AAPL_CIK})]})
+    assert fetch_cik(conn, client, AAPL_CIK).status == "error"
+    row = conn.execute("SELECT status, error FROM sec_fetch_status WHERE cik=?", (AAPL_CIK,)).fetchone()
+    assert row[0] == "error" and "no 'facts'" in row[1]
+
+
+def test_company_with_no_stored_tags_is_counted_as_empty(conn):
+    client = _client({_url(AAPL_CIK): [FakeResp(200, {"facts": {"us-gaap": {}}})]})
+    counts = load_universe(conn, client, ["AAPL"])
+    assert counts["empty"] == 1 and counts["ok"] == 0
+
+
+def test_duplicate_facts_are_counted_when_a_cik_is_refreshed(conn):
+    payload = _load("companyfacts_aapl.json")
+    client = _client({_url(AAPL_CIK): [FakeResp(200, payload), FakeResp(200, payload)]})
+    first = load_universe(conn, client, ["AAPL"])
+    again = load_universe(conn, client, ["AAPL"], refresh=True)
+    assert first["duplicate_facts_ignored"] == 0
+    assert again["duplicate_facts_ignored"] == conn.execute("SELECT COUNT(*) FROM sec_fundamentals").fetchone()[0]
+
+
+def test_coverage_report_has_no_invented_zero_without_data(conn):
+    from trader_koo.fundamentals.report import coverage_report
+
+    u = sqlite3.connect(":memory:")
+    u.execute("CREATE TABLE finviz_fundamentals (ticker TEXT, snapshot_ts TEXT, raw_json TEXT)")
+    u.execute("INSERT INTO finviz_fundamentals VALUES ('AAPL', '2026-01-01', 'not json')")
+    out = coverage_report(conn, u)
+    assert out["restated_pct"] is None and out["period_groups_with_restated_values"] is None
+    assert out["tickers_with_unreadable_sector_json"] == ["AAPL"]

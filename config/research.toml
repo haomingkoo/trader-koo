@@ -1,0 +1,120 @@
+# Research and data-collection settings. One file, loaded once into frozen dataclasses by
+# trader_koo/research/settings.py. Every entry needs value, unit and reason; a missing key,
+# an unknown key or a wrong type stops the program. The sha256 of this file is written into
+# every new bench ledger entry.
+#
+# Not here: the numbers inside the pre-registered hypothesis signals (docs/research/hypotheses-v*.md).
+# Those are part of the registration and live next to each signal in trader_koo/research/bench/hypotheses.py.
+
+[bench]
+cost_bps = { value = 10.0, unit = "bps of traded notional per side", reason = "hypotheses-v1 common rules: costs" }
+stress_bps = { value = 20.0, unit = "bps of traded notional per side", reason = "hypotheses-v1 common rules: stress run" }
+n_random = { value = 200, unit = "portfolios", reason = "hypotheses-v1 benchmarks: 200 random portfolios under the same rules" }
+top_n = { value = 20, unit = "names", reason = "hypotheses-v1 execution: 20 names, equal weight" }
+buffer_n = { value = 40, unit = "rank", reason = "hypotheses-v1 execution: a holding is sold only if it falls out of the top 40" }
+review_every = { value = 10, unit = "sessions", reason = "hypotheses-v1 signal date: every 10th trading session" }
+min_hold = { value = 20, unit = "sessions", reason = "hypotheses-v1 execution: held at least 20 sessions" }
+seal_fraction = { value = 0.2, unit = "fraction of sessions", reason = "hypotheses-v1 periods: the last 20% of sessions is sealed" }
+trading_days_per_year = { value = 252, unit = "sessions per year", reason = "annualisation convention for CAGR, Sharpe and turnover" }
+random_pct_low = { value = 5, unit = "percentile", reason = "lower edge of the random-control band in the report" }
+random_pct_mid = { value = 50, unit = "percentile", reason = "median of the random-control distribution" }
+random_pct_high = { value = 95, unit = "percentile", reason = "upper edge of the random-control band; hypotheses-v1 pass rule 2 is the 95th percentile" }
+summary_digits = { value = 10, unit = "decimal places", reason = "rounding of ledger summaries so a replay compares equal despite float noise" }
+move_digits = { value = 4, unit = "decimal places", reason = "rounding of flagged price moves in the report" }
+cost_solve_iterations = { value = 8, unit = "iterations", reason = "fixed-point passes to charge the fee on the notional actually traded after the fee" }
+benchmark_ticker = { value = "SPY", unit = "ticker", reason = "hypotheses-v1 benchmarks: SPY total return; its sessions define the trading calendar" }
+universe = { value = "sp500_pit", unit = "label", reason = "hypotheses-v1 universe: S&P 500 members on the signal date; recorded in the ledger config" }
+split_ratio_round_digits = { value = 6, unit = "decimal places", reason = "split ratios from two sources are the same split when they agree to this precision" }
+keep_real_move_flags = { value = ["dividend_off_calendar", "special_dividend", "unexplained_move"], unit = "flag names", reason = "flagged rows that keep their real close-to-close move instead of 0% or NaN; see data.py" }
+share_check_filings = { value = 9, unit = "filings", reason = "number of earlier filings whose median a new share count is checked against" }
+share_check_min_prior = { value = 2, unit = "filings", reason = "fewer earlier filings than this cannot check a share count; it is accepted and counted" }
+share_scale_limit = { value = 3.0, unit = "ratio", reason = "a share count more than this many times above or below the median is rejected as off-scale" }
+share_history_rows = { value = 200, unit = "rows", reason = "bound on share-count rows read per ticker and date" }
+lookahead_seed = { value = 0, unit = "seed", reason = "seed of the noise that corrupts later prices in the look-ahead guard" }
+lookahead_noise_low = { value = 0.2, unit = "multiplier", reason = "lower bound of the multiplier applied to later prices in the look-ahead guard" }
+lookahead_noise_high = { value = 5.0, unit = "multiplier", reason = "upper bound of the multiplier applied to later prices in the look-ahead guard" }
+lookahead_price_factor = { value = 3.0, unit = "multiplier", reason = "later stored prices are multiplied by this in the look-ahead guard database view" }
+lookahead_fact_scale = { value = 7.0, unit = "multiplier", reason = "later SEC fact values are multiplied by this in the look-ahead guard" }
+lookahead_fact_shift = { value = 13.0, unit = "units of the fact", reason = "then shifted by this, so a leak cannot cancel out" }
+
+[quality]
+zero_volume_run_sessions = { value = 5, unit = "consecutive rows", reason = "data-quality rule R1: a run of zero or missing volume this long is invalid" }
+seam_move_fraction = { value = 0.25, unit = "fraction of prior close", reason = "data-quality rule R2: a larger move across the backfill junction invalidates the backfilled spell" }
+erratic_move_fraction = { value = 0.25, unit = "fraction of prior close", reason = "data-quality rule R3: a close-to-close move above this counts as a big move" }
+erratic_moves_per_year = { value = 7, unit = "moves", reason = "data-quality rule R3: this many big moves in a calendar year invalidates the ticker-year (6 is the most a real member had, March 2020)" }
+
+[total_return]
+version = { value = "tr-v1-from-yfinance-actions-v1", unit = "label", reason = "recorded on every series; change it whenever either threshold below changes" }
+max_abs_daily_move = { value = 0.40, unit = "fraction of prior close", reason = "larger one-day moves are flagged as unexplained" }
+max_dividend_fraction = { value = 0.10, unit = "fraction of prior close", reason = "larger dividends are flagged as special" }
+
+[fundamentals]
+sec_user_agent = { value = "trader-koo research haomingkoo@gmail.com", unit = "HTTP header", reason = "SEC fair access requires a declared contact" }
+sec_tickers_url = { value = "https://www.sec.gov/files/company_tickers.json", unit = "URL", reason = "SEC ticker to CIK map" }
+sec_facts_url = { value = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json", unit = "URL template", reason = "SEC companyfacts endpoint per CIK" }
+requests_per_second = { value = 4.0, unit = "requests per second", reason = "SEC fair-access ceiling is 10 per second; stay well under it" }
+http_timeout_sec = { value = 60, unit = "seconds", reason = "bound on each SEC request" }
+max_attempts = { value = 5, unit = "attempts", reason = "tries per SEC request before the CIK is recorded as an error" }
+backoff_base_sec = { value = 2.0, unit = "seconds", reason = "first retry delay; doubles each attempt" }
+backoff_cap_sec = { value = 120.0, unit = "seconds", reason = "longest retry delay" }
+retry_statuses = { value = [403, 429, 500, 502, 503, 504], unit = "HTTP status codes", reason = "statuses that are retried; any other non-200 status is an error" }
+quarter_days = { value = [80, 100], unit = "days between period start and end", reason = "duration window that identifies a quarter" }
+ytd_days = { value = [150, 290], unit = "days between period start and end", reason = "duration window that identifies a year-to-date period" }
+annual_days = { value = [350, 380], unit = "days between period start and end", reason = "duration window that identifies a fiscal year" }
+match_tolerance_days = { value = 15, unit = "days", reason = "prior-year comparison periods may drift this much (52/53-week years)" }
+days_per_year = { value = 365, unit = "days", reason = "shift from a period to the same period one year earlier" }
+
+[price_backfill]
+floor = { value = "2010-01-01", unit = "ISO date", reason = "earliest date backfilled" }
+warmup_days = { value = 400, unit = "calendar days", reason = "history fetched before a member's first spell so 252-session signals can warm up" }
+departure_buffer_days = { value = 10, unit = "calendar days", reason = "bars kept after a departed ticker's last spell day (delisting settlement)" }
+floor_tolerance_days = { value = 7, unit = "calendar days", reason = "the floor is often a holiday; history this close to it counts as reaching it" }
+retries = { value = 3, unit = "retries", reason = "extra attempts per fetch before the ticker is recorded as an error" }
+backoff_sec = { value = 10.0, unit = "seconds", reason = "first retry delay; doubles each retry" }
+pace_sec = { value = 1.0, unit = "seconds", reason = "pause between tickers to stay polite to the vendor" }
+seed_batch = { value = 20000, unit = "rows", reason = "rows per insert when seeding the research database" }
+detail_max_chars = { value = 300, unit = "characters", reason = "error detail length kept in the state file and report" }
+probe_days = { value = 14, unit = "calendar days", reason = "history window of the coverage probe" }
+http_timeout_sec = { value = 30, unit = "seconds", reason = "bound on the membership file download" }
+busy_timeout_ms = { value = 30000, unit = "milliseconds", reason = "SQLite lock wait" }
+sha_prefix_chars = { value = 10, unit = "characters", reason = "length of the commit prefix in the cached membership file name" }
+gap_days = { value = 365, unit = "calendar days", reason = "a membership gap longer than this may mean another company holds the symbol" }
+late_start_days = { value = 45, unit = "calendar days", reason = "a member's first bar later than this after its spell start fails closed" }
+
+[membership]
+count_min = { value = 495, unit = "members", reason = "the index holds about 500 names; fewer at a month end means missing rows" }
+count_max = { value = 510, unit = "members", reason = "more at a month end means overlapping or unclosed intervals" }
+date_tolerance_days = { value = 5, unit = "days", reason = "Wikipedia and the CSV may differ by effective versus announced date" }
+first_year = { value = 2018, unit = "calendar year", reason = "start of the cross-check against Wikipedia's change log" }
+fetch_timeout_sec = { value = 60, unit = "seconds", reason = "bound on each download so the CLI cannot hang" }
+user_agent = { value = "trader-koo-research (haoming@kooexperience.com)", unit = "HTTP header", reason = "declared contact for the downloads" }
+
+[collection]
+universe_cron_hour_utc = { value = 23, unit = "hour UTC", reason = "options universe job starts after the nightly report window (21:30 to 23:30 UTC)" }
+universe_cron_minute_utc = { value = 45, unit = "minute UTC", reason = "see universe_cron_hour_utc" }
+universe_window_start_utc = { value = "23:45", unit = "HH:MM UTC", reason = "start of the accepted run window; must equal the cron time" }
+universe_window_end_utc = { value = "03:00", unit = "HH:MM UTC", reason = "the job hard-stops here" }
+universe_wait_poll_sec = { value = 180, unit = "seconds", reason = "re-check interval while a pipeline run is active" }
+universe_default_max_tickers = { value = 600, unit = "tickers", reason = "default size of the options universe" }
+universe_max_tickers_limit = { value = 1000, unit = "tickers", reason = "upper bound accepted from the environment" }
+universe_default_workers = { value = 2, unit = "threads", reason = "default parallel chain fetches" }
+universe_max_workers = { value = 3, unit = "threads", reason = "upper bound accepted from the environment" }
+universe_default_sleep_sec = { value = 0.25, unit = "seconds", reason = "pause between batches" }
+universe_max_sleep_sec = { value = 10.0, unit = "seconds", reason = "upper bound accepted from the environment" }
+universe_nearest_expiries = { value = 2, unit = "expiries", reason = "nearest expiries always fetched" }
+universe_target_days = { value = [30, 60, 90], unit = "days to expiry", reason = "constant-maturity IV targets; expiries bracketing each are fetched" }
+days_per_year = { value = 365.0, unit = "days", reason = "time to expiry is calendar days over this" }
+min_valid_iv = { value = 0.01, unit = "decimal vol", reason = "yfinance reports about 1e-5 for dead quotes" }
+max_valid_iv = { value = 5.0, unit = "decimal vol", reason = "implied vols above 500% are quote errors" }
+skew_target_delta = { value = -0.25, unit = "put delta", reason = "25-delta put skew" }
+skew_delta_tolerance = { value = 0.10, unit = "delta", reason = "skew is NULL when no put lies within this of the target" }
+skew_maturity_days = { value = 30, unit = "days to expiry", reason = "skew and call-put spread use the expiry closest to this" }
+cp_spread_moneyness_band = { value = 0.05, unit = "fraction of spot", reason = "call-put IV spread uses strikes within this of spot" }
+rate_symbol = { value = "^IRX", unit = "symbol", reason = "13-week T-bill discount rate, quoted in percent, used for put delta" }
+history_period = { value = "5d", unit = "yfinance period", reason = "recent history read for the latest close of the spot and the rate" }
+finnhub_min_interval_sec = { value = 1.1, unit = "seconds", reason = "Finnhub free tier allows 60 calls per minute" }
+bmo_before_et = { value = "09:30", unit = "HH:MM US/Eastern", reason = "report times before this are before market open" }
+amc_from_et = { value = "16:00", unit = "HH:MM US/Eastern", reason = "report times from this are after market close" }
+yfinance_earnings_limit = { value = 40, unit = "rows", reason = "earnings dates requested per ticker from yfinance" }
+backfill_default_years = { value = 5, unit = "years", reason = "default Finnhub lookback" }
+backfill_lookahead_days = { value = 120, unit = "days", reason = "upcoming earnings window requested with the backfill" }

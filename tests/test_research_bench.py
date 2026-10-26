@@ -27,6 +27,7 @@ def _build_db(path: str, prices: pd.DataFrame, actions: pd.DataFrame, extra_fact
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, open REAL, close REAL, volume REAL, adjustment_basis TEXT)")
     conn.execute("CREATE TABLE price_corporate_actions (ticker TEXT, action_date TEXT, action_type TEXT, value REAL)")
+    conn.execute("CREATE TABLE price_series_revisions (ticker TEXT, evidence_json TEXT)")
     prices.assign(volume=1e6, adjustment_basis=None).to_sql("price_daily", conn, if_exists="append", index=False)
     actions.to_sql("price_corporate_actions", conn, if_exists="append", index=False)
     ensure_membership_schema(conn)
@@ -60,7 +61,8 @@ def market(db_path):
 
 
 def _cfg(**kw) -> BenchConfig:
-    return BenchConfig(**{"candidate": "equal_weight", "n_random": 5, **kw})
+    kw = {"n_random": 5, **kw}
+    return BenchConfig.from_settings(kw.pop("candidate", "equal_weight"), **kw)
 
 
 def test_universe_is_point_in_time_and_needs_a_price(market):
@@ -100,7 +102,7 @@ def test_lookahead_guard_catches_price_and_sec_leaks(market):
 
 def test_buffer_and_min_hold_rules():
     scores = pd.Series({f"T{i:02d}": float(100 - i) for i in range(60)})  # T00 is rank 1
-    rules = Rules(top_n=5, buffer_n=10, min_hold=20)
+    rules = Rules(top_n=5, buffer_n=10, review_every=10, min_hold=20)
     held = {"T08": 0, "T09": 0, "T20": 0, "T30": 95}
     out = select_holdings(scores, held, exec_idx=100, rules=rules)
     assert "T08" in out and "T09" in out  # fell out of the top 5 but inside the top 10
@@ -111,7 +113,7 @@ def test_buffer_and_min_hold_rules():
 
 
 def test_schedule_respects_min_hold_and_top_n(market):
-    rules = Rules()
+    rules = Rules.from_settings()
     sig = make_signal("momentum_12_1", {"lookback": 100, "skip": 10})
     sched = build_schedule(market, list(range(110, 340, 10)), rules,
                            lambda s, u: sig(market.sessions[s], u, market.view(market.sessions[s])))

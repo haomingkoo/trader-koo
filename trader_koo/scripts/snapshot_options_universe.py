@@ -14,7 +14,7 @@ import sqlite3
 from pathlib import Path
 
 from trader_koo.backend.services.pipeline import read_active_pipeline_run
-from trader_koo.collection.config import get_options_universe_config
+from trader_koo.collection.config import RATE_SYMBOL, get_options_universe_config
 from trader_koo.collection.options_universe import (
     fetch_rate,
     load_ingest_universe,
@@ -79,11 +79,14 @@ def main() -> None:
             "Starting options universe snapshot tickers=%d workers=%d expiries=nearest%d+%s",
             len(tickers), args.workers, args.max_expiries, list(target_days),
         )
+        rate_error = None
         try:
             rate = fetch_rate()
-        except Exception as exc:  # skew needs a rate; without one it is stored as NULL
-            LOG.warning("%s rate unavailable (%s); put_skew_25d will be NULL", "^IRX", exc)
-            rate = None
+        except Exception as exc:  # skew needs a rate; without one it is stored as NULL and reported below
+            LOG.warning("%s rate unavailable (%s); put_skew_25d will be NULL", RATE_SYMBOL, exc)
+            rate, rate_error = None, f"{type(exc).__name__}: {exc}"
+        if rate is None and rate_error is None:
+            rate_error = f"{RATE_SYMBOL} returned no close"
         summary = snapshot_universe(
             conn,
             tickers,
@@ -96,6 +99,7 @@ def main() -> None:
             rate=rate,
             should_stop=should_stop,
         )
+        summary["rate_error"] = rate_error
         LOG.info(
             "Options universe snapshot done rows=%d skipped=%d quality=%s errors=%d stopped_early=%s",
             summary["rows_written"], summary["skipped_existing"], summary["quality"],

@@ -138,3 +138,12 @@ def test_special_dividend_with_price_collapse_reports_special_dividend():
     out = total_return_series(p, a)
     assert out["flag"].iloc[1] == "special_dividend"
     assert math.isnan(out["total_return"].iloc[1])
+
+
+def test_dividend_after_the_last_price_and_unknown_action_types_are_reported():
+    p = _prices([("2024-01-02", 100.0), ("2024-01-03", 101.0)])
+    a = _actions([("2024-01-10", "dividend", 1.0), ("2024-01-03", "spinoff", 5.0)])
+    out = total_return_series(p, a)
+    assert out.attrs["dividends_after_last_price"] == [("AAA", "2024-01-10", 1.0)]
+    assert out.attrs["ignored_action_types"] == {"spinoff": 1}
+    assert out["total_return"].iloc[1] == pytest.approx(0.01)  # neither changed the return

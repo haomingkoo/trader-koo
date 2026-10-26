@@ -15,24 +15,26 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from trader_koo.research.settings import get as _settings
+
 from .data import Market
 
-
-DEFAULT_TOP_N = 20
-DEFAULT_BUFFER_N = 40
-DEFAULT_REVIEW_EVERY = 10
-DEFAULT_MIN_HOLD = 20
-BPS_PER_UNIT = 10_000
-YEAR_CHARS = 4
-COST_SOLVE_ITERATIONS = 8
+BPS_PER_UNIT = 10_000  # unit conversion
+YEAR_CHARS = 4  # ISO date prefix width
+COST_SOLVE_ITERATIONS = _settings().bench.cost_solve_iterations
 
 
 @dataclass(frozen=True)
 class Rules:
-    top_n: int = DEFAULT_TOP_N
-    buffer_n: int = DEFAULT_BUFFER_N
-    review_every: int = DEFAULT_REVIEW_EVERY
-    min_hold: int = DEFAULT_MIN_HOLD
+    top_n: int
+    buffer_n: int
+    review_every: int
+    min_hold: int
+
+    @classmethod
+    def from_settings(cls) -> "Rules":
+        b = _settings().bench
+        return cls(b.top_n, b.buffer_n, b.review_every, b.min_hold)
 
 
 @dataclass
@@ -43,6 +45,8 @@ class Schedule:
     targets: list[list[str]]
     dropped_no_open: int = 0
     blocked_spinoff: int = 0  # buys skipped because the name's spin-off ex-date falls in the holding period
+    dropped_unscored_held: int = 0  # holdings sold at a review because they had no score (even inside min hold)
+    empty_target_reviews: int = 0  # reviews after the first with no target at all (all cash)
 
 
 @dataclass
@@ -54,6 +58,9 @@ class Result:
     period_returns: list[np.ndarray]  # open-to-open return of each held name, per period
     period_idx: list[int]         # fill session of each period in period_returns
     exits: list[tuple[int, int]] = field(default_factory=list)  # (session, column) of spin-off exits
+    flat_valued_name_days: int = 0  # held name-days valued at the last known close because the close is missing
+    stale_open_fills: int = 0  # held names whose fill-session open was missing, so the last known open was used
+    cash_periods: int = 0  # holding periods with no position (all cash)
 
 
 def select_holdings(scores: pd.Series, held: dict[str, int], exec_idx: int, rules: Rules) -> list[str]:
@@ -108,6 +115,7 @@ def build_schedule(market: Market, review_idx: list[int], rules: Rules,
         nxt = _next_fill(review_idx, i, len(market.sessions), end_idx)
         held = {t: v for t, v in held.items() if not _exited_since(market, t, prev_e, e - 1)}
         scores = score_fn(s, market.universe(s))
+        out.dropped_unscored_held += sum(1 for t in held if not np.isfinite(scores.get(t, np.nan)))
         blocked = [t for t in scores.index if t not in held and _exited_since(market, t, e, nxt - 1)]
         out.blocked_spinoff += len(blocked)
         chosen = select_holdings(scores.drop(blocked), held, e, rules)
@@ -131,7 +139,9 @@ def equal_weight_schedule(market: Market, review_idx: list[int], end_idx: int | 
             break
         nxt = _next_fill(review_idx, i, len(market.sessions), end_idx)
         open_row = market.adj_open.iloc[e]
-        names = [t for t in market.universe(s) if np.isfinite(open_row[t])]
+        universe = market.universe(s)
+        names = [t for t in universe if np.isfinite(open_row[t])]
+        out.dropped_no_open += len(universe) - len(names)
         keep = [t for t in names if t in prev or not _exited_since(market, t, e, nxt - 1)]
         out.blocked_spinoff += len(names) - len(keep)
         out.exec_idx.append(e)
@@ -151,6 +161,8 @@ def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float) 
     c = cost_bps / BPS_PER_UNIT
     ex, tg = schedule.exec_idx, schedule.targets
     O, C = market.open_ff.to_numpy(), market.close_ff.to_numpy()
+    raw_open, raw_close = market.adj_open.to_numpy(), market.adj_close.to_numpy()
+    flat_days = stale_opens = cash_periods = 0
     cols = market.columns
     pos = np.zeros(O.shape[1])
     cash, eq_parts = 1.0, []
@@ -191,6 +203,11 @@ def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float) 
                     t_idx.append(q)
                     t_amt.append(float(pos[col] * gross))
                     result_exits.append((q, int(col)))
+            missing_close = np.isnan(raw_close[e:nxt, held])
+            for j, col, q, gross in sold:
+                missing_close[q - e + 1:, j] = False  # after a spin-off exit the name is cash, not valued flat
+            flat_days += int(missing_close.sum())
+            stale_opens += int(np.isnan(raw_open[e, held]).sum())
             eq_parts.append(cash + (ratio * pos[held]).sum(axis=1))
             pos = pos.copy()
             for j, col, q, gross in sold:
@@ -205,13 +222,15 @@ def simulate(market: Market, schedule: Schedule, end_idx: int, cost_bps: float) 
                 still = pos[held] > 0
                 pos[held[still]] = pos[held[still]] * grow[still]
         else:
+            cash_periods += 1
             eq_parts.append(np.full(nxt - e, cash))
             if nxt <= end_idx:
                 period_ret.append(np.array([]))
                 period_idx.append(e)
     first = ex[0]
     equity_path = np.concatenate(eq_parts) if eq_parts else np.array([])
-    return Result(first, equity_path, np.array(t_idx, dtype=int), np.array(t_amt), period_ret, period_idx, result_exits)
+    return Result(first, equity_path, np.array(t_idx, dtype=int), np.array(t_amt), period_ret, period_idx,
+                  result_exits, flat_days, stale_opens, cash_periods)
 
 
 def buy_and_hold(market: Market, ticker: str, first_idx: int, end_idx: int) -> np.ndarray:

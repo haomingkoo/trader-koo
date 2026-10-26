@@ -209,3 +209,28 @@ def test_failures_are_recorded_not_raised(workers):
         conn, ["AAA"], workers=workers, ticker_factory=Boom, today=TODAY, rate=RATE
     )
     assert "rate limited" in summary["errors"]["AAA"] and summary["rows_written"] == 0
+
+
+def test_an_unreadable_expiry_is_an_error_not_a_dropped_expiry():
+    with pytest.raises(ValueError):
+        select_metric_expiries(["2026-11-20", "soon"], TODAY, nearest=1, target_days=(30,))
+
+
+def test_database_errors_other_than_a_missing_ledger_are_not_swallowed(monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    assert load_ingest_universe(conn) == []  # tables missing: empty, logged
+
+    class Locked:
+        def execute(self, *a, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(sqlite3.OperationalError):
+        load_ingest_universe(Locked())
+
+
+def test_a_stopped_run_reports_the_tickers_it_never_attempted():
+    conn = sqlite3.connect(":memory:")
+    summary = snapshot_universe(conn, ["AAA", "BBB", "CCC"], today=TODAY, rate=RATE, should_stop=lambda: True,
+                                ticker_factory=lambda s: None)
+    assert summary["stopped_early"] and summary["rows_written"] == 0
+    assert summary["not_attempted"] == 3

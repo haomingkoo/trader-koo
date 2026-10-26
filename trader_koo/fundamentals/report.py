@@ -9,7 +9,11 @@ from typing import Any
 from trader_koo.fundamentals import config as cfg
 
 
-def _sectors(universe: sqlite3.Connection) -> dict[str, str]:
+UNKNOWN_SECTOR = "Unknown"
+
+
+def _sectors(universe: sqlite3.Connection, unreadable: list[str]) -> dict[str, str]:
+    """Sector per ticker from the latest Finviz snapshot; tickers whose JSON cannot be read go to ``unreadable``."""
     rows = universe.execute(
         """SELECT ticker, raw_json FROM finviz_fundamentals f
            WHERE snapshot_ts = (SELECT MAX(snapshot_ts) FROM finviz_fundamentals WHERE ticker = f.ticker)"""
@@ -17,9 +21,10 @@ def _sectors(universe: sqlite3.Connection) -> dict[str, str]:
     out: dict[str, str] = {}
     for ticker, raw in rows:
         try:
-            out[ticker.upper()] = json.loads(raw).get("Sector") or "Unknown"
+            out[ticker.upper()] = json.loads(raw).get("Sector") or UNKNOWN_SECTOR
         except (TypeError, ValueError):
-            out[ticker.upper()] = "Unknown"
+            unreadable.append(ticker.upper())
+            out[ticker.upper()] = UNKNOWN_SECTOR
     return out
 
 
@@ -29,7 +34,8 @@ def coverage_report(
     sectors: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """``sectors`` overrides the Finviz sector in the universe DB, which is often empty."""
-    sectors = sectors or _sectors(universe)
+    unreadable: list[str] = []
+    sectors = sectors or _sectors(universe, unreadable)
     concept_of = {tag: name for name, pairs in cfg.CONCEPTS.items() for _, tag in pairs}
     have: dict[int, set[str]] = defaultdict(set)
     for cik, tag in conn.execute("SELECT DISTINCT cik, tag FROM sec_fundamentals"):
@@ -41,7 +47,7 @@ def coverage_report(
         if cik in seen or cik not in have:
             continue
         seen.add(cik)
-        bucket = per_sector[sectors.get(ticker, "Unknown")]
+        bucket = per_sector[sectors.get(ticker, UNKNOWN_SECTOR)]
         bucket["companies"] += 1
         for concept in have[cik]:
             bucket["concepts"][concept] += 1
@@ -65,8 +71,9 @@ def coverage_report(
         "latest_filed_date": last_filed,
         "median_first_filing_year": sorted(starts)[len(starts) // 2] if starts else None,
         "period_groups": groups,
-        "period_groups_with_restated_values": restated or 0,
-        "restated_pct": round(100.0 * (restated or 0) / groups, 2) if groups else 0.0,
+        "period_groups_with_restated_values": restated,
+        "restated_pct": round(100.0 * restated / groups, 2) if groups else None,
+        "tickers_with_unreadable_sector_json": unreadable,
         "sectors": {
             s: {"companies": b["companies"], "concept_coverage_pct": {
                 c: round(100.0 * b["concepts"].get(c, 0) / b["companies"], 1) for c in cfg.CONCEPTS}}

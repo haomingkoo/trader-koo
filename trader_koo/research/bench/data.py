@@ -32,13 +32,16 @@ from trader_koo.db.membership import members_on
 from trader_koo.db.total_return import load_total_return_inputs, total_return_series
 from trader_koo.fundamentals.pit import Fact, fundamentals_as_of, ttm_as_of
 from trader_koo.research.bench import quality
+from trader_koo.research.bench.diagnostics import Diagnostics
 from trader_koo.research.bench.spinoffs import NEUTRALISED, load_spinoffs
+from trader_koo.research.settings import get as _settings
 
-BENCHMARK_TICKER = "SPY"
+_B = _settings().bench
+BENCHMARK_TICKER = _B.benchmark_ticker
 SPLIT_TYPES = ("split", "reverse_split")
-SPLIT_ROUND = 6
-YEAR_CHARS = 4
-KEEP_REAL_MOVE_FLAGS = ("dividend_off_calendar", "special_dividend", "unexplained_move")
+SPLIT_ROUND = _B.split_ratio_round_digits
+YEAR_CHARS = 4  # ISO date prefix width
+KEEP_REAL_MOVE_FLAGS = _B.keep_real_move_flags
 
 
 def connect_ro(db_path: str | Path) -> sqlite3.Connection:
@@ -68,21 +71,23 @@ def load_splits(conn: sqlite3.Connection) -> Splits:
     """Share-count ratios of every split per ticker, sorted by ex-date: ticker -> [(ex_date, ratio)].
 
     Union of ``price_corporate_actions`` and the vendor action ledger kept in
-    ``price_series_revisions.evidence_json``. The action table alone misses splits
+    ``price_series_revisions.evidence_json``. Both tables are required: a missing
+    one would read as "no splits", so it raises LookupError. The action table alone misses splits
     the price loader did not need to apply (NKTR 1-for-15 in 2025, NBR 1-for-50 in 2020),
     yet the stored closes are adjusted for them. Ratios above 1 add shares (a 2-for-1 is 2.0).
     """
+    for table in ("price_corporate_actions", "price_series_revisions"):
+        if not _has_table(conn, table):
+            raise LookupError(f"database has no {table} table; split ratios cannot be established")
     found: dict[str, set[tuple[str, float]]] = {}
-    if _has_table(conn, "price_corporate_actions"):
-        for t, d, v in conn.execute(
-                "SELECT ticker, action_date, value FROM price_corporate_actions WHERE action_type IN (?,?)",
-                SPLIT_TYPES):
-            found.setdefault(t, set()).add((d, round(float(v), SPLIT_ROUND)))
-    if _has_table(conn, "price_series_revisions"):
-        for t, raw in conn.execute("SELECT ticker, evidence_json FROM price_series_revisions"):
-            for a in json.loads(raw).get("vendor_action_ledger", []):
-                if a["action_type"] in SPLIT_TYPES:
-                    found.setdefault(t, set()).add((a["action_date"], round(float(a["value"]), SPLIT_ROUND)))
+    for t, d, v in conn.execute(
+            "SELECT ticker, action_date, value FROM price_corporate_actions WHERE action_type IN (?,?)",
+            SPLIT_TYPES):
+        found.setdefault(t, set()).add((d, round(float(v), SPLIT_ROUND)))
+    for t, raw in conn.execute("SELECT ticker, evidence_json FROM price_series_revisions"):
+        for a in json.loads(raw)["vendor_action_ledger"]:  # KeyError when a revision has no ledger: not guessed
+            if a["action_type"] in SPLIT_TYPES:
+                found.setdefault(t, set()).add((a["action_date"], round(float(a["value"]), SPLIT_ROUND)))
     return {t: sorted(v) for t, v in found.items()}
 
 
@@ -101,39 +106,36 @@ class AsOfView:
     as_of: str
     close: pd.DataFrame
     open: pd.DataFrame
-    conn: sqlite3.Connection | None = None
-    splits: Splits | None = None
+    conn: sqlite3.Connection
+    splits: Splits
+    diag: Diagnostics
 
     def fundamentals(self, ticker: str, tag, kind: str | None = None) -> Fact | None:
-        return fundamentals_as_of(self._need_conn(), ticker, self.filing_cutoff, tag, kind)
+        return fundamentals_as_of(self.conn, ticker, self.filing_cutoff, tag, kind)
 
     def ttm(self, ticker: str, tag, period_end_max: str | None = None) -> Fact | None:
-        return ttm_as_of(self._need_conn(), ticker, self.filing_cutoff, tag, period_end_max)
+        return ttm_as_of(self.conn, ticker, self.filing_cutoff, tag, period_end_max)
 
     @property
     def filing_cutoff(self) -> str:
         return filing_cutoff(self.as_of)
 
-    def _need_conn(self) -> sqlite3.Connection:
-        if self.conn is None:
-            raise LookupError("no fundamentals connection attached")
-        return self.conn
-
 
 class Market:
     """All sessions, adjusted prices and point-in-time membership of one DB."""
 
-    def __init__(self, adj_open: pd.DataFrame, adj_close: pd.DataFrame,
-                 conn: sqlite3.Connection, flagged: pd.DataFrame | None = None,
-                 price_tickers: set[str] | None = None, spinoffs: pd.DataFrame | None = None,
-                 exclusions: pd.DataFrame | None = None, splits: Splits | None = None):
+    def __init__(self, adj_open: pd.DataFrame, adj_close: pd.DataFrame, conn: sqlite3.Connection, *,
+                 flagged: pd.DataFrame, price_tickers: set[str], spinoffs: pd.DataFrame,
+                 exclusions: pd.DataFrame, splits: Splits, diag: Diagnostics):
+        """Every input is required: an empty frame or dict must be passed on purpose, not defaulted."""
         self.adj_open, self.adj_close, self.conn = adj_open, adj_close, conn
-        self.splits = splits if splits is not None else {}
-        self.exclusions = exclusions if exclusions is not None else pd.DataFrame(columns=quality.COLUMNS)
+        self.splits = splits
+        self.load_diag = diag  # substitutions made while building the price matrix (once per load)
+        self.diag = Diagnostics()  # substitutions made while scoring; run_bench starts each run with a fresh one
+        self.exclusions = exclusions
         self.sessions: list[str] = list(adj_close.index)
-        self.flagged = flagged if flagged is not None else pd.DataFrame(
-            columns=["ticker", "date", "flag", "move", "treatment"])
-        self.price_tickers = price_tickers if price_tickers is not None else set(adj_close.columns)
+        self.flagged = flagged
+        self.price_tickers = price_tickers
         # Forward-filled copies value held positions across data gaps only.
         self.open_ff, self.close_ff = adj_open.ffill(), adj_close.ffill()
         self.columns = {t: i for i, t in enumerate(adj_close.columns)}
@@ -141,9 +143,13 @@ class Market:
         # Exit session (close of the session before the ex-date) per held column; see spinoffs.py.
         self.exits: dict[int, list[int]] = {}
         self.exit_events: dict[tuple[int, int], dict] = {}
-        for r in (spinoffs if spinoffs is not None else pd.DataFrame()).itertuples():
+        for r in spinoffs.itertuples():
             x = int(np.searchsorted(self.sessions, r.ex_date, side="left"))
-            if r.parent_ticker in self.columns and 0 < x < len(self.sessions):
+            if r.parent_ticker not in self.columns:
+                diag.note("spinoffs_not_applied", (r.parent_ticker, r.ex_date, "parent has no prices"))
+            elif not 0 < x < len(self.sessions):
+                diag.note("spinoffs_not_applied", (r.parent_ticker, r.ex_date, "ex-date outside the loaded sessions"))
+            else:
                 col = self.columns[r.parent_ticker]
                 self.exits.setdefault(col, []).append(x - 1)
                 self.exit_events[(col, x - 1)] = {"ticker": r.parent_ticker, "ex_date": r.ex_date,
@@ -178,7 +184,8 @@ class Market:
         return g.sort_values(["rule", "ticker"]).to_dict("records")
 
     def view(self, as_of: str) -> AsOfView:
-        return AsOfView(as_of, self.adj_close.loc[:as_of], self.adj_open.loc[:as_of], self.conn, self.splits)
+        return AsOfView(as_of, self.adj_close.loc[:as_of], self.adj_open.loc[:as_of], self.conn, self.splits,
+                        self.diag)
 
     def universe(self, idx: int) -> list[str]:
         """Point-in-time members on session ``idx`` that have a close that day."""
@@ -213,12 +220,16 @@ class Market:
 
 
 def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) -> Market:
+    diag = Diagnostics()
     conn = connect_ro(db_path)
     if not _has_table(conn, "sp500_membership"):
         conn.close()
         raise LookupError("database has no sp500_membership table; the bench needs point-in-time membership")
     prices, actions = load_total_return_inputs(db_path)
     tr = total_return_series(prices, actions)
+    diag.count("dividends_after_last_price_not_applied", len(tr.attrs["dividends_after_last_price"]))
+    for action_type, n in tr.attrs["ignored_action_types"].items():
+        diag.count(f"corporate_actions_of_unknown_type_ignored:{action_type}", n)
     if not any(r[1] == "volume" for r in conn.execute("PRAGMA table_info(price_daily)")):
         conn.close()
         raise LookupError("price_daily has no volume column; the data-quality filter needs it")
@@ -237,6 +248,11 @@ def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) ->
     neutral = {(r.parent_ticker, r.ex_date) for r in spin.itertuples() if r.price_effect == NEUTRALISED}
     is_neutral = pd.Series([(t, d) in neutral for t, d in zip(tr["ticker"], tr["date"])], index=tr.index)
     ret = ret.where(~is_neutral, 0.0)
+    # A NaN return (flagged bad close or split-date move, or the day after an invalid close) is a
+    # 0% day: the price level carries over. Counted so it shows in the report.
+    nan_ret = ret.isna() & (tr.groupby("ticker").cumcount() > 0)
+    diag.count("nan_returns_filled_as_0pct_on_flagged_rows", int((nan_ret & (tr["flag"] != "")).sum()))
+    diag.count("nan_returns_filled_as_0pct_after_invalid_close", int((nan_ret & (tr["flag"] == "")).sum()))
     tr = tr.assign(growth=1.0 + ret.fillna(0.0))
     tr["adj_close"] = tr.groupby("ticker")["growth"].cumprod()
     tr.loc[~(tr["close"] > 0), "adj_close"] = np.nan
@@ -244,11 +260,14 @@ def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) ->
         move=real[tr["flag"] != ""],
         treatment=np.where(is_neutral[tr["flag"] != ""], "listed spin-off, 0% (spinoffs.csv)",
                            np.where(keep_real[tr["flag"] != ""], "real move kept", "0% day or NaN")))
-    flagged = flagged[flagged["flag"] != "dividend_off_calendar"].reset_index(drop=True)
+    off_calendar = flagged["flag"] == "dividend_off_calendar"
+    diag.count("off_calendar_dividend_flags_not_listed_in_flagged_rows", int(off_calendar.sum()))
+    flagged = flagged[~off_calendar].reset_index(drop=True)
     adj_close = tr.pivot(index="date", columns="ticker", values="adj_close").sort_index()
     raw_close = tr.pivot(index="date", columns="ticker", values="close").sort_index()
     raw_open = opens.pivot(index="date", columns="ticker", values="open").reindex(
         index=adj_close.index, columns=adj_close.columns)
+    diag.count("nonpositive_opens_set_to_missing", int((raw_open <= 0).sum().sum()))
     raw_open = raw_open.where(raw_open > 0)
     adj_open = adj_close * (raw_open / raw_close)
     # Validity filter (quality.py): flagged ticker-days have no price, for every candidate and benchmark alike.
@@ -256,16 +275,23 @@ def load_market(db_path: str | Path, spinoffs_path: str | Path | None = None) ->
         "SELECT ticker, date, volume FROM price_daily "
         "WHERE COALESCE(adjustment_basis,'split_adjusted_price_only')='split_adjusted_price_only' "
         "AND ticker NOT LIKE '^%'", conn)
+    junction = quality.junction_date(conn)
+    if junction is None:
+        diag.note("quality_rules_not_applied", "R2 seam: no unversioned price rows, so no backfill junction to check")
     bad = quality.invalid_rows(tr[["ticker", "date", "close"]].merge(volumes, on=["ticker", "date"], how="left"),
-                               quality.junction_date(conn))
+                               junction)
     for t, d in bad[["ticker", "date"]].drop_duplicates().itertuples(index=False):
-        if t in adj_close.columns and d in adj_close.index:
-            adj_close.loc[d, t] = np.nan
-            adj_open.loc[d, t] = np.nan
+        if t not in adj_close.columns or d not in adj_close.index:  # cannot happen: the rows came from this frame
+            raise KeyError(f"invalid row {t} {d} is not in the price matrix")
+        adj_close.loc[d, t] = np.nan
+        adj_open.loc[d, t] = np.nan
     if BENCHMARK_TICKER not in adj_close.columns:
         conn.close()
         raise LookupError(f"{BENCHMARK_TICKER} prices are required for the benchmark")
     calendar = adj_close.index[adj_close[BENCHMARK_TICKER].notna()]
+    diag.count("dates_dropped_for_no_benchmark_close", len(adj_close.index) - len(calendar))
+    in_calendar = flagged["date"].isin(calendar)
+    diag.count("flagged_rows_on_dates_without_benchmark_close_not_listed", int((~in_calendar).sum()))
     return Market(adj_open.loc[calendar], adj_close.loc[calendar], conn,
-                  flagged=flagged[flagged["date"].isin(calendar)],
-                  price_tickers=set(tr["ticker"].unique()), spinoffs=spin, exclusions=bad, splits=load_splits(conn))
+                  flagged=flagged[in_calendar], price_tickers=set(tr["ticker"].unique()), spinoffs=spin,
+                  exclusions=bad, splits=load_splits(conn), diag=diag)

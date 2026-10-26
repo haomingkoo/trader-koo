@@ -19,6 +19,7 @@ from trader_koo.research.bench import quality
 from trader_koo.research.bench.data import AsOfView, load_market
 from trader_koo.research.bench.hypotheses import accept_share_count
 from trader_koo.research.bench.portfolio import Rules, annual_reviews, build_schedule
+from trader_koo.research.bench.diagnostics import Diagnostics
 from trader_koo.research.bench.run import BenchConfig, run_bench
 from trader_koo.research.bench.signals import assert_no_lookahead, make_signal
 
@@ -33,6 +34,7 @@ def _build(path: str) -> str:
     conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT, open REAL, close REAL, volume REAL, "
                  "adjustment_basis TEXT)")
     conn.execute("CREATE TABLE price_corporate_actions (ticker TEXT, action_date TEXT, action_type TEXT, value REAL)")
+    conn.execute("CREATE TABLE price_series_revisions (ticker TEXT PRIMARY KEY, evidence_json TEXT)")
     prices.assign(volume=1e6, adjustment_basis=None).to_sql("price_daily", conn, if_exists="append", index=False)
     actions.to_sql("price_corporate_actions", conn, if_exists="append", index=False)
     ensure_membership_schema(conn)
@@ -109,7 +111,8 @@ def test_h2_inputs_match_hand_computation_on_aapl(market):
 
 
 def test_h2_is_unscored_without_two_years_of_filings(market):
-    thin = AsOfView("2023-06-01", market.adj_close.loc[:"2023-06-01"], market.adj_open.loc[:"2023-06-01"], market.conn)
+    thin = AsOfView("2023-06-01", market.adj_close.loc[:"2023-06-01"], market.adj_open.loc[:"2023-06-01"], market.conn,
+                    market.splits, Diagnostics())
     assert np.isnan(hyp.revenue_acceleration(thin, "AAPL"))  # the fixture holds about a year of filings by then
     assert not np.isnan(hyp.revenue_acceleration(market.view(market.sessions[AS_OF_IDX]), "AAPL"))
 
@@ -193,11 +196,11 @@ def test_h4_buys_the_five_largest_at_the_next_open_and_holds_the_year(market):
 
 def test_h4_is_registered_with_five_names_and_no_buffer(market, tmp_path):
     with pytest.raises(ValueError, match="registered"):
-        run_bench(market, BenchConfig("h4_market_cap_leaders", n_random=2), tmp_path / "l.jsonl")
+        run_bench(market, BenchConfig.from_settings("h4_market_cap_leaders", n_random=2), tmp_path / "l.jsonl")
 
 
 def test_run_reports_coverage_exclusions_and_years_beating_both(market, tmp_path):
-    out = run_bench(market, BenchConfig("h1_quality_fair_price", n_random=3), tmp_path / "l.jsonl")
+    out = run_bench(market, BenchConfig.from_settings("h1_quality_fair_price", n_random=3), tmp_path / "l.jsonl")
     assert 0 < out["coverage"]["mean_scored"] < out["coverage"]["mean_universe"]
     assert "pct_years_beating_both" in out["dev"] and out["exclusions"] == []
 
@@ -205,9 +208,26 @@ def test_run_reports_coverage_exclusions_and_years_beating_both(market, tmp_path
 def test_h5_drops_the_top_decile_of_short_float_and_keeps_unknowns():
     universe = [f"T{i:02d}" for i in range(20)]
     sf = pd.Series({t: (i + 1) / 100.0 for i, t in enumerate(universe) if t != "T05"})
-    kept = hyp.h5_fade_the_crowd(universe[:], sf, universe)
+    missing: list[str] = []
+    kept = hyp.h5_fade_the_crowd(universe[:], sf, universe, missing)
     assert "T19" not in kept and "T18" not in kept  # 90th percentile of the 19 values is 0.182
     assert "T17" in kept and "T05" in kept and len(kept) == 18
+    assert missing == ["T05"]  # kept for having no value, and counted
+
+
+def test_h5_fails_closed_without_any_short_float_value():
+    universe = ["A", "B"]
+    with pytest.raises(ValueError):
+        hyp.h5_fade_the_crowd(universe[:], pd.Series(dtype=float), universe, [])
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE finviz_fundamentals (ticker TEXT, snapshot_ts TEXT, raw_json TEXT)")
+    with pytest.raises(LookupError):
+        hyp.short_float(conn, "2026-10-01", [])  # no snapshot is not "nobody is shorted"
+    conn.execute("INSERT INTO finviz_fundamentals VALUES ('A','2026-09-01','{\"Short Float\": \"4.5%\"}')")
+    conn.execute("INSERT INTO finviz_fundamentals VALUES ('B','2026-09-01','{\"Short Float\": \"-\"}')")
+    unparsed: list = []
+    assert hyp.short_float(conn, "2026-10-01", unparsed).to_dict() == {"A": 0.045}
+    assert unparsed == [("B", "-")]
 
 
 # ---- data-quality filter -----------------------------------------------------------------------------
@@ -265,23 +285,22 @@ def test_share_count_with_a_wrong_scale_is_rejected_and_the_next_older_is_used()
     rejected: list = []
     assert accept_share_count(history, [], rejected) == (4.88e9, "2012-06-26")
     assert rejected == [("2012-09-24", 4.8e15)]
-    assert accept_share_count(history[1:], [], None) == (4.88e9, "2012-06-26")  # a clean series is untouched
+    assert accept_share_count(history[1:], [], []) == (4.88e9, "2012-06-26")  # a clean series is untouched
 
 
 def test_a_split_between_two_filings_is_not_a_scale_error():
     history = [("2012-10-25", 1.125e10), ("2012-07-26", 2.25e9), ("2012-04-26", 2.26e9), ("2012-01-26", 2.27e9)]
-    assert accept_share_count(history, [("2012-08-13", 5.0)]) == (1.125e10, "2012-10-25")
-    assert accept_share_count(history, []) == (2.25e9, "2012-07-26")  # without the split on record it is rejected
+    assert accept_share_count(history, [("2012-08-13", 5.0)], []) == (1.125e10, "2012-10-25")
+    assert accept_share_count(history, [], []) == (2.25e9, "2012-07-26")  # without the split on record it is rejected
 
 
 def test_a_count_with_too_little_history_is_accepted_unchecked():
-    assert accept_share_count([("2012-09-24", 4.8e15), ("2012-06-26", 4.88e9)], []) == (4.8e15, "2012-09-24")
+    assert accept_share_count([("2012-09-24", 4.8e15), ("2012-06-26", 4.88e9)], [], []) == (4.8e15, "2012-09-24")
 
 
 def test_split_ledger_adds_splits_missing_from_the_action_table(tmp_path):
     path = _build(str(tmp_path / "led.db"))
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE price_series_revisions (ticker TEXT PRIMARY KEY, evidence_json TEXT)")
     conn.execute("INSERT INTO price_series_revisions VALUES ('KO', ?)", (
         '{"vendor_action_ledger":[{"action_date":"2020-04-23","action_type":"reverse_split","value":0.02},'
         '{"action_date":"2020-05-01","action_type":"dividend","value":0.4}]}',))

@@ -16,23 +16,24 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trader_koo.research.settings import get as _settings
+
 from . import ledger, report
 from .data import BENCHMARK_TICKER, Market
-from .portfolio import (DEFAULT_BUFFER_N, DEFAULT_MIN_HOLD, DEFAULT_REVIEW_EVERY, DEFAULT_TOP_N,
-                        Result, Rules, Schedule, annual_reviews, build_schedule, buy_and_hold,
+from .diagnostics import Diagnostics
+from .hypotheses import H4_RULES
+from .portfolio import (Result, Rules, Schedule, annual_reviews, build_schedule, buy_and_hold,
                         equal_weight_schedule, simulate)
 from .signals import ANNUAL_CANDIDATES, make_signal
 
-DEFAULT_COST_BPS = 10.0
-DEFAULT_STRESS_BPS = 20.0
-DEFAULT_N_RANDOM = 200
-ANNUAL_RULES = (5, 5, 0)  # H4: five names, no buffer, no minimum hold
-SUMMARY_DIGITS = 10
-MOVE_DIGITS = 4
-YEAR_CHARS = 4
-PCT_LOW = 5
-PCT_MID = 50
-PCT_HIGH = 95
+_B = _settings().bench
+ANNUAL_RULES = H4_RULES  # registered with the H4 signal
+SUMMARY_DIGITS = _B.summary_digits
+MOVE_DIGITS = _B.move_digits
+YEAR_CHARS = 4  # ISO date prefix width
+PCT_LOW = _B.random_pct_low
+PCT_MID = _B.random_pct_mid
+PCT_HIGH = _B.random_pct_high
 
 SURVIVORSHIP = (
     "Survivorship: price history is missing for {n} of {m} point-in-time members in the window "
@@ -48,19 +49,28 @@ CAVEATS = [
 
 @dataclass(frozen=True)
 class BenchConfig:
+    """One run's configuration. Tunables have no defaults here: ``from_settings`` fills them from the settings file."""
+
     candidate: str
-    params: dict = field(default_factory=dict)
-    start: str | None = None
-    end: str | None = None
-    cost_bps: float = DEFAULT_COST_BPS
-    stress_bps: float = DEFAULT_STRESS_BPS
-    n_random: int = DEFAULT_N_RANDOM
+    cost_bps: float
+    stress_bps: float
+    n_random: int
+    top_n: int
+    buffer_n: int
+    review_every: int
+    min_hold: int
+    universe: str
+    params: dict = field(default_factory=dict)  # no parameters means the candidate's registered ones
+    start: str | None = None  # None: from the first session
+    end: str | None = None  # None: to the end of the development window
     open_sealed: bool = False
-    top_n: int = DEFAULT_TOP_N
-    buffer_n: int = DEFAULT_BUFFER_N
-    review_every: int = DEFAULT_REVIEW_EVERY
-    min_hold: int = DEFAULT_MIN_HOLD
-    universe: str = "sp500_pit"
+
+    @classmethod
+    def from_settings(cls, candidate: str, **overrides) -> "BenchConfig":
+        b = _settings().bench
+        base = dict(cost_bps=b.cost_bps, stress_bps=b.stress_bps, n_random=b.n_random, top_n=b.top_n,
+                    buffer_n=b.buffer_n, review_every=b.review_every, min_hold=b.min_hold, universe=b.universe)
+        return cls(candidate=candidate, **{**base, **overrides})
 
     def rules(self) -> Rules:
         return Rules(self.top_n, self.buffer_n, self.review_every, self.min_hold)
@@ -89,6 +99,7 @@ def _window_block(market: Market, first: int, lo: int, hi: int, cand: Result, st
     st = {k: report.stats(v) for k, v in r.items()}
     rc = np.array([report.stats(report.window_returns(x.equity, p0, p1))["cagr"] for x in rand])
     cagr = st["strategy"]["cagr"]
+    hit, hit_skipped = report.hit_rate(cand, ew, lo, hi)
     years = report.by_year(market.sessions[lo:hi + 1], r)
     beats = [y["strategy"] > y["spy"] for y in years]
     beats_both = [y["strategy"] > y["spy"] and y["strategy"] > y["equal_weight"] for y in years]
@@ -99,7 +110,7 @@ def _window_block(market: Market, first: int, lo: int, hi: int, cand: Result, st
         "excess_vs_equal_weight": cagr - st["equal_weight"]["cagr"],
         "stress": st["stress"], "stress_excess_vs_spy": st["stress"]["cagr"] - st["spy"]["cagr"],
         "turnover": report.turnover(cand, cand.equity[p0:p1 + 1], lo, hi),
-        "hit_rate": report.hit_rate(cand, ew, lo, hi),
+        "hit_rate": hit, "hit_rate_periods_without_benchmark": hit_skipped,
         "pct_years_beating_spy": float(np.mean(beats)) if beats else None,
         "pct_years_beating_both": float(np.mean(beats_both)) if beats_both else None,
         "years": years,
@@ -122,6 +133,7 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
             f"the sealed window starts at {market.sessions[boundary]}; pass open_sealed to use it")
     if start >= end:
         raise ValueError("empty date range")
+    market.diag = Diagnostics()  # this run's substitutions only; load-time ones stay in market.load_diag
     config = cfg.seed_basis()
     seed = ledger.seed_from_config(config)
     stamp = datetime.now(timezone.utc).isoformat()
@@ -146,14 +158,17 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
     keep = next((i for i, t in enumerate(cand_sched.targets) if t), None)
     if keep is None:
         raise ValueError("the candidate never selected a name in this range")
+    leading_empty = keep
     cand_sched = Schedule(cand_sched.exec_idx[keep:], cand_sched.targets[keep:], cand_sched.dropped_no_open,
-                          cand_sched.blocked_spinoff)
+                          cand_sched.blocked_spinoff, cand_sched.dropped_unscored_held)
+    cand_sched.empty_target_reviews = sum(1 for t in cand_sched.targets if not t)
     reviews = [e - 1 for e in cand_sched.exec_idx]
     first = cand_sched.exec_idx[0]
 
     cand = simulate(market, cand_sched, end, cfg.cost_bps)
     stress = simulate(market, cand_sched, end, cfg.stress_bps)
-    ew = simulate(market, equal_weight_schedule(market, reviews, end), end, cfg.cost_bps)
+    ew_sched = equal_weight_schedule(market, reviews, end)
+    ew = simulate(market, ew_sched, end, cfg.cost_bps)
     spy = buy_and_hold(market, BENCHMARK_TICKER, first, end)
     rng = np.random.default_rng(seed)
     rand = [
@@ -189,6 +204,17 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
                    "flagged": flagged.round({"move": MOVE_DIGITS}).to_dict("records"),
                    "sealed_boundary": market.sessions[boundary],
                    "members_without_prices": missing, "members_in_window": members}
+    out["data"]["substitutions"] = {
+        **market.load_diag.as_dict(), **market.diag.as_dict(),
+        "leading_reviews_with_no_selection_skipped": leading_empty,
+        "reviews_with_no_target_held_as_cash": cand_sched.empty_target_reviews,
+        "held_names_sold_for_having_no_score": cand_sched.dropped_unscored_held,
+        "held_name_days_valued_flat_at_last_close": cand.flat_valued_name_days,
+        "held_names_filled_at_last_known_open": cand.stale_open_fills,
+        "candidate_cash_periods": cand.cash_periods,
+        "equal_weight_entries_skipped_no_open": ew_sched.dropped_no_open,
+        "equal_weight_held_name_days_valued_flat": ew.flat_valued_name_days,
+    }
     out["caveats"] = [SURVIVORSHIP.format(n=missing, m=members)] + CAVEATS
     out["markdown"] = report.markdown(out)
 
