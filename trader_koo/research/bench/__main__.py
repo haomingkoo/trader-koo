@@ -6,12 +6,14 @@ import json
 import sys
 from pathlib import Path
 
+from trader_koo.research.settings import get as _settings
+
 from . import ledger
 from .data import load_market
-from .portfolio import DEFAULT_BUFFER_N, DEFAULT_MIN_HOLD, DEFAULT_REVIEW_EVERY, DEFAULT_TOP_N
-from .run import DEFAULT_COST_BPS, DEFAULT_N_RANDOM, DEFAULT_STRESS_BPS, BenchConfig, run_bench
+from .run import BenchConfig, run_bench
 
 EXIT_REFUSED = 3
+SHA_SHOWN = 12  # characters of a settings hash printed in messages
 
 
 def _ledger_path(args) -> Path:
@@ -19,6 +21,7 @@ def _ledger_path(args) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    b = _settings().bench  # defaults of the run flags come from config/research.toml
     p = argparse.ArgumentParser(prog="trader_koo.research.bench")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run one candidate and append it to the trial ledger")
@@ -27,13 +30,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--params", default="{}", help="JSON object of candidate parameters")
     r.add_argument("--start")
     r.add_argument("--end")
-    r.add_argument("--cost-bps", type=float, default=DEFAULT_COST_BPS)
-    r.add_argument("--stress-bps", type=float, default=DEFAULT_STRESS_BPS)
-    r.add_argument("--n-random", type=int, default=DEFAULT_N_RANDOM)
-    r.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
-    r.add_argument("--buffer-n", type=int, default=DEFAULT_BUFFER_N)
-    r.add_argument("--review-every", type=int, default=DEFAULT_REVIEW_EVERY)
-    r.add_argument("--min-hold", type=int, default=DEFAULT_MIN_HOLD)
+    r.add_argument("--cost-bps", type=float, default=b.cost_bps)
+    r.add_argument("--stress-bps", type=float, default=b.stress_bps)
+    r.add_argument("--n-random", type=int, default=b.n_random)
+    r.add_argument("--top-n", type=int, default=b.top_n)
+    r.add_argument("--buffer-n", type=int, default=b.buffer_n)
+    r.add_argument("--review-every", type=int, default=b.review_every)
+    r.add_argument("--min-hold", type=int, default=b.min_hold)
     r.add_argument("--open-sealed", action="store_true", help="include the sealed final 20%% of sessions")
     r.add_argument("--ledger", help="trial ledger JSONL (default: next to the database)")
     r.add_argument("--json", action="store_true", help="print the full report as JSON")
@@ -46,10 +49,11 @@ def main(argv: list[str] | None = None) -> int:
     path = _ledger_path(args)
 
     if args.cmd == "run":
-        cfg = BenchConfig(
-            args.candidate, json.loads(args.params), args.start, args.end, args.cost_bps,
-            args.stress_bps, args.n_random, args.open_sealed, args.top_n, args.buffer_n,
-            args.review_every, args.min_hold)
+        cfg = BenchConfig.from_settings(
+            args.candidate, params=json.loads(args.params), start=args.start, end=args.end,
+            cost_bps=args.cost_bps, stress_bps=args.stress_bps, n_random=args.n_random,
+            open_sealed=args.open_sealed, top_n=args.top_n, buffer_n=args.buffer_n,
+            review_every=args.review_every, min_hold=args.min_hold)
     else:
         entry = next((e for e in ledger.read(path)
                       if e.get("event") == "run" and e.get("trial_id") == args.trial), None)
@@ -58,6 +62,14 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         if entry["config"]["open_sealed"] and not args.open_sealed:
             print("this entry opened the sealed window; replay needs --open-sealed", file=sys.stderr)
+            return 2
+        recorded = entry.get("settings_sha256")
+        if recorded is None:
+            print(f"note: entry {args.trial} predates settings hashing; replaying under settings "
+                  f"{_settings().sha256[:SHA_SHOWN]}", file=sys.stderr)
+        elif recorded != _settings().sha256:
+            print(f"refused: entry {args.trial} ran under settings {recorded[:SHA_SHOWN]} but "
+                  f"{_settings().path} is {_settings().sha256[:SHA_SHOWN]}", file=sys.stderr)
             return 2
         cfg = BenchConfig(**entry["config"])
     try:

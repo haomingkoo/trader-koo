@@ -16,12 +16,17 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
-from . import hypotheses
-from .data import AsOfView, Market
+from trader_koo.research.settings import get as _settings
 
-DEFAULT_LOOKBACK = 252
-DEFAULT_SKIP = 21
-NOISE_RANGE = (0.2, 5.0)
+from . import hypotheses, quality, spinoffs
+from .data import AsOfView, Market
+from .diagnostics import Diagnostics
+
+_B = _settings().bench
+# Reference run "plain 12-1 momentum" (hypotheses-v1, Reference runs; H3 rule uses the same 252 and 21).
+DEFAULT_LOOKBACK = hypotheses.MOM_LOOKBACK
+DEFAULT_SKIP = hypotheses.MOM_SKIP
+NOISE_RANGE = (_B.lookahead_noise_low, _B.lookahead_noise_high)
 
 Signal = Callable[[str, list[str], AsOfView], pd.Series]
 
@@ -78,10 +83,10 @@ def _view_sql(conn: sqlite3.Connection, table: str, as_of: str) -> str:
     """SELECT over ``src.<table>`` with the later-dated numeric columns corrupted."""
     cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
     if table == "price_daily":
-        scale = {c: f"{c} * 3.0" for c in ("open", "high", "low", "close", "adj_close") if c in cols}
+        scale = {c: f"{c} * {_B.lookahead_price_factor!r}" for c in ("open", "high", "low", "close", "adj_close") if c in cols}
         when = f"date > '{as_of}'"
     elif table == "sec_fundamentals":
-        scale = {"value": "value * 7.0 + 13.0"}
+        scale = {"value": f"value * {_B.lookahead_fact_scale!r} + {_B.lookahead_fact_shift!r}"}
         when = f"filed_date >= '{as_of}'"  # a filing dated as_of is not usable until the next session
     else:
         return f"SELECT * FROM src.{table}"
@@ -104,9 +109,11 @@ def _perturbed_conn(conn: sqlite3.Connection, as_of: str) -> sqlite3.Connection:
         conn.backup(mem)
         for (name,) in mem.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
             if name == "sec_fundamentals":
-                mem.execute("UPDATE sec_fundamentals SET value = value * 7.0 + 13.0 WHERE filed_date >= ?", (as_of,))
+                mem.execute("UPDATE sec_fundamentals SET value = value * ? + ? WHERE filed_date >= ?",
+                            (_B.lookahead_fact_scale, _B.lookahead_fact_shift, as_of))
             elif name == "price_daily":
-                mem.execute("UPDATE price_daily SET open = open * 3.0, close = close * 3.0 WHERE date > ?", (as_of,))
+                mem.execute("UPDATE price_daily SET open = open * ?, close = close * ? WHERE date > ?",
+                            (_B.lookahead_price_factor, _B.lookahead_price_factor, as_of))
         return mem
     out = sqlite3.connect(":memory:", uri=True)
     out.execute("ATTACH DATABASE ? AS src", (f"file:{path}?mode=ro",))
@@ -116,7 +123,7 @@ def _perturbed_conn(conn: sqlite3.Connection, as_of: str) -> sqlite3.Connection:
 
 
 def assert_no_lookahead(signal: Signal, market: Market, as_of: str, universe: list[str],
-                        seed: int = 0) -> None:
+                        seed: int = _B.lookahead_seed) -> None:
     """Raise LookaheadError if scores change when data after ``as_of`` is corrupted.
 
     The corruption is done by views over a read-only attach, so it costs no
@@ -130,7 +137,9 @@ def assert_no_lookahead(signal: Signal, market: Market, as_of: str, universe: li
     close.loc[later] = close.loc[later].to_numpy() * noise
     open_.loc[later] = open_.loc[later].to_numpy() * noise
     mem = _perturbed_conn(market.conn, as_of)
-    fake = Market(open_, close, mem, price_tickers=market.price_tickers, splits=market.splits)
+    fake = Market(open_, close, mem, flagged=market.flagged.iloc[0:0], price_tickers=market.price_tickers,
+                  spinoffs=pd.DataFrame(columns=spinoffs.COLUMNS), exclusions=pd.DataFrame(columns=quality.COLUMNS),
+                  splits=market.splits, diag=Diagnostics())
     try:
         pert = signal(as_of, universe, fake.view(as_of))
     finally:

@@ -9,6 +9,9 @@ The rules look at the stored series only, never at returns of a candidate. They
 are not signals: a row that fails them is an artifact of the data source, so
 using the following rows of a run to recognise it is not trading information.
 
+The limits (5 sessions, 25%, 25%, 7 moves) are settings in config/research.toml; the text below
+describes them as registered with rules version 1.
+
 R1 zero_volume_run   5 or more consecutive stored rows with volume 0 or missing. The
                      whole run is invalid (the source filled prices without trading).
 R2 seam              The stored series is the backfilled history joined to the series
@@ -27,11 +30,14 @@ from __future__ import annotations
 
 import pandas as pd
 
-ZERO_VOLUME_RUN = 5
-SEAM_MOVE = 0.25
-ERRATIC_MOVE = 0.25
-ERRATIC_MOVES_PER_YEAR = 7
-YEAR_CHARS = 4
+from trader_koo.research.settings import get as _settings
+
+_Q = _settings().quality
+ZERO_VOLUME_RUN = _Q.zero_volume_run_sessions
+SEAM_MOVE = _Q.seam_move_fraction
+ERRATIC_MOVE = _Q.erratic_move_fraction
+ERRATIC_MOVES_PER_YEAR = _Q.erratic_moves_per_year
+YEAR_CHARS = 4  # ISO date prefix width
 COLUMNS = ["ticker", "date", "rule"]
 RULES = ("zero_volume_run", "seam", "erratic_year")
 

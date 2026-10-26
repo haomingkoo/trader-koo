@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import exchange_calendars as xcals
 
 from trader_koo.collection.config import (
+    HISTORY_PERIOD,
     RATE_SYMBOL,
     UNIVERSE_NEAREST_EXPIRIES,
     UNIVERSE_TARGET_DAYS,
@@ -82,7 +83,7 @@ def select_metric_expiries(
         (days, str(exp))
         for exp in expiries
         for days in [_days_until(exp, today)]
-        if days is not None and days >= 0
+        if days >= 0  # an expiry already past is not an option to fetch
     )
     chosen = {exp for _, exp in dated[: max(0, int(nearest))]}
     for target in target_days:
@@ -92,11 +93,9 @@ def select_metric_expiries(
     return sorted(chosen)
 
 
-def _days_until(expiry: str, today: dt.date) -> int | None:
-    try:
-        return (dt.date.fromisoformat(str(expiry)) - today).days
-    except ValueError:
-        return None
+def _days_until(expiry: str, today: dt.date) -> int:
+    """Calendar days to ``expiry``; an unparseable date raises, which records the ticker as an error."""
+    return (dt.date.fromisoformat(str(expiry)) - today).days
 
 
 @lru_cache(maxsize=1)
@@ -107,14 +106,11 @@ def _xnys():
 def is_xnys_session(day: dt.date) -> bool:
     """True when ``day`` is an NYSE session (holidays and weekends are not).
 
-    The calendar only covers a bounded range; outside it the day is treated as
-    not a session and the reason is logged.
+    The calendar only covers a bounded range; outside it the library raises
+    ValueError, which is passed on: the calendar package needs updating, and
+    answering "not a session" would stop the job silently.
     """
-    try:
-        return bool(_xnys().is_session(day.isoformat()))
-    except ValueError as exc:
-        LOG.warning("XNYS calendar cannot answer for %s: %s", day, exc)
-        return False
+    return bool(_xnys().is_session(day.isoformat()))
 
 
 def universe_session_date(now: dt.datetime) -> dt.date | None:
@@ -143,7 +139,10 @@ def latest_session_date(now: dt.datetime) -> dt.date:
 
 
 def load_ingest_universe(conn: sqlite3.Connection, *, max_tickers: int | None = None) -> list[str]:
-    """Tickers of the latest ingest run; empty (fail closed) when the ledger is missing."""
+    """Tickers of the latest ingest run; empty (fail closed) when the ledger tables are missing.
+
+    Any other database error propagates.
+    """
     try:
         row = conn.execute("SELECT run_id FROM ingest_runs ORDER BY started_ts DESC LIMIT 1").fetchone()
         if not row or not row[0]:
@@ -152,7 +151,10 @@ def load_ingest_universe(conn: sqlite3.Connection, *, max_tickers: int | None = 
             "SELECT DISTINCT ticker FROM ingest_ticker_status WHERE run_id = ? ORDER BY ticker",
             (str(row[0]),),
         ).fetchall()
-    except sqlite3.Error:
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        LOG.warning("ingest ledger missing (%s); the ingest universe is empty", exc)
         return []
     tickers = normalize_options_tickers([r[0] for r in rows if r[0]])
     return tickers[:max_tickers] if max_tickers else tickers
@@ -164,7 +166,7 @@ def fetch_rate(factory: Callable[[str], Any] | None = None) -> float | None:
         import yfinance as yf
 
         factory = yf.Ticker
-    close = _latest_close_from_history(factory(RATE_SYMBOL).history(period="5d"))
+    close = _latest_close_from_history(factory(RATE_SYMBOL).history(period=HISTORY_PERIOD))
     return None if close is None else close / 100
 
 
@@ -235,7 +237,7 @@ def snapshot_universe(
 
     def work(symbol: str) -> dict[str, Any]:
         tk = factory(symbol)
-        spot = _latest_close_from_history(tk.history(period="5d"))
+        spot = _latest_close_from_history(tk.history(period=HISTORY_PERIOD))
         chains = fetch_chains(tk, day, nearest, target_days)
         return compute_daily_metrics(spot, rate, chains, day, target_days)
 
@@ -270,4 +272,7 @@ def snapshot_universe(
                 summary["quality"][q] = summary["quality"].get(q, 0) + 1
             if sleep_sec > 0 and due:
                 time.sleep(float(sleep_sec))
+    summary["not_attempted"] = (
+        summary["tickers_total"] - summary["rows_written"] - summary["skipped_existing"] - len(summary["errors"])
+    )
     return summary

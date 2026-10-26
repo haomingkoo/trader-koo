@@ -14,12 +14,16 @@ from typing import Any
 import pandas as pd
 
 from trader_koo.db.membership import members_on, normalize_ticker
+from trader_koo.research.settings import get as _settings
 
-MEMBERSHIP_COUNT_MIN = 495  # members; the index holds ~500 names, fewer means missing rows
-MEMBERSHIP_COUNT_MAX = 510  # members; more means overlapping or unclosed intervals
-MEMBERSHIP_DATE_TOLERANCE_DAYS = 5  # days; Wikipedia and the CSV may differ by effective vs announced date
-MEMBERSHIP_FIRST_YEAR = 2018  # calendar year; start of the price history the bench uses
-FETCH_TIMEOUT_SEC = 60  # seconds; bound on each download so the CLI cannot hang
+_M = _settings().membership
+MEMBERSHIP_COUNT_MIN = _M.count_min  # members; fewer than this at a month end means missing rows
+MEMBERSHIP_COUNT_MAX = _M.count_max  # members; more means overlapping or unclosed intervals
+MEMBERSHIP_DATE_TOLERANCE_DAYS = _M.date_tolerance_days  # days; effective vs announced date
+MEMBERSHIP_FIRST_YEAR = _M.first_year  # calendar year; start of the cross-check
+FETCH_TIMEOUT_SEC = _M.fetch_timeout_sec  # seconds; bound on each download
+USER_AGENT = _M.user_agent
+WIKI_DATE_FORMAT = "%B %d, %Y"
 
 Event = dict[str, str]  # {"kind": "add"|"remove", "ticker": ..., "date": ISO}
 
@@ -61,14 +65,19 @@ def parse_wiki_constituents(html: str) -> set[str]:
     return {normalize_ticker(s) for s in table["Symbol"].astype(str)}
 
 
-def parse_wiki_changes(html: str) -> list[Event]:
-    """Flatten the 'Selected changes' table into add/remove events."""
+def parse_wiki_changes(html: str, unparsed: list[str]) -> list[Event]:
+    """Flatten the 'Selected changes' table into add/remove events.
+
+    A row whose date cannot be parsed yields no events; its date text is appended
+    to ``unparsed`` so the caller can report it.
+    """
     table = pd.read_html(io.StringIO(html), attrs={"id": "changes"}, flavor="lxml")[0]
     table.columns = ["date", "add_t", "add_s", "rem_t", "rem_s", "reason", "refs"]
     events: list[Event] = []
     for row in table.itertuples(index=False):
-        when = pd.to_datetime(row.date, format="%B %d, %Y", errors="coerce")
+        when = pd.to_datetime(row.date, format=WIKI_DATE_FORMAT, errors="coerce")
         if pd.isna(when):
+            unparsed.append(str(row.date))
             continue
         for kind, ticker in (("add", row.add_t), ("remove", row.rem_t)):
             if isinstance(ticker, str) and ticker.strip():

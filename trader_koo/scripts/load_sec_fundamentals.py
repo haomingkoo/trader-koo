@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     client = SecClient()
     status, payload = client.get_json(cfg.SEC_TICKERS_URL)
+    if payload is None:
+        raise SystemExit(f"SEC ticker map returned HTTP {status}; refusing to continue without it")
     LOG.info("mapped %d tickers to CIKs", store_cik_map(conn, payload))
     for item in args.predecessor:
         ticker, _, cik = item.partition("=")

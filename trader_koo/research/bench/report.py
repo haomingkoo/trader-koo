@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import numpy as np
 
+from trader_koo.research.settings import get as _settings
+
 from .portfolio import Result
 
-TRADING_DAYS = 252
-YEAR_CHARS = 4
+TRADING_DAYS = _settings().bench.trading_days_per_year
+YEAR_CHARS = 4  # ISO date prefix width
 
 
 def window_returns(equity: np.ndarray, lo: int, hi: int) -> np.ndarray:
@@ -38,15 +40,21 @@ def turnover(res: Result, equity: np.ndarray, lo_idx: int, hi_idx: int) -> float
     return float(res.trade_notional[m].sum() / 2 / np.mean(equity) / years)
 
 
-def hit_rate(cand: Result, ew: Result, lo_idx: int, hi_idx: int) -> float | None:
-    """Share of held names whose holding-period return beat the equal-weight universe's."""
+def hit_rate(cand: Result, ew: Result, lo_idx: int, hi_idx: int) -> tuple[float | None, int]:
+    """Share of held names whose holding-period return beat the equal-weight universe's.
+
+    Returns (rate, periods skipped because the equal-weight universe held nothing then).
+    """
     ew_mean = {i: float(np.mean(r)) for i, r in zip(ew.period_idx, ew.period_returns) if len(r)}
-    wins = total = 0
+    wins = total = skipped = 0
     for i, r in zip(cand.period_idx, cand.period_returns):
-        if lo_idx <= i <= hi_idx and i in ew_mean and len(r):
+        if lo_idx <= i <= hi_idx and len(r):
+            if i not in ew_mean:
+                skipped += 1
+                continue
             wins += int((r > ew_mean[i]).sum())
             total += len(r)
-    return wins / total if total else None
+    return (wins / total if total else None), skipped
 
 
 def by_year(dates: list[str], r_by_series: dict[str, np.ndarray]) -> list[dict]:
@@ -117,6 +125,10 @@ def markdown(report: dict) -> str:
     ex = report.get("exclusions") or []
     lines += [f"Data-quality filter (trader_koo/research/bench/quality.py): {len(ex)} ticker-rule pairs, "
               f"{d.get('excluded_member_days', 0)} index-member days removed from every portfolio and benchmark.", ""]
+    sub = d.get("substitutions") or {}
+    lines += ["Substitutions, rejections and skips (each counted; nothing is replaced or dropped silently):", ""]
+    lines += [f"- {k}: {v}" if not isinstance(v, dict) else f"- {k}: {v['distinct']} distinct" for k, v in sub.items()]
+    lines += [""]
     lines += [f"Spin-off handling: {len(d['spinoff_exits'])} holdings sold at the close before a listed "
               f"spin-off ex-date, {d['spinoff_buys_blocked']} buys skipped because an ex-date fell in the "
               f"holding period (trader_koo/research/bench/spinoffs.csv).", ""]

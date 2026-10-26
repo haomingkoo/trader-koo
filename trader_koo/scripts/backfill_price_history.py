@@ -151,10 +151,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    membership = load_membership(ensure_membership_file(args.membership_csv), floor=args.start)
-    membership = add_context_symbols(membership, args.context_symbols.split(","), floor=args.start)
+    dropped_spells: list[tuple[str, str, str]] = []
+    membership = load_membership(
+        ensure_membership_file(args.membership_csv), floor=args.start, dropped_before_floor=dropped_spells)
+    context = [t.strip() for t in args.context_symbols.split(",") if t.strip()]
+    context_already_members: list[str] = []
+    membership = add_context_symbols(
+        membership, context, floor=args.start, already_members=context_already_members)
     only = {t.strip().upper() for t in args.tickers.split(",") if t.strip()} or None
-    report: dict = {"membership_source": MEMBERSHIP_URL, "symbols": len(membership)}
+    report: dict = {
+        "membership_source": MEMBERSHIP_URL,
+        "symbols": len(membership),
+        "spells_ended_before_floor_dropped": len(dropped_spells),
+        "spells_ended_before_floor_dropped_list": dropped_spells,
+        "context_symbols_already_members": context_already_members,
+    }
 
     if args.coverage_only:
         rows = probe_coverage(membership, floor=args.start, pace_sec=args.pace_sec, only=only, limit=args.limit)
@@ -193,8 +204,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     text = json.dumps(report, indent=1, sort_keys=True, default=str)
     if args.report_json:
         args.report_json.write_text(text)
-    print(json.dumps({k: v for k, v in report.items() if k not in ("results", "coverage")}, indent=1, default=str))
-    return 0
+    print(json.dumps({k: v for k, v in report.items() if k not in ("results", "coverage", "spells_ended_before_floor_dropped_list")}, indent=1, default=str))
+    return 1 if report.get("status_counts", {}).get("error") else 0
 
 
 if __name__ == "__main__":

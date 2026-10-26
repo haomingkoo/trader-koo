@@ -35,7 +35,7 @@ PINNED_SHA = "a2430f2af0c79ddf0748e91de11bdeb1616ab5a7"
 CSV_URL = "https://raw.githubusercontent.com/fja05680/sp500/{sha}/sp500_ticker_start_end.csv"
 WIKI_CURRENT_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 WIKI_CHANGES_URL = "https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500"
-USER_AGENT = "trader-koo-research (haoming@kooexperience.com)"
+USER_AGENT = chk.USER_AGENT
 
 
 def _year(iso: str) -> str:
@@ -85,7 +85,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     since = f"{chk.MEMBERSHIP_FIRST_YEAR}-01-01"
     counts = chk.month_end_counts(conn, as_of)
     current = chk.compare_current(conn, as_of, chk.parse_wiki_constituents(current_html))
-    problems = chk.compare_events(conn, chk.parse_wiki_changes(changes_html), since)
+    unparsed_dates: list[str] = []
+    problems = chk.compare_events(conn, chk.parse_wiki_changes(changes_html, unparsed_dates), since)
 
     report = Path(args.report_dir)
     report.mkdir(parents=True, exist_ok=True)
@@ -102,6 +103,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "max": max(c["count"] for c in counts if _year(c["date"]) == y)}
             for y in sorted({_year(c["date"]) for c in counts})
         },
+        "wiki_change_rows_with_unparsed_date": unparsed_dates,
         "current_vs_wikipedia": current,
         "disagreement_counts": {
             k: sum(1 for p in problems if p["issue"] == k)
@@ -109,7 +111,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     price_table = _attach_prices(conn, Path(args.prices_db) if args.prices_db else None)
-    if price_table:
+    if price_table is None:
+        summary["coverage_skipped"] = "no price_daily table in the database and no --prices-db"
+    else:
         until = as_of.isoformat()
         summary["coverage_by_year"] = chk.coverage_by_year(conn, since, until, price_table)
         gap = chk.survivorship_gap(conn, since, until, price_table)

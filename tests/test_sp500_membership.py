@@ -123,7 +123,9 @@ WIKI_HTML = """
 
 def test_parse_wiki_tables():
     assert chk.parse_wiki_constituents(WIKI_HTML) == {"BRK-B", "AAA"}
-    events = chk.parse_wiki_changes(WIKI_HTML)
+    unparsed: list = []
+    events = chk.parse_wiki_changes(WIKI_HTML, unparsed)
+    assert unparsed == []
     assert {(e["kind"], e["ticker"], e["date"]) for e in events} == {
         ("add", "NEW", "2020-03-02"),
         ("remove", "OLD", "2020-03-02"),
@@ -143,3 +145,11 @@ def test_coverage_and_survivorship_gap():
     assert cov == [{"year": "2024", "member_days": 3, "with_price": 2}]
     gap = chk.survivorship_gap(conn, "2024-01-01", "2024-12-31")
     assert gap == [{"ticker": "GONE", "member_days": 1, "last_end": "2024-01-03"}]
+
+
+def test_wiki_change_rows_with_unreadable_dates_are_reported_not_skipped():
+    html = WIKI_HTML.replace("March 2, 2020", "sometime in March")
+    unparsed: list = []
+    events = chk.parse_wiki_changes(html, unparsed)
+    assert unparsed == ["sometime in March"]
+    assert {e["ticker"] for e in events} == {"GONE"}

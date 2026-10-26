@@ -15,7 +15,7 @@ import logging
 import math
 import sqlite3
 import time
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, NamedTuple
 
 from trader_koo.collection.config import (
     AMC_FROM,
@@ -29,6 +29,16 @@ LOG = logging.getLogger(__name__)
 
 
 Row = dict[str, Any]
+SESSIONS = frozenset({"BMO", "AMC"})
+EASTERN = "America/New_York"
+
+
+class UpsertResult(NamedTuple):
+    """Rows written, rows rejected for a missing ticker, date or source, and rows whose session text was not BMO/AMC."""
+
+    written: int
+    skipped_invalid: int
+    session_unrecognised: int
 
 
 def ensure_earnings_events_schema(conn: sqlite3.Connection) -> None:
@@ -66,20 +76,29 @@ def _num(value: Any) -> float | None:
 
 def _session(value: Any) -> str | None:
     text = str(value or "").strip().upper()
-    return text if text in {"BMO", "AMC"} else None
+    return text if text in SESSIONS else None
 
 
-def upsert_earnings_events(conn: sqlite3.Connection, rows: Iterable[Row]) -> int:
-    """Upsert calendar-shaped rows (the ``catalyst_data`` row keys). Returns rows written."""
+def upsert_earnings_events(conn: sqlite3.Connection, rows: Iterable[Row]) -> UpsertResult:
+    """Upsert calendar-shaped rows (the ``catalyst_data`` row keys).
+
+    A row without ticker, date or source is not written and is counted in
+    ``skipped_invalid``. A session value other than BMO/AMC (for example ``TBD``) is
+    stored as NULL and counted in ``session_unrecognised``.
+    """
     ensure_earnings_events_schema(conn)
     fetched_ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     params = []
+    skipped = unrecognised = 0
     for row in rows:
         ticker = str(row.get("ticker") or "").strip().upper()
         report_date = str(row.get("earnings_date") or "").strip()[:DATE_TEXT_LEN]
         source = str(row.get("source") or "").strip()
         if not ticker or not report_date or not source:
+            skipped += 1
             continue
+        if str(row.get("earnings_session") or "").strip() and _session(row.get("earnings_session")) is None:
+            unrecognised += 1
         params.append(
             (
                 ticker,
@@ -95,7 +114,7 @@ def upsert_earnings_events(conn: sqlite3.Connection, rows: Iterable[Row]) -> int
             )
         )
     if not params:
-        return 0
+        return UpsertResult(0, skipped, unrecognised)
     conn.executemany(
         """
         INSERT INTO earnings_events (
@@ -113,15 +132,12 @@ def upsert_earnings_events(conn: sqlite3.Connection, rows: Iterable[Row]) -> int
         """,
         params,
     )
-    return len(params)
+    return UpsertResult(len(params), skipped, unrecognised)
 
 
 def session_from_timestamp(ts: Any) -> str | None:
     """BMO/AMC from a report timestamp; None when the time of day is not informative."""
-    try:
-        local = ts.tz_convert("America/New_York") if ts.tzinfo else ts
-    except (AttributeError, TypeError):
-        return None
+    local = ts.tz_convert(EASTERN) if ts.tzinfo else ts
     t = local.time()
     if t == dt.time(0, 0):
         return None
@@ -168,7 +184,10 @@ def backfill_earnings_history(
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """Backfill history per ticker from each provided source, recording the source."""
-    summary: dict[str, Any] = {"tickers": 0, "rows": 0, "failures": {}}
+    summary: dict[str, Any] = {
+        "tickers": 0, "rows": 0, "failures": {}, "rows_skipped_invalid": 0,
+        "sessions_unrecognised": 0, "no_rows": [],
+    }
     last_finnhub: float | None = None
     for raw in tickers:
         ticker = str(raw).strip().upper()
@@ -186,8 +205,13 @@ def backfill_earnings_history(
                 last_finnhub = time.monotonic()
             try:
                 rows = fetch(ticker)
-                summary["rows"] += upsert_earnings_events(conn, rows)
+                result = upsert_earnings_events(conn, rows)
                 conn.commit()
+                summary["rows"] += result.written
+                summary["rows_skipped_invalid"] += result.skipped_invalid
+                summary["sessions_unrecognised"] += result.session_unrecognised
+                if not rows:
+                    summary["no_rows"].append(f"{ticker}:{name}")
             except Exception as exc:
                 conn.rollback()
                 LOG.warning("earnings backfill %s/%s failed: %s", ticker, name, exc)
@@ -201,7 +225,8 @@ def persist_fetched_calendar(
     """Archive freshly fetched calendar rows; pass the (rows, meta) pair through.
 
     Cache hits were archived when first fetched. A storage failure is logged and
-    must not break the calendar response.
+    must not break the calendar response; it is surfaced as ``archive_error`` in the
+    returned meta so the caller can see the rows were not archived.
     """
     rows, meta = fetched
     if rows and not meta.get("used_cache"):
@@ -211,4 +236,5 @@ def persist_fetched_calendar(
         except sqlite3.Error as exc:
             conn.rollback()
             LOG.warning("Failed to persist earnings events: %s", exc)
+            meta = {**meta, "archive_error": str(exc)}
     return rows, meta

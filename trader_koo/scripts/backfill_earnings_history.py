@@ -49,11 +49,13 @@ def main() -> None:
         ensure_earnings_events_schema(conn)
         conn.commit()
         tickers = normalize_options_tickers(args.tickers) or load_ingest_universe(conn)
+        truncated = tickers[args.max_tickers:]
         tickers = tickers[: args.max_tickers]
         if not tickers:
             raise SystemExit("no tickers: pass --tickers or run after an ingest")
 
         finnhub_fetch = None
+        sources_skipped: dict[str, str] = {}
         if args.source in ("both", "finnhub"):
             key = os.getenv("FINNHUB_API_KEY", "").strip()
             if key:
@@ -65,12 +67,17 @@ def main() -> None:
                 raise SystemExit("FINNHUB_API_KEY is not set")
             else:
                 LOG.warning("FINNHUB_API_KEY not set; skipping Finnhub")
+                sources_skipped["finnhub"] = "FINNHUB_API_KEY not set"
         yfinance_fetch = fetch_yfinance_history if args.source in ("both", "yfinance") else None
 
         summary = backfill_earnings_history(
             conn, tickers, finnhub_fetch=finnhub_fetch, yfinance_fetch=yfinance_fetch
         )
+        summary["sources_skipped"] = sources_skipped
+        summary["tickers_beyond_max_not_run"] = truncated
         print(json.dumps(summary, sort_keys=True))
+        if summary["failures"]:
+            raise SystemExit(f"{len(summary['failures'])} ticker/source fetches failed; see the summary above")
     finally:
         conn.close()
 

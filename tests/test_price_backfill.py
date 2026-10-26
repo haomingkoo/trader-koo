@@ -172,15 +172,17 @@ def test_membership_csv_keeps_only_spells_overlapping_floor(tmp_path: Path) -> N
         "AAL,2015-03-23,2024-09-23\n"
         "BRK.B,2010-02-16,\n"
     )
-    membership = load_membership(csv, floor=FLOOR)
+    dropped: list = []
+    membership = load_membership(csv, floor=FLOOR, dropped_before_floor=dropped)
     assert set(membership) == {"AAL", "BRK-B"}
     assert membership["AAL"] == [Spell("2015-03-23", "2024-09-23")]
+    assert dropped == [("OLD", "1999-01-01", "2009-12-31"), ("AAL", "1996-01-02", "1997-01-15")]  # reported, not lost
 
 
 def test_renamed_symbol_spells_merge_under_the_new_symbol(tmp_path: Path) -> None:
     csv = tmp_path / "m.csv"
     csv.write_text("ticker,start_date,end_date\nFB,2013-12-23,2022-06-09\nMETA,2022-06-09,\n")
-    membership = load_membership(csv, floor=FLOOR)
+    membership = load_membership(csv, floor=FLOOR, dropped_before_floor=[])
     assert list(membership) == ["META"]
     assert membership["META"] == [Spell("2013-12-23", "2022-06-09"), Spell("2022-06-09", None)]
 
@@ -352,10 +354,12 @@ def test_run_resumes_from_state_file(conn, tmp_path: Path) -> None:
         fetch_fn=fetch, actions_fn=split_ledger, probe_alive_fn=lambda t: False,
         floor=FLOOR, warmup_days=400, sleep_fn=lambda s: None, pace_sec=0.0, state_path=state,
     )
-    run_backfill(conn, membership, limit=1, **common)
+    first = run_backfill(conn, membership, limit=1, **common)
     assert [c[0] for c in fetch.calls] == ["AAA"]
-    run_backfill(conn, membership, **common)
+    assert [(r["ticker"], r["status"]) for r in first] == [("AAA", "ok"), ("BBB", "not_attempted_limit")]
+    second = run_backfill(conn, membership, **common)
     assert [c[0] for c in fetch.calls] == ["AAA", "BBB"]
+    assert [(r["ticker"], r["status"]) for r in second] == [("AAA", "skipped_settled_in_state"), ("BBB", "ok")]
 
 
 # --- research database seeding ----------------------------------------------------
@@ -371,11 +375,13 @@ def test_seed_copies_price_rows_and_never_overwrites(tmp_path: Path) -> None:
     seed_existing(source, "AAA")
     source.close()
     research = _file_db(tmp_path / "research.db")
-    copied = seed_research_db(research, tmp_path / "source.db")
-    assert copied["price_daily"] > 100
+    report = seed_research_db(research, tmp_path / "source.db")
+    assert report["price_daily"]["copied"] > 100
+    assert report["price_daily"]["copied"] == report["price_daily"]["source_rows"]
     research.execute("UPDATE price_daily SET close=999 WHERE ticker='AAA' AND date=?", (EXISTING_START,))
     research.commit()
-    assert seed_research_db(research, tmp_path / "source.db")["price_daily"] == 0
+    again = seed_research_db(research, tmp_path / "source.db")["price_daily"]
+    assert again["copied"] == 0 and again["ignored_existing"] == again["source_rows"]  # existing rows win, counted
     assert research.execute(
         "SELECT close FROM price_daily WHERE ticker='AAA' AND date=?", (EXISTING_START,)
     ).fetchone()[0] == 999
@@ -398,8 +404,12 @@ def test_context_symbols_are_backfilled_without_touching_existing_rows(conn) -> 
 
     seed_existing(conn, "SPY")
     before = existing_rows(conn, "SPY")
-    membership = add_context_symbols({"AAA": CURRENT}, ["spy", " ", "AAA"], floor=FLOOR)
+    already: list = []
+    membership = add_context_symbols({"AAA": CURRENT}, ["spy", "AAA"], floor=FLOOR, already_members=already)
     assert membership["SPY"] == [Spell(FLOOR, None)] and membership["AAA"] == CURRENT
+    assert already == ["AAA"]
+    with pytest.raises(ValueError):  # a blank symbol is an input error, not skipped
+        add_context_symbols({}, [" "], floor=FLOOR, already_members=[])
     out = run_one(conn, make_fetch(), spells=membership["SPY"], ticker="SPY")
     assert out["status"] == "ok" and out["rows_added"] > 0
     assert out["earliest_after"] < EXISTING_START

@@ -34,7 +34,9 @@ from typing import Callable, NamedTuple, Optional
 import pandas as pd
 
 from trader_koo.price_backfill import config as cfg
-from trader_koo.price_backfill.store import load_state, save_state
+from trader_koo.price_backfill.store import (
+    existing_snapshot, load_state, restore_yolo, save_state, save_yolo,
+)
 from trader_koo.db.sources import PriceFetchError
 from trader_koo.scripts.update_market_db import (
     ensure_schema,
@@ -46,7 +48,7 @@ from trader_koo.scripts.update_market_db import (
 
 LOG = logging.getLogger("trader_koo.backfill")
 
-DEFAULT_FLOOR = "2010-01-01"
+DEFAULT_FLOOR = cfg.FLOOR
 DEFAULT_WARMUP_DAYS = cfg.WARMUP_DAYS
 # Calendar days kept after a departed ticker's last spell day (delisting settlement).
 DEPARTURE_BUFFER_DAYS = cfg.DEPARTURE_BUFFER_DAYS
@@ -69,12 +71,20 @@ def to_db_ticker(symbol: str) -> str:
     return symbol.strip().upper().replace(".", "-")
 
 
-def load_membership(path: Path, *, floor: str) -> dict[str, list[Spell]]:
+def load_membership(
+    path: Path, *, floor: str, dropped_before_floor: list[tuple[str, str, str]]
+) -> dict[str, list[Spell]]:
+    """Spells per ticker from the pinned CSV; a blank end date means a current member.
+
+    Spells that ended before ``floor`` are left out and appended to ``dropped_before_floor``
+    as (ticker, start, end) so the caller can report them.
+    """
     frame = pd.read_csv(path, dtype=str, keep_default_na=False)
     membership: dict[str, list[Spell]] = {}
     for row in frame.itertuples(index=False):
         end = row.end_date or None
         if end is not None and end < floor:
+            dropped_before_floor.append((row.ticker, row.start_date, end))
             continue
         ticker = to_db_ticker(row.ticker)
         ticker = cfg.SYMBOL_RENAMES.get(ticker, ticker)
@@ -83,18 +93,24 @@ def load_membership(path: Path, *, floor: str) -> dict[str, list[Spell]]:
 
 
 def add_context_symbols(
-    membership: dict[str, list[Spell]], symbols: list[str], *, floor: str
+    membership: dict[str, list[Spell]], symbols: list[str], *, floor: str, already_members: list[str]
 ) -> dict[str, list[Spell]]:
     """Add benchmark/context symbols (SPY, QQQ, ^VIX, ^IRX) as always-present members.
 
     They are not index members, so the membership file never lists them. Each is
     treated as a current member from the floor, and goes through the same
     window planning, fetch and no-modification safety checks as any member.
+    A blank symbol raises; a symbol that is already a member keeps its membership
+    spells and is appended to ``already_members``.
     """
     out = dict(membership)
     for raw in symbols:
         symbol = raw.strip().upper()
-        if symbol and symbol not in out:
+        if not symbol:
+            raise ValueError("blank context symbol")
+        if symbol in out:
+            already_members.append(symbol)
+        else:
             out[symbol] = [Spell(floor, None)]
     return dict(sorted(out.items()))
 
@@ -160,46 +176,6 @@ def _in_a_spell(date: str, spells: list[Spell]) -> bool:
         if spell.start <= date <= limit:
             return True
     return False
-
-
-def _existing_snapshot(conn: sqlite3.Connection, ticker: str, earliest: Optional[str]) -> tuple:
-    if earliest is None:
-        return ((), ())
-    prices = conn.execute(
-        "SELECT * FROM price_daily WHERE ticker=? AND date>=? ORDER BY date", (ticker, earliest)
-    ).fetchall()
-    actions = conn.execute(
-        "SELECT * FROM price_corporate_actions WHERE ticker=? AND action_date>=? "
-        "ORDER BY action_date, action_type, provider",
-        (ticker, earliest),
-    ).fetchall()
-    return tuple(prices), tuple(actions)
-
-
-def _save_yolo(conn: sqlite3.Connection, ticker: str) -> tuple[list[str], list[tuple]]:
-    """record_price_series_revision clears a ticker's chart patterns on a new start date.
-
-    Older history does not change recent bars, so the patterns stay valid.
-    """
-    exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='yolo_patterns'"
-    ).fetchone()
-    if not exists:
-        return [], []
-    columns = [row[1] for row in conn.execute("PRAGMA table_info(yolo_patterns)")]
-    rows = conn.execute("SELECT * FROM yolo_patterns WHERE ticker=?", (ticker,)).fetchall()
-    return columns, rows
-
-
-def _restore_yolo(conn: sqlite3.Connection, ticker: str, saved: tuple[list[str], list[tuple]]) -> None:
-    columns, rows = saved
-    if not columns:
-        return
-    conn.execute("DELETE FROM yolo_patterns WHERE ticker=?", (ticker,))
-    marks = ",".join("?" * len(columns))
-    conn.executemany(
-        f"INSERT INTO yolo_patterns ({','.join(columns)}) VALUES ({marks})", rows
-    )
 
 
 def _fetch_with_retry(
@@ -303,28 +279,33 @@ def backfill_ticker(
 
     # The request already ended at the earliest stored date; keep that true even if a vendor ignores `end`.
     attrs = dict(frame.attrs)
+    fetched_rows = len(frame)
     if earliest is not None:
         frame = frame[frame["date"] < earliest]
+    result["rows_trimmed_at_earliest"] = fetched_rows - len(frame)
     frame = frame.reset_index(drop=True)
     frame.attrs.update(attrs)
     if frame.empty:
         return done("up_to_date")
     for key in ("corporate_actions", "unresolved_discontinuities"):
-        frame.attrs[key] = [
-            item for item in frame.attrs.get(key, [])
+        items = frame.attrs.get(key, [])
+        kept = [
+            item for item in items
             if earliest is None or str(item.get("action_date") or item.get("date") or "") < earliest
         ]
+        result[f"{key}_dropped_on_or_after_earliest"] = len(items) - len(kept)
+        frame.attrs[key] = kept
 
     rows_before = conn.execute("SELECT COUNT(*) FROM price_daily WHERE ticker=?", (ticker,)).fetchone()[0]
-    snapshot = _existing_snapshot(conn, ticker, earliest)
-    saved_yolo = _save_yolo(conn, ticker)
+    snapshot = existing_snapshot(conn, ticker, earliest)
+    saved_yolo = save_yolo(conn, ticker)
     conn.execute("SAVEPOINT backfill")
     try:
         reconcile_vendor_action_ledger(frame, ledger, managed_start=start, managed_end=end)
         mark_full_history_actions_verified(frame)
         write_price_daily(conn, ticker, frame, data_source=source)
-        _restore_yolo(conn, ticker, saved_yolo)
-        if _existing_snapshot(conn, ticker, earliest) != snapshot:
+        restore_yolo(conn, ticker, saved_yolo)
+        if existing_snapshot(conn, ticker, earliest) != snapshot:
             conn.execute("ROLLBACK TO backfill")
             conn.execute("RELEASE backfill")
             conn.commit()
@@ -367,6 +348,12 @@ def run_backfill(
     only: Optional[set[str]] = None,
     retry_terminal: bool = False,
 ) -> list[dict]:
+    """Backfill every ticker in ``membership`` not filtered out by ``only``.
+
+    Tickers settled in the state file get a ``skipped_settled_in_state`` result and tickers
+    beyond ``limit`` a ``not_attempted_limit`` result, so every ticker is accounted for.
+    Neither is written to the state file.
+    """
     state = load_state(state_path)
     results: list[dict] = []
     attempted = 0
@@ -375,9 +362,13 @@ def run_backfill(
             continue
         prior = state.get(ticker)
         if prior and prior["status"] in TERMINAL_STATUSES and not retry_terminal:
+            results.append({"ticker": ticker, "status": "skipped_settled_in_state", "rows_added": 0,
+                            "detail": f"state file says {prior['status']}", "elapsed_sec": 0.0})
             continue
         if limit is not None and attempted >= limit:
-            break
+            results.append({"ticker": ticker, "status": "not_attempted_limit", "rows_added": 0,
+                            "detail": f"limit {limit} reached", "elapsed_sec": 0.0})
+            continue
         attempted += 1
         out = backfill_ticker(
             conn, ticker, spells, fetch_fn=fetch_fn, actions_fn=actions_fn,

@@ -23,10 +23,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-TR_VERSION = "tr-v1-from-yfinance-actions-v1"
-# The two thresholds below are part of TR_VERSION; changing either means a new version.
-MAX_ABS_DAILY_MOVE = 0.40  # fraction of prior close; larger one-day moves are treated as unexplained
-MAX_DIVIDEND_FRACTION = 0.10  # fraction of prior close; larger dividends are treated as special
+from trader_koo.research.settings import get as _settings
+
+_T = _settings().total_return
+# The two thresholds below are part of TR_VERSION; changing either means a new version (config/research.toml).
+TR_VERSION = _T.version
+MAX_ABS_DAILY_MOVE = _T.max_abs_daily_move  # fraction of prior close; larger one-day moves are unexplained
+MAX_DIVIDEND_FRACTION = _T.max_dividend_fraction  # fraction of prior close; larger dividends are special
+DIVIDEND = "dividend"
+SPLIT_TYPES = ("split", "reverse_split")
 OUT_COLUMNS = ["ticker", "date", "close", "dividend", "total_return", "tr_index", "segment", "flag"]
 
 
@@ -42,7 +47,7 @@ def _input_hash(prices: pd.DataFrame, actions: pd.DataFrame) -> str:
     return h.hexdigest()
 
 
-def _one_ticker(px: pd.DataFrame, acts: pd.DataFrame) -> pd.DataFrame:
+def _one_ticker(px: pd.DataFrame, acts: pd.DataFrame, unapplied: list) -> pd.DataFrame:
     px = px.sort_values("date").reset_index(drop=True)
     n = len(px)
     dates = px["date"].astype(str).tolist()
@@ -55,17 +60,18 @@ def _one_ticker(px: pd.DataFrame, acts: pd.DataFrame) -> pd.DataFrame:
             flags[i] = reason
 
     for row in acts.itertuples(index=False):
-        if row.action_type != "dividend":
+        if row.action_type != DIVIDEND:
             continue
         d = str(row.action_date)
         idx = next((i for i, x in enumerate(dates) if x >= d), None)
-        if idx is None:
+        if idx is None:  # ex-date after the last stored price: no return to attach it to; reported, not dropped
+            unapplied.append((str(px["ticker"].iloc[0]), d, float(row.value)))
             continue
         if dates[idx] != d:
             flag(idx, "dividend_off_calendar")
         div[idx] += float(row.value)
     split_dates = set(
-        acts.loc[acts["action_type"].isin(["split", "reverse_split"]), "action_date"].astype(str)
+        acts.loc[acts["action_type"].isin(SPLIT_TYPES), "action_date"].astype(str)
     )
 
     ret = np.full(n, np.nan)
@@ -99,15 +105,25 @@ def _one_ticker(px: pd.DataFrame, acts: pd.DataFrame) -> pd.DataFrame:
 def total_return_series(
     prices_df: pd.DataFrame, actions_df: pd.DataFrame, version: str = TR_VERSION
 ) -> pd.DataFrame:
-    """Per-ticker total-return series; attrs carry `version` and `input_sha256`."""
+    """Per-ticker total-return series.
+
+    attrs: `version`, `input_sha256`, `dividends_after_last_price` (dividends with no price row on or after their
+    ex-date, not applied) and `ignored_action_types` (action types that are neither dividend nor split, with counts).
+    """
     if actions_df is None or actions_df.empty:
         actions_df = pd.DataFrame(columns=["ticker", "action_date", "action_type", "value"])
+    unapplied: list = []
     parts = [
-        _one_ticker(px, actions_df[actions_df["ticker"] == ticker])
+        _one_ticker(px, actions_df[actions_df["ticker"] == ticker], unapplied)
         for ticker, px in prices_df.groupby("ticker", sort=True)
     ]
     out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=OUT_COLUMNS)
     out.attrs["version"] = version
+    out.attrs["dividends_after_last_price"] = unapplied
+    known = (DIVIDEND, *SPLIT_TYPES)
+    out.attrs["ignored_action_types"] = {
+        str(k): int(v) for k, v in actions_df.loc[~actions_df["action_type"].isin(known), "action_type"].value_counts().items()
+    }
     out.attrs["input_sha256"] = _input_hash(prices_df, actions_df)
     return out
 

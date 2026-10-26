@@ -2,7 +2,8 @@
 
 Every run is one JSON line. The entry holds the full config, so ``replay`` can
 re-run it; the random-control seed is derived from the config, so the same entry
-always yields the same numbers.
+always yields the same numbers. Every entry also records the sha256 of
+``config/research.toml`` as ``settings_sha256``.
 """
 from __future__ import annotations
 
@@ -12,7 +13,9 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-SEAL_FRACTION = 0.2
+from trader_koo.research.settings import get as _settings
+
+SEAL_FRACTION = _settings().bench.seal_fraction
 HEX_BASE = 16
 SEED_HEX_DIGITS = 8
 ID_LENGTH = 12
@@ -39,15 +42,23 @@ def seed_from_config(config: dict) -> int:
     return int(sha(config)[:SEED_HEX_DIGITS], HEX_BASE)
 
 
+class CodeVersionError(RuntimeError):
+    pass
+
+
 def code_version() -> str:
+    """Repository HEAD of the code, ``-dirty`` when tracked files changed. Raises when it cannot be read.
+
+    A ledger entry without a code version would break lineage, so there is no placeholder.
+    """
     root = Path(__file__).resolve().parents[REPO_ROOT_DEPTH]
     try:
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
                               text=True, check=True).stdout.strip()
         dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=root,
                                capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise CodeVersionError(f"cannot read the version of the code in {root}: {exc}") from exc
     return head + ("-dirty" if dirty else "")
 
 
@@ -76,8 +87,10 @@ def pinned_boundary(path: str | Path, sessions: list[str]) -> str:
 
 
 def append(path: str | Path, entry: dict) -> None:
+    """Append one entry, stamped with the sha256 of the settings file in force."""
+    stamped = {**entry, "settings_sha256": _settings().sha256}
     with open(path, "a", encoding="utf-8") as fh:
-        fh.write(canonical(entry) + "\n")
+        fh.write(canonical(stamped) + "\n")
 
 
 def read(path: str | Path) -> list[dict]:
