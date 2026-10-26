@@ -36,6 +36,28 @@ lists them. `--context-symbols SPY,QQQ,^VIX,^IRX` adds them as members from
 `--start`. They use the same fetch path and the same no-modification checks as every
 other ticker. To backfill only these, also pass `--tickers SPY,QQQ,^VIX,^IRX`.
 
+## One-command build
+
+```bash
+make research-db RESEARCH_DB=~/dev/.research/trader_koo_research.db SOURCE_DB=/path/to/export.db
+```
+
+Runs, in order and one process at a time: price backfill (members plus
+`SPY,QQQ,^VIX,^IRX`), membership load, SEC fundamentals load (with
+`--predecessor XOM=34088`), earnings backfill. It stops at the first stage that
+exits non-zero, logs `database is locked`, a traceback or an SQLite error, or
+reports price tickers with status `error`. Then it runs the data checks
+(`ops/research_db_checks.py`) and prints the checklist. A failing check fails
+the build. Report-only items (off-scale share counts, vendor splits missing from
+`price_corporate_actions`, flagged rows by reason, multi-class issuers) are
+listed with real counts. Stage output and the report files go to
+`<db stem>_build/` beside the database.
+
+Earnings use Finnhub and yfinance. Without `FINNHUB_API_KEY` the build refuses
+to start unless you pass `EARNINGS_SOURCE=yfinance`. For a test build on a
+subset into a temporary file, add `TICKERS=AAPL,XOM,BRK-B`. To re-run the checks
+alone: `python -m ops.research_db_checks --db-path <file>`.
+
 ## What it does and refuses to do
 
 - Universe: S&P 500 members at any time since 2010-01-01 from

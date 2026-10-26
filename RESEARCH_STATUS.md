@@ -35,6 +35,16 @@ performance claim.
   (FB, APC). Both findings support the no-alpha language below.
 - The LightGBM stack was removed. It never had a qualified model and never
   vetoed, ranked, or sized Campaign v2 trades.
+- Hypotheses version 1 (`docs/research/hypotheses-v1.md`) ran walk-forward on a
+  separate research database, 2011-01-04 to 2023-06-09, net of 10 bps per side,
+  with the last 20% of sessions sealed. H1 failed criterion 1 (46.2% of years
+  beating both benchmarks), H2 and H3 failed criteria 1 to 3, and H4 failed
+  criteria 1 to 3 on its graded 2011 to 2017 period. No hypothesis passed, so the
+  sealed window was not opened. The H4 result used a BRK-B share count of the
+  wrong class, and the universe excludes departed members that have no price
+  history. Values, trial ids and caveats: `docs/research/results-v1.md`, with the
+  frozen ledger lines in `docs/research/ledger-v1.jsonl`. This is a software and
+  data result, not evidence of alpha.
 
 The checked-in challenger artifact is immutable historical evidence. Its
 negative result is useful: the fixed current-universe dataset lacks verified
