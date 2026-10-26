@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+from trader_koo.collection.earnings_history import persist_fetched_calendar
 
 LOG = logging.getLogger("trader_koo.catalyst")
 
@@ -492,13 +493,9 @@ def _finnhub_api_key() -> str:
     return str(os.getenv("FINNHUB_API_KEY", "")).strip()
 
 
-def _fetch_finnhub_calendar_rows(api_key: str, from_date: str, to_date: str) -> list[dict[str, Any]]:
-    """Fetch full-market earnings calendar from Finnhub (free tier)."""
-    qs = urllib.parse.urlencode({
-        "from": from_date,
-        "to": to_date,
-        "token": api_key,
-    })
+def _fetch_finnhub_calendar_rows(api_key: str, from_date: str, to_date: str, symbol: str | None = None) -> list[dict[str, Any]]:
+    """Fetch the Finnhub earnings calendar (free tier): full market, or one ``symbol``."""
+    qs = urllib.parse.urlencode({"from": from_date, "to": to_date, "token": api_key, **({"symbol": symbol} if symbol else {})})
     url = f"https://finnhub.io/api/v1/calendar/earnings?{qs}"
     req = urllib.request.Request(url, headers={"User-Agent": "trader-koo/1.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -839,7 +836,7 @@ def build_earnings_calendar_payload(
     effective_universe = requested or tracked_tickers
     snapshot_ts, universe_count = _select_fund_snapshot(conn, min_complete_tickers=400)
     fundamentals_map = _load_fundamentals_snapshot_map(conn, market_date=market_date, snapshot_ts=snapshot_ts)
-    primary_rows, source_meta = _get_primary_calendar_rows(conn, days)
+    primary_rows, source_meta = persist_fetched_calendar(conn, _get_primary_calendar_rows(conn, days))
     yolo_map = _load_latest_yolo_map(conn, tickers=effective_universe or None)
     max_date = market_date + dt.timedelta(days=days)
     setup_map = {str(k or "").upper(): v for k, v in (setup_map or {}).items() if str(k or "").strip()}

@@ -998,6 +998,7 @@ def create_scheduler() -> BackgroundScheduler:
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
+    from trader_koo.backend.services.options_universe_job import register_options_universe_job
 
     scheduler = BackgroundScheduler(
         timezone="UTC",
@@ -1010,18 +1011,14 @@ def create_scheduler() -> BackgroundScheduler:
     polymarket_snapshot_minutes = env_int(
         "TRADER_KOO_POLYMARKET_SNAPSHOT_MINUTES", 5, min_value=1, max_value=60
     )
-    spike_alert_minutes = env_int(
-        "TRADER_KOO_SPIKE_ALERT_MINUTES", 5, min_value=1, max_value=60
-    )
+    spike_alert_minutes = env_int("TRADER_KOO_SPIKE_ALERT_MINUTES", 5, min_value=1, max_value=60)
     macro_alert_minutes = env_int(
         "TRADER_KOO_MACRO_ALERT_MINUTES", 10, min_value=5, max_value=60
     )
     hyperliquid_poll_minutes = env_int(
         "TRADER_KOO_HYPERLIQUID_POLL_MINUTES", 5, min_value=1, max_value=60
     )
-    site_health_minutes = env_int(
-        "TRADER_KOO_SITE_HEALTH_MINUTES", 10, min_value=5, max_value=60
-    )
+    site_health_minutes = env_int("TRADER_KOO_SITE_HEALTH_MINUTES", 10, min_value=5, max_value=60)
     crypto_health_minutes = env_int(
         "TRADER_KOO_CRYPTO_HEALTH_MINUTES", 15, min_value=5, max_value=60
     )
@@ -1101,6 +1098,8 @@ def create_scheduler() -> BackgroundScheduler:
         )
     else:
         LOG.info("Options IV snapshot job disabled by TRADER_KOO_OPTIONS_SNAPSHOT_ENABLED")
+
+    register_options_universe_job(scheduler)
 
     # Storage cleanup — daily at 04:00 UTC (after pipeline completes)
     scheduler.add_job(
