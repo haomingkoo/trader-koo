@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from trader_koo.backend.services import ops_jobs
 from trader_koo.backend.services import scheduler as scheduler_module
 from trader_koo.backend.services.scheduler import (
     _run_daily_backup,
@@ -383,7 +384,7 @@ def telegram(monkeypatch):
     """Record Telegram sends; reset the per-kind alert cooldowns."""
     from trader_koo.notifications import telegram as telegram_module
 
-    monkeypatch.setattr(scheduler_module, "_last_ops_alert_ts", {})
+    monkeypatch.setattr(ops_jobs, "_last_ops_alert_ts", {})
     sent: list[tuple[str, str]] = []
     state = SimpleNamespace(configured=True, result=True, raises=None, sent=sent)
 
@@ -438,8 +439,8 @@ def test_repeated_pipeline_failures_respect_the_cooldown(tmp_path, monkeypatch, 
     _failing_pipeline(tmp_path, monkeypatch, "pipe_fail_b")
     assert len(telegram.sent) == 1
 
-    scheduler_module._last_ops_alert_ts["pipeline_failed"] -= (
-        scheduler_module._OPS_ALERT_COOLDOWN_SEC + 1
+    ops_jobs._last_ops_alert_ts["pipeline_failed"] -= (
+        ops_jobs.OPS_ALERT_COOLDOWN_SEC + 1
     )
     _failing_pipeline(tmp_path, monkeypatch, "pipe_fail_c")
 
@@ -471,7 +472,7 @@ def test_unconfigured_telegram_logs_that_the_alert_was_not_sent(
 ):
     telegram.configured = False
 
-    with caplog.at_level("WARNING", logger="trader_koo.services.scheduler"):
+    with caplog.at_level("WARNING", logger="trader_koo.services.ops_jobs"):
         _failing_pipeline(tmp_path, monkeypatch, "pipe_fail_unconfigured")
 
     assert telegram.sent == []

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import datetime as dt
 import errno
-import html
 import json
 import logging
 import os
@@ -17,7 +16,6 @@ import sqlite3
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,6 +26,7 @@ except ImportError:  # pragma: no cover - production/runtime is Unix-like
 
 from trader_koo.backend.services.report_loader import _tail_text_file
 from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
+from trader_koo.backend.services.ops_jobs import run_daily_backup, send_ops_alert
 from trader_koo.backend.services.market_data import read_latest_ingest_run
 from trader_koo.report.utils import expected_price_date
 from trader_koo.config import (
@@ -460,7 +459,7 @@ def _run_daily_update_unlocked(
         tail = _tail_text_file(RUN_LOG_PATH, lines=25, max_bytes=100_000)
         if tail:
             LOG.error("Scheduler: recent cron tail:\n%s", "\n".join(tail))
-        _send_ops_alert(
+        send_ops_alert(
             "pipeline_failed",
             "Nightly pipeline failed",
             (
@@ -471,98 +470,12 @@ def _run_daily_update_unlocked(
 
 
 # ---------------------------------------------------------------------------
-# Operational failure alerts
-# ---------------------------------------------------------------------------
-
-# Per alert kind, so a failing backup is not muted by a pipeline alert. The
-# cooldown is in memory: a restart can repeat one alert, never suppress one.
-_OPS_ALERT_COOLDOWN_SEC = 6 * 3600
-_last_ops_alert_ts: dict[str, float] = {}
-
-
-def _send_ops_alert(kind: str, title: str, detail: str) -> None:
-    """Send one Telegram alert per *kind* per cooldown. Never raises.
-
-    Callers have already logged the original failure; an alert problem is
-    logged as a warning and must not replace or hide that error.
-    """
-    now_mono = time.monotonic()
-    last = _last_ops_alert_ts.get(kind)
-    if last is not None and now_mono - last <= _OPS_ALERT_COOLDOWN_SEC:
-        LOG.info("Scheduler: %s alert suppressed by cooldown", kind)
-        return
-    try:
-        from trader_koo.notifications import telegram
-
-        if not telegram.is_configured():
-            LOG.warning("Scheduler: Telegram not configured; %s alert not sent", kind)
-            return
-        text = f"⚠️ <b>{html.escape(title)}</b>\n\n<code>{html.escape(detail[:1500])}</code>"
-        if telegram.send_message(text, parse_mode="HTML"):
-            _last_ops_alert_ts[kind] = now_mono
-        else:
-            LOG.warning("Scheduler: Telegram rejected the %s alert", kind)
-    except Exception as exc:
-        LOG.warning("Scheduler: failed to send %s alert: %s", kind, exc)
-
-
-# ---------------------------------------------------------------------------
 # Daily backup
 # ---------------------------------------------------------------------------
 
 def _run_daily_backup() -> None:
-    """Daily job: quick-check and compress SQLite DB to a timestamped .gz backup.
-
-    Skips while a maintenance intent blocks writers, so the scheduled copy
-    cannot prune the named backup a maintenance run is still re-hashing.
-    """
-    from trader_koo.backend.services.maintenance import MaintenanceError, writers_blocked
-
-    if not DB_PATH.exists():
-        LOG.warning("Scheduler: skipping daily backup — DB not found at %s", DB_PATH)
-        _append_run_log("BACKUP", f"Skipped — DB not found at {DB_PATH}")
-        _send_ops_alert("backup_failed", "Backup failed", f"database not found at {DB_PATH}")
-        return
-    try:
-        blocked = writers_blocked(DB_PATH)
-    except MaintenanceError as exc:
-        blocked = True
-        LOG.error("Scheduler: daily backup fail-closed on maintenance state: %s", exc.code)
-    if blocked:
-        LOG.warning("Scheduler: skipping daily backup while maintenance blocks writers")
-        _append_run_log("BACKUP", "Skipped — maintenance intent blocks writers")
-        return
-
-    started = dt.datetime.now(dt.timezone.utc)
-    _append_run_log("BACKUP", "Starting daily SQLite backup")
-    LOG.info("Scheduler: starting daily SQLite backup (db=%s)", DB_PATH)
-
-    try:
-        from trader_koo.scripts.backup_db import backup_database
-
-        result = backup_database(DB_PATH)
-        elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
-        _append_run_log(
-            "BACKUP",
-            (
-                f"Backup completed: {result['backup_name']} "
-                f"src={result['src_size_bytes']}B dest={result['dest_size_bytes']}B "
-                f"ratio={result['compression_ratio_pct']}% "
-                f"pruned={result['pruned_count']} sec={elapsed:.1f}"
-            ),
-        )
-        LOG.info(
-            "Scheduler: daily backup completed OK (%s, %.1f MB -> %.1f MB, %.1fs)",
-            result["backup_name"],
-            result["src_size_bytes"] / 1_048_576,
-            result["dest_size_bytes"] / 1_048_576,
-            elapsed,
-        )
-    except Exception as exc:
-        elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
-        _append_run_log("BACKUP", f"Backup failed: {exc} sec={elapsed:.1f}")
-        LOG.error("Scheduler: daily backup failed (sec=%.1f): %s", elapsed, exc)
-        _send_ops_alert("backup_failed", "Backup failed", f"{type(exc).__name__}: {exc}")
+    """Daily job; see ``trader_koo.backend.services.ops_jobs.run_daily_backup``."""
+    run_daily_backup(DB_PATH, _append_run_log)
 
 
 # ---------------------------------------------------------------------------
