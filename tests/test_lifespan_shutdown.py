@@ -76,8 +76,8 @@ def test_child_grace_fits_inside_configured_railway_drain_window():
     draining = tomllib.loads((repo / "railway.toml").read_text())["deploy"].get("drainingSeconds")
     if draining is None:
         pytest.skip(
-            "railway.toml sets no deploy.drainingSeconds, so Railway may SIGKILL "
-            "before lifespan shutdown stops writer children"
+            "railway.toml sets no deploy.drainingSeconds yet; this test goes live "
+            "once fix/dark-deploy-rollback-hardening lands with drainingSeconds = 120"
         )
     match = re.search(r"--timeout-graceful-shutdown (\d+)", (repo / "start.sh").read_text())
     assert match, "start.sh must cap uvicorn's graceful shutdown"
