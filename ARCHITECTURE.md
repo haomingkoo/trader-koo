@@ -701,7 +701,7 @@ Configurable allowed origins via `TRADER_KOO_CORS_ORIGINS` env var. Defaults to 
 - All secrets stored as Railway env vars, never hardcoded
 - Secret redaction in log output (API keys, tokens masked)
 - `.env.example` with placeholder values for documentation
-- `GET /api/config` returns the API key for frontend auth — acceptable for a personal tool, not suitable for multi-tenant use
+- `GET /api/config` returns no auth details; the admin key is kept in browser memory only
 
 ---
 

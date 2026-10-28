@@ -505,9 +505,7 @@ async def lifespan(_app: FastAPI):
 # App creation
 # ---------------------------------------------------------------------------
 
-# FastAPI registers these routes in its constructor, so the flag must be
-# resolved before the app is built.
-_DOCS_ENABLED = os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1"
+_DOCS_ENABLED = os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1"  # read before routes register
 app = FastAPI(
     title="trader_koo API",
     version="0.2.0",
@@ -559,8 +557,7 @@ from trader_koo.ratelimit.middleware import RateLimitMiddleware
 
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(MaintenanceInterlockMiddleware, db_path=DB_PATH)
-# Added last so it is outermost and also covers 429 and 503 responses.
-app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)  # outermost: also covers 429 and 503
 
 
 # ---------------------------------------------------------------------------

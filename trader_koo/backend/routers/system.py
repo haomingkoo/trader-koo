@@ -270,16 +270,9 @@ def _sanitize_status_payload(payload: dict[str, Any], *, expose_internal: bool) 
         return sanitized
 
     service_meta = dict(sanitized.get("service_meta") or {})
-    # The admin header name and action paths are an attack map; operators
-    # read them from the codebase, so public status omits them.
-    for key in (
-        "git_sha",
-        "deployed_ts",
-        "deployment_id",
-        "auth_header",
-        "admin_auth_configured",
-        "actions",
-    ):
+    # Admin header name and action paths are an attack map; keep them private.
+    for key in ("git_sha", "deployed_ts", "deployment_id",
+                "auth_header", "admin_auth_configured", "actions"):
         service_meta.pop(key, None)
     sanitized["service_meta"] = service_meta
 
