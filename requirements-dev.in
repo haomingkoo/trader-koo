@@ -1,7 +1,4 @@
-# Development dependencies plus every production dependency. Edit this file,
-# then run `make lock` to regenerate the hashed requirements-dev.txt lock.
-# -r makes the dev lock name every runtime package, so Dependabot recompiles it
-# on each runtime bump (it follows -r, not -c); -c keeps the runtime versions.
+# Dev dependencies plus every runtime pin, locked by `make lock`; see DEPLOYMENT.md, "Python dependency lock".
 -r requirements.in
 -c requirements.txt
 

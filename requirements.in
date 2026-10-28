@@ -1,6 +1,4 @@
-# Production dependencies. Edit this file, then run `make lock` to regenerate
-# the hashed requirements.txt lock (Linux x86_64, Python 3.11) that Railway and
-# CI install with --no-deps. See DEPLOYMENT.md, "Python dependency lock".
+# Production dependencies, locked by `make lock`; see DEPLOYMENT.md, "Python dependency lock".
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 pandas==2.3.3
@@ -25,9 +23,7 @@ exchange-calendars==4.13.2
 jsonschema==4.26.0
 hyperliquid-python-sdk==0.24.0
 
-# CPU-only PyTorch. Linux resolves the +cpu builds from the index above, so
-# ultralytics' torch>=1.8.0 never pulls the CUDA wheels and nvidia-* packages.
-# macOS has no +cpu local version; its plain wheels are already CPU-only.
+# CPU-only PyTorch, +cpu on Linux only; see DEPLOYMENT.md, "Python dependency lock".
 torch==2.13.0+cpu ; sys_platform == "linux"
 torch==2.13.0 ; sys_platform != "linux"
 torchvision==0.28.0+cpu ; sys_platform == "linux"

@@ -6,16 +6,12 @@ set -euo pipefail
 log() { echo "==> [build] $*"; }
 
 # ── 1. Install package in editable mode ─────────────────────────────────
-# The nixpacks install phase (nixpacks.toml) already installed the hashed
-# requirements.txt lock, including CPU-only torch. --no-deps keeps this step
-# from resolving anything outside that lock, and --no-build-isolation builds
-# with the locked setuptools instead of fetching the latest one from PyPI.
+# nixpacks already installed the hashed lock; see DEPLOYMENT.md, "Python dependency lock".
 log "Installing trader_koo package..."
 pip install --no-deps --no-build-isolation -e .
 
 # ── 2. Keep only opencv-python-headless ────────────────────────────────
-# ultralytics pulls in GUI opencv-python, which needs libGL.so.1. Both wheels
-# own cv2/, so remove both and reinstall the headless one from its locked hashes.
+# ultralytics pulls in GUI opencv-python, which needs libGL; see DEPLOYMENT.md, "Python dependency lock".
 log "Switching to opencv-python-headless..."
 bash scripts/use-headless-opencv.sh python
 

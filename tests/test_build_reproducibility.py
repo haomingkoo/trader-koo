@@ -66,8 +66,7 @@ def test_runtime_lock_resolves_cpu_torch_without_cuda() -> None:
     assert pins["opencv-python-headless"] == "4.10.0.84"
     assert not [name for name in pins if name.startswith("nvidia-")]
     assert "triton" not in pins
-    # torch needs setuptools; Dependabot adds --allow-unsafe when it sees this
-    # pin, so the lock must be compiled with it too or updates would diverge.
+    # Dependabot adds --allow-unsafe for setuptools; see DEPLOYMENT.md.
     assert "setuptools" in pins
     assert "--allow-unsafe" in text.split("\n\n", 1)[0]
 
@@ -83,10 +82,7 @@ def test_lock_input_selects_cpu_torch_on_linux_and_plain_wheels_elsewhere() -> N
 
 
 def test_dev_lock_contains_every_runtime_pin() -> None:
-    # Dependabot recompiles only the .in files whose lock already names the
-    # bumped package, and it follows -r but not -c. Including requirements.in
-    # puts every runtime package in the dev lock, so a runtime bump always
-    # regenerates both locks; -c keeps the dev lock on the runtime versions.
+    # Dependabot regenerates both locks on a runtime bump; see DEPLOYMENT.md.
     lines = DEV_LOCK_INPUT.read_text(encoding="utf-8").splitlines()
     assert "-r requirements.in" in lines
     assert "-c requirements.txt" in lines
