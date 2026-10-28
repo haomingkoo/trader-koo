@@ -23,7 +23,7 @@ is in `ops/INCIDENT_RUNBOOK.md`.
 | Volume | Railway Hobby, 5 GB cap, cannot be resized from the CLI |
 | Scheduled backup | daily at 03:00 UTC (`daily_backup` in `trader_koo/backend/services/scheduler.py`), after the 22:00 UTC pipeline and paper admission and before the 04:00 storage cleanup |
 | Other backups | every dark-deploy run (`POST /api/admin/backups`) and every maintenance `quiesce-backup` |
-| Integrity | each snapshot must pass `PRAGMA quick_check` before compression, or the backup fails and nothing is written |
+| Integrity | each snapshot must pass `PRAGMA quick_check` before compression, or the backup fails and nothing is written. Compression writes `<name>.partial` and renames it only after fsync and hashing, so a failed write (for example a full disk) never shows up as a backup |
 | Retention | `trader_koo/scripts/backup_db.py`: the 2 newest copies, the newest copy of each of the 3 most recent UTC days, and the newest copy of each of the 4 most recent ISO weeks, never more than `MAX_BACKUPS = 7` files |
 | Visibility | public `/api/status` field `backup.latest_backup_utc` and `backup.latest_backup_size_bytes` |
 | Alerting | Telegram on a failed scheduled backup; the hourly `prod-freshness.yml` run fails when the newest backup is older than 30 hours |
@@ -32,6 +32,13 @@ All three kinds of backup share the one budget of 7. The tiers make sure a burst
 of same-day dark-deploy runs cannot evict every older restore point. Files that
 do not match `trader_koo_backup_<UTC stamp>.db.gz` (for example
 `pre_split_rebase*`) are never pruned and do not count toward the budget.
+A `*.db.gz.partial` file left by a killed process is not pruned either; delete
+it by hand once no backup is running.
+
+History depth: at a steady daily cadence the oldest kept restore point is about
+3 ISO weeks old. The weekly schedule this replaced kept 7 weekly copies when no
+dark-deploy bursts happened, so the history is now shorter in exchange for a
+restore point at most a day old.
 
 Disk budget: on 2026-10-28 the database was 1.43 GB and each compressed backup
 about 0.2 GB, so seven backups take about 1.4 GB. The nightly VACUUM needs about
