@@ -249,6 +249,19 @@ def test_latest_attempted_dark_deploy_failure_fails():
     assert "dark-deploy" in problems[0] and "ad0cee74" in problems[0]
 
 
+@pytest.mark.parametrize("conclusion", ["timed_out", "startup_failure"])
+def test_latest_attempted_dark_deploy_must_conclude_success(conclusion):
+    runs = copy.deepcopy(RECORDED["deploy_runs"])
+    runs["workflow_runs"].insert(
+        0, {"status": "completed", "conclusion": conclusion, "head_sha": "e" * 40}
+    )
+
+    problems = _evaluate(deploy_runs=runs)
+
+    assert len(problems) == 1
+    assert "dark-deploy" in problems[0] and conclusion in problems[0]
+
+
 def test_unapproved_cancelled_runs_do_not_hide_an_earlier_failure():
     runs = copy.deepcopy(RECORDED["deploy_runs"])
     runs["workflow_runs"] = runs["workflow_runs"][1:]

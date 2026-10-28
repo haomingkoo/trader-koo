@@ -15,7 +15,7 @@ Checks, all fail-closed (a missing or unparseable field is a failure):
 - the ``/api/release`` git_sha is on ``main`` and the oldest commit not yet
   deployed landed less than ``RELEASE_LAG_MAX`` ago (GitHub compare API);
 - the latest attempted dark-deploy run (cancelled runs are unapproved, not
-  attempts) did not conclude ``failure``.
+  attempts) concluded ``success``.
 """
 from __future__ import annotations
 
@@ -172,10 +172,10 @@ def _check_deploy_runs(deploy_runs: dict[str, Any]) -> str | None:
     for run in runs:
         if run.get("status") != "completed" or run.get("conclusion") in NOT_ATTEMPTED:
             continue
-        if run.get("conclusion") == "failure":
+        if run.get("conclusion") != "success":
             return (
                 f"latest attempted dark-deploy run for {str(run.get('head_sha') or '')[:8]} "
-                f"concluded failure ({run.get('created_at')})"
+                f"concluded {run.get('conclusion')} ({run.get('created_at')})"
             )
         return None
     return None
