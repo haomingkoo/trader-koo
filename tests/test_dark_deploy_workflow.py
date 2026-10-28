@@ -55,18 +55,35 @@ def test_dark_deploy_tracks_the_new_id_and_waits_for_its_terminal_status() -> No
     assert "FAILED|CRASHED|REMOVED|REMOVING|SKIPPED)" in rollback_block
 
 
-def test_dark_deploy_reserves_time_for_rollback() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+def test_dark_deploy_time_budgets_cover_health_check_and_rollback() -> None:
+    import tomllib
 
-    timeout_minutes = 45
-    deploy_seconds = 90 * 5
-    rollback_seconds = 120 * 5
-    reserve_seconds = timeout_minutes * 60 - deploy_seconds - rollback_seconds
+    import yaml
 
-    assert "timeout-minutes: 45" in workflow
-    assert 'DEPLOYMENT_POLL_ATTEMPTS: "90"' in workflow
-    assert 'ROLLBACK_POLL_ATTEMPTS: "120"' in workflow
-    assert reserve_seconds >= 25 * 60
+    railway = tomllib.loads((WORKFLOW.parents[2] / "railway.toml").read_text(encoding="utf-8"))
+    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["dark-deploy"]
+    steps = {step["name"]: step for step in job["steps"]}
+    health_seconds = railway["deploy"]["healthcheckTimeout"]
+    interval = int(job["env"]["DEPLOYMENT_POLL_INTERVAL_SEC"])
+    deploy_poll_seconds = int(job["env"]["DEPLOYMENT_POLL_ATTEMPTS"]) * interval
+    rollback_poll_seconds = int(job["env"]["ROLLBACK_POLL_ATTEMPTS"]) * interval
+    install = steps["Install release tooling"]["timeout-minutes"]
+    upload = steps["Upload dark release and wait for Railway health gate"]["timeout-minutes"]
+    record = steps["Record dark deployment"]["timeout-minutes"]
+    rollback_step = steps["Roll back code and variables after any failed release check"]
+    rollback = rollback_step["timeout-minutes"]
+    # Backup, migration replay, API checks, Chromium journeys, and manifests.
+    unbounded_minutes = 15
+
+    assert railway["deploy"]["drainingSeconds"] == 120
+    assert 540 <= health_seconds <= 660
+    assert deploy_poll_seconds >= health_seconds + 120
+    assert rollback_poll_seconds >= health_seconds + 120
+    assert record * 60 > deploy_poll_seconds
+    assert rollback * 60 > rollback_poll_seconds
+    assert install >= 20 and upload >= 15
+    assert job["timeout-minutes"] >= install + upload + record + rollback + unbounded_minutes
+    assert "failure() || cancelled()" in rollback_step["if"]
 
 
 def test_railway_gate_json_shape_fails_closed() -> None:

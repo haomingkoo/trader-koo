@@ -18,7 +18,9 @@ jobs:
   dark-deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Install 25 + upload 25 + record 20 + rollback 25 + 15 for the other
+    # steps. A job timeout skips cleanup, so the rollback must fit inside it.
+    timeout-minutes: 110
     environment:
       name: production-dark
       url: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
@@ -30,8 +32,9 @@ jobs:
       BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
       ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-      DEPLOYMENT_POLL_ATTEMPTS: "90"
-      ROLLBACK_POLL_ATTEMPTS: "120"
+      # 180 polls x 5 s = 900 s: the 600 s Railway health check plus margin.
+      DEPLOYMENT_POLL_ATTEMPTS: "180"
+      ROLLBACK_POLL_ATTEMPTS: "180"
       ROLLBACK_NEW_DEPLOYMENT_GRACE_POLLS: "12"
       DEPLOYMENT_POLL_INTERVAL_SEC: "5"
     steps:
@@ -55,6 +58,7 @@ jobs:
           cache-dependency-path: trader_koo/frontend-v2/package-lock.json
 
       - name: Install release tooling
+        timeout-minutes: 25
         run: |
           make backend-install
           npm ci --prefix trader_koo/frontend-v2
@@ -160,6 +164,7 @@ jobs:
 
       - name: Upload dark release and wait for Railway health gate
         id: upload
+        timeout-minutes: 25
         env:
           NO_COLOR: "1"
         run: |
@@ -183,6 +188,7 @@ jobs:
 
       - name: Record dark deployment
         id: deployed
+        timeout-minutes: 20
         env:
           UPLOAD_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}
         run: |
@@ -254,7 +260,8 @@ jobs:
 
       - name: Roll back code and variables after any failed release check
         id: rollback
-        if: ${{ failure() && steps.previous.outputs.id != '' }}
+        timeout-minutes: 25
+        if: ${{ (failure() || cancelled()) && steps.previous.outputs.id != '' }}
         env:
           PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
