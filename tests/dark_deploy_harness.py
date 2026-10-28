@@ -81,11 +81,15 @@ def run_step(
     *,
     env: dict[str, str],
     scenario: dict[str, list[dict[str, Any]]],
+    files: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, Any]], dict[str, str]]:
     script = step(name)["run"]
     assert "${{" not in script, "pass workflow expressions through step env"
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
+    # Files that earlier steps leave in /tmp, such as the recorded deployments.
+    for file_name, text in (files or {}).items():
+        (work / file_name).write_text(text, encoding="utf-8")
     script = script.replace("/tmp/", f"{work}/")
     (tmp_path / "ops").mkdir(exist_ok=True)
     for query in (ROOT / "ops").glob("*.graphql"):
