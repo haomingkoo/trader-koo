@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: prod-freshness
@@ -29,7 +30,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check health and price freshness
+      - name: Check health, data, backup and release freshness
         env:
           BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
-        run: python ops/check_prod_freshness.py --base-url "$BASE_URL"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python ops/check_prod_freshness.py --base-url "$BASE_URL" --repo "$GITHUB_REPOSITORY"
