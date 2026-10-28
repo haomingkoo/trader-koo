@@ -74,7 +74,7 @@ elif [ "$BOOT_STATE" != "ready" ]; then
 fi
 
 echo "[start.sh] Starting uvicorn server..."
-# Railway drains for 120s before SIGKILL. Capping connection drain at 90s
-# leaves time for lifespan shutdown to stop writer children.
+# Capping connection drain at 90s leaves lifespan shutdown 20s to stop writer
+# children, but only if Railway's deploy.drainingSeconds is at least 120.
 exec "$UVICORN" trader_koo.backend.main:app --host 0.0.0.0 --port "${PORT:-8000}" \
     --timeout-graceful-shutdown 90

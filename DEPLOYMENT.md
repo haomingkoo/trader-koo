@@ -30,6 +30,13 @@ unreadable, or fails `PRAGMA quick_check`. Set
 a new volume, and remove it once the seed finishes. See "First-run DB seed"
 in `ARCHITECTURE.md`.
 
+On SIGTERM, uvicorn drains connections for up to 90s
+(`--timeout-graceful-shutdown 90`), then lifespan shutdown gives scheduler
+writer children 20s to exit before it SIGKILLs them. That sequence only
+finishes if Railway waits at least 120s before its own SIGKILL, which needs
+`deploy.drainingSeconds = 120` on the service. Until that is set, Railway can
+still kill writer children mid-write during a deploy or restart.
+
 Campaign activation and reset endpoints are intentionally absent from the
 deployment workflow. They require a separate authenticated human decision.
 

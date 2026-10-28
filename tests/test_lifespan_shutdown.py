@@ -1,6 +1,8 @@
 """Lifespan shutdown stops writer children before the scheduler."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from trader_koo.backend.services import child_processes
@@ -36,7 +38,21 @@ def test_lifespan_uses_child_aware_shutdown(tmp_path, monkeypatch: pytest.Monkey
     assert "_scheduler.shutdown(" not in source
 
 
-def test_child_grace_fits_inside_railway_drain_window():
-    uvicorn_graceful_sec = 90
-    railway_draining_sec = 120
-    assert uvicorn_graceful_sec + child_processes.CHILD_TERMINATE_GRACE_SEC < railway_draining_sec
+def test_child_grace_fits_inside_configured_railway_drain_window():
+    import re
+
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10 local venvs; CI runs 3.11
+        import tomli as tomllib
+
+    repo = Path(__file__).resolve().parents[1]
+    draining = tomllib.loads((repo / "railway.toml").read_text())["deploy"].get("drainingSeconds")
+    if draining is None:
+        pytest.skip(
+            "railway.toml sets no deploy.drainingSeconds, so Railway may SIGKILL "
+            "before lifespan shutdown stops writer children"
+        )
+    match = re.search(r"--timeout-graceful-shutdown (\d+)", (repo / "start.sh").read_text())
+    assert match, "start.sh must cap uvicorn's graceful shutdown"
+    assert int(match.group(1)) + child_processes.CHILD_TERMINATE_GRACE_SEC < draining
