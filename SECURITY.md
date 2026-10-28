@@ -31,6 +31,27 @@ Response targets:
 - Public endpoints should remain read-only (`/api/health`, `/api/status`).
 - All `/api/admin/*` endpoints must require `X-API-Key`.
 - Never expose admin keys in frontend JavaScript, HTML, or browser storage.
+  The Guide page's admin panel keeps the key in React state until reload. It
+  also deletes the `trader_koo_admin_key` value that older builds left in
+  `localStorage`.
+- Public `/api/status` omits the admin auth header, the key-configured flag
+  and the admin action paths. They return only with
+  `TRADER_KOO_EXPOSE_STATUS_INTERNAL=1`.
+- `/openapi.json`, `/docs` and `/redoc` exist only with
+  `TRADER_KOO_DOCS_ENABLED=1`. Leave it unset in production.
+
+## Browser Hardening
+- Every HTTP response carries `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`.
+  It also sends `Referrer-Policy: strict-origin-when-cross-origin` and a
+  `Permissions-Policy` that disables camera, microphone, geolocation, payment
+  and USB. A header set by a route wins
+  (`trader_koo/middleware/security_headers.py`).
+- The SPA's main policy is the `<meta>` CSP in
+  `trader_koo/frontend-v2/index.html`. Its `script-src` has no
+  `'unsafe-inline'` because the Vite build emits only external module
+  scripts. Keep `static.cloudflareinsights.com` in it for the Cloudflare
+  beacon.
 
 ## Client IP and Proxy Headers
 Rate limits, the admin lockout and the audit log key on the client IP from
@@ -71,3 +92,8 @@ also answers directly without Cloudflare.
 - Install and run pre-commit hooks before pushing.
 - Run secret scanning on staged changes.
 - Review `git diff` for accidental key/config leakage.
+- CI fails on known Python dependency vulnerabilities (`pip-audit` in the
+  `security-contracts` job) and on high-severity npm advisories. Each ignored
+  advisory carries its reason in `.github/workflows/ci.yml`.
+- CodeQL scans Python, TypeScript and the workflows on pushes and pull
+  requests to `main`, and weekly (`.github/workflows/codeql.yml`).
