@@ -1,11 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 const expectedSha = process.env.PLAYWRIGHT_EXPECTED_SHA;
-const apiKey = process.env.PLAYWRIGHT_ADMIN_API_KEY;
 
 test("exact inactive release works through production pages", async ({ page, request }) => {
   expect(expectedSha).toBeTruthy();
-  expect(apiKey).toBeTruthy();
   const release = await request.get("/api/release");
   expect(release.ok()).toBeTruthy();
   expect(await release.json()).toMatchObject({ ok: true, git_sha: expectedSha });
