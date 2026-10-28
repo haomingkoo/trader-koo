@@ -507,20 +507,35 @@ def _send_ops_alert(kind: str, title: str, detail: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Weekly backup
+# Daily backup
 # ---------------------------------------------------------------------------
 
-def _run_weekly_backup() -> None:
-    """Saturday job: compress SQLite DB to a timestamped .gz backup."""
+def _run_daily_backup() -> None:
+    """Daily job: quick-check and compress SQLite DB to a timestamped .gz backup.
+
+    Skips while a maintenance intent blocks writers, so the scheduled copy
+    cannot prune the named backup a maintenance run is still re-hashing.
+    """
+    from trader_koo.backend.services.maintenance import MaintenanceError, writers_blocked
+
     if not DB_PATH.exists():
-        LOG.warning("Scheduler: skipping weekly backup — DB not found at %s", DB_PATH)
+        LOG.warning("Scheduler: skipping daily backup — DB not found at %s", DB_PATH)
         _append_run_log("BACKUP", f"Skipped — DB not found at {DB_PATH}")
         _send_ops_alert("backup_failed", "Backup failed", f"database not found at {DB_PATH}")
         return
+    try:
+        blocked = writers_blocked(DB_PATH)
+    except MaintenanceError as exc:
+        blocked = True
+        LOG.error("Scheduler: daily backup fail-closed on maintenance state: %s", exc.code)
+    if blocked:
+        LOG.warning("Scheduler: skipping daily backup while maintenance blocks writers")
+        _append_run_log("BACKUP", "Skipped — maintenance intent blocks writers")
+        return
 
     started = dt.datetime.now(dt.timezone.utc)
-    _append_run_log("BACKUP", "Starting weekly SQLite backup")
-    LOG.info("Scheduler: starting weekly SQLite backup (db=%s)", DB_PATH)
+    _append_run_log("BACKUP", "Starting daily SQLite backup")
+    LOG.info("Scheduler: starting daily SQLite backup (db=%s)", DB_PATH)
 
     try:
         from trader_koo.scripts.backup_db import backup_database
@@ -537,7 +552,7 @@ def _run_weekly_backup() -> None:
             ),
         )
         LOG.info(
-            "Scheduler: weekly backup completed OK (%s, %.1f MB -> %.1f MB, %.1fs)",
+            "Scheduler: daily backup completed OK (%s, %.1f MB -> %.1f MB, %.1fs)",
             result["backup_name"],
             result["src_size_bytes"] / 1_048_576,
             result["dest_size_bytes"] / 1_048_576,
@@ -546,7 +561,7 @@ def _run_weekly_backup() -> None:
     except Exception as exc:
         elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
         _append_run_log("BACKUP", f"Backup failed: {exc} sec={elapsed:.1f}")
-        LOG.error("Scheduler: weekly backup failed (sec=%.1f): %s", elapsed, exc)
+        LOG.error("Scheduler: daily backup failed (sec=%.1f): %s", elapsed, exc)
         _send_ops_alert("backup_failed", "Backup failed", f"{type(exc).__name__}: {exc}")
 
 
@@ -1093,10 +1108,12 @@ def create_scheduler() -> BackgroundScheduler:
         id="weekly_yolo",
         replace_existing=True,
     )
+    # Every day at 03:00 UTC: after the 22:00 pipeline and its paper admission
+    # (about 35 minutes in production), before the 04:00 storage cleanup.
     scheduler.add_job(
-        _run_weekly_backup,
-        CronTrigger(hour=2, minute=0, day_of_week="sat", timezone="UTC"),
-        id="weekly_backup",
+        _run_daily_backup,
+        CronTrigger(hour=3, minute=0, timezone="UTC"),
+        id="daily_backup",
         replace_existing=True,
     )
 

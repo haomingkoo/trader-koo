@@ -734,7 +734,7 @@ APScheduler `BackgroundScheduler` runs inside the FastAPI process.
 | Mon–Fri 22:00 UTC | `CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="UTC")` | `daily_update` runs `daily_update.sh` (ingest + YOLO + report) |
 | Saturday 00:30 UTC | `CronTrigger(hour=0, minute=30, day_of_week="sat", timezone="UTC")` | `weekly_yolo`: YOLO full seed (all tickers, both timeframes) |
 
-Other jobs registered in the same file include `preopen_report_watchdog`, `weekly_backup`, `polymarket_snapshot`, `storage_cleanup`, `crypto_health_check`, `hyperliquid_poll`, `derivatives_snapshot`, `calibration_pulse`, and `memory_cleanup`. Some are conditional: `morning_summary`, `spike_alerts`, `macro_alert`, and `site_health_check` need `TELEGRAM_BOT_TOKEN`, and `options_iv_snapshot` needs its snapshot config enabled. `trader_koo/backend/services/scheduler.py` is authoritative for the job list, triggers, and conditions.
+Other jobs registered in the same file include `preopen_report_watchdog`, `daily_backup`, `polymarket_snapshot`, `storage_cleanup`, `crypto_health_check`, `hyperliquid_poll`, `derivatives_snapshot`, `calibration_pulse`, and `memory_cleanup`. Some are conditional: `morning_summary`, `spike_alerts`, `macro_alert`, and `site_health_check` need `TELEGRAM_BOT_TOKEN`, and `options_iv_snapshot` needs its snapshot config enabled. `trader_koo/backend/services/scheduler.py` is authoritative for the job list, triggers, and conditions.
 
 22:00 UTC covers all US market closes (Mon–Fri 4pm ET = 21:00 UTC in EDT / 22:00 UTC in EST — the schedule uses 22:00 as a conservative post-close time).
 

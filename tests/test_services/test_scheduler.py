@@ -10,7 +10,7 @@ import pytest
 
 from trader_koo.backend.services import scheduler as scheduler_module
 from trader_koo.backend.services.scheduler import (
-    _run_weekly_backup,
+    _run_daily_backup,
     _run_memory_cleanup,
     _run_daily_update_unlocked,
     _run_preopen_report_watchdog,
@@ -501,7 +501,7 @@ def _backup_env(tmp_path, monkeypatch, *, blocked: bool = False):
 def test_daily_backup_succeeds_without_alert(tmp_path, monkeypatch, telegram):
     calls = _backup_env(tmp_path, monkeypatch)
 
-    _run_weekly_backup()
+    _run_daily_backup()
 
     assert len(calls) == 1
     assert len(list((tmp_path / "backups").glob("*.db.gz"))) == 1
@@ -514,7 +514,7 @@ def test_failed_backup_sends_an_alert(tmp_path, monkeypatch, telegram):
     _backup_env(tmp_path, monkeypatch)
     monkeypatch.setattr(backup_db, "_quick_check", lambda path: ["row 9 missing from index"])
 
-    _run_weekly_backup()
+    _run_daily_backup()
 
     assert len(telegram.sent) == 1
     assert "Backup failed" in telegram.sent[0][0]
@@ -529,7 +529,7 @@ def test_backup_and_pipeline_alerts_have_separate_cooldowns(tmp_path, monkeypatc
     _backup_env(tmp_path, monkeypatch)
     monkeypatch.setattr(backup_db, "_quick_check", lambda path: ["bad page"])
 
-    _run_weekly_backup()
+    _run_daily_backup()
 
     assert len(telegram.sent) == 2
 
@@ -537,7 +537,29 @@ def test_backup_and_pipeline_alerts_have_separate_cooldowns(tmp_path, monkeypatc
 def test_missing_database_backup_sends_an_alert(tmp_path, monkeypatch, telegram):
     monkeypatch.setattr(scheduler_module, "DB_PATH", tmp_path / "absent.db")
 
-    _run_weekly_backup()
+    _run_daily_backup()
 
     assert len(telegram.sent) == 1
     assert "not found" in telegram.sent[0][0]
+
+
+def test_backup_skips_while_maintenance_blocks_writers(tmp_path, monkeypatch, telegram):
+    calls = _backup_env(tmp_path, monkeypatch, blocked=True)
+
+    _run_daily_backup()
+
+    assert calls == []
+    assert telegram.sent == []
+
+
+def test_backup_is_daily_after_the_nightly_pipeline():
+    scheduler = create_scheduler()
+
+    assert scheduler.get_job("weekly_backup") is None
+    job = scheduler.get_job("daily_backup")
+    assert job is not None
+    assert str(job.trigger) == "cron[hour='3', minute='0']"
+    pipeline = str(scheduler.get_job("daily_update").trigger)
+    assert pipeline == "cron[day_of_week='mon-fri', hour='22', minute='0']"
+    cleanup = str(scheduler.get_job("storage_cleanup").trigger)
+    assert cleanup == "cron[hour='4', minute='0']"

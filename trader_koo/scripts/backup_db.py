@@ -4,7 +4,7 @@ Usage (standalone)::
 
     python -m trader_koo.scripts.backup_db --db-path /data/trader_koo.db
 
-Or called programmatically by the APScheduler weekly job in
+Or called programmatically by the APScheduler daily job in
 ``trader_koo.backend.services.scheduler``.
 """
 from __future__ import annotations
