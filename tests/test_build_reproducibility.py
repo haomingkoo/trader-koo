@@ -141,3 +141,15 @@ def test_dependabot_keeps_torch_pins_manual() -> None:
     ]
     ignored = {entry["dependency-name"] for entry in root_pip.get("ignore", [])}
     assert {"torch", "torchvision"} <= ignored
+
+
+def test_ci_checks_the_locks_match_their_inputs() -> None:
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    lock_job = workflow["jobs"]["dependency-lock"]
+    runs = [step.get("run", "") for step in lock_job["steps"]]
+
+    assert any("make lock-check" in run for run in runs)
+    for step in lock_job["steps"]:
+        uses = step.get("uses")
+        if uses:
+            assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", uses), uses
