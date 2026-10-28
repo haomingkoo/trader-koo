@@ -37,6 +37,10 @@ writer children 20s to exit before it SIGKILLs them. Child shutdown needs
 SIGKILL the container first and kill writer children mid-write during a
 deploy or restart.
 
+If preflight crash-loops on a corrupt database and no maintenance run is
+active, temporarily set the Railway start command to `sleep infinity`, SSH
+in, run maintenance or restore the database, then revert the start command.
+
 Campaign activation and reset endpoints are intentionally absent from the
 deployment workflow. They require a separate authenticated human decision.
 
