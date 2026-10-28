@@ -31,9 +31,9 @@ Response targets:
 - Public endpoints should remain read-only (`/api/health`, `/api/status`).
 - All `/api/admin/*` endpoints must require `X-API-Key`.
 - Never expose admin keys in frontend JavaScript, HTML, or browser storage.
-  The Guide page's admin panel keeps the key in React state until reload. It
-  also deletes the `trader_koo_admin_key` value that older builds left in
-  `localStorage`.
+  The Guide page's admin panel keeps the key in React state until reload.
+  Every SPA load deletes the `trader_koo_admin_key` value that older builds
+  left in `localStorage` (`trader_koo/frontend-v2/src/main.tsx`).
 - Public `/api/status` omits the admin auth header, the key-configured flag
   and the admin action paths. They return only with
   `TRADER_KOO_EXPOSE_STATUS_INTERNAL=1`.

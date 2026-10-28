@@ -1,10 +1,9 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePipelineStatus, useTriggerUpdate } from "../api/hooks";
 import type { PipelineStatus } from "../api/types";
 import Badge from "./ui/Badge";
 import { derivePipelineState, priceBasisStatusCopy } from "./pipelineState";
-import { clearLegacyAdminKey } from "./adminKey";
 
 /* ── Helpers ── */
 
@@ -358,10 +357,6 @@ export default function PipelineOpsPanel() {
   const { data, isLoading } = usePipelineStatus();
   const queryClient = useQueryClient();
   const [adminKey, setAdminKey] = useState("");
-
-  useEffect(() => {
-    clearLegacyAdminKey();
-  }, []);
 
   const state = derivePipelineState(data);
   const isRunning = state === "running";

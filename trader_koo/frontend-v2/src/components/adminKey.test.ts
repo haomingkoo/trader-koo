@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { LEGACY_ADMIN_KEY_STORAGE, clearLegacyAdminKey } from "./adminKey.ts";
 
@@ -39,4 +40,13 @@ test("does not throw when browser storage is blocked", () => {
 
 test("does not throw when browser storage is absent", () => {
   assert.doesNotThrow(() => clearLegacyAdminKey(() => undefined));
+});
+
+test("the app entry clears the legacy key before the first render", () => {
+  // The Guide admin panel is not mounted on most visits, so the clear runs at start-up.
+  const entry = readFileSync(new URL("../main.tsx", import.meta.url), "utf8");
+  const clearAt = entry.indexOf("clearLegacyAdminKey();");
+
+  assert.ok(clearAt >= 0, "main.tsx must call clearLegacyAdminKey()");
+  assert.ok(clearAt < entry.indexOf("createRoot("), "clear must run before render");
 });
