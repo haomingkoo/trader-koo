@@ -106,6 +106,18 @@ def test_existing_db_starts_server_without_seed(harness):
     assert "1 price_daily rows" in result.stdout + result.stderr
 
 
+def test_uvicorn_gets_bounded_graceful_shutdown(harness):
+    run, calls, db_path = harness
+    _seed_db(db_path)
+
+    result = run()
+
+    assert result.returncode == 0, result.stderr
+    args = (calls / "uvicorn").read_text().splitlines()
+    i = args.index("--timeout-graceful-shutdown")
+    assert args[i + 1] == "90"
+
+
 def test_production_missing_volume_db_refuses_to_boot(harness, tmp_path):
     run, calls, db_path = harness
 
