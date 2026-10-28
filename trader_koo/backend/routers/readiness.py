@@ -2,7 +2,7 @@
 
 ``/api/health`` stays the cheap liveness probe Railway gates deploys on. This
 probe returns 503 unless the scheduler is running, ``daily_update`` has a next
-run time, and the DB answers ``SELECT 1`` and ``PRAGMA quick_check(1)`` over a
+run time, and the DB reads its schema and answers ``PRAGMA quick_check(1)`` over a
 read-only connection. It exposes only booleans. The system router includes it.
 
 In the deployed app the maintenance interlock answers 503 for this path before
@@ -47,7 +47,9 @@ def _db_readable(db_path: Path) -> bool:
     try:
         conn = _open_db_read_only(db_path)
         try:
-            return conn.execute("SELECT 1").fetchone() == (1,)
+            # SELECT 1 can succeed without reading the file; the schema read cannot.
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return True
         finally:
             conn.close()
     except sqlite3.Error as exc:
