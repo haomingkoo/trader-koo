@@ -33,10 +33,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from trader_koo.report.utils import (  # noqa: E402
-    MARKET_CLOSE_HOUR,
-    MARKET_TZ,
     expected_price_date,
-    nyse_early_closes_for_year,
+    session_close_utc,
 )
 
 # Covers GitHub's delayed cron and a slow nightly run on top of INGEST_DUE_LAG.
@@ -124,9 +122,7 @@ def _check_backup(status: dict[str, Any], now_utc: dt.datetime) -> str | None:
 def _check_report(freshness: dict[str, Any], expected: dt.date) -> str | None:
     generated_value = freshness.get("report_generated_ts")
     generated = _parse_utc(generated_value)
-    close_hour = 13 if expected in nyse_early_closes_for_year(expected.year) else MARKET_CLOSE_HOUR
-    close = dt.datetime.combine(expected, dt.time(hour=close_hour), tzinfo=MARKET_TZ)
-    if generated is None or generated < close:
+    if generated is None or generated < session_close_utc(expected):
         return (
             f"report not fresh (report_generated_ts={generated_value}; "
             f"expected a report generated after the {expected.isoformat()} close)"

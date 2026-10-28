@@ -166,6 +166,14 @@ def previous_nyse_session(day: dt.date) -> dt.date:
     return candidate
 
 
+def session_close_utc(day: dt.date) -> dt.datetime:
+    """Return the UTC time of the New York close for *day*, early closes included."""
+    close_hour = 13 if day in nyse_early_closes_for_year(day.year) else MARKET_CLOSE_HOUR
+    return dt.datetime.combine(day, dt.time(hour=close_hour), tzinfo=MARKET_TZ).astimezone(
+        dt.timezone.utc
+    )
+
+
 def last_completed_nyse_session(
     as_of: dt.date | dt.datetime | None = None,
 ) -> dt.date:
@@ -188,8 +196,7 @@ def last_completed_nyse_session(
 
     candidate = market_now.date()
     if is_nyse_session(candidate):
-        close_hour = 13 if candidate in nyse_early_closes_for_year(candidate.year) else MARKET_CLOSE_HOUR
-        if market_now.time() < dt.time(hour=close_hour):
+        if market_now < session_close_utc(candidate):
             candidate -= dt.timedelta(days=1)
     return previous_nyse_session(candidate)
 
