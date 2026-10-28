@@ -407,8 +407,8 @@ def _failing_pipeline(tmp_path, monkeypatch, run_id: str, returncode: int = 3):
     reserve_pipeline_run(run_id=run_id, mode="report", source="scheduler", db_path=db_path)
     monkeypatch.setattr(scheduler_module, "DB_PATH", db_path)
     monkeypatch.setattr(
-        scheduler_module.subprocess,
-        "run",
+        scheduler_module,
+        "_run_tracked_child",
         lambda *args, **kwargs: SimpleNamespace(returncode=returncode),
     )
     _run_daily_update_unlocked("report", "scheduler", pipeline_run_id=run_id)
