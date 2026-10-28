@@ -1,9 +1,6 @@
 """Track scheduler writer subprocesses so shutdown can stop them in time.
 
-Uvicorn may spend up to 90s draining connections before lifespan shutdown,
-then children get 20s. That only completes before Railway's SIGKILL when the
-service's deploy.drainingSeconds is at least 120; without it Railway may kill
-the container first (see DEPLOYMENT.md).
+Shutdown timing and its Railway dependency are in DEPLOYMENT.md.
 """
 from __future__ import annotations
 

@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Entrypoint for Railway deployment.
-# Runs a read-only boot preflight, bootstraps an empty DB only when allowed,
-# then execs uvicorn. In production (RAILWAY_ENVIRONMENT or
-# RAILWAY_VOLUME_MOUNT_PATH set) a missing DB is fatal unless
-# TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP=1, and the DB must live on the mounted volume.
+# Railway entrypoint: boot preflight, empty-DB bootstrap when allowed, then uvicorn (see DEPLOYMENT.md).
 set -euo pipefail
 
 # Use the nixpacks venv explicitly — bash (non-login) doesn't source /root/.profile.
@@ -74,7 +70,5 @@ elif [ "$BOOT_STATE" != "ready" ]; then
 fi
 
 echo "[start.sh] Starting uvicorn server..."
-# Capping connection drain at 90s leaves lifespan shutdown 20s to stop writer
-# children, but only if Railway's deploy.drainingSeconds is at least 120.
 exec "$UVICORN" trader_koo.backend.main:app --host 0.0.0.0 --port "${PORT:-8000}" \
     --timeout-graceful-shutdown 90
