@@ -62,14 +62,9 @@ class FetchError(OSError):
     """A GET that failed; ``status`` is the HTTP status or None if unreachable."""
 
     def __init__(self, url: str, status: int | None, reason: str) -> None:
-        self.url = url
         self.status = status
-        self.reason = reason
         detail = f"HTTP {status}" if status is not None else f"unreachable ({reason})"
         super().__init__(f"GET {url} -> {detail}")
-
-    def __str__(self) -> str:
-        return self.args[0]
 
 
 def fetch_json(
@@ -77,8 +72,8 @@ def fetch_json(
     timeout: int,
     attempts: int,
     headers: dict[str, str] | None = None,
-) -> tuple[int, dict[str, Any]]:
-    """GET *url* and return ``(http_status, json_object)``; raise ``FetchError``."""
+) -> dict[str, Any]:
+    """GET *url* and return its JSON object; raise ``FetchError``."""
     last: FetchError | None = None
     for attempt in range(1, attempts + 1):
         try:
@@ -86,11 +81,10 @@ def fetch_json(
                 url, headers={"User-Agent": USER_AGENT, **(headers or {})}
             )
             with urllib.request.urlopen(request, timeout=timeout) as resp:
-                status = int(getattr(resp, "status", 200))
                 payload = json.load(resp)
             if not isinstance(payload, dict):
                 raise ValueError("response is not a JSON object")
-            return status, payload
+            return payload
         except urllib.error.HTTPError as exc:
             last = FetchError(url, exc.code, "HTTPError")
         except (OSError, ValueError) as exc:
@@ -189,46 +183,39 @@ def evaluate(
     release: dict[str, Any],
     compare: dict[str, Any],
     deploy_runs: dict[str, Any],
-    http_status: dict[str, int] | None = None,
 ) -> list[str]:
-    codes = http_status or {}
-
-    def where(source: str) -> str:
-        code = codes.get(source)
-        return f"{source} (HTTP {code})" if code is not None else source
-
     problems: list[str] = []
     if not (health.get("ok") and health.get("db_exists")):
-        problems.append(f"{where('/api/health')}: not ok: {health}")
+        problems.append(f"/api/health: not ok: {health}")
 
     expected = expected_price_date(now_utc - EXTRA_GRACE)
     price_date = (status.get("latest_data") or {}).get("price_date")
     if not price_date:
-        problems.append(f"{where('/api/status')}: no latest_data.price_date")
+        problems.append("/api/status: no latest_data.price_date")
     elif str(price_date)[:10] < expected.isoformat():
         problems.append(
-            f"{where('/api/status')}: price_date {price_date} is behind expected {expected.isoformat()}"
+            f"/api/status: price_date {price_date} is behind expected {expected.isoformat()}"
         )
 
     freshness = status.get("freshness") if isinstance(status.get("freshness"), dict) else {}
     report_problem = _check_report(freshness, expected)
     if report_problem:
-        problems.append(f"{where('/api/status')}: {report_problem}")
+        problems.append(f"/api/status: {report_problem}")
 
     backup_problem = _check_backup(status, now_utc)
     if backup_problem:
-        problems.append(f"{where('/api/status')}: {backup_problem}")
+        problems.append(f"/api/status: {backup_problem}")
 
     if not release.get("git_sha"):
-        problems.append(f"{where('/api/release')}: no git_sha")
+        problems.append("/api/release: no git_sha")
     else:
         lag_problem = _check_release_lag(release, compare, now_utc)
         if lag_problem:
-            problems.append(f"{where('github compare')}: {lag_problem}")
+            problems.append(f"github compare: {lag_problem}")
 
     deploy_problem = _check_deploy_runs(deploy_runs)
     if deploy_problem:
-        problems.append(f"{where('github dark-deploy runs')}: {deploy_problem}")
+        problems.append(f"github dark-deploy runs: {deploy_problem}")
     return problems
 
 
@@ -258,31 +245,27 @@ def main(argv: list[str] | None = None) -> int:
     if token:
         github_headers["Authorization"] = f"Bearer {token}"
 
-    codes: dict[str, int] = {}
     try:
-        codes["/api/health"], health = fetch_json(f"{base}/api/health", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
-        codes["/api/status"], status = fetch_json(f"{base}/api/status", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
-        codes["/api/release"], release = fetch_json(f"{base}/api/release", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
+        health = fetch_json(f"{base}/api/health", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
+        status = fetch_json(f"{base}/api/status", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
+        release = fetch_json(f"{base}/api/release", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
         compare: dict[str, Any] = {}
         sha = str(release.get("git_sha") or "")
         if sha:
-            codes["github compare"], compare = fetch_json(
+            compare = fetch_json(
                 f"{GITHUB_API}/repos/{repo}/compare/{sha}...main",
                 FETCH_TIMEOUT_SEC,
                 FETCH_ATTEMPTS,
                 github_headers,
             )
-        codes["github dark-deploy runs"], deploy_runs = fetch_json(
+        deploy_runs = fetch_json(
             f"{GITHUB_API}/repos/{repo}/actions/workflows/{DEPLOY_WORKFLOW}/runs?branch=main&per_page=30",
             FETCH_TIMEOUT_SEC,
             FETCH_ATTEMPTS,
             github_headers,
         )
     except FetchError as exc:
-        if exc.status is None:
-            print(f"FAIL: service unreachable or returned invalid JSON: {exc}")
-        else:
-            print(f"FAIL: {exc}")
+        print(f"FAIL: {exc}")
         return 1
 
     problems = evaluate(
@@ -292,7 +275,6 @@ def main(argv: list[str] | None = None) -> int:
         release=release,
         compare=compare,
         deploy_runs=deploy_runs,
-        http_status=codes,
     )
     for problem in problems:
         print(f"FAIL: {problem}")

@@ -51,7 +51,6 @@ def _evaluate(**overrides):
         release=inputs["release"],
         compare=inputs["compare"],
         deploy_runs=inputs["deploy_runs"],
-        http_status=inputs.get("http_status"),
     )
 
 
@@ -280,16 +279,6 @@ def test_missing_workflow_runs_fails_closed():
     assert any("dark-deploy" in p for p in _evaluate(deploy_runs={}))
 
 
-def test_fail_messages_carry_the_http_status():
-    status = _fresh_backup_status()
-    status["freshness"]["report_generated_ts"] = None
-
-    problems = _evaluate(status=status, http_status={"/api/status": 200})
-
-    assert len(problems) == 1
-    assert problems[0].startswith("/api/status (HTTP 200): report not fresh")
-
-
 def test_main_fails_closed_when_unreachable(monkeypatch, capsys):
     def boom(url, timeout, attempts, headers=None):
         raise mod.FetchError(url, None, "URLError")
@@ -306,7 +295,7 @@ def test_main_reports_the_http_status_of_a_failed_fetch(monkeypatch, capsys):
     def fake_fetch(url, timeout, attempts, headers=None):
         if url.endswith("/api/status"):
             raise mod.FetchError(url, 503, "HTTPError")
-        return 200, {}
+        return {}
 
     monkeypatch.setattr(mod, "fetch_json", fake_fetch)
 
@@ -332,7 +321,7 @@ def test_main_runs_every_check_against_recorded_payloads(monkeypatch, capsys):
         seen.append((url, headers or {}))
         for marker, payload in responses.items():
             if marker in url:
-                return 200, copy.deepcopy(payload)
+                return copy.deepcopy(payload)
         raise AssertionError(url)
 
     monkeypatch.setattr(mod, "fetch_json", fake_fetch)
@@ -390,8 +379,6 @@ def test_workflow_runs_the_monitor_on_a_schedule():
 
 
 class _Resp:
-    status = 200
-
     def __enter__(self):
         return self
 
@@ -411,7 +398,7 @@ def test_fetch_sends_explicit_user_agent(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
-    assert mod.fetch_json("https://example.invalid/api/health", 1, 1) == (200, {"ok": True})
+    assert mod.fetch_json("https://example.invalid/api/health", 1, 1) == {"ok": True}
     assert seen["ua"] == mod.USER_AGENT
     assert "Python-urllib" not in seen["ua"]
 
