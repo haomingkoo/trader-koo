@@ -16,18 +16,20 @@ The job runs only for a successful CI `push` run on this repository's `main`
 (never for a fork pull request), or for the rollback drill below. For each
 release, the workflow:
 
-1. checks out the exact CI-tested commit and confirms a successful CI push run
-   exists for it;
+1. checks out the exact CI-tested commit, confirms a successful CI push run
+   exists for it, and refuses a commit that is no longer the `main` head (a
+   re-run of an old workflow);
 2. refuses deployment if Railway GitHub autodeploy is connected;
-3. creates and verifies a named production database backup;
-4. tests migrations and replay against a downloaded copy;
-5. records the previous deployment and its public `/api/release` SHA, plus the
-   campaign state and the `TRADER_KOO_PAPER_TRADE_ENABLED` write gate;
-6. refuses a commit that is no longer the `main` head (a re-run of an old
-   workflow) or that does not descend from the production SHA;
-7. refuses to restart production while `/api/status` reports
+3. refuses to restart production while `/api/status` reports
    `pipeline_active`, waiting up to 15 minutes, and inside the weekday nightly
-   window of 21:15-23:15 UTC around the 22:00 UTC `daily_update` job;
+   window of 21:15-23:15 UTC around the 22:00 UTC `daily_update` job. These
+   checks run before the backup, so a refused run writes nothing to the
+   production volume;
+4. creates and verifies a named production database backup;
+5. tests migrations and replay against a downloaded copy;
+6. records the previous deployment and its public `/api/release` SHA, plus the
+   campaign state and the `TRADER_KOO_PAPER_TRADE_ENABLED` write gate;
+7. refuses a commit that does not descend from the production SHA;
 8. uploads the exact commit with the pre-deploy write gate preserved, then
    waits for the deployment that `railway up` printed to pass Railway's health
    check (each poll logs its id, status, `createdAt` and message);
@@ -37,17 +39,25 @@ release, the workflow:
 
 `railway up --ci` can exit 0 when the build logs end, before the health check
 finishes, so the workflow polls the deployment itself. Railway waits up to
-600 seconds for `/api/health` (`railway.toml`); the poll and step timeouts
-cover that plus margin, and the 110-minute job timeout leaves room for the
+600 seconds for `/api/health` (`railway.toml`). The poll and step timeouts
+cover that plus about 2 seconds of CLI time per poll, and the 135-minute job
+timeout also counts the 15-minute pipeline wait. It leaves room for the
 rollback because a job timeout skips cleanup steps.
 
 Rollback calls Railway's `deploymentRollback` mutation, which returns only a
-Boolean. It cancels an in-flight dark deployment first, then identifies the
-restored deployment as the one new entry in the deployment list. It verifies
-health and the previous SHA through `/api/release`. It also verifies the
-campaign state and the write gate. Railway records no commit hash for `railway up` uploads, so the
-public release SHA is the code check. GraphQL error bodies are printed; they
-never contain the token.
+Boolean. First it finds every dark deployment: the id `railway up` printed
+(read back from the upload log if a cancel stopped the upload step before it
+saved the id), plus any upload of this release missing from the recorded
+deployment list. It cancels each one still in flight. The restored deployment
+is the one new entry in the deployment list. If no new entry appears within 12
+polls, the step accepts the recorded previous deployment once Railway reports
+it `SUCCESS` again. Before it succeeds, every dark deployment must have
+stopped (`REMOVED`, `FAILED`, `CRASHED` or `SKIPPED`), because one still
+building could pass its health check later and take traffic back. It then
+verifies health, the previous SHA through `/api/release`, the campaign state
+and the write gate. Railway records no commit hash for `railway up` uploads,
+so the public release SHA is the code check. GraphQL error bodies are printed;
+they never contain the token.
 
 The release evidence manifest (`dark-deploy-manifest-v3`) is kept for 90 days.
 
@@ -64,8 +74,12 @@ workflow refuses, so a drill never ships code. Avoid the nightly window.
 
 ```text
 gh workflow run dark-deploy.yml --ref main -f rollback_drill=true
-gh run watch "$(gh run list --workflow dark-deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run list --workflow dark-deploy.yml --event workflow_dispatch --limit 3 --json databaseId,createdAt,status
+gh run watch RUN_ID
 ```
+
+The new run can take a few seconds to appear. Pick the `RUN_ID` whose
+`createdAt` is after the dispatch, not an older drill.
 
 Approve the run in the `production-dark` environment. The drill passes when the
 job ends failed at "Fail on purpose to exercise the rollback drill", the

@@ -29,8 +29,9 @@ Before upload, the workflow records the active Railway deployment and the
 release SHA served by the public `/api/release` endpoint. Railway records no
 commit hash for `railway up` uploads. Any failed or cancelled step after the
 first Railway change invokes Railway's `deploymentRollback` mutation for that
-exact previous deployment. The workflow then verifies health and requires
-`/api/release` to return the previous SHA. Railway rollback restores its image
+exact previous deployment. The workflow cancels any in-flight dark deployment,
+requires every dark deployment to have stopped, then verifies health and
+requires `/api/release` to return the previous SHA. Railway rollback restores its image
 and custom variables. The pre-deploy database
 backup remains available for a separately approved data recovery; CD never
 overwrites the live SQLite volume. Dark-deploy verification also fails unless
