@@ -46,12 +46,6 @@ def _wal_db(path: Path) -> Path:
     return path
 
 
-def test_backup_records_quick_check_ok(tmp_path: Path) -> None:
-    result = backup_database(_wal_db(tmp_path / "source.db"), tmp_path / "backups")
-
-    assert result["quick_check"] == "ok"
-
-
 def test_backup_fails_and_writes_nothing_when_quick_check_is_not_ok(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -63,7 +63,6 @@ def test_create_then_download_returns_the_same_bytes_and_hash(client) -> None:
     assert body["backup_name"].startswith(backup_db.BACKUP_PREFIX)
     assert len(body["sha256"]) == 64
     assert body["dest_size_bytes"] > 0
-    assert body["quick_check"] == "ok"
 
     downloaded = client.get(f"/api/admin/backups/{body['backup_name']}", headers=AUTH)
 

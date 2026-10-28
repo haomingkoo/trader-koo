@@ -62,8 +62,7 @@ def backup_database(
 ) -> dict[str, str | int | float]:
     """Compress *db_path* into a timestamped ``.db.gz`` in *backup_dir*.
 
-    Returns a summary dict with backup path, size, hash, quick_check result
-    and duration. Raises ``FileNotFoundError`` if the source DB does not exist
+    Returns a summary dict with backup path, size, hash and duration. Raises ``FileNotFoundError`` if the source DB does not exist
     and ``BackupIntegrityError`` if the snapshot fails ``PRAGMA quick_check``.
     """
     if not db_path.exists():
@@ -134,7 +133,6 @@ def backup_database(
         "src_size_bytes": src_size,
         "dest_size_bytes": dest_size,
         "sha256": digest.hexdigest(),
-        "quick_check": "ok",
         "compression_ratio_pct": ratio,
         "elapsed_sec": elapsed,
         "pruned_count": len(pruned),
