@@ -38,13 +38,11 @@ class TestConfigEndpoint:
 
         assert response.status_code == 200
 
-    def test_config_has_auth_block(self, test_app):
+    def test_config_omits_auth_block(self, test_app):
         response = test_app.get("/api/config")
         data = response.json()
 
-        assert "auth" in data
-        assert "admin_api_key_required" in data["auth"]
-        assert "admin_api_key_header" in data["auth"]
+        assert "auth" not in data
 
     def test_config_does_not_expose_secrets(self, test_app):
         response = test_app.get("/api/config")

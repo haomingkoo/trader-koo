@@ -333,12 +333,7 @@ def release() -> dict[str, Any]:
 @router.get("/api/config", include_in_schema=False)
 def config() -> dict[str, Any]:
     """Public client config -- never expose secrets (Requirement 6.6)."""
-    response = {
-        "auth": {
-            "admin_api_key_required": bool(API_KEY),
-            "admin_api_key_header": "X-API-Key",
-        },
-    }
+    response: dict[str, Any] = {}
     return sanitize_public_response(response)
 
 
