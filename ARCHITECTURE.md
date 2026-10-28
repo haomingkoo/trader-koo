@@ -53,23 +53,10 @@ Config-as-Code format in favor of `.railway/railway.ts`; the existing file
 remains supported until 2026-12-01. Treat migration as a release change and run
 the copied-database and production-browser gates before replacing it.
 
-Production dependencies are declared in `requirements.in` and locked, with
-hashes, in `requirements.txt` for Linux x86_64 and Python 3.11. The nixpacks
-install phase installs that lock with `--no-deps --require-hashes` before
-running `build.sh`, and CI installs the same lock plus `requirements-dev.txt`
-(locked from `requirements-dev.in`). See DEPLOYMENT.md, "Python dependency
-lock".
+Python and Node come from one pinned nixpkgs revision and Python packages from
+hashed locks; see DEPLOYMENT.md, "Build inputs" and "Python dependency lock".
 
-The torch/torchvision pair is pinned to matching `+cpu` builds from the PyTorch
-CPU index; a mismatched pair breaks the `torchvision::nms` operator at runtime,
-and the PyPI builds pull about 2.5GB of CUDA libraries. `build.sh` then
-replaces `opencv-python`, which `ultralytics` installs but which needs
-`libGL.so.1` and fails on headless servers, with the locked
-`opencv-python-headless` wheel.
-
-**Runtime**: Python 3.11.16 and Node 22.23.4 from one pinned nixpkgs revision
-in `nixpacks.toml`; `trader_koo/frontend-v2/.nvmrc` holds the same Node
-version. 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
+**Runtime**: 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
 
 ### First-run DB seed
 

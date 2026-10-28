@@ -40,7 +40,7 @@ Every input is pinned so the image matches what CI tested:
   adds only the package itself (`pip install --no-deps --no-build-isolation
   -e .`, built with the locked `setuptools`), swaps
   `opencv-python` for the locked `opencv-python-headless` wheel, refuses an
-  image with GUI opencv or CUDA torch, and runs `npm ci` from the npm lock.
+  image with CUDA torch or a broken `cv2` import, and runs `npm ci` from the npm lock.
 
 ### Python dependency lock
 
@@ -59,39 +59,32 @@ docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src python:3.11 \
   sh -c 'make lock-tools lock PYTHON=python'
 ```
 
+`make lock` refuses anything but Linux x86_64 and Python 3.11.5 or later 3.11:
+some locked wheels, such as `soupsieve`, declare `Requires-Python >=3.11.5`.
 `make lock-tools` installs the pip and pip-tools versions Dependabot runs, so
-Dependabot's pip-compile updates produce the same file shape. The CI
-`dependency-lock` job runs `make lock-check` and fails when a lock's pins or
-layout no longer match its input. It re-resolves against the live indexes
-while keeping the existing pins, so it needs network access. It does not
-verify hashes: pip-compile copies the committed hashes for unchanged pins, so a
-hand-edited `--hash` line passes the check. A wrong hash still fails closed
-when `--require-hashes` installs the lock. Dependabot ignores torch
-and torchvision; bump that pair by hand in `requirements.in`, keeping the
-`+cpu` Linux pins and plain non-Linux pins on the same version.
+Dependabot's pip-compile updates produce the same file shape. The locks are
+compiled with `--allow-unsafe` because torch requires `setuptools`; Dependabot
+adds that flag whenever a lock pins `setuptools`, so both must agree.
 
-The locks are compiled with `--allow-unsafe` because torch requires
-`setuptools`; Dependabot adds that flag whenever a lock pins `setuptools`, so
-both must agree. The runtime lock also pins GUI `opencv-python`, which
-`ultralytics` declares. `build.sh` and the Linux `make backend-install` path
-uninstall it and reinstall `opencv-python-headless` from its locked hashes,
-since both wheels own `cv2/` and the GUI one needs `libGL.so.1`.
+The CI `dependency-lock` job runs `make lock-check` and fails when a lock's
+pins or layout no longer match its input. It re-resolves against the live
+indexes while keeping the existing pins, so it needs network access. It does
+not verify hashes: pip-compile copies the committed hashes for unchanged pins,
+so a hand-edited `--hash` line passes the check. A wrong hash still fails
+closed when `--require-hashes` installs the lock.
 
-The locks need Python 3.11.5 or later: some locked wheels, such as
-`soupsieve`, declare `Requires-Python >=3.11.5`, and `make lock` refuses an
-older 3.11. Railway runs 3.11.16 and CI the latest 3.11. To dry-run the locks
-from another platform, pass a full patch version and both platform tags. pip
-does not widen a `--platform` tag, and the locked wheels need both:
-`contourpy` ships only `manylinux_2_27`/`2_28` wheels and `cffi` only
-`manylinux2014`. `sys_platform` markers still evaluate against the host, so
-the Linux torch pins are skipped on macOS:
+**torch.** `requirements.in` pins torch and torchvision to matching `+cpu`
+builds from the PyTorch CPU index on Linux and to the plain (already CPU-only)
+wheels elsewhere. The PyPI Linux builds pull about 2.5GB of CUDA libraries, and
+a mismatched pair breaks the `torchvision::nms` operator at runtime.
+Dependabot ignores both; bump the pair by hand in `requirements.in`, keeping
+the Linux and non-Linux pins on the same version, then run `make lock`.
 
-```bash
-pip install --dry-run --report report.json --no-deps --require-hashes \
-  --only-binary=:all: --platform manylinux_2_28_x86_64 \
-  --platform manylinux2014_x86_64 --python-version 3.11.16 \
-  --target /tmp/lock-dry-run -r requirements-dev.txt
-```
+**opencv.** `ultralytics` declares GUI `opencv-python`, so the runtime lock
+pins it. It needs `libGL.so.1`, which headless servers lack, and both it and
+`opencv-python-headless` own `cv2/`. `scripts/use-headless-opencv.sh`, run by
+`build.sh` and the Linux `make backend-install`, uninstalls both and
+reinstalls `opencv-python-headless` from its locked hashes.
 
 On macOS, `make backend-install` installs the `.in` inputs with the lock
 versions as hash-free constraints, because the `+cpu` wheels exist only for
