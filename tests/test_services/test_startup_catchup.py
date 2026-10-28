@@ -17,7 +17,7 @@ from trader_koo.backend.services.pipeline import (
     startup_catchup_reason,
     startup_work_queued,
 )
-from trader_koo.report.utils import expected_price_date
+from trader_koo.report.utils import expected_price_date, session_close_utc
 
 UTC = dt.timezone.utc
 
@@ -43,6 +43,21 @@ def _utc(y: int, m: int, d: int, h: int = 0, mi: int = 0) -> dt.datetime:
 )
 def test_expected_price_date_follows_nyse_calendar(now, expected):
     assert expected_price_date(now) == expected
+
+
+@pytest.mark.parametrize(
+    ("day", "close"),
+    [
+        # Regular session in EDT and in EST.
+        (dt.date(2026, 10, 27), dt.datetime(2026, 10, 27, 20, tzinfo=dt.timezone.utc)),
+        (dt.date(2026, 11, 25), dt.datetime(2026, 11, 25, 21, tzinfo=dt.timezone.utc)),
+        # Day after Thanksgiving closes at 13:00 New York.
+        (dt.date(2026, 11, 27), dt.datetime(2026, 11, 27, 18, tzinfo=dt.timezone.utc)),
+    ],
+)
+def test_session_close_utc_honours_early_closes(day, close):
+    assert session_close_utc(day) == close
+    assert session_close_utc(day).utcoffset() == dt.timedelta(0)
 
 
 @pytest.mark.parametrize(

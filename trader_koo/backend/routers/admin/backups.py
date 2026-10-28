@@ -1,6 +1,7 @@
 """Admin backup endpoints — list and download SQLite backups."""
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -8,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from trader_koo.scripts.backup_db import (
     DEFAULT_BACKUP_DIR,
+    BackupIntegrityError,
     backup_path_by_name,
     backup_database,
     latest_backup_path,
@@ -21,7 +23,12 @@ router = APIRouter(tags=["admin", "admin-backups"])
 @router.post("/api/admin/backups")
 def admin_create_backup() -> dict[str, Any]:
     """Create a consistent online SQLite backup before a release migration."""
-    result = backup_database(DB_PATH, DEFAULT_BACKUP_DIR)
+    try:
+        result = backup_database(DB_PATH, DEFAULT_BACKUP_DIR)
+    except BackupIntegrityError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="backup_quick_check_failed"
+        ) from exc
     return {"ok": True, **result}
 
 

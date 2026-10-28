@@ -71,3 +71,11 @@ inspect. Never place the admin API key in shell history, logs, or command output
 
 The detailed state model, rollback boundary, and database compatibility matrix
 are in `ops/RELEASE_STATES.md`.
+
+## Operations
+
+- `ops/INCIDENT_RUNBOOK.md`: where alerts arrive, first triage commands,
+  rollback, disk full, stale data, and failed backups.
+- `ops/DISASTER_RECOVERY.md`: backup schedule and retention, proposed RPO and
+  RTO, restore drill, and the full-volume-loss runbook. Off-site backup storage
+  is not decided yet, so every backup shares the live volume.

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from trader_koo.backend.routers import system
 from trader_koo.backend.services.pipeline import invalidate_status_cache
+from trader_koo.scripts import backup_db
 
 
 def _status_dependencies():
@@ -323,3 +324,44 @@ def test_persisted_revision_summary_reads_only_price_identities(seeded_conn) -> 
     assert len(price_queries) == 1
     assert "select distinct ticker from price_daily" in price_queries[0]
     assert all(column not in price_queries[0] for column in (" open", " close", " high", " low", " volume"))
+
+
+def _status_with_backups(seeded_conn, tmp_path: Path, backup_dir: Path) -> dict:
+    db_path = tmp_path / "status.db"
+    db_path.touch()
+    invalidate_status_cache()
+    dependencies = _status_dependencies()
+    with (
+        patch.object(system, "get_conn", return_value=seeded_conn),
+        patch.object(system, "DB_PATH", db_path),
+        patch.object(backup_db, "DEFAULT_BACKUP_DIR", backup_dir),
+        patch.object(system, "get_cached_status", return_value=None),
+        patch.object(system, "set_cached_status"),
+        dependencies[0],
+        dependencies[1],
+        dependencies[2],
+    ):
+        return system.status()
+
+
+def test_status_reports_latest_backup_time_and_size(seeded_conn, tmp_path: Path) -> None:
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    (backup_dir / "trader_koo_backup_20261025T185211275072Z.db.gz").write_bytes(b"a" * 5)
+    (backup_dir / "trader_koo_backup_20261026T234300346462Z.db.gz").write_bytes(b"b" * 11)
+    (backup_dir / "trader_koo_backup_manual.db.gz").write_bytes(b"c" * 99)
+    (backup_dir / "pre_split_rebase.db.gz").write_bytes(b"d" * 99)
+
+    payload = _status_with_backups(seeded_conn, tmp_path, backup_dir)
+
+    assert payload["backup"] == {
+        "latest_backup_utc": "2026-10-26T23:43:00+00:00",
+        "latest_backup_size_bytes": 11,
+    }
+    assert str(backup_dir) not in json.dumps(payload)
+
+
+def test_status_reports_no_backup_as_null(seeded_conn, tmp_path: Path) -> None:
+    payload = _status_with_backups(seeded_conn, tmp_path, tmp_path / "missing")
+
+    assert payload["backup"] == {"latest_backup_utc": None, "latest_backup_size_bytes": None}

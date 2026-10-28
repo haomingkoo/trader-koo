@@ -1,0 +1,61 @@
+{
+  "_source": "Trimmed public responses recorded 2026-10-28T09:46Z: GET /api/health, /api/release and /api/status on the production URL, plus GitHub REST compare and dark-deploy workflow runs. /api/status had no backup block yet; its values come from the newest file in /data/backups at the same time.",
+  "now_utc": "2026-10-28T09:46:06+00:00",
+  "health": {"ok": true, "db_exists": true},
+  "release": {
+    "ok": true,
+    "service": "trader_koo-api",
+    "version": "0.2.0",
+    "git_sha": "223aa607d8d983d9742438a179ad65a64cb3a419"
+  },
+  "status": {
+    "ok": true,
+    "now_utc": "2026-10-28T09:46:06+00:00",
+    "db_exists": true,
+    "freshness": {
+      "price_age_days": 0.57,
+      "fund_age_hours": 11.77,
+      "opt_age_hours": 12.1,
+      "report_age_hours": 11.3,
+      "report_generated_ts": "2026-10-27T22:27:53Z",
+      "report_fresh": true
+    },
+    "latest_data": {
+      "price_date": "2026-10-27",
+      "fund_snapshot": "2026-10-27T22:00:01Z",
+      "options_snapshot": "2026-10-27T21:40:00Z"
+    },
+    "backup": {
+      "latest_backup_utc": "2026-10-26T23:43:00+00:00",
+      "latest_backup_size_bytes": 205644423
+    }
+  },
+  "compare_identical": {
+    "status": "identical",
+    "ahead_by": 0,
+    "behind_by": 0,
+    "total_commits": 0,
+    "commits": []
+  },
+  "compare_ahead": {
+    "status": "ahead",
+    "ahead_by": 1,
+    "behind_by": 0,
+    "total_commits": 1,
+    "commits": [
+      {
+        "sha": "223aa607d8d983d9742438a179ad65a64cb3a419",
+        "commit": {"committer": {"name": "GitHub", "date": "2026-10-26T22:33:07Z"}}
+      }
+    ]
+  },
+  "deploy_runs": {
+    "workflow_runs": [
+      {"status": "completed", "conclusion": "success", "head_sha": "223aa607d8d983d9742438a179ad65a64cb3a419", "head_branch": "main", "created_at": "2026-10-26T22:38:33Z"},
+      {"status": "completed", "conclusion": "cancelled", "head_sha": "73785c82e0ae969d4f59399c151fbd62d16db48f", "head_branch": "main", "created_at": "2026-10-26T22:30:53Z"},
+      {"status": "completed", "conclusion": "cancelled", "head_sha": "a561085f41995238ea6ddcc51daae713c33a8b51", "head_branch": "main", "created_at": "2026-10-26T17:01:37Z"},
+      {"status": "completed", "conclusion": "failure", "head_sha": "ad0cee74565bb15cf3f5b6d1645b76488bab8911", "head_branch": "main", "created_at": "2026-10-26T16:29:39Z"},
+      {"status": "completed", "conclusion": "cancelled", "head_sha": "50e07b3a21ff5ecf393a3432041ed04802850d44", "head_branch": "main", "created_at": "2026-10-26T16:20:30Z"}
+    ]
+  }
+}
