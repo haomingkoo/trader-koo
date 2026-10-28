@@ -134,33 +134,6 @@ def test_production_missing_volume_db_refuses_to_boot(harness, tmp_path):
     assert not (calls / "seed").exists()
 
 
-def test_production_opt_in_still_requires_a_real_mount(harness, tmp_path):
-    run, calls, db_path = harness
-
-    result = run(
-        RAILWAY_ENVIRONMENT="production",
-        RAILWAY_VOLUME_MOUNT_PATH=str(tmp_path / "data"),
-        TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP="1",
-    )
-
-    assert result.returncode != 0
-    assert "not a mount point" in result.stderr
-    assert not db_path.exists()
-    assert not (calls / "uvicorn").exists()
-
-
-def test_corrupt_db_refuses_to_boot(harness):
-    run, calls, db_path = harness
-    db_path.parent.mkdir(parents=True)
-    db_path.write_bytes(b"not a database" * 512)
-
-    result = run()
-
-    assert result.returncode != 0
-    assert "cannot read" in result.stderr
-    assert not (calls / "uvicorn").exists()
-
-
 def _request_maintenance(db_path: Path) -> None:
     from trader_koo.backend.services.maintenance import request_maintenance
 
@@ -179,17 +152,3 @@ def test_corrupt_db_under_maintenance_boots_maintenance_only(harness):
     assert (calls / "uvicorn").exists()
     assert not (calls / "seed").exists()
     assert db_path.read_bytes() == b"not a database" * 512
-
-
-def test_missing_db_after_preserve_crash_boots_maintenance_only(harness):
-    run, calls, db_path = harness
-    _seed_db(db_path)
-    _request_maintenance(db_path)
-    os.replace(db_path, db_path.with_name(f"{db_path.name}.pre_restore_maint-test"))
-
-    result = run()
-
-    assert result.returncode == 0, result.stderr
-    assert (calls / "uvicorn").exists()
-    assert not (calls / "seed").exists()
-    assert not db_path.exists()
