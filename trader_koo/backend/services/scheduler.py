@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import errno
+import html
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -458,6 +460,50 @@ def _run_daily_update_unlocked(
         tail = _tail_text_file(RUN_LOG_PATH, lines=25, max_bytes=100_000)
         if tail:
             LOG.error("Scheduler: recent cron tail:\n%s", "\n".join(tail))
+        _send_ops_alert(
+            "pipeline_failed",
+            "Nightly pipeline failed",
+            (
+                f"daily_update.sh rc={result.returncode} source={source} mode={mode_norm} "
+                f"run_id={pipeline_run_id} sec={elapsed:.0f}"
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Operational failure alerts
+# ---------------------------------------------------------------------------
+
+# Per alert kind, so a failing backup is not muted by a pipeline alert. The
+# cooldown is in memory: a restart can repeat one alert, never suppress one.
+_OPS_ALERT_COOLDOWN_SEC = 6 * 3600
+_last_ops_alert_ts: dict[str, float] = {}
+
+
+def _send_ops_alert(kind: str, title: str, detail: str) -> None:
+    """Send one Telegram alert per *kind* per cooldown. Never raises.
+
+    Callers have already logged the original failure; an alert problem is
+    logged as a warning and must not replace or hide that error.
+    """
+    now_mono = time.monotonic()
+    last = _last_ops_alert_ts.get(kind)
+    if last is not None and now_mono - last <= _OPS_ALERT_COOLDOWN_SEC:
+        LOG.info("Scheduler: %s alert suppressed by cooldown", kind)
+        return
+    try:
+        from trader_koo.notifications import telegram
+
+        if not telegram.is_configured():
+            LOG.warning("Scheduler: Telegram not configured; %s alert not sent", kind)
+            return
+        text = f"⚠️ <b>{html.escape(title)}</b>\n\n<code>{html.escape(detail[:1500])}</code>"
+        if telegram.send_message(text, parse_mode="HTML"):
+            _last_ops_alert_ts[kind] = now_mono
+        else:
+            LOG.warning("Scheduler: Telegram rejected the %s alert", kind)
+    except Exception as exc:
+        LOG.warning("Scheduler: failed to send %s alert: %s", kind, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +515,7 @@ def _run_weekly_backup() -> None:
     if not DB_PATH.exists():
         LOG.warning("Scheduler: skipping weekly backup — DB not found at %s", DB_PATH)
         _append_run_log("BACKUP", f"Skipped — DB not found at {DB_PATH}")
+        _send_ops_alert("backup_failed", "Backup failed", f"database not found at {DB_PATH}")
         return
 
     started = dt.datetime.now(dt.timezone.utc)
@@ -500,6 +547,7 @@ def _run_weekly_backup() -> None:
         elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
         _append_run_log("BACKUP", f"Backup failed: {exc} sec={elapsed:.1f}")
         LOG.error("Scheduler: weekly backup failed (sec=%.1f): %s", elapsed, exc)
+        _send_ops_alert("backup_failed", "Backup failed", f"{type(exc).__name__}: {exc}")
 
 
 # ---------------------------------------------------------------------------
