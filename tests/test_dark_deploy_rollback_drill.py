@@ -38,7 +38,7 @@ def test_dispatch_requires_main_and_the_drill_input() -> None:
         "${{ github.event.workflow_run.head_sha || github.sha }}"
     )
     assert job["env"]["ROLLBACK_DRILL"] == (
-        "${{ github.event_name == 'workflow_dispatch' && inputs.rollback_drill }}"
+        "${{ github.event_name == 'workflow_dispatch' }}"
     )
     assert step("Check out the exact CI commit")["with"]["ref"] == "${{ env.RELEASE_SHA }}"
 

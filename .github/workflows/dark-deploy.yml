@@ -59,7 +59,8 @@ jobs:
       RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
       BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-      ROLLBACK_DRILL: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_drill }}
+      # The job if admits a dispatch only as a drill.
+      ROLLBACK_DRILL: ${{ github.event_name == 'workflow_dispatch' }}
       # 180 polls x 5 s = 900 s: the 600 s Railway health check plus margin.
       # Each poll's CLI call adds about 2 s, which the step timeouts cover.
       DEPLOYMENT_POLL_ATTEMPTS: "180"
@@ -388,7 +389,7 @@ jobs:
         id: rollback
         timeout-minutes: 30
         # Nothing to undo, and no restart to cause, until Railway was touched.
-        if: ${{ (failure() || cancelled()) && steps.previous.outputs.id != '' && steps.bind.outputs.started == 'true' }}
+        if: ${{ (failure() || cancelled()) && steps.bind.outputs.started == 'true' }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
