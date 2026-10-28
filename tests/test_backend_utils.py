@@ -48,11 +48,8 @@ def test_client_ip_can_explicitly_trust_proxy_headers(monkeypatch):
     assert client_ip(request) == "203.0.113.10"
 
 
-# Production chain (checked read-only): client -> Cloudflare -> Railway edge ->
-# app, and the *.up.railway.app origin answers without Cloudflare. Only the
-# right end of the forwarded chain is written by proxies we run behind, so the
-# client is the rightmost hop that is not a trusted proxy. Client addresses
-# below are global because Python counts the documentation ranges as private.
+# Client addresses below are global because Python counts the documentation
+# ranges as private.
 _CLOUDFLARE_TEST_CIDR = "173.245.48.0/20"
 _CLOUDFLARE_HOP = "173.245.48.10"
 

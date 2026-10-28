@@ -80,13 +80,7 @@ def _trust_forwarded_headers(request: Request) -> bool:
 
 
 def _forwarded_client_ip(request: Request) -> str | None:
-    """Return the rightmost forwarded hop that is not a trusted proxy.
-
-    Entries to the left of the first untrusted hop are client-supplied and can
-    be forged. The edge's X-Real-IP is the last hop it saw, so it closes the
-    chain; this matters when the origin is reached without the CDN in front.
-    CF-Connecting-IP is ignored because the origin is reachable directly.
-    """
+    """Return the rightmost forwarded hop that is not a trusted proxy (see SECURITY.md)."""
     if not _trust_forwarded_headers(request):
         return None
 
