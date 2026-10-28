@@ -504,21 +504,21 @@ async def lifespan(_app: FastAPI):
 # App creation
 # ---------------------------------------------------------------------------
 
+# FastAPI registers these routes in its constructor, so the flag must be
+# resolved before the app is built.
+_DOCS_ENABLED = os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1"
 app = FastAPI(
     title="trader_koo API",
     version="0.2.0",
-    docs_url=None,
-    redoc_url=None,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
     lifespan=lifespan,
 )
 app.state.admin_authenticator = AdminAuthenticator(
     AdminAuthConfig.from_env(),
     audit_recorder=_record_admin_auth_attempt,
 )
-if os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1":
-    app.docs_url = "/docs"
-    app.redoc_url = "/redoc"
-    app.openapi_url = "/openapi.json"
 
 # ---------------------------------------------------------------------------
 # CORS middleware
