@@ -9,6 +9,11 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+    # requirements.in pins CPU torch per platform (+cpu on Linux). Bump the
+    # torch/torchvision pair by hand together with `make lock`.
+    ignore:
+      - dependency-name: "torch"
+      - dependency-name: "torchvision"
     labels:
       - "dependencies"
       - "python"

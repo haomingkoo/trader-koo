@@ -26,6 +26,47 @@ For each release, the workflow:
 Campaign activation and reset endpoints are intentionally absent from the
 deployment workflow. They require a separate authenticated human decision.
 
+## Build inputs
+
+Railway builds with nixpacks (`railway.toml`, `nixpacks.toml`, `build.sh`).
+Every input is pinned so the image matches what CI tested:
+
+- The nixpacks install phase runs
+  `pip install --no-deps --require-hashes -r requirements.txt`. `build.sh`
+  adds only the package itself (`pip install --no-deps -e .`), swaps
+  `opencv-python` for the locked `opencv-python-headless` wheel, refuses an
+  image with GUI opencv or CUDA torch, and runs `npm ci` from the npm lock.
+
+### Python dependency lock
+
+`requirements.in` and `requirements-dev.in` are the inputs; `requirements.txt`
+and `requirements-dev.txt` are hashed pip-tools locks for Linux x86_64 and
+Python 3.11. Edit an input, then regenerate the locks on Linux x86_64:
+
+```bash
+docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src python:3.11 \
+  sh -c 'make lock-tools lock PYTHON=python'
+```
+
+`make lock-tools` installs the pip and pip-tools versions Dependabot runs, so
+Dependabot's pip-compile updates produce the same file shape. The CI
+`dependency-lock` job runs `make lock-check` and fails when a lock no longer
+matches its input. Dependabot ignores torch and torchvision; bump that pair by
+hand in `requirements.in`, keeping the `+cpu` Linux pins and plain non-Linux
+pins on the same version.
+
+The locks are compiled with `--allow-unsafe` because torch requires
+`setuptools`; Dependabot adds that flag whenever a lock pins `setuptools`, so
+both must agree. The runtime lock also pins GUI `opencv-python`, which
+`ultralytics` declares. `build.sh` and the Linux `make backend-install` path
+uninstall it and reinstall `opencv-python-headless` from its locked hashes,
+since both wheels own `cv2/` and the GUI one needs `libGL.so.1`.
+
+On macOS, `make backend-install` installs the `.in` inputs with the lock
+versions as hash-free constraints, because the `+cpu` wheels exist only for
+Linux and Windows. That install is unhashed and keeps GUI opencv; CI is the
+reference.
+
 ## Verification
 
 Use the GitHub Actions run as the release record. A merge is not a deployment,

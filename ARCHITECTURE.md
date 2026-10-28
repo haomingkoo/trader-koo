@@ -53,11 +53,19 @@ Config-as-Code format in favor of `.railway/railway.ts`; the existing file
 remains supported until 2026-12-01. Treat migration as a release change and run
 the copied-database and production-browser gates before replacing it.
 
-Nixpacks installs the single canonical production dependency manifest at
-`requirements.txt` before running `build.sh`. Development-only packages live in
-`requirements-dev.txt`, which includes that production manifest.
+Production dependencies are declared in `requirements.in` and locked, with
+hashes, in `requirements.txt` for Linux x86_64 and Python 3.11. The nixpacks
+install phase installs that lock with `--no-deps --require-hashes` before
+running `build.sh`, and CI installs the same lock plus `requirements-dev.txt`
+(locked from `requirements-dev.in`). See DEPLOYMENT.md, "Python dependency
+lock".
 
-The torch/torchvision pair must come from the same CPU index — installing them separately risks an ABI mismatch that breaks the `torchvision::nms` operator at runtime. The `opencv-python-headless` force-reinstall runs last because `ultralytics` installs the non-headless `opencv-python`, which requires `libGL.so.1` and fails on headless servers.
+The torch/torchvision pair is pinned to matching `+cpu` builds from the PyTorch
+CPU index; a mismatched pair breaks the `torchvision::nms` operator at runtime,
+and the PyPI builds pull about 2.5GB of CUDA libraries. `build.sh` then
+replaces `opencv-python`, which `ultralytics` installs but which needs
+`libGL.so.1` and fails on headless servers, with the locked
+`opencv-python-headless` wheel.
 
 **Runtime**: Python 3.11 via nixpacks. 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
 

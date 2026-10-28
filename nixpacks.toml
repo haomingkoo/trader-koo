@@ -6,3 +6,10 @@ PYTHON_VERSION = "3.11"
 [phases.setup]
 nixPkgs = ["python311", "gcc"]
 nixLibs = ["gcc-unwrapped", "zlib"]
+
+# Install exactly the hashed lock; --no-deps stops pip resolving anything new.
+# See DEPLOYMENT.md, "Python dependency lock".
+[phases.install]
+cmds = ["python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install --no-deps --require-hashes -r requirements.txt"]
+paths = ["/opt/venv/bin"]
+cacheDirectories = ["/root/.cache/pip"]

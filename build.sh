@@ -5,25 +5,31 @@ set -euo pipefail
 
 log() { echo "==> [build] $*"; }
 
-# ── 1. Install PyTorch (CPU-only) ──────────────────────────────────────
-log "Installing PyTorch CPU..."
-pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu
-
-# ── 2. Install package in editable mode ─────────────────────────────────
-# Nixpacks installs the canonical root requirements.txt before this script.
+# ── 1. Install package in editable mode ─────────────────────────────────
+# The nixpacks install phase (nixpacks.toml) already installed the hashed
+# requirements.txt lock, including CPU-only torch. --no-deps keeps this step
+# from resolving anything outside that lock.
 log "Installing trader_koo package..."
-pip install -e .
+pip install --no-deps -e .
 
-# ── 3. Force opencv-headless (remove full opencv if present) ────────────
+# ── 2. Keep only opencv-python-headless ────────────────────────────────
+# ultralytics pulls in GUI opencv-python, which needs libGL.so.1. Both wheels
+# own cv2/, so remove both and reinstall the headless one from its locked hashes.
 log "Switching to opencv-python-headless..."
-pip uninstall -y opencv-python 2>/dev/null || true
-pip install --force-reinstall opencv-python-headless==4.10.0.84
+pip uninstall -y opencv-python opencv-python-headless
+awk '/^opencv-python-headless==/ {found = 1} found {print} found && !/\\$/ {exit}' \
+    requirements.txt > /tmp/opencv-headless.txt
+pip install --no-deps --require-hashes -r /tmp/opencv-headless.txt
 
-# ── 4. Preflight import check ──────────────────────────────────────────
+# ── 3. Preflight import check ──────────────────────────────────────────
 log "Running preflight import check..."
-python -c "import cv2, torch, ultralytics, huggingface_hub; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)"
+if pip show opencv-python >/dev/null 2>&1; then
+    log "opencv-python is still installed; it needs libGL and breaks cv2 here"
+    exit 1
+fi
+python -c "import cv2, torch, ultralytics, huggingface_hub; assert torch.version.cuda is None, 'CUDA torch installed'; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)"
 
-# ── 5. Install Node.js via nvm ──────────────────────────────────────────
+# ── 4. Install Node.js via nvm ──────────────────────────────────────────
 log "Installing Node.js 22 via NodeSource..."
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
@@ -40,7 +46,7 @@ else
 fi
 log "Node $(node --version) / npm $(npm --version)"
 
-# ── 6. Build React frontend ────────────────────────────────────────────
+# ── 5. Build React frontend ────────────────────────────────────────────
 log "Building React frontend..."
 cd trader_koo/frontend-v2
 npm ci
