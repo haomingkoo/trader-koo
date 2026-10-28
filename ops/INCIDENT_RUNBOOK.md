@@ -8,7 +8,7 @@ admin API key or the Railway token. Read it with `read -rs`.
 
 | Source | Channel | Fires on |
 | --- | --- | --- |
-| `prod-freshness.yml` (hourly, outside the container) | GitHub Actions failure email to the workflow owner | service unreachable or a non-2xx response, stale price date, report not fresh, newest backup older than 30 hours, deployed `git_sha` more than 3 days behind `main`, last attempted dark-deploy failed |
+| `prod-freshness.yml` (hourly, outside the container) | GitHub Actions failure email to the workflow owner | service unreachable or a non-2xx response, stale price date, no report generated after the last expected session close, newest backup older than 30 hours, deployed `git_sha` not on `main` or more than 3 days behind it, last attempted dark-deploy failed |
 | In-app scheduler | Telegram (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) | nightly pipeline failed, scheduled backup failed, storage pressure, crypto data stale, a kooexperience.com site down |
 | `dark-deploy.yml` | GitHub Actions failure email | a release check failed; the workflow has already rolled back |
 
@@ -66,8 +66,12 @@ rolling back across a schema change.
 
 ## Stale data or report
 
-1. `/api/status`: check `latest_data.price_date`, `freshness.report_fresh` and
-   `pipeline`. A pipeline that is still running is not stale.
+1. `/api/status`: check `latest_data.price_date`,
+   `freshness.report_generated_ts` and `pipeline`. A pipeline that is still
+   running is not stale. Do not go by `freshness.report_fresh` alone: it reads
+   false from Sunday 02:35 UTC until the Monday run because the Saturday
+   weekly report only gets 26 hours. The monitor compares
+   `report_generated_ts` with the last expected session close instead.
 2. Read the cron log tail (see triage) for `[INGEST]`, `[YOLO]` and `[REPORT]`
    return codes.
 3. Re-run with the admin key. A provider outage needs `full`. A failed report
@@ -89,7 +93,10 @@ rolling back across a schema change.
    it as a data incident and stop making new backups, because the older
    copies are the good ones.
 2. `Skipped — maintenance intent blocks writers` is expected during a
-   maintenance run. Check `GET /api/admin/maintenance/status`.
+   maintenance run. While writers are blocked every HTTP path except
+   `/api/health` answers 503, so read `GET /api/health` (`maintenance_state`,
+   `error_code`) or run
+   `railway ssh "/opt/venv/bin/python -m trader_koo.scripts.paper_schema_maintenance status"`.
 3. For a disk or permission error, free space first, then make one backup with
    `POST /api/admin/backups` and confirm `/api/status` `backup.latest_backup_utc`
    moved forward.
