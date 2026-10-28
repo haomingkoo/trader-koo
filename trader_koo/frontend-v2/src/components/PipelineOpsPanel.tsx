@@ -1,33 +1,12 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePipelineStatus, useTriggerUpdate } from "../api/hooks";
 import type { PipelineStatus } from "../api/types";
 import Badge from "./ui/Badge";
 import { derivePipelineState, priceBasisStatusCopy } from "./pipelineState";
+import { clearLegacyAdminKey } from "./adminKey";
 
 /* ── Helpers ── */
-
-const ADMIN_KEY_STORAGE = "trader_koo_admin_key";
-
-function getAdminKey(): string {
-  try {
-    return localStorage.getItem(ADMIN_KEY_STORAGE) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function setAdminKey(key: string): void {
-  try {
-    localStorage.setItem(ADMIN_KEY_STORAGE, key);
-  } catch {
-    /* localStorage unavailable */
-  }
-}
-
-function hasAdminKey(): boolean {
-  return getAdminKey().trim().length > 0;
-}
 
 type PipelineState = "idle" | "running" | "completed" | "warning" | "error";
 
@@ -95,9 +74,8 @@ function freshnessColor(age: number | null | undefined, thresholdFresh: number, 
 
 /* ── API Key Input ── */
 
-function ApiKeyInput({ onKeyChange }: { onKeyChange?: () => void }) {
-  const [key, setKey] = useState(getAdminKey);
-  const hasKey = key.length > 0;
+function ApiKeyInput({ value, onChange }: { value: string; onChange: (key: string) => void }) {
+  const hasKey = value.length > 0;
   const [visible, setVisible] = useState(hasKey);
 
   return (
@@ -118,18 +96,14 @@ function ApiKeyInput({ onKeyChange }: { onKeyChange?: () => void }) {
           {visible ? "Hide Admin Key" : hasKey ? "Admin Unlocked" : "Unlock Admin"}
         </button>
         <span className="text-[10px] text-[var(--muted)]">
-          {hasKey ? "Key stored locally" : "Required for actions"}
+          {hasKey ? "Key kept in memory until reload" : "Required for actions"}
         </span>
       </div>
       {visible && (
         <input
           type="password"
-          value={key}
-          onChange={(e) => {
-            setKey(e.target.value);
-            setAdminKey(e.target.value);
-            onKeyChange?.();
-          }}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
           placeholder="Admin API key"
           className="h-8 w-full max-w-xs rounded-md border border-[var(--line)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none"
         />
@@ -144,22 +118,23 @@ interface ActionButtonProps {
   label: string;
   mode: "full" | "yolo" | "report";
   disabled: boolean;
+  apiKey: string;
 }
 
-function ActionButton({ label, mode, disabled }: ActionButtonProps) {
+function ActionButton({ label, mode, disabled, apiKey }: ActionButtonProps) {
   const trigger = useTriggerUpdate();
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const handleClick = useCallback(() => {
     setFeedback(null);
     trigger.mutate(
-      { mode, apiKey: getAdminKey() },
+      { mode, apiKey },
       {
         onSuccess: (msg) => setFeedback({ ok: true, msg }),
         onError: (err) => setFeedback({ ok: false, msg: err instanceof Error ? err.message : String(err) }),
       },
     );
-  }, [trigger, mode]);
+  }, [trigger, mode, apiKey]);
 
   const isLoading = trigger.isPending;
 
@@ -167,7 +142,7 @@ function ActionButton({ label, mode, disabled }: ActionButtonProps) {
     <div className="flex flex-col gap-1">
       <button
         onClick={handleClick}
-        disabled={disabled || isLoading || !getAdminKey()}
+        disabled={disabled || isLoading || !apiKey}
         className="rounded-md border border-[var(--line)] bg-[var(--panel-hover)] px-3 py-1.5 text-xs font-medium text-[var(--text)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
       >
         {isLoading ? "Running\u2026" : label}
@@ -382,11 +357,15 @@ function EventsLog({ data }: { data: PipelineStatus }) {
 export default function PipelineOpsPanel() {
   const { data, isLoading } = usePipelineStatus();
   const queryClient = useQueryClient();
-  const [, setAdminKeyRevision] = useState(0);
+  const [adminKey, setAdminKey] = useState("");
+
+  useEffect(() => {
+    clearLegacyAdminKey();
+  }, []);
 
   const state = derivePipelineState(data);
   const isRunning = state === "running";
-  const adminUnlocked = hasAdminKey();
+  const adminUnlocked = adminKey.trim().length > 0;
 
   if (isLoading || !data) {
     return (
@@ -400,7 +379,7 @@ export default function PipelineOpsPanel() {
   return (
     <div className="space-y-5">
       {/* API Key input */}
-      <ApiKeyInput onKeyChange={() => setAdminKeyRevision((value) => value + 1)} />
+      <ApiKeyInput value={adminKey} onChange={setAdminKey} />
 
       {/* Status */}
       <StatusSection data={data} state={state} />
@@ -412,9 +391,9 @@ export default function PipelineOpsPanel() {
             Admin Controls
           </div>
           <div className="flex flex-wrap gap-3">
-            <ActionButton label="Run Full Update" mode="full" disabled={isRunning} />
-            <ActionButton label="Rerun YOLO + Report" mode="yolo" disabled={isRunning} />
-            <ActionButton label="Rebuild Report Only" mode="report" disabled={isRunning} />
+            <ActionButton label="Run Full Update" mode="full" disabled={isRunning} apiKey={adminKey} />
+            <ActionButton label="Rerun YOLO + Report" mode="yolo" disabled={isRunning} apiKey={adminKey} />
+            <ActionButton label="Rebuild Report Only" mode="report" disabled={isRunning} apiKey={adminKey} />
             <button
               onClick={() => {
                 void queryClient.invalidateQueries({ queryKey: ["pipeline-status"] });
@@ -427,7 +406,7 @@ export default function PipelineOpsPanel() {
         </div>
       ) : (
         <div className="rounded-md border border-[var(--line)] bg-[var(--bg)]/45 px-3 py-2 text-xs text-[var(--muted)]">
-          Status auto-refreshes every 30 seconds. Admin actions stay hidden until a valid API key is set locally.
+          Status auto-refreshes every 30 seconds. Admin actions stay hidden until you enter the admin API key.
         </div>
       )}
 

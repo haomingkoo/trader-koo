@@ -10,10 +10,6 @@ test("exact inactive release works through production pages", async ({ page, req
   expect(release.ok()).toBeTruthy();
   expect(await release.json()).toMatchObject({ ok: true, git_sha: expectedSha });
 
-  await page.addInitScript((key) => {
-    localStorage.setItem("trader_koo_admin_key", key);
-  }, apiKey as string);
-
   await page.goto("/report");
   await expect(page.getByRole("heading", { name: "Daily Report" })).toBeVisible();
   const unavailableReport = page.getByTestId("report-unavailable-state");
