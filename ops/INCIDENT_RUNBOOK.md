@@ -8,7 +8,7 @@ admin API key or the Railway token. Read it with `read -rs`.
 
 | Source | Channel | Fires on |
 | --- | --- | --- |
-| `prod-freshness.yml` (hourly, outside the container) | GitHub Actions failure email to the workflow owner | service unreachable or a non-2xx response, `/api/ready` not ready (503 or `ok` false), stale price date, no report generated after the last expected session close, newest backup older than 30 hours, deployed `git_sha` not on `main` or more than 3 days behind it, last attempted dark-deploy failed |
+| `prod-freshness.yml` (hourly, outside the container) | GitHub Actions failure email to the workflow owner | service unreachable or a non-2xx response, `/api/ready` not ready (503 or `ok` false), stale price date, no report generated after the last expected session close, newest backup older than 30 hours, deployed `git_sha` not on `main` or more than 3 days behind it, last attempted dark-deploy did not succeed (failure, timeout or startup failure) |
 | In-app scheduler | Telegram (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) | nightly pipeline failed, scheduled backup failed, storage pressure, crypto data stale, a kooexperience.com site down |
 | `dark-deploy.yml` | GitHub Actions failure email | a release check failed; the workflow has already rolled back |
 
