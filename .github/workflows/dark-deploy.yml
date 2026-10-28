@@ -5,25 +5,41 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback_drill:
+        description: Redeploy the running main release, then fail on purpose so the rollback runs
+        type: boolean
+        default: false
 
 concurrency:
   group: production-dark
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   deployments: write
 
 jobs:
   dark-deploy:
     # Only a CI run for a push to this repository's main may deploy; a fork
-    # pull request can also complete the CI workflow.
+    # pull request can also complete the CI workflow. A dispatch is accepted
+    # only as a rollback drill on main.
     if: >-
       ${{
-        github.event.workflow_run.conclusion == 'success'
-        && github.event.workflow_run.event == 'push'
-        && github.event.workflow_run.head_branch == 'main'
-        && github.event.workflow_run.head_repository.full_name == github.repository
+        (
+          github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.head_repository.full_name == github.repository
+        )
+        || (
+          github.event_name == 'workflow_dispatch'
+          && github.ref == 'refs/heads/main'
+          && inputs.rollback_drill
+        )
       }}
     runs-on: ubuntu-latest
     # Install 25 + upload 25 + record 20 + rollback 25 + 15 for the other
@@ -41,7 +57,8 @@ jobs:
       RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
       RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
       BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
-      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      ROLLBACK_DRILL: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_drill }}
       # 180 polls x 5 s = 900 s: the 600 s Railway health check plus margin.
       DEPLOYMENT_POLL_ATTEMPTS: "180"
       ROLLBACK_POLL_ATTEMPTS: "180"
@@ -54,9 +71,19 @@ jobs:
       - name: Check out the exact CI commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Require a passing CI run for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${RELEASE_SHA}&event=push&status=success&branch=main" --jq '.total_count')
+          if [ "$passed" -lt 1 ]; then
+            echo "No successful CI push run on main for ${RELEASE_SHA}; refusing to deploy it."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -189,6 +216,11 @@ jobs:
           fi
           if ! git merge-base --is-ancestor "$PREVIOUS_SHA" "$RELEASE_SHA"; then
             echo "Production SHA ${PREVIOUS_SHA} is not an ancestor of ${RELEASE_SHA}; refusing to deploy."
+            exit 1
+          fi
+          # The drill tests rollback mechanics only; it must not ship code.
+          if [ "$ROLLBACK_DRILL" = "true" ] && [ "$PREVIOUS_SHA" != "$RELEASE_SHA" ]; then
+            echo "Production runs ${PREVIOUS_SHA}, not main ${RELEASE_SHA}; release main normally before a rollback drill."
             exit 1
           fi
 
@@ -338,6 +370,12 @@ jobs:
           PLAYWRIGHT_ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
         run: npx playwright test --config=playwright.production.config.ts
 
+      - name: Fail on purpose to exercise the rollback drill
+        if: ${{ env.ROLLBACK_DRILL == 'true' }}
+        run: |
+          echo "::notice::Rollback drill: every release check passed; failing now so the rollback runs."
+          exit 1
+
       - name: Roll back code and variables after any failed release check
         id: rollback
         timeout-minutes: 25
@@ -475,8 +513,9 @@ jobs:
         run: |
           mkdir -p release-evidence
           jq -n \
-            --arg schema "dark-deploy-manifest-v2" \
+            --arg schema "dark-deploy-manifest-v3" \
             --arg git_sha "$RELEASE_SHA" \
+            --argjson rollback_drill "$ROLLBACK_DRILL" \
             --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
             --arg previous_git_sha "${{ steps.previous.outputs.sha }}" \
             --arg expected_campaign_status "${{ steps.previous.outputs.campaign_status }}" \
@@ -491,14 +530,14 @@ jobs:
             --arg dark_deployment_id "${{ steps.deployed.outputs.id }}" \
             --arg rollback_deployment_id "${{ steps.rollback.outputs.id }}" \
             --arg job_status "${{ job.status }}" \
-            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, expected_campaign_write_state: $expected_campaign_write_state, previous_paper_trade_enabled: $previous_paper_trade_enabled, deployed_paper_trade_enabled: $deployed_paper_trade_enabled, deployed_campaign_status: $deployed_campaign_status, deployed_campaign_write_state: $deployed_campaign_write_state, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, rollback_campaign_status: $rollback_campaign_status, rollback_campaign_write_state: $rollback_campaign_write_state, rollback_paper_trade_enabled: $rollback_paper_trade_enabled, verification_status: $job_status, campaign_activation_invoked: false}' \
+            '{schema: $schema, git_sha: $git_sha, rollback_drill: $rollback_drill,previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, expected_campaign_write_state: $expected_campaign_write_state, previous_paper_trade_enabled: $previous_paper_trade_enabled, deployed_paper_trade_enabled: $deployed_paper_trade_enabled, deployed_campaign_status: $deployed_campaign_status, deployed_campaign_write_state: $deployed_campaign_write_state, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, rollback_campaign_status: $rollback_campaign_status, rollback_campaign_write_state: $rollback_campaign_write_state, rollback_paper_trade_enabled: $rollback_paper_trade_enabled, verification_status: $job_status, campaign_activation_invoked: false}' \
             > release-evidence/deployment-manifest.json
 
       - name: Upload deployment evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dark-deploy-evidence-${{ github.event.workflow_run.head_sha }}
+          name: dark-deploy-evidence-${{ env.RELEASE_SHA }}
           path: release-evidence/*.json
           if-no-files-found: error
           retention-days: 90

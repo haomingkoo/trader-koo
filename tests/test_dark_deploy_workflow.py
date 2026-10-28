@@ -18,7 +18,7 @@ def test_dark_deploy_preserves_and_verifies_write_gate() -> None:
     assert "steps.previous.outputs.paper_trade_enabled" in workflow
     assert "steps.previous.outputs.campaign_write_state" in workflow
     assert "--expected-campaign-write-state" in workflow
-    assert "dark-deploy-manifest-v2" in workflow
+    assert "dark-deploy-manifest-v3" in workflow
     assert "previous_paper_trade_enabled" in workflow
     assert "deployed_paper_trade_enabled" in workflow
     assert "deployed_campaign_write_state" in workflow
