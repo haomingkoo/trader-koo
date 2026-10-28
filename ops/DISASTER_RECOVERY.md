@@ -4,15 +4,24 @@ This file covers losing or corrupting the production SQLite database. Image
 rollback for a bad release is in `ops/RELEASE_STATES.md`; first-response triage
 is in `ops/INCIDENT_RUNBOOK.md`.
 
-> **PLACEHOLDER: off-site backup storage is not decided.**
-> Every backup lives in `/data/backups` on the same Railway volume as the live
-> database `/data/trader_koo.db`. Losing the volume loses the database and all
-> of its backups together. Dark-deploy downloads a backup to a GitHub runner
-> but keeps only its manifest, and the runner's copy is gone when the job ends.
-> Do not use a GitHub release or artifact as off-site storage: the repository
-> is public, and backups hold emails, tokens and IP addresses. Until the owner
-> picks a private, encrypted destination, the only copies off the volume are
-> the ones an operator downloaded by hand (see "Take an off-volume copy").
+## Off-site backups
+
+Every backup in `/data/backups` lives on the same Railway volume as the live
+database `/data/trader_koo.db`, so losing the volume loses both. Dark-deploy
+downloads a backup to a GitHub runner but keeps only its manifest, and the
+runner's copy is gone when the job ends. Do not use a GitHub release or
+artifact as off-site storage: the repository is public, and backups hold
+emails, tokens and IP addresses.
+
+Railway volume backups (daily kept 6 days, weekly kept 27, monthly kept 89;
+incremental) protect against corruption, bad migrations and bad deletes. They
+are not off-site: "wiping a volume deletes all backups", and they restore only
+into the same project and environment. The owner enables them in the Railway
+dashboard. See <https://docs.railway.com/reference/backups>.
+
+A true off-site copy (an encrypted R2 bucket) is an open owner decision. Until
+then the only copies off the volume are the ones an operator downloaded by
+hand (see "Take an off-volume copy").
 
 ## What is protected
 
@@ -144,9 +153,9 @@ process holds the database open.
    (`TRADER_KOO_PAPER_TRADE_ENABLED=0`) and records the incident. Do not
    activate or reset a campaign as part of recovery. That is a separate,
    authenticated human decision.
-3. **Find the newest off-volume copy.** [PLACEHOLDER: off-site store not
-   decided.] Today the only candidates are copies an operator downloaded by
-   hand. Check each one's sha256 against its dark-deploy manifest
+3. **Find the newest off-volume copy.** The off-site store is an open owner
+   decision (see "Off-site backups"), so today the only candidates are copies
+   an operator downloaded by hand. Check each one's sha256 against its dark-deploy manifest
    (`production-backup-manifest.json` in the `dark-deploy-evidence-<sha>`
    artifact, kept 30 days) or your own record.
 4. **Prove the copy** with steps 2 and 3 of the restore drill.
