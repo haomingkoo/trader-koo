@@ -67,7 +67,9 @@ replaces `opencv-python`, which `ultralytics` installs but which needs
 `libGL.so.1` and fails on headless servers, with the locked
 `opencv-python-headless` wheel.
 
-**Runtime**: Python 3.11 via nixpacks. 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
+**Runtime**: Python 3.11.16 and Node 22.23.4 from one pinned nixpkgs revision
+in `nixpacks.toml`; `trader_koo/frontend-v2/.nvmrc` holds the same Node
+version. 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
 
 ### First-run DB seed
 

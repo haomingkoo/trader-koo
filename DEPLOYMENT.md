@@ -31,6 +31,10 @@ deployment workflow. They require a separate authenticated human decision.
 Railway builds with nixpacks (`railway.toml`, `nixpacks.toml`, `build.sh`).
 Every input is pinned so the image matches what CI tested:
 
+- Python 3.11.16 and Node 22.23.4 come from one fixed nixpkgs revision in
+  `nixpacks.toml`. `build.sh` fails when `node --version` differs from
+  `trader_koo/frontend-v2/.nvmrc`, which CI's `setup-node` also reads. Moving
+  the revision changes both, so update `.nvmrc` with it.
 - The nixpacks install phase runs
   `pip install --no-deps --require-hashes -r requirements.txt`. `build.sh`
   adds only the package itself (`pip install --no-deps -e .`), swaps

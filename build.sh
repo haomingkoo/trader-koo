@@ -29,22 +29,16 @@ if pip show opencv-python >/dev/null 2>&1; then
 fi
 python -c "import cv2, torch, ultralytics, huggingface_hub; assert torch.version.cuda is None, 'CUDA torch installed'; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)"
 
-# ── 4. Install Node.js via nvm ──────────────────────────────────────────
-log "Installing Node.js 22 via NodeSource..."
-export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-if [ -s "$NVM_DIR/nvm.sh" ]; then
-    # nvm already available (nixpacks may provide it)
-    . "$NVM_DIR/nvm.sh"
-    nvm install 22
-    nvm use 22
-elif command -v node >/dev/null 2>&1; then
-    log "Node.js already available: $(node --version)"
-else
-    # Fallback: NodeSource setup script (requires root, typical in Railway)
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    apt-get install -y nodejs
+# ── 4. Check Node.js against the pinned version ─────────────────────────
+# Node comes from the nixpacks setup phase (nixpacks.toml). Fail rather than
+# build the frontend with a different Node than CI tested.
+expected_node="v$(tr -d '[:space:]' < trader_koo/frontend-v2/.nvmrc)"
+actual_node="$(node --version)"
+if [ "$actual_node" != "$expected_node" ]; then
+    log "Node $actual_node does not match trader_koo/frontend-v2/.nvmrc ($expected_node)"
+    exit 1
 fi
-log "Node $(node --version) / npm $(npm --version)"
+log "Node $actual_node / npm $(npm --version)"
 
 # ── 5. Build React frontend ────────────────────────────────────────────
 log "Building React frontend..."

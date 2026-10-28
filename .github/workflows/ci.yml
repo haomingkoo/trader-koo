@@ -87,9 +87,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "22"
+          node-version-file: trader_koo/frontend-v2/.nvmrc
           cache: "npm"
           cache-dependency-path: trader_koo/frontend-v2/package-lock.json
 
@@ -190,9 +190,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "22"
+          node-version-file: trader_koo/frontend-v2/.nvmrc
           cache: "npm"
           cache-dependency-path: trader_koo/frontend-v2/package-lock.json
 

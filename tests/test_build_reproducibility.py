@@ -153,3 +153,40 @@ def test_ci_checks_the_locks_match_their_inputs() -> None:
         uses = step.get("uses")
         if uses:
             assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", uses), uses
+
+
+def test_nixpacks_pins_python_and_node_to_one_revision() -> None:
+    phases = tomllib.loads((ROOT / "nixpacks.toml").read_text(encoding="utf-8"))["phases"]
+
+    # Python and Node share one revision; see the comment in nixpacks.toml.
+    assert re.fullmatch(r"[0-9a-f]{40}", phases["setup"]["nixpkgsArchive"])
+    assert {"python311", "nodejs_22"} <= set(phases["setup"]["nixPkgs"])
+    assert [name for name, phase in phases.items() if "nixpkgsArchive" in phase] == ["setup"]
+
+
+def test_build_script_takes_node_from_nix_and_checks_nvmrc() -> None:
+    script = (ROOT / "build.sh").read_text(encoding="utf-8")
+
+    assert "trader_koo/frontend-v2/.nvmrc" in script
+    assert "curl" not in script
+    assert not re.search(r"\bnvm\b", script)
+    assert "apt-get" not in script
+    assert "npm ci" in script
+
+
+def test_node_version_is_exact_and_shared_with_ci() -> None:
+    version = NVMRC.read_text(encoding="utf-8").strip()
+    assert re.fullmatch(r"22\.\d+\.\d+", version)
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    node_steps = [
+        step
+        for job in workflow["jobs"].values()
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("actions/setup-node@")
+    ]
+    assert node_steps
+    for step in node_steps:
+        assert step["with"].get("node-version-file") == "trader_koo/frontend-v2/.nvmrc"
+        assert "node-version" not in step["with"]
+        assert re.fullmatch(r"actions/setup-node@[0-9a-f]{40}", step["uses"])
