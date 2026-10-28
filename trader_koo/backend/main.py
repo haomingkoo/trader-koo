@@ -43,6 +43,7 @@ if str(ROOT_DIR) not in sys.path:
 from trader_koo.config import validate_config, ConfigError
 from trader_koo.middleware.cors import RestrictiveCORSMiddleware
 from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
+from trader_koo.middleware.security_headers import SecurityHeadersMiddleware
 from trader_koo.security.logging_filter import install_secret_redaction_filter
 from trader_koo.security.error_middleware import ErrorSanitizationMiddleware
 from trader_koo.audit import AuditLogger, ensure_audit_schema
@@ -558,6 +559,8 @@ from trader_koo.ratelimit.middleware import RateLimitMiddleware
 
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(MaintenanceInterlockMiddleware, db_path=DB_PATH)
+# Added last so it is outermost and also covers 429 and 503 responses.
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ---------------------------------------------------------------------------
