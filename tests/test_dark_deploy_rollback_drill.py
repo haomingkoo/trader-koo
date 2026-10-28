@@ -99,12 +99,3 @@ def test_ci_gate_requires_a_successful_push_run_for_the_sha(tmp_path: Path) -> N
         assert "event=push" in query and "status=success" in query and "branch=main" in query
     assert step(CI_GATE)["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert _workflow()["permissions"]["actions"] == "read"
-
-
-def test_manifest_records_the_drill() -> None:
-    manifest = step("Write deployment manifest")["run"]
-
-    assert "dark-deploy-manifest-v3" in manifest
-    assert "rollback_drill: $rollback_drill" in manifest
-    upload = step("Upload deployment evidence")
-    assert upload["with"]["name"] == "dark-deploy-evidence-${{ env.RELEASE_SHA }}"

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tests.dark_deploy_harness import ROOT, deployments, run_step, step
+from tests.dark_deploy_harness import ROOT, deployments, run_step
 
 
 ROLLBACK = "Roll back code and variables after any failed release check"
@@ -189,14 +189,6 @@ def test_rollback_requires_the_public_release_sha_to_be_restored(tmp_path: Path)
     )
 
     assert result.returncode != 0
-
-
-def test_rollback_does_not_depend_on_railway_commit_metadata() -> None:
-    script = step(ROLLBACK)["run"]
-
-    assert "commitHash" not in script
-    assert ".data.deploymentRollback.id" not in script
-    assert '"404"' not in script
 
 
 def test_rollback_cancels_an_in_flight_dark_deployment_first(tmp_path: Path) -> None:

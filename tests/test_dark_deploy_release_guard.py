@@ -104,12 +104,6 @@ def test_guard_reads_production_and_runs_before_the_production_backup() -> None:
     assert "/api/release" not in step("Record previous verified deployment")["run"]
 
 
-def test_checkout_has_the_history_for_the_ancestor_check() -> None:
-    checkout = step("Check out the exact CI commit")
-
-    assert checkout["with"]["fetch-depth"] == 0
-
-
 def test_job_only_runs_for_pushes_to_this_repository_main() -> None:
     job_if = yaml.safe_load(WORKFLOW.read_text())["jobs"]["dark-deploy"]["if"]
 

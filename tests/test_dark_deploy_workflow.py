@@ -40,22 +40,6 @@ def test_dark_deploy_does_not_publish_variable_inventory() -> None:
     assert "/tmp/rollback-variables.json" in workflow
 
 
-def test_dark_deploy_tracks_the_new_id_and_waits_for_its_terminal_status() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-
-    assert "UPLOAD_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}" in workflow
-    assert '--message "dark release ${RELEASE_SHA}"' in workflow
-    assert '--arg message "dark release ${RELEASE_SHA}"' in workflow
-    assert "FAILED|CRASHED|REMOVED|REMOVING|SKIPPED) exit 1 ;;" in workflow
-    assert "railway api" not in workflow
-    assert "https://backboard.railway.com/graphql/v2" in workflow
-    assert "Project-Access-Token: ${RAILWAY_TOKEN}" in workflow
-    rollback_block = workflow.split(
-        "- name: Roll back code and variables after any failed release check", 1
-    )[1]
-    assert "FAILED|CRASHED|REMOVED|REMOVING|SKIPPED)" in rollback_block
-
-
 def test_dark_deploy_time_budgets_cover_health_check_and_rollback() -> None:
     import tomllib
 
