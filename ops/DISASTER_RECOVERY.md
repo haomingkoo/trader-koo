@@ -28,17 +28,11 @@ is in `ops/INCIDENT_RUNBOOK.md`.
 | Visibility | public `/api/status` field `backup.latest_backup_utc` and `backup.latest_backup_size_bytes` |
 | Alerting | Telegram on a failed scheduled backup; the hourly `prod-freshness.yml` run fails when the newest backup is older than 30 hours |
 
-All three kinds of backup share the one budget of 7. The tiers make sure a burst
-of same-day dark-deploy runs cannot evict every older restore point. Files that
+Scheduled, dark-deploy and maintenance backups share that budget. Files that
 do not match `trader_koo_backup_<UTC stamp>.db.gz` (for example
-`pre_split_rebase*`) are never pruned and do not count toward the budget.
-A `*.db.gz.partial` file left by a killed process is not pruned either; delete
-it by hand once no backup is running.
-
-History depth: at a steady daily cadence the oldest kept restore point is about
-3 ISO weeks old. The weekly schedule this replaced kept 7 weekly copies when no
-dark-deploy bursts happened, so the history is now shorter in exchange for a
-restore point at most a day old.
+`pre_split_rebase*`) and `*.db.gz.partial` files left by a killed process are
+never pruned and do not count toward it; delete a partial file by hand once no
+backup is running.
 
 Disk budget: on 2026-10-28 the database was 1.43 GB and each compressed backup
 about 0.2 GB, so seven backups take about 1.4 GB. The nightly VACUUM needs about
