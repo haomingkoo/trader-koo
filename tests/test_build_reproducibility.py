@@ -88,13 +88,19 @@ def test_lock_input_selects_cpu_torch_on_linux_and_plain_wheels_elsewhere() -> N
     assert 'torchvision==0.28.0 ; sys_platform != "linux"' in text
 
 
-def test_dev_lock_reuses_every_runtime_pin() -> None:
-    assert "-c requirements.txt" in DEV_LOCK_INPUT.read_text(encoding="utf-8")
+def test_dev_lock_contains_every_runtime_pin() -> None:
+    # Dependabot recompiles only the .in files whose lock already names the
+    # bumped package, and it follows -r but not -c. Including requirements.in
+    # puts every runtime package in the dev lock, so a runtime bump always
+    # regenerates both locks; -c keeps the dev lock on the runtime versions.
+    lines = DEV_LOCK_INPUT.read_text(encoding="utf-8").splitlines()
+    assert "-r requirements.in" in lines
+    assert "-c requirements.txt" in lines
     runtime = _locked_pins(LOCK)
     dev = _locked_pins(DEV_LOCK)
-    shared = runtime.keys() & dev.keys()
-    assert {name: dev[name] for name in shared} == {name: runtime[name] for name in shared}
+    assert {name: dev.get(name) for name in runtime} == runtime
     assert {"pytest", "pylint", "import-linter"} <= dev.keys()
+    assert f"--extra-index-url {TORCH_CPU_INDEX}" in DEV_LOCK.read_text(encoding="utf-8")
 
 
 def test_build_script_installs_nothing_outside_the_lock() -> None:
@@ -127,7 +133,9 @@ def test_nixpacks_installs_only_the_hashed_lock() -> None:
 def test_makefile_installs_the_locks_on_linux() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
-    assert "--no-deps --require-hashes -r requirements.txt -r requirements-dev.txt" in makefile
+    # The dev lock already holds every runtime pin, so CI installs it alone.
+    assert "$(PIP) install --no-deps --require-hashes -r requirements-dev.txt\n" in makefile
+    assert "-r requirements.txt -r requirements-dev.txt" not in makefile
     assert "$(PIP) install --no-deps -e ." in makefile
     assert "pip-tools==7.6.1" in makefile
 

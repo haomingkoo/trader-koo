@@ -10,7 +10,7 @@ FRONTEND_DIR := trader_koo/frontend-v2
 backend-install:
 	$(PIP) install --upgrade pip
 ifeq ($(shell uname -s),Linux)
-	$(PIP) install --no-deps --require-hashes -r requirements.txt -r requirements-dev.txt
+	$(PIP) install --no-deps --require-hashes -r requirements-dev.txt
 	@# Match build.sh: drop GUI opencv-python, reinstall the locked headless wheel.
 	$(PIP) uninstall -y opencv-python opencv-python-headless
 	awk '/^opencv-python-headless==/ {found = 1} found {print} found && !/\\$$/ {exit}' \
@@ -19,8 +19,8 @@ ifeq ($(shell uname -s),Linux)
 	rm -f opencv-headless.lock.tmp
 else
 	@tmp=$$(mktemp -d) && \
-	sed -e '/--hash=/d' -e 's/ \\$$//' requirements.txt requirements-dev.txt > "$$tmp/constraints.txt" && \
-	grep -v '^-c ' requirements-dev.in > "$$tmp/requirements-dev.in" && \
+	sed -e '/--hash=/d' -e 's/ \\$$//' requirements-dev.txt > "$$tmp/constraints.txt" && \
+	grep -v -e '^-c ' -e '^-r ' requirements-dev.in > "$$tmp/requirements-dev.in" && \
 	$(PIP) install -c "$$tmp/constraints.txt" -r requirements.in -r "$$tmp/requirements-dev.in"
 endif
 	$(PIP) install --no-deps -e .

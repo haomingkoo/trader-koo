@@ -1,5 +1,8 @@
-# Development dependencies, layered on the production lock. Edit this file,
+# Development dependencies plus every production dependency. Edit this file,
 # then run `make lock` to regenerate the hashed requirements-dev.txt lock.
+# -r makes the dev lock name every runtime package, so Dependabot recompiles it
+# on each runtime bump (it follows -r, not -c); -c keeps the runtime versions.
+-r requirements.in
 -c requirements.txt
 
 # Testing

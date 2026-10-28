@@ -45,7 +45,13 @@ Every input is pinned so the image matches what CI tested:
 
 `requirements.in` and `requirements-dev.in` are the inputs; `requirements.txt`
 and `requirements-dev.txt` are hashed pip-tools locks for Linux x86_64 and
-Python 3.11. Edit an input, then regenerate the locks on Linux x86_64:
+Python 3.11. Railway installs `requirements.txt`. `requirements-dev.in`
+includes `requirements.in` (`-r`) and is constrained by `requirements.txt`
+(`-c`), so `requirements-dev.txt` holds every runtime pin at the same version
+plus the dev tools, and CI installs it alone. The `-r` line matters for
+Dependabot: it recompiles only the locks that already name the package it
+bumps, so a runtime bump regenerates both locks. Edit an input, then
+regenerate the locks on Linux x86_64:
 
 ```bash
 docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src python:3.11 \
