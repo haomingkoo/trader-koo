@@ -57,7 +57,7 @@ from trader_koo.ratelimit.integration import initialize_rate_limiting
 
 from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.frontend_routes import SPA_ROUTE_PATHS
-from trader_koo.backend.services.scheduler import create_scheduler
+from trader_koo.backend.services.scheduler import create_scheduler, shutdown_scheduler
 from trader_koo.backend.services.maintenance import (
     acquire_lease,
     writers_blocked,
@@ -492,7 +492,7 @@ async def lifespan(_app: FastAPI):
     # Do not release the whole-process writer lease while a scheduler job may
     # still be using the database.  Platform force-kill remains fail-closed:
     # inherited writer children retain the lease until they exit.
-    _scheduler.shutdown(wait=True)
+    shutdown_scheduler(_scheduler)
     # Intentionally retain the shared lease until OS process exit. Admin
     # endpoints can own daemon writer threads that are not part of APScheduler;
     # closing here would create a gap before those threads are terminated.

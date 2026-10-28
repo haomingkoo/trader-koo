@@ -356,7 +356,7 @@ def test_worker_transitions_reserved_record_before_subprocess(tmp_path, monkeypa
 
     monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
     monkeypatch.setattr(
-        "trader_koo.backend.services.scheduler.subprocess.run",
+        "trader_koo.backend.services.scheduler._run_tracked_child",
         completed_subprocess,
     )
 

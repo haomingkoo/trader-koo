@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - production/runtime is Unix-like
 
 from trader_koo.backend.services.report_loader import _tail_text_file
 from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
+from trader_koo.backend.services.child_processes import run_tracked_child as _run_tracked_child, shutdown_scheduler
 from trader_koo.backend.services.ops_jobs import run_daily_backup, send_ops_alert
 from trader_koo.backend.services.market_data import read_latest_ingest_run
 from trader_koo.report.utils import expected_price_date
@@ -374,10 +375,10 @@ def _run_daily_update_unlocked(
     env = os.environ.copy()
     env["TRADER_KOO_UPDATE_MODE"] = mode_norm
     env["TRADER_KOO_PIPELINE_RUN_ID"] = pipeline_run_id
-    result = subprocess.run(
-        ["bash", str(script)], capture_output=False, env=env,
-        pass_fds=inherited_writer_lease_fds(),
-    )
+    result = _run_tracked_child(
+        ["bash", str(script)], interruptible=True, env=env, pass_fds=inherited_writer_lease_fds())
+    if result is None:  # stopped by shutdown: status stays 'running' so the next boot resumes it
+        return
     elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     rss_after = _current_rss_mb()
     delta = (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None
@@ -498,7 +499,7 @@ def _run_weekly_yolo() -> None:
     )
     _append_run_log("WEEKLY", "Starting weekly YOLO pass")
     with run_log.open("a", encoding="utf-8") as log_file:
-        result = subprocess.run(
+        result = _run_tracked_child(
             [
                 sys.executable, str(script_yolo),
                 "--db-path", str(DB_PATH),
@@ -538,7 +539,7 @@ def _run_weekly_yolo() -> None:
     LOG.info("Scheduler: regenerating report after weekly YOLO")
     _append_run_log("WEEKLY", "Report regeneration starting")
     with run_log.open("a", encoding="utf-8") as log_file:
-        report_result = subprocess.run(
+        report_result = _run_tracked_child(
             [
                 sys.executable, str(script_report),
                 "--db-path", str(DB_PATH),
@@ -634,7 +635,7 @@ def _run_options_iv_snapshot(options_config: "OptionsConfig | None" = None) -> N
     if snapshot_config.tickers:
         cmd.extend(["--tickers", snapshot_config.tickers])
     with RUN_LOG_PATH.open("a", encoding="utf-8") as run_log:
-        result = subprocess.run(
+        result = _run_tracked_child(
             cmd,
             stdout=run_log,
             stderr=subprocess.STDOUT,

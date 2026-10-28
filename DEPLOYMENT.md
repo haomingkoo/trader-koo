@@ -23,6 +23,24 @@ For each release, the workflow:
 7. verifies the public release SHA, API contracts, and Chromium journeys; and
 8. rolls back to the recorded deployment if a release check fails.
 
+In production, `start.sh` refuses to boot when the volume is not mounted or
+`price_daily` is empty. It also refuses a database that is missing,
+unreadable, or fails `PRAGMA quick_check`. Set
+`TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP=1` only for a deliberate first bootstrap on
+a new volume, and remove it once the seed finishes. See "First-run DB seed"
+in `ARCHITECTURE.md`.
+
+On SIGTERM, uvicorn drains connections for up to 90s
+(`--timeout-graceful-shutdown 90`), then lifespan shutdown gives scheduler
+writer children 20s to exit before it SIGKILLs them. Child shutdown needs
+`deploy.drainingSeconds = 120` in `railway.toml`: without it Railway can
+SIGKILL the container first and kill writer children mid-write during a
+deploy or restart.
+
+If preflight crash-loops on a corrupt database and no maintenance run is
+active, temporarily set the Railway start command to `sleep infinity`, SSH
+in, run maintenance or restore the database, then revert the start command.
+
 Campaign activation and reset endpoints are intentionally absent from the
 deployment workflow. They require a separate authenticated human decision.
 
@@ -35,6 +53,10 @@ following before calling a release complete:
 - the CI workflow passed for the released SHA;
 - the dark-deploy workflow passed for that same SHA;
 - `/api/health` returns `ok: true`;
+- `/api/ready` returns HTTP 200 with `ok: true`, meaning the scheduler is
+  running, `daily_update` has a next run, and the database opens read-only
+  and passes `PRAGMA quick_check` (cached for five minutes). Railway still
+  gates deploys on the cheaper `/api/health` liveness probe;
 - `/api/release` returns the expected Git SHA;
 - production browser journeys passed; and
 - the paper campaign state matches the pre-deploy state.
