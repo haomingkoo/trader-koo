@@ -69,6 +69,50 @@ def test_backup_fails_and_writes_nothing_when_quick_check_is_not_ok(
     assert list(backups.glob("*")) == []
 
 
+def test_failed_compression_leaves_no_backup_and_keeps_the_latest_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno
+
+    source = _wal_db(tmp_path / "source.db")
+    backups = tmp_path / "backups"
+    good = backup_database(source, backups)
+    before = backup_db.latest_backup_summary(backups)
+    real_copy = backup_db.shutil.copyfileobj
+
+    def copy_then_fill_disk(f_in, f_out, length=0):
+        f_out.write(f_in.read(1024))
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(backup_db.shutil, "copyfileobj", copy_then_fill_disk)
+    with pytest.raises(OSError, match="No space left"):
+        backup_database(source, backups)
+    monkeypatch.setattr(backup_db.shutil, "copyfileobj", real_copy)
+
+    assert sorted(p.name for p in backups.iterdir()) == [good["backup_name"]]
+    assert backup_db.latest_backup_summary(backups) == before
+
+
+def test_backup_is_published_under_its_generated_name_only_when_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _wal_db(tmp_path / "source.db")
+    backups = tmp_path / "backups"
+    seen: list[list[str]] = []
+    real_copy = backup_db.shutil.copyfileobj
+
+    def copy_and_look(f_in, f_out, length=0):
+        real_copy(f_in, f_out, length)
+        seen.append(sorted(p.name for p in backups.glob("trader_koo_backup_*.db.gz")))
+
+    monkeypatch.setattr(backup_db.shutil, "copyfileobj", copy_and_look)
+    result = backup_database(source, backups)
+
+    assert seen == [[]]
+    with gzip.open(result["backup_path"], "rb") as handle:
+        assert handle.read(16) == b"SQLite format 3\x00"
+
+
 def test_quick_check_reads_the_real_pragma(tmp_path: Path) -> None:
     assert backup_db._quick_check(_wal_db(tmp_path / "source.db")) == ["ok"]
 

@@ -14,6 +14,7 @@ import datetime as dt
 import gzip
 import hashlib
 import logging
+import os
 import sqlite3
 import shutil
 import tempfile
@@ -35,6 +36,7 @@ KEEP_DAILY = 3
 KEEP_WEEKLY = 4
 BACKUP_PREFIX = "trader_koo_backup_"
 BACKUP_SUFFIX = ".db.gz"
+PARTIAL_SUFFIX = ".partial"
 STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
 QUICK_CHECK_DETAIL_ROWS = 5
 
@@ -86,15 +88,29 @@ def backup_database(
             detail = "; ".join(quick_check[:QUICK_CHECK_DETAIL_ROWS])
             LOG.error("Backup aborted: snapshot quick_check failed: %s", detail)
             raise BackupIntegrityError(f"snapshot quick_check failed: {detail}")
-        with snapshot.open("rb") as f_in, gzip.open(dest, "wb", compresslevel=6) as f_out:
-            shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
+        # Compress under a name the backup glob does not match, so a write cut
+        # short (for example ENOSPC) is never listed, served or counted as
+        # the latest backup.
+        partial = dest.with_name(dest.name + PARTIAL_SUFFIX)
+        try:
+            with partial.open("wb") as raw:
+                with snapshot.open("rb") as f_in, gzip.GzipFile(
+                    filename="", mode="wb", fileobj=raw, compresslevel=6
+                ) as f_out:
+                    shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
+                raw.flush()
+                os.fsync(raw.fileno())
+            dest_size = partial.stat().st_size
+            digest = hashlib.sha256()
+            with partial.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            os.replace(partial, dest)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
 
     elapsed = round(time.monotonic() - t0, 2)
-    dest_size = dest.stat().st_size
-    digest = hashlib.sha256()
-    with dest.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
     ratio = round(dest_size / src_size * 100, 1) if src_size else 0.0
 
     LOG.info(
