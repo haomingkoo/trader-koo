@@ -19,6 +19,14 @@ SPEC.loader.exec_module(mod)
 
 UTC = dt.timezone.utc
 HEALTHY = {"ok": True, "db_exists": True}
+# Shape of GET /api/ready (trader_koo/backend/routers/readiness.py).
+READY = {
+    "ok": True,
+    "scheduler_running": True,
+    "daily_update_scheduled": True,
+    "db_readable": True,
+    "db_integrity_ok": True,
+}
 RECORDED = json.loads((ROOT / "tests" / "fixtures" / "prod_freshness_2026_10_28.json").read_text())
 RECORDED_NOW = dt.datetime.fromisoformat(RECORDED["now_utc"])
 
@@ -32,6 +40,7 @@ def _fresh_backup_status(now: dt.datetime = RECORDED_NOW) -> dict:
 def _recorded(**overrides):
     inputs = {
         "health": copy.deepcopy(RECORDED["health"]),
+        "ready": copy.deepcopy(READY),
         "status": _fresh_backup_status(),
         "now_utc": RECORDED_NOW,
         "release": copy.deepcopy(RECORDED["release"]),
@@ -48,6 +57,7 @@ def _evaluate(**overrides):
         inputs["health"],
         inputs["status"],
         inputs["now_utc"],
+        ready=inputs["ready"],
         release=inputs["release"],
         compare=inputs["compare"],
         deploy_runs=inputs["deploy_runs"],
@@ -97,6 +107,14 @@ def test_price_freshness(health, price_date, now, healthy):
     problems = _evaluate(health=health, status=_status(price_date, now), now_utc=now)
 
     assert (problems == []) is healthy
+
+
+@pytest.mark.parametrize("ready", [{**READY, "ok": False, "scheduler_running": False}, {}])
+def test_not_ready_fails(ready):
+    problems = _evaluate(ready=ready)
+
+    assert len(problems) == 1
+    assert problems[0].startswith("/api/ready: not ready")
 
 
 def test_missing_latest_data_block_fails():
@@ -310,6 +328,7 @@ def test_main_runs_every_check_against_recorded_payloads(monkeypatch, capsys):
     status = _fresh_backup_status()
     responses = {
         "/api/health": RECORDED["health"],
+        "/api/ready": READY,
         "/api/status": status,
         "/api/release": RECORDED["release"],
         "/compare/": RECORDED["compare_identical"],
@@ -341,6 +360,53 @@ def test_main_runs_every_check_against_recorded_payloads(monkeypatch, capsys):
     )
     github_headers = [h for url, h in seen if url.startswith("https://api.github.com")]
     assert github_headers and all(h["Authorization"] == "Bearer test-token-not-printed" for h in github_headers)
+
+
+def _recorded_fetch_except_ready(ready_error):
+    responses = {
+        "/api/health": RECORDED["health"],
+        "/api/status": _fresh_backup_status(),
+        "/api/release": RECORDED["release"],
+        "/compare/": RECORDED["compare_identical"],
+        "/actions/workflows/dark-deploy.yml/runs": RECORDED["deploy_runs"],
+    }
+
+    def fake_fetch(url, timeout, attempts, headers=None):
+        if url.endswith("/api/ready"):
+            raise ready_error(url)
+        for marker, payload in responses.items():
+            if marker in url:
+                return copy.deepcopy(payload)
+        raise AssertionError(url)
+
+    return fake_fetch
+
+
+def test_main_reports_a_503_readiness_as_not_ready(monkeypatch, capsys):
+    monkeypatch.setattr(
+        mod, "fetch_json", _recorded_fetch_except_ready(lambda url: mod.FetchError(url, 503, "HTTPError"))
+    )
+    monkeypatch.setattr(mod, "_utc_now", lambda: RECORDED_NOW)
+
+    code = mod.main(["--base-url", "https://example.invalid", "--repo", "owner/repo"])
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert out.splitlines() == [
+        "FAIL: /api/ready: not ready (GET https://example.invalid/api/ready -> HTTP 503)"
+    ]
+
+
+def test_main_reports_an_unreachable_readiness_probe_as_unreachable(monkeypatch, capsys):
+    monkeypatch.setattr(
+        mod, "fetch_json", _recorded_fetch_except_ready(lambda url: mod.FetchError(url, None, "URLError"))
+    )
+
+    code = mod.main(["--base-url", "https://example.invalid", "--repo", "owner/repo"])
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "unreachable" in out and "not ready" not in out
 
 
 @pytest.mark.parametrize("url", ["", "   "])

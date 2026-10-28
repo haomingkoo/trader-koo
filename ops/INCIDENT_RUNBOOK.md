@@ -8,7 +8,7 @@ admin API key or the Railway token. Read it with `read -rs`.
 
 | Source | Channel | Fires on |
 | --- | --- | --- |
-| `prod-freshness.yml` (hourly, outside the container) | GitHub Actions failure email to the workflow owner | service unreachable or a non-2xx response, stale price date, no report generated after the last expected session close, newest backup older than 30 hours, deployed `git_sha` not on `main` or more than 3 days behind it, last attempted dark-deploy failed |
+| `prod-freshness.yml` (hourly, outside the container) | GitHub Actions failure email to the workflow owner | service unreachable or a non-2xx response, `/api/ready` not ready (503 or `ok` false), stale price date, no report generated after the last expected session close, newest backup older than 30 hours, deployed `git_sha` not on `main` or more than 3 days behind it, last attempted dark-deploy failed |
 | In-app scheduler | Telegram (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) | nightly pipeline failed, scheduled backup failed, storage pressure, crypto data stale, a kooexperience.com site down |
 | `dark-deploy.yml` | GitHub Actions failure email | a release check failed; the workflow has already rolled back |
 
@@ -23,6 +23,7 @@ hourly GitHub check remains. In-app alerts stop when the container stops.
 BASE_URL=https://trader.kooexperience.com
 UA=trader-koo-freshness-monitor/1.0
 curl -sS -A "$UA" -w '\nHTTP %{http_code}\n' "$BASE_URL/api/health"
+curl -sS -A "$UA" -w '\nHTTP %{http_code}\n' "$BASE_URL/api/ready"
 curl -sS -A "$UA" "$BASE_URL/api/status" | jq '{ok, operational_warnings, latest_data, freshness, backup, pipeline: .pipeline | {active, stage, last_completed_stage, last_completed_status, last_completed_ts}}'
 curl -sS -A "$UA" "$BASE_URL/api/release" | jq .
 curl -sS -A "$UA" "$BASE_URL/api/paper-trades/summary" | jq '.campaign_health | {campaign_id, status, write_state, healthy, health_reasons}'

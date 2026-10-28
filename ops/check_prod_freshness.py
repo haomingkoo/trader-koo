@@ -7,6 +7,8 @@ problem so the failed run notifies the owner. Standard library only.
 Checks, all fail-closed (a missing or unparseable field is a failure):
 
 - ``/api/health`` is ok and the database exists;
+- ``/api/ready`` answers 200 with ``ok`` true (it answers 503 while the
+  scheduler, the ``daily_update`` job or the database is not ready);
 - ``latest_data.price_date`` is not behind the expected trading session;
 - ``freshness.report_generated_ts`` is at or after the close of that expected
   session (the app's ``report_fresh`` flag measures age from the report's
@@ -176,6 +178,7 @@ def evaluate(
     status: dict[str, Any],
     now_utc: dt.datetime,
     *,
+    ready: dict[str, Any],
     release: dict[str, Any],
     compare: dict[str, Any],
     deploy_runs: dict[str, Any],
@@ -183,6 +186,8 @@ def evaluate(
     problems: list[str] = []
     if not (health.get("ok") and health.get("db_exists")):
         problems.append(f"/api/health: not ok: {health}")
+    if ready.get("ok") is not True:
+        problems.append(f"/api/ready: not ready ({ready.get('http_error') or ready})")
 
     expected = expected_price_date(now_utc - EXTRA_GRACE)
     price_date = (status.get("latest_data") or {}).get("price_date")
@@ -243,6 +248,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         health = fetch_json(f"{base}/api/health", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
+        try:
+            ready = fetch_json(f"{base}/api/ready", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
+        except FetchError as exc:
+            # A not-ready service answers 503, which is a readiness failure,
+            # not an unreachable host.
+            if exc.status is None:
+                raise
+            ready = {"ok": False, "http_error": str(exc)}
         status = fetch_json(f"{base}/api/status", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
         release = fetch_json(f"{base}/api/release", FETCH_TIMEOUT_SEC, FETCH_ATTEMPTS)
         compare: dict[str, Any] = {}
@@ -268,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         health,
         status,
         _utc_now(),
+        ready=ready,
         release=release,
         compare=compare,
         deploy_runs=deploy_runs,
