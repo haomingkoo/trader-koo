@@ -113,8 +113,8 @@ export interface PipelineStatus {
     contract: string;
     contract_version: string;
     version: string;
-    auth_header: string;
-    admin_auth_configured: boolean;
+    auth_header?: string;
+    admin_auth_configured?: boolean;
     runtime_started_ts: string;
     base_url?: string;
     app_url?: string;
@@ -122,7 +122,7 @@ export interface PipelineStatus {
     git_sha?: string;
     deployed_ts?: string;
     deployment_id?: string;
-    actions: Array<{
+    actions?: Array<{
       id: string;
       label: string;
       description: string;
