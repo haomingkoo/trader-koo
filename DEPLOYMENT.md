@@ -77,6 +77,22 @@ both must agree. The runtime lock also pins GUI `opencv-python`, which
 uninstall it and reinstall `opencv-python-headless` from its locked hashes,
 since both wheels own `cv2/` and the GUI one needs `libGL.so.1`.
 
+The locks need Python 3.11.5 or later: some locked wheels, such as
+`soupsieve`, declare `Requires-Python >=3.11.5`, and `make lock` refuses an
+older 3.11. Railway runs 3.11.16 and CI the latest 3.11. To dry-run the locks
+from another platform, pass a full patch version and both platform tags. pip
+does not widen a `--platform` tag, and the locked wheels need both:
+`contourpy` ships only `manylinux_2_27`/`2_28` wheels and `cffi` only
+`manylinux2014`. `sys_platform` markers still evaluate against the host, so
+the Linux torch pins are skipped on macOS:
+
+```bash
+pip install --dry-run --report report.json --no-deps --require-hashes \
+  --only-binary=:all: --platform manylinux_2_28_x86_64 \
+  --platform manylinux2014_x86_64 --python-version 3.11.16 \
+  --target /tmp/lock-dry-run -r requirements-dev.txt
+```
+
 On macOS, `make backend-install` installs the `.in` inputs with the lock
 versions as hash-free constraints, because the `+cpu` wheels exist only for
 Linux and Windows. That install is unhashed and keeps GUI opencv; CI is the

@@ -139,6 +139,8 @@ def test_makefile_installs_the_locks_on_linux() -> None:
     # Build with the locked setuptools, not one fetched into an isolated env.
     assert "$(PIP) install --no-deps --no-build-isolation -e ." in makefile
     assert "pip-tools==7.6.1" in makefile
+    # Locked wheels such as soupsieve declare Requires-Python >=3.11.5.
+    assert "(3, 11, 5)" in makefile
 
 
 def test_dependabot_keeps_torch_pins_manual() -> None:

@@ -37,7 +37,7 @@ lock-tools:
 #   sh -c 'make lock-tools lock PYTHON=python'
 lock:
 	@test "$$(uname -sm)" = "Linux x86_64" || { echo "make lock must run on Linux x86_64"; exit 2; }
-	@$(PYTHON) -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11) and "make lock needs Python 3.11")'
+	@$(PYTHON) -c 'import sys; v = sys.version_info[:3]; sys.exit(not (3, 11, 5) <= v < (3, 12) and "make lock needs Python 3.11.5 or later 3.11")'
 	$(PIP_COMPILE) --output-file=requirements.txt requirements.in
 	$(PIP_COMPILE) --output-file=requirements-dev.txt requirements-dev.in
 
