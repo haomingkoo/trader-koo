@@ -56,13 +56,18 @@ def test_drill_fails_after_every_verification_and_before_rollback() -> None:
 
 def _guard(tmp_path: Path, previous: str, drill: str):
     scenario = {
+        "curl": [{"match": "/api/release", "responses": [{"body": {"git_sha": previous}}]}],
         "git": [
             {"match": "ls-remote", "responses": [{"body": f"{SHA}\trefs/heads/main\n"}]},
             {"match": "cat-file", "responses": [{"exit": 0}]},
             {"match": "merge-base --is-ancestor", "responses": [{"exit": 0}]},
         ]
     }
-    env = {"RELEASE_SHA": SHA, "PREVIOUS_SHA": previous, "ROLLBACK_DRILL": drill}
+    env = {
+        "RELEASE_SHA": SHA,
+        "BASE_URL": "https://prod.example.invalid",
+        "ROLLBACK_DRILL": drill,
+    }
     return run_step(tmp_path, GUARD, env=env, scenario=scenario)
 
 

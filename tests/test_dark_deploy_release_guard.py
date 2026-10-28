@@ -14,8 +14,17 @@ RELEASE_SHA = "c" * 40
 PREVIOUS_SHA = "a" * 40
 
 
-def _git(*, main_head: str = RELEASE_SHA, known: bool = True, ancestor: bool = True):
+def _git(
+    *,
+    main_head: str = RELEASE_SHA,
+    known: bool = True,
+    ancestor: bool = True,
+    production_sha: str = PREVIOUS_SHA,
+):
     return {
+        "curl": [
+            {"match": "/api/release", "responses": [{"body": {"git_sha": production_sha}}]}
+        ],
         "git": [
             {"match": "ls-remote", "responses": [{"body": f"{main_head}\trefs/heads/main\n"}]},
             {"match": "cat-file", "responses": [{"exit": 0 if known else 1}]},
@@ -25,14 +34,15 @@ def _git(*, main_head: str = RELEASE_SHA, known: bool = True, ancestor: bool = T
 
 
 def _run(tmp_path: Path, name: str = GUARD, **kwargs):
-    env = {"RELEASE_SHA": RELEASE_SHA, "PREVIOUS_SHA": PREVIOUS_SHA}
+    env = {"RELEASE_SHA": RELEASE_SHA, "BASE_URL": "https://prod.example.invalid"}
     return run_step(tmp_path, name, env=env, scenario=_git(**kwargs))
 
 
 def test_guard_accepts_the_main_head_descending_from_production(tmp_path: Path) -> None:
-    result, calls, _ = _run(tmp_path)
+    result, calls, outputs = _run(tmp_path)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert outputs["sha"] == PREVIOUS_SHA
     merge_base = [call["args"] for call in calls if "merge-base" in call["args"]]
     assert merge_base == [["merge-base", "--is-ancestor", PREVIOUS_SHA, RELEASE_SHA]]
 
@@ -74,14 +84,15 @@ def test_head_guard_runs_before_install_and_the_production_backup() -> None:
     assert "PREVIOUS_SHA" not in step(HEAD_GUARD).get("env", {})
 
 
-def test_guard_runs_after_previous_state_and_before_any_railway_change() -> None:
+def test_guard_reads_production_and_runs_before_the_production_backup() -> None:
+    # A refused run must not write a backup to the production volume.
     names = [s["name"] for s in yaml.safe_load(WORKFLOW.read_text())["jobs"]["dark-deploy"]["steps"]]
 
-    assert names.index("Record previous verified deployment") < names.index(GUARD)
-    assert names.index(GUARD) < names.index(
-        "Bind release identity without starting a second deployment"
-    )
-    assert step(GUARD)["env"]["PREVIOUS_SHA"] == "${{ steps.previous.outputs.sha }}"
+    assert names.index(HEAD_GUARD) < names.index(GUARD) < names.index(BACKUP)
+    assert step(GUARD)["id"] == "production"
+    assert "secrets." not in str(step(GUARD))
+    assert "/api/release" in step(GUARD)["run"]
+    assert "/api/release" not in step("Record previous verified deployment")["run"]
 
 
 def test_checkout_has_the_history_for_the_ancestor_check() -> None:

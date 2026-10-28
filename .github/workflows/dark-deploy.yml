@@ -96,6 +96,27 @@ jobs:
             exit 1
           fi
 
+      - name: Refuse a release that does not descend from production
+        id: production
+        run: |
+          curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/previous-release.json
+          previous_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
+          test -n "$previous_sha"
+          echo "sha=$previous_sha" >> "$GITHUB_OUTPUT"
+          if ! git cat-file -e "${previous_sha}^{commit}" 2>/dev/null; then
+            echo "Production SHA ${previous_sha} is not in the repository history; refusing to deploy over it."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$previous_sha" "$RELEASE_SHA"; then
+            echo "Production SHA ${previous_sha} is not an ancestor of ${RELEASE_SHA}; refusing to deploy."
+            exit 1
+          fi
+          # The drill tests rollback mechanics only; it must not ship code.
+          if [ "$ROLLBACK_DRILL" = "true" ] && [ "$previous_sha" != "$RELEASE_SHA" ]; then
+            echo "Production runs ${previous_sha}, not main ${RELEASE_SHA}; release main normally before a rollback drill."
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -214,8 +235,6 @@ jobs:
           railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-variables.json
           paper_trade_enabled=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/previous-variables.json)
           deployment_id=$(jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty' /tmp/previous-deployments.json)
-          curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/previous-release.json
-          release_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
           curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
           jq -e '.ok == true' /tmp/previous-paper-summary.json > /dev/null
           campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
@@ -233,30 +252,10 @@ jobs:
             test "$observed_write_state" = "$expected_write_state"
           fi
           test -n "$deployment_id"
-          test -n "$release_sha"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
-          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
           echo "campaign_status=$campaign_status" >> "$GITHUB_OUTPUT"
           echo "campaign_write_state=$expected_write_state" >> "$GITHUB_OUTPUT"
           echo "paper_trade_enabled=$paper_trade_enabled" >> "$GITHUB_OUTPUT"
-
-      - name: Refuse a release that does not descend from production
-        env:
-          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
-        run: |
-          if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
-            echo "Production SHA ${PREVIOUS_SHA} is not in the repository history; refusing to deploy over it."
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$PREVIOUS_SHA" "$RELEASE_SHA"; then
-            echo "Production SHA ${PREVIOUS_SHA} is not an ancestor of ${RELEASE_SHA}; refusing to deploy."
-            exit 1
-          fi
-          # The drill tests rollback mechanics only; it must not ship code.
-          if [ "$ROLLBACK_DRILL" = "true" ] && [ "$PREVIOUS_SHA" != "$RELEASE_SHA" ]; then
-            echo "Production runs ${PREVIOUS_SHA}, not main ${RELEASE_SHA}; release main normally before a rollback drill."
-            exit 1
-          fi
 
       - name: Bind release identity without starting a second deployment
         id: bind
@@ -390,7 +389,7 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
-          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+          PREVIOUS_SHA: ${{ steps.production.outputs.sha }}
           DARK_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}
           EXPECTED_CAMPAIGN_STATUS: ${{ steps.previous.outputs.campaign_status }}
           EXPECTED_CAMPAIGN_WRITE_STATE: ${{ steps.previous.outputs.campaign_write_state }}
@@ -568,7 +567,7 @@ jobs:
             --arg git_sha "$RELEASE_SHA" \
             --argjson rollback_drill "$ROLLBACK_DRILL" \
             --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
-            --arg previous_git_sha "${{ steps.previous.outputs.sha }}" \
+            --arg previous_git_sha "${{ steps.production.outputs.sha }}" \
             --arg expected_campaign_status "${{ steps.previous.outputs.campaign_status }}" \
             --arg expected_campaign_write_state "${{ steps.previous.outputs.campaign_write_state }}" \
             --arg previous_paper_trade_enabled "${{ steps.previous.outputs.paper_trade_enabled }}" \
