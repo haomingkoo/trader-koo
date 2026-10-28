@@ -23,6 +23,13 @@ For each release, the workflow:
 7. verifies the public release SHA, API contracts, and Chromium journeys; and
 8. rolls back to the recorded deployment if a release check fails.
 
+In production, `start.sh` refuses to boot when the volume is not mounted or
+`price_daily` is empty. It also refuses a database that is missing,
+unreadable, or fails `PRAGMA quick_check`. Set
+`TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP=1` only for a deliberate first bootstrap on
+a new volume, and remove it once the seed finishes. See "First-run DB seed"
+in `ARCHITECTURE.md`.
+
 Campaign activation and reset endpoints are intentionally absent from the
 deployment workflow. They require a separate authenticated human decision.
 
