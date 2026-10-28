@@ -159,46 +159,64 @@ jobs:
           test "$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/bound-variables.json)" = "${{ steps.previous.outputs.paper_trade_enabled }}"
 
       - name: Upload dark release and wait for Railway health gate
-        run: >-
-          railway up --ci
-          --project "$RAILWAY_PROJECT_ID"
-          --service "$RAILWAY_SERVICE"
-          --environment "$RAILWAY_ENVIRONMENT"
-          --message "dark release ${RELEASE_SHA}"
+        id: upload
+        env:
+          NO_COLOR: "1"
+        run: |
+          # `railway up --ci` can exit 0 once build logs end, before the health
+          # check finishes, so the next step owns the wait.
+          set +e
+          railway up --ci \
+            --project "$RAILWAY_PROJECT_ID" \
+            --service "$RAILWAY_SERVICE" \
+            --environment "$RAILWAY_ENVIRONMENT" \
+            --message "dark release ${RELEASE_SHA}" \
+            2>&1 | tee /tmp/railway-up.log
+          up_status=${PIPESTATUS[0]}
+          set -e
+          deployment_id=$(grep -oE '[?&]id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' /tmp/railway-up.log | head -n 1 | cut -d= -f2 || true)
+          if [ -n "$deployment_id" ]; then
+            echo "Railway deployment id: ${deployment_id}"
+            echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$up_status"
 
       - name: Record dark deployment
         id: deployed
+        env:
+          UPLOAD_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}
         run: |
-          deployment_id=""
+          if [ -z "$UPLOAD_DEPLOYMENT_ID" ]; then
+            echo "railway up printed no deployment id; refusing to guess which deployment is the release."
+            exit 1
+          fi
+          deployment_id="$UPLOAD_DEPLOYMENT_ID"
+          if jq -e --arg id "$deployment_id" 'map(.id) | index($id)' /tmp/previous-deployments.json > /dev/null; then
+            echo "Deployment ${deployment_id} existed before the upload."
+            exit 1
+          fi
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
           for attempt in $(seq 1 "$DEPLOYMENT_POLL_ATTEMPTS"); do
             railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/current-deployments.json
-            if [ -z "$deployment_id" ]; then
-              deployment_id=$(jq -r \
-                --arg message "dark release ${RELEASE_SHA}" \
-                --slurpfile previous /tmp/previous-deployments.json '
-                  [.[]
-                    | select(.meta.cliMessage == $message)
-                    | select(.id as $id | ($previous[0] | map(.id) | index($id) | not))
-                  ] as $matches
-                  | if ($matches | length) == 1 then $matches[0].id
-                    elif ($matches | length) > 1 then "AMBIGUOUS"
-                    else ""
-                    end
-                ' /tmp/current-deployments.json)
-              if [ "$deployment_id" = "AMBIGUOUS" ]; then
+            summary=$(jq -c --arg id "$deployment_id" \
+              '.[] | select(.id == $id) | {id, status, createdAt, cliMessage: .meta.cliMessage}' \
+              /tmp/current-deployments.json)
+            echo "Deployment poll ${attempt}/${DEPLOYMENT_POLL_ATTEMPTS}: ${summary:-not listed yet}"
+            status=""
+            if [ -n "$summary" ]; then
+              if ! jq -e --arg message "dark release ${RELEASE_SHA}" '.cliMessage == $message' <<< "$summary" > /dev/null; then
+                echo "Deployment ${deployment_id} is not the release for ${RELEASE_SHA}."
                 exit 1
               fi
+              status=$(jq -r '.status' <<< "$summary")
             fi
-            status=$(jq -r --arg id "$deployment_id" '.[] | select(.id == $id) | .status' /tmp/current-deployments.json)
-            if [ "$status" = "SUCCESS" ]; then
-              echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ] || [ "$status" = "REMOVED" ]; then
-              exit 1
-            fi
+            case "$status" in
+              SUCCESS) exit 0 ;;
+              FAILED|CRASHED|REMOVED|REMOVING|SKIPPED) exit 1 ;;
+            esac
             sleep "$DEPLOYMENT_POLL_INTERVAL_SEC"
           done
+          echo "Deployment ${deployment_id} did not reach SUCCESS within ${DEPLOYMENT_POLL_ATTEMPTS} polls."
           exit 1
 
       - name: Verify deployed Railway write gate
@@ -240,7 +258,7 @@ jobs:
         env:
           PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
-          DARK_DEPLOYMENT_ID: ${{ steps.deployed.outputs.id }}
+          DARK_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}
           EXPECTED_CAMPAIGN_STATUS: ${{ steps.previous.outputs.campaign_status }}
           EXPECTED_CAMPAIGN_WRITE_STATE: ${{ steps.previous.outputs.campaign_write_state }}
           EXPECTED_PAPER_TRADE_ENABLED: ${{ steps.previous.outputs.paper_trade_enabled }}
