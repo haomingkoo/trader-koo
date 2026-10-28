@@ -1,4 +1,4 @@
-"""SQLite database backup — compress to timestamped .gz, retain last N copies.
+"""SQLite database backup — quick-check, compress to timestamped .gz, retain last N copies.
 
 Usage (standalone)::
 
@@ -26,6 +26,20 @@ DEFAULT_BACKUP_DIR = Path("/data/backups")
 MAX_BACKUPS = 7
 BACKUP_PREFIX = "trader_koo_backup_"
 BACKUP_SUFFIX = ".db.gz"
+STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
+
+
+class BackupIntegrityError(RuntimeError):
+    """The online snapshot failed ``PRAGMA quick_check``; nothing was written."""
+
+
+def _quick_check(path: Path) -> list[str]:
+    """Return the ``PRAGMA quick_check`` rows for *path* (``["ok"]`` when clean)."""
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            return [str(row[0]) for row in conn.execute("PRAGMA quick_check").fetchall()]
+    except sqlite3.DatabaseError as exc:
+        return [f"{type(exc).__name__}: {exc}"]
 
 
 def backup_database(
@@ -35,15 +49,16 @@ def backup_database(
 ) -> dict[str, str | int | float]:
     """Compress *db_path* into a timestamped ``.db.gz`` in *backup_dir*.
 
-    Returns a summary dict with backup path, size, and duration.
-    Raises ``FileNotFoundError`` if the source DB does not exist.
+    Returns a summary dict with backup path, size, hash, quick_check result
+    and duration. Raises ``FileNotFoundError`` if the source DB does not exist
+    and ``BackupIntegrityError`` if the snapshot fails ``PRAGMA quick_check``.
     """
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = dt.datetime.now(dt.timezone.utc).strftime(STAMP_FORMAT)
     dest = backup_dir / f"{BACKUP_PREFIX}{stamp}{BACKUP_SUFFIX}"
 
     t0 = time.monotonic()
@@ -56,6 +71,11 @@ def backup_database(
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as source:
             with sqlite3.connect(snapshot) as target:
                 source.backup(target)
+        quick_check = _quick_check(snapshot)
+        if quick_check != ["ok"]:
+            detail = "; ".join(quick_check[:5])
+            LOG.error("Backup aborted: snapshot quick_check failed: %s", detail)
+            raise BackupIntegrityError(f"snapshot quick_check failed: {detail}")
         with snapshot.open("rb") as f_in, gzip.open(dest, "wb", compresslevel=6) as f_out:
             shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
 
@@ -87,6 +107,7 @@ def backup_database(
         "src_size_bytes": src_size,
         "dest_size_bytes": dest_size,
         "sha256": digest.hexdigest(),
+        "quick_check": "ok",
         "compression_ratio_pct": ratio,
         "elapsed_sec": elapsed,
         "pruned_count": len(pruned),

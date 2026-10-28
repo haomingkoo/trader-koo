@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from trader_koo.scripts.backup_db import (
     DEFAULT_BACKUP_DIR,
+    BackupIntegrityError,
     backup_path_by_name,
     backup_database,
     latest_backup_path,
@@ -21,7 +22,10 @@ router = APIRouter(tags=["admin", "admin-backups"])
 @router.post("/api/admin/backups")
 def admin_create_backup() -> dict[str, Any]:
     """Create a consistent online SQLite backup before a release migration."""
-    result = backup_database(DB_PATH, DEFAULT_BACKUP_DIR)
+    try:
+        result = backup_database(DB_PATH, DEFAULT_BACKUP_DIR)
+    except BackupIntegrityError as exc:
+        raise HTTPException(status_code=500, detail="backup_quick_check_failed") from exc
     return {"ok": True, **result}
 
 

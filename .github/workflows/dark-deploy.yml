@@ -91,12 +91,14 @@ jobs:
             --header "X-API-Key: ${ADMIN_API_KEY}" \
             "${BASE_URL}/api/admin/backups" \
             --output /tmp/backup-created.json
-          jq -e '.ok == true and (.backup_name | length > 0) and (.sha256 | length == 64) and .dest_size_bytes > 0' /tmp/backup-created.json > /dev/null
+          # quick_check is null only when the image being replaced predates the
+          # check; a newer image answers 500 instead of an unchecked backup.
+          jq -e '.ok == true and (.backup_name | length > 0) and (.sha256 | length == 64) and .dest_size_bytes > 0 and (.quick_check == "ok" or .quick_check == null)' /tmp/backup-created.json > /dev/null
           backup_name=$(jq -r '.backup_name' /tmp/backup-created.json)
           backup_sha=$(jq -r '.sha256' /tmp/backup-created.json)
           backup_size=$(jq -r '.dest_size_bytes' /tmp/backup-created.json)
           mkdir -p release-evidence
-          jq '{schema: "production-backup-v1", backup_name, sha256, dest_size_bytes}' \
+          jq '{schema: "production-backup-v1", backup_name, sha256, dest_size_bytes, quick_check: (.quick_check // "not_reported")}' \
             /tmp/backup-created.json > release-evidence/production-backup-manifest.json
           curl --fail --silent --show-error \
             --header "X-API-Key: ${ADMIN_API_KEY}" \
