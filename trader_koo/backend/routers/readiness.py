@@ -4,6 +4,10 @@
 probe returns 503 unless the scheduler is running, ``daily_update`` has a next
 run time, and the DB answers ``SELECT 1`` and ``PRAGMA quick_check(1)`` over a
 read-only connection. It exposes only booleans. The system router includes it.
+
+In the deployed app the maintenance interlock answers 503 for this path before
+the route runs, and the rate limiter exempts it like ``/api/health`` so a
+poller sees 503 rather than 429.
 """
 from __future__ import annotations
 
@@ -82,6 +86,8 @@ def _db_integrity_ok(db_path: Path) -> bool:
 def ready(request: Request) -> JSONResponse:
     """Readiness: scheduler running, daily_update scheduled, DB readable and intact."""
     state = request.app.state
+    # Unreachable behind MaintenanceInterlockMiddleware; kept so the route
+    # fails closed if it is ever mounted without the interlock.
     maintenance_mode = bool(getattr(state, "maintenance_mode", False))
     scheduler = getattr(state, "scheduler", None)
     scheduler_running = bool(getattr(scheduler, "running", False))
@@ -100,7 +106,6 @@ def ready(request: Request) -> JSONResponse:
     )
     payload = {
         "ok": ok,
-        "maintenance_mode": maintenance_mode,
         "scheduler_running": scheduler_running,
         "daily_update_scheduled": daily_update_scheduled,
         "db_readable": db_readable,

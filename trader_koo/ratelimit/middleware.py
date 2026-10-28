@@ -125,7 +125,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         # Only rate-limit /api/* paths — skip SPA routes, static assets, health
         path = request.url.path
-        if not path.startswith("/api/") or path in ("/api/health", "/api/status"):
+        if not path.startswith("/api/") or path in ("/api/health", "/api/ready", "/api/status"):
             return await call_next(request)
         if (
             request.method == "OPTIONS"

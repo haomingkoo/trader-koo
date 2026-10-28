@@ -16,7 +16,6 @@ from trader_koo.backend.routers.system import router as system_router
 
 READY_KEYS = {
     "ok",
-    "maintenance_mode",
     "scheduler_running",
     "daily_update_scheduled",
     "db_readable",
@@ -73,7 +72,6 @@ def test_ready_ok_when_scheduler_and_db_are_healthy(tmp_path):
     assert response.status_code == 200
     assert response.json() == {
         "ok": True,
-        "maintenance_mode": False,
         "scheduler_running": True,
         "daily_update_scheduled": True,
         "db_readable": True,
@@ -115,13 +113,14 @@ def test_ready_503_when_daily_update_job_absent(tmp_path):
     assert response.json()["daily_update_scheduled"] is False
 
 
-def test_ready_503_in_maintenance_mode(tmp_path):
+def test_ready_503_in_maintenance_mode_even_without_the_interlock(tmp_path):
+    """Defence in depth: the deployed app's interlock answers first (see below)."""
     response = _get_ready(
         _real_db(tmp_path / "db.sqlite"), FakeScheduler(next_run=_next_run()), maintenance_mode=True
     )
 
     assert response.status_code == 503
-    assert response.json()["maintenance_mode"] is True
+    assert response.json()["ok"] is False
 
 
 def test_ready_503_when_db_missing_and_does_not_create_it(tmp_path):
@@ -203,3 +202,40 @@ def test_health_stays_cheap_liveness(tmp_path):
 
     assert health.status_code == 200
     assert health.json()["ok"] is True
+
+
+# -- the deployed app's middleware stack --------------------------------------
+
+@pytest.fixture()
+def real_app(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADER_KOO_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("TRADER_KOO_LOGOS_DIR", str(tmp_path / "logos"))
+    monkeypatch.setenv("TRADER_KOO_MAINTENANCE_STATE_PATH", str(tmp_path / "maintenance.sqlite3"))
+    from trader_koo.backend.main import app
+
+    db_path = _real_db(tmp_path / "db.sqlite")
+    monkeypatch.setattr(readiness, "DB_PATH", db_path)
+    return db_path, TestClient(app, raise_server_exceptions=False)
+
+
+def test_real_app_ready_is_exempt_from_rate_limiting(real_app):
+    _, client = real_app
+
+    response = client.get("/api/ready")
+
+    assert response.status_code == 503  # no scheduler without the lifespan
+    assert set(response.json()) == READY_KEYS
+    assert "X-RateLimit-Limit" not in response.headers
+
+
+def test_real_app_ready_is_503_from_maintenance_interlock(real_app):
+    from trader_koo.backend.services.maintenance import request_maintenance
+
+    db_path, client = real_app
+    request_maintenance(db_path, run_id="maint-test", boot_id="boot", reason="test", timeout_sec=1)
+
+    response = client.get("/api/ready")
+
+    assert response.status_code == 503
+    assert "ok" not in response.json()
+    assert client.get("/api/health").json()["maintenance"] is True
