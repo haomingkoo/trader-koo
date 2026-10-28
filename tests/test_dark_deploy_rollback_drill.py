@@ -7,7 +7,7 @@ import yaml
 from tests.dark_deploy_harness import WORKFLOW, run_step, step
 
 
-GUARD = "Refuse a stale or non-descendant release"
+GUARD = "Refuse a release that does not descend from production"
 CI_GATE = "Require a passing CI run for the release commit"
 DRILL = "Fail on purpose to exercise the rollback drill"
 ROLLBACK = "Roll back code and variables after any failed release check"

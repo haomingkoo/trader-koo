@@ -85,6 +85,15 @@ jobs:
             exit 1
           fi
 
+      - name: Refuse a release that is not the main head
+        run: |
+          # A re-run of an old workflow must not push an older commit.
+          main_head=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$main_head" != "$RELEASE_SHA" ]; then
+            echo "Release ${RELEASE_SHA} is not the current main head (${main_head:-unknown}); refusing to deploy it."
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -134,6 +143,35 @@ jobs:
             | jq -e --arg service "$RAILWAY_SERVICE" \
             '.services[$service].source.repo == null' \
             > /dev/null
+
+      - name: Refuse a restart during the nightly pipeline
+        run: |
+          # daily_update runs at 22:00 UTC Mon-Fri (backend/services/scheduler.py)
+          # and took about 35 minutes. This runs before the backup so the
+          # backup is not a mid-pipeline snapshot; the restart lands 10-30
+          # minutes later, so 21:15-23:15 UTC on weekdays is closed; after
+          # that pipeline_active covers an overrun.
+          for attempt in $(seq 1 "$PIPELINE_WAIT_ATTEMPTS"); do
+            now=$(date -u '+%u %H%M')
+            weekday=${now% *}
+            hhmm=$((10#${now#* }))
+            if [ "$weekday" -le 5 ] && [ "$hhmm" -ge 2115 ] && [ "$hhmm" -lt 2315 ]; then
+              echo "Refusing to restart production inside the weekday nightly window (21:15-23:15 UTC, now ${now})."
+              exit 1
+            fi
+            curl --fail --silent --show-error "${BASE_URL}/api/status" > /tmp/pipeline-status.json
+            active=$(jq -r '.pipeline_active | if type == "boolean" then tostring else error("pipeline_active is not a boolean") end' /tmp/pipeline-status.json)
+            stage=$(jq -r '.pipeline_stage // "unknown"' /tmp/pipeline-status.json)
+            echo "Pipeline check ${attempt}/${PIPELINE_WAIT_ATTEMPTS}: active=${active} stage=${stage}"
+            if [ "$active" = "false" ]; then
+              exit 0
+            fi
+            if [ "$attempt" -lt "$PIPELINE_WAIT_ATTEMPTS" ]; then
+              sleep "$PIPELINE_WAIT_INTERVAL_SEC"
+            fi
+          done
+          echo "The pipeline is still active after ${PIPELINE_WAIT_ATTEMPTS} checks; refusing to restart production."
+          exit 1
 
       - name: Create and download a fresh consistent production backup
         env:
@@ -200,16 +238,10 @@ jobs:
           echo "campaign_write_state=$expected_write_state" >> "$GITHUB_OUTPUT"
           echo "paper_trade_enabled=$paper_trade_enabled" >> "$GITHUB_OUTPUT"
 
-      - name: Refuse a stale or non-descendant release
+      - name: Refuse a release that does not descend from production
         env:
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
         run: |
-          # A re-run of an old workflow must not push an older commit.
-          main_head=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ "$main_head" != "$RELEASE_SHA" ]; then
-            echo "Release ${RELEASE_SHA} is not the current main head (${main_head:-unknown}); refusing to deploy it."
-            exit 1
-          fi
           if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
             echo "Production SHA ${PREVIOUS_SHA} is not in the repository history; refusing to deploy over it."
             exit 1
@@ -223,34 +255,6 @@ jobs:
             echo "Production runs ${PREVIOUS_SHA}, not main ${RELEASE_SHA}; release main normally before a rollback drill."
             exit 1
           fi
-
-      - name: Refuse a restart during the nightly pipeline
-        run: |
-          # daily_update runs at 22:00 UTC Mon-Fri (backend/services/scheduler.py)
-          # and took about 35 minutes. The restart lands 10-25 minutes after
-          # this check, so 21:15-23:15 UTC on weekdays is closed; after that
-          # pipeline_active covers an overrun.
-          for attempt in $(seq 1 "$PIPELINE_WAIT_ATTEMPTS"); do
-            now=$(date -u '+%u %H%M')
-            weekday=${now% *}
-            hhmm=$((10#${now#* }))
-            if [ "$weekday" -le 5 ] && [ "$hhmm" -ge 2115 ] && [ "$hhmm" -lt 2315 ]; then
-              echo "Refusing to restart production inside the weekday nightly window (21:15-23:15 UTC, now ${now})."
-              exit 1
-            fi
-            curl --fail --silent --show-error "${BASE_URL}/api/status" > /tmp/pipeline-status.json
-            active=$(jq -r '.pipeline_active | if type == "boolean" then tostring else error("pipeline_active is not a boolean") end' /tmp/pipeline-status.json)
-            stage=$(jq -r '.pipeline_stage // "unknown"' /tmp/pipeline-status.json)
-            echo "Pipeline check ${attempt}/${PIPELINE_WAIT_ATTEMPTS}: active=${active} stage=${stage}"
-            if [ "$active" = "false" ]; then
-              exit 0
-            fi
-            if [ "$attempt" -lt "$PIPELINE_WAIT_ATTEMPTS" ]; then
-              sleep "$PIPELINE_WAIT_INTERVAL_SEC"
-            fi
-          done
-          echo "The pipeline is still active after ${PIPELINE_WAIT_ATTEMPTS} checks; refusing to restart production."
-          exit 1
 
       - name: Bind release identity without starting a second deployment
         id: bind

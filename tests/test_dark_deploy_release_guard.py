@@ -7,7 +7,9 @@ import yaml
 from tests.dark_deploy_harness import WORKFLOW, run_step, step
 
 
-GUARD = "Refuse a stale or non-descendant release"
+HEAD_GUARD = "Refuse a release that is not the main head"
+GUARD = "Refuse a release that does not descend from production"
+BACKUP = "Create and download a fresh consistent production backup"
 RELEASE_SHA = "c" * 40
 PREVIOUS_SHA = "a" * 40
 
@@ -22,9 +24,9 @@ def _git(*, main_head: str = RELEASE_SHA, known: bool = True, ancestor: bool = T
     }
 
 
-def _run(tmp_path: Path, **kwargs):
+def _run(tmp_path: Path, name: str = GUARD, **kwargs):
     env = {"RELEASE_SHA": RELEASE_SHA, "PREVIOUS_SHA": PREVIOUS_SHA}
-    return run_step(tmp_path, GUARD, env=env, scenario=_git(**kwargs))
+    return run_step(tmp_path, name, env=env, scenario=_git(**kwargs))
 
 
 def test_guard_accepts_the_main_head_descending_from_production(tmp_path: Path) -> None:
@@ -36,10 +38,17 @@ def test_guard_accepts_the_main_head_descending_from_production(tmp_path: Path) 
 
 
 def test_guard_refuses_a_sha_that_is_no_longer_the_main_head(tmp_path: Path) -> None:
-    result, _, _ = _run(tmp_path, main_head="d" * 40)
+    result, _, _ = _run(tmp_path, HEAD_GUARD, main_head="d" * 40)
 
     assert result.returncode != 0
     assert "not the current main head" in result.stdout
+
+
+def test_head_guard_accepts_the_main_head(tmp_path: Path) -> None:
+    result, calls, _ = _run(tmp_path, HEAD_GUARD)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [call["args"] for call in calls] == [["ls-remote", "origin", "refs/heads/main"]]
 
 
 def test_guard_refuses_when_production_is_not_an_ancestor(tmp_path: Path) -> None:
@@ -54,6 +63,15 @@ def test_guard_refuses_an_unknown_production_sha(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "not in the repository history" in result.stdout
+
+
+def test_head_guard_runs_before_install_and_the_production_backup() -> None:
+    names = [s["name"] for s in yaml.safe_load(WORKFLOW.read_text())["jobs"]["dark-deploy"]["steps"]]
+
+    assert names.index("Require a passing CI run for the release commit") < names.index(HEAD_GUARD)
+    assert names.index(HEAD_GUARD) < names.index("Install release tooling")
+    assert names.index(HEAD_GUARD) < names.index(BACKUP)
+    assert "PREVIOUS_SHA" not in step(HEAD_GUARD).get("env", {})
 
 
 def test_guard_runs_after_previous_state_and_before_any_railway_change() -> None:

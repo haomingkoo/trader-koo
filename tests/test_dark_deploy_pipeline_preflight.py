@@ -10,6 +10,7 @@ from tests.dark_deploy_harness import WORKFLOW, run_step, step
 
 PREFLIGHT = "Refuse a restart during the nightly pipeline"
 BIND = "Bind release identity without starting a second deployment"
+BACKUP = "Create and download a fresh consistent production backup"
 ROLLBACK = "Roll back code and variables after any failed release check"
 
 
@@ -74,10 +75,13 @@ def test_preflight_fails_closed_without_a_boolean_pipeline_flag(tmp_path: Path) 
         assert result.returncode != 0, body
 
 
-def test_preflight_runs_right_before_the_first_railway_change() -> None:
+def test_preflight_runs_right_before_the_production_backup() -> None:
+    # A refused run must not write a backup, and a wait must not leave the
+    # migration evidence older than the database it deploys over.
     names = [s["name"] for s in yaml.safe_load(WORKFLOW.read_text())["jobs"]["dark-deploy"]["steps"]]
 
-    assert names.index(PREFLIGHT) + 1 == names.index(BIND)
+    assert names.index(PREFLIGHT) + 1 == names.index(BACKUP)
+    assert names.index(PREFLIGHT) < names.index(BIND)
 
 
 def test_rollback_only_runs_after_railway_was_touched() -> None:
