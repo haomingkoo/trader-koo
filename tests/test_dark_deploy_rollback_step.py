@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tests.dark_deploy_harness import ROOT, deployments, run_step
+from tests.dark_deploy_harness import ROOT, deployments, run_script
 
 
-ROLLBACK = "Roll back code and variables after any failed release check"
+ROLLBACK = ROOT / "ops" / "dark_deploy_rollback.sh"
 PREVIOUS_SHA = "a" * 40
 RELEASE_SHA = "c" * 40
 DARK_UUID = "0f1e2d3c-4b5a-4968-8776-655443322110"
@@ -102,7 +102,7 @@ def _run(
     scenario: dict[str, list[dict[str, Any]]],
     files: dict[str, str] | None = None,
 ):
-    return run_step(
+    return run_script(
         tmp_path, ROLLBACK, env=env, scenario=scenario, files=files or _RECORDED
     )
 

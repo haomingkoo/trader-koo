@@ -6,10 +6,11 @@ import subprocess
 
 
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "dark-deploy.yml"
+ROLLBACK_SCRIPT = Path(__file__).parents[1] / "ops" / "dark_deploy_rollback.sh"
 
 
 def test_dark_deploy_preserves_and_verifies_write_gate() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8") + ROLLBACK_SCRIPT.read_text(encoding="utf-8")
 
     assert '"TRADER_KOO_PAPER_TRADE_ENABLED=0"' not in workflow
     assert "railway variable list --json" in workflow
@@ -37,7 +38,7 @@ def test_dark_deploy_does_not_publish_variable_inventory() -> None:
     assert "variables.json" not in upload_block
     assert "/tmp/previous-variables.json" in workflow
     assert "/tmp/deployed-variables.json" in workflow
-    assert "/tmp/rollback-variables.json" in workflow
+    assert '"$work_dir/rollback-variables.json"' in ROLLBACK_SCRIPT.read_text(encoding="utf-8")
 
 
 def test_dark_deploy_time_budgets_cover_health_check_and_rollback() -> None:

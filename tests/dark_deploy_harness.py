@@ -1,4 +1,4 @@
-"""Run one dark-deploy workflow step in bash against stubbed Railway and HTTP.
+"""Run a dark-deploy workflow step or ops script in bash against stubbed Railway and HTTP.
 
 Only the external CLIs (``railway``, ``curl``, ``git``, ``date``, ``sleep``)
 are stubbed. ``jq`` and bash are real, so the step's own parsing and control
@@ -75,6 +75,9 @@ def step(name: str) -> dict[str, Any]:
     raise AssertionError(f"no step named {name!r}")
 
 
+Result = tuple[subprocess.CompletedProcess[str], list[dict[str, Any]], dict[str, str]]
+
+
 def run_step(
     tmp_path: Path,
     name: str,
@@ -82,18 +85,44 @@ def run_step(
     env: dict[str, str],
     scenario: dict[str, list[dict[str, Any]]],
     files: dict[str, str] | None = None,
-) -> tuple[subprocess.CompletedProcess[str], list[dict[str, Any]], dict[str, str]]:
+) -> Result:
     script = step(name)["run"]
     assert "${{" not in script, "pass workflow expressions through step env"
+    script = script.replace("/tmp/", f"{_work_dir(tmp_path, files)}/")
+    return _run(tmp_path, ["-c", script], env=env, scenario=scenario)
+
+
+def run_script(
+    tmp_path: Path,
+    script: Path,
+    *,
+    env: dict[str, str],
+    scenario: dict[str, list[dict[str, Any]]],
+    files: dict[str, str] | None = None,
+) -> Result:
+    work = _work_dir(tmp_path, files)
+    return _run(
+        tmp_path, [str(script)], env={"DARK_DEPLOY_WORK_DIR": str(work), **env},
+        scenario=scenario,
+    )
+
+
+def _work_dir(tmp_path: Path, files: dict[str, str] | None) -> Path:
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     # Files that earlier steps leave in /tmp, such as the recorded deployments.
     for file_name, text in (files or {}).items():
         (work / file_name).write_text(text, encoding="utf-8")
-    script = script.replace("/tmp/", f"{work}/")
-    (tmp_path / "ops").mkdir(exist_ok=True)
-    for query in (ROOT / "ops").glob("*.graphql"):
-        (tmp_path / "ops" / query.name).write_text(query.read_text(encoding="utf-8"))
+    return work
+
+
+def _run(
+    tmp_path: Path,
+    bash_args: list[str],
+    *,
+    env: dict[str, str],
+    scenario: dict[str, list[dict[str, Any]]],
+) -> Result:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     for tool in {"railway", "curl", "sleep", *scenario}:
@@ -121,7 +150,7 @@ def run_step(
     }
     # GitHub runs `shell: bash` steps as `bash --noprofile --norc -eo pipefail`.
     result = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", *bash_args],
         cwd=tmp_path,
         env=full_env,
         text=True,
