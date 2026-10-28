@@ -1,12 +1,16 @@
 """Security response headers added to every HTTP response."""
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 
 from trader_koo.middleware.security_headers import SECURITY_HEADERS, SecurityHeadersMiddleware
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _app() -> FastAPI:
     app = FastAPI()
@@ -62,3 +66,19 @@ def test_security_header_set_is_complete():
         "referrer-policy",
         "permissions-policy",
     }
+
+
+def test_spa_script_policy_has_no_unsafe_inline():
+    """Vite emits only external module scripts, so inline script is not needed."""
+    html = (REPO_ROOT / "trader_koo/frontend-v2/index.html").read_text()
+    csp = re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', html)
+    assert csp is not None
+    directives = {
+        tokens[0]: tokens[1:]
+        for tokens in (item.split() for item in csp.group(1).split(";"))
+        if tokens
+    }
+    assert "'unsafe-inline'" not in directives["script-src"]
+    assert "https://static.cloudflareinsights.com" in directives["script-src"]
+    for attrs in re.findall(r"<script([^>]*)>", html):
+        assert "src=" in attrs or 'type="application/ld+json"' in attrs, attrs
