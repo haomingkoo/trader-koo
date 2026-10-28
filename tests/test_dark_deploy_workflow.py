@@ -73,17 +73,34 @@ def test_dark_deploy_time_budgets_cover_health_check_and_rollback() -> None:
     record = steps["Record dark deployment"]["timeout-minutes"]
     rollback_step = steps["Roll back code and variables after any failed release check"]
     rollback = rollback_step["timeout-minutes"]
-    # Backup, migration replay, API checks, Chromium journeys, and manifests.
+    pipeline_wait_seconds = int(job["env"]["PIPELINE_WAIT_ATTEMPTS"]) * int(
+        job["env"]["PIPELINE_WAIT_INTERVAL_SEC"]
+    )
+    # Each `railway deployment list` call takes about 2 s on top of the sleep.
+    per_poll_cli_seconds = 3
+    # Cancels, rollback mutation, and the restored-state checks.
+    rollback_extra_seconds = 120
+    # Checkout, setup, backup, migration replay, API checks, Chromium
+    # journeys, and manifests.
     unbounded_minutes = 15
 
     assert railway["deploy"]["drainingSeconds"] == 120
     assert 540 <= health_seconds <= 660
     assert deploy_poll_seconds >= health_seconds + 120
     assert rollback_poll_seconds >= health_seconds + 120
-    assert record * 60 > deploy_poll_seconds
-    assert rollback * 60 > rollback_poll_seconds
+    deploy_attempts = int(job["env"]["DEPLOYMENT_POLL_ATTEMPTS"])
+    rollback_attempts = int(job["env"]["ROLLBACK_POLL_ATTEMPTS"])
+    assert record * 60 >= deploy_poll_seconds + deploy_attempts * per_poll_cli_seconds
+    assert rollback * 60 >= (
+        rollback_poll_seconds
+        + rollback_attempts * per_poll_cli_seconds
+        + rollback_extra_seconds
+    )
     assert install >= 20 and upload >= 15
-    assert job["timeout-minutes"] >= install + upload + record + rollback + unbounded_minutes
+    assert job["timeout-minutes"] * 60 >= (
+        (install + upload + record + rollback + unbounded_minutes) * 60
+        + pipeline_wait_seconds
+    )
     assert "failure() || cancelled()" in rollback_step["if"]
 
 
