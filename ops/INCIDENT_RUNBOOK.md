@@ -33,6 +33,12 @@ railway logs --service SERVICE_NAME | tail -n 200
 railway ssh "df -h /data; ls -la /data/backups; tail -n 60 /data/logs/cron_daily.log"
 ```
 
+These commands are the live source for the current state: released
+`git_sha` (`/api/release`), last dark-deploy result (`gh run list`), campaign
+status and `write_state` (`/api/paper-trades/summary`), data and report
+freshness and the newest backup (`/api/status`), and volume use and backup
+files (`railway ssh`). No document records that state.
+
 The site firewall answers 403 to the default Python-urllib user agent. The
 `-A` flag sends the same agent the monitor uses. Every `railway` command above
 only reads.
