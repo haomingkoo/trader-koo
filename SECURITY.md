@@ -68,15 +68,23 @@ also answers directly without Cloudflare.
   are client-supplied and are ignored.
 - `CF-Connecting-IP` is never read: anyone who reaches the Railway origin
   directly can set it.
-- Without Cloudflare's ranges in `TRADER_KOO_TRUSTED_PROXY_CIDRS`, every
-  request through Cloudflare keys on a Cloudflare edge IP. That cannot be
-  spoofed, but it is coarse: users of one edge share a rate-limit bucket and the
-  admin lockout. Set the variable in Railway to Cloudflare's published list
-  (<https://www.cloudflare.com/ips/>) and refresh it when that list changes:
-
-  ```
-  TRADER_KOO_TRUSTED_PROXY_CIDRS=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32
-  ```
+- Leave `TRADER_KOO_TRUSTED_PROXY_CIDRS` unset in production. Every request
+  through Cloudflare then keys on a Cloudflare edge IP. That cannot be
+  spoofed, but it is coarse: users of one edge share a rate-limit bucket and
+  the admin lockout.
+- Do not put Cloudflare's ranges (<https://www.cloudflare.com/ips/>) in
+  `TRADER_KOO_TRUSTED_PROXY_CIDRS` while the `*.up.railway.app` origin answers
+  directly. A Cloudflare Worker can fetch that origin with any
+  `X-Forwarded-For` it likes, and it egresses from a Cloudflare address
+  (`2a06:98c0:3600::103`, inside `2a06:98c0::/29`). With those ranges trusted,
+  the forged entry becomes the client IP and rotating it bypasses the admin
+  lockout and the rate limits
+  (`tests/test_backend_utils.py::test_cloudflare_cidrs_let_a_worker_forge_the_client_while_origin_is_open`).
+- Per-client keys behind Cloudflare need an owner change first: close direct
+  origin access (remove the Railway domain, or accept only traffic that
+  proves it came through this zone, such as authenticated origin pulls or a
+  tunnel). Then re-check that a Worker request cannot reach the app with a
+  forged header before trusting any Cloudflare range.
 
 ## Logging and Data Safety
 - Do not log raw credentials, auth headers, or full secrets.

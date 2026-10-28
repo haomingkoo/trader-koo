@@ -129,6 +129,35 @@ def test_edge_real_ip_from_trusted_proxy_falls_through_to_forwarded_chain(monkey
     assert client_ip(request) == "9.9.9.9"
 
 
+def test_cloudflare_cidrs_let_a_worker_forge_the_client_while_origin_is_open(monkeypatch):
+    """Why SECURITY.md forbids Cloudflare's ranges while the Railway origin is open.
+
+    A Worker fetching *.up.railway.app egresses from 2a06:98c0:3600::103 (inside
+    Cloudflare's 2a06:98c0::/29) and sets X-Forwarded-For itself. Trusting that
+    range turns the forged entry into the client key.
+    """
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TRADER_KOO_TRUSTED_PROXY_CIDRS", "2a06:98c0::/29")
+
+    request = _mock_request(
+        "10.0.0.5",
+        headers={"x-forwarded-for": "6.6.6.6, 2a06:98c0:3600::103"},
+    )
+
+    assert client_ip(request) == "6.6.6.6"
+
+
+def test_worker_hop_is_the_client_without_cloudflare_cidrs(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+
+    request = _mock_request(
+        "10.0.0.5",
+        headers={"x-forwarded-for": "6.6.6.6, 2a06:98c0:3600::103"},
+    )
+
+    assert client_ip(request) == "2a06:98c0:3600::103"
+
+
 def test_unconfigured_cloudflare_hop_is_treated_as_the_client(monkeypatch):
     """Without the CIDR list the key is coarse, but it cannot be spoofed."""
     _clear_proxy_env(monkeypatch)
