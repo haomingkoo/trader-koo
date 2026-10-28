@@ -16,7 +16,15 @@ permissions:
 
 jobs:
   dark-deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Only a CI run for a push to this repository's main may deploy; a fork
+    # pull request can also complete the CI workflow.
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository
+      }}
     runs-on: ubuntu-latest
     # Install 25 + upload 25 + record 20 + rollback 25 + 15 for the other
     # steps. A job timeout skips cleanup, so the rollback must fit inside it.
@@ -42,6 +50,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -149,6 +158,25 @@ jobs:
           echo "campaign_status=$campaign_status" >> "$GITHUB_OUTPUT"
           echo "campaign_write_state=$expected_write_state" >> "$GITHUB_OUTPUT"
           echo "paper_trade_enabled=$paper_trade_enabled" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a stale or non-descendant release
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        run: |
+          # A re-run of an old workflow must not push an older commit.
+          main_head=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$main_head" != "$RELEASE_SHA" ]; then
+            echo "Release ${RELEASE_SHA} is not the current main head (${main_head:-unknown}); refusing to deploy it."
+            exit 1
+          fi
+          if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+            echo "Production SHA ${PREVIOUS_SHA} is not in the repository history; refusing to deploy over it."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$PREVIOUS_SHA" "$RELEASE_SHA"; then
+            echo "Production SHA ${PREVIOUS_SHA} is not an ancestor of ${RELEASE_SHA}; refusing to deploy."
+            exit 1
+          fi
 
       - name: Bind release identity without starting a second deployment
         run: |
