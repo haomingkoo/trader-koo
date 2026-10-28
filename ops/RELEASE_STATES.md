@@ -16,6 +16,26 @@ Trader Koo deliberately separates these states:
 6. **Campaign activated**: a human separately used the authenticated, audited
    campaign transition. CI/CD never calls activation or reset endpoints.
 
+## Current production state
+
+Checked 2026-10-28 at 09:46 UTC from public `GET /api/release`, `/api/status`
+and `/api/paper-trades/summary`, `gh api` workflow runs, and a read-only
+`railway ssh` listing. Re-check before relying on it; this is a snapshot.
+
+| Item | Value | Source |
+| --- | --- | --- |
+| Released `git_sha` | `223aa607d8d983d9742438a179ad65a64cb3a419`, equal to `origin/main` at check time | `/api/release` |
+| Last dark-deploy | `success` for that SHA, finished 2026-10-26T23:53:56Z | `gh api .../dark-deploy.yml/runs` |
+| Release state reached | 5, production verified, by that successful dark-deploy run | workflow conclusion |
+| Campaign `paper-v2` | `status: active`, `write_state: enabled`, `healthy: true` | `/api/paper-trades/summary` `campaign_health` |
+| Campaign `paper-v1` | `status: frozen` | same |
+| State 6, campaign activated | yes for `paper-v2`; the approval record was not checked | same |
+| Paper schema version (v4 or v5) | unknown: no public endpoint reports it | none |
+| `TRADER_KOO_PAPER_TRADE_ENABLED` | unknown directly; `write_state: enabled` implies `1` | inferred |
+| Data freshness | `price_date` 2026-10-27, `report_fresh: true`, `ok: true` | `/api/status` |
+| Volume | 4.4 GB, 3.1 GB used (71%), database 1.43 GB | `df -h /data` |
+| Backups | 7 files, about 0.2 GB each, all from 2026-10-25 and 2026-10-26 | `ls -la /data/backups` |
+
 ## Evidence and rollback
 
 Each CI run stores hash-bound database migration, replay, and execution-ledger
