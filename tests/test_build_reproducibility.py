@@ -113,7 +113,7 @@ def test_build_script_installs_nothing_outside_the_lock() -> None:
     pip_installs = [line for line in commands if re.search(r"\bpip install\b", line)]
 
     assert pip_installs == [
-        "pip install --no-deps -e .",
+        "pip install --no-deps --no-build-isolation -e .",
         "pip install --no-deps --require-hashes -r /tmp/opencv-headless.txt",
     ]
     assert "pip uninstall -y opencv-python opencv-python-headless" in script
@@ -136,7 +136,8 @@ def test_makefile_installs_the_locks_on_linux() -> None:
     # The dev lock already holds every runtime pin, so CI installs it alone.
     assert "$(PIP) install --no-deps --require-hashes -r requirements-dev.txt\n" in makefile
     assert "-r requirements.txt -r requirements-dev.txt" not in makefile
-    assert "$(PIP) install --no-deps -e ." in makefile
+    # Build with the locked setuptools, not one fetched into an isolated env.
+    assert "$(PIP) install --no-deps --no-build-isolation -e ." in makefile
     assert "pip-tools==7.6.1" in makefile
 
 

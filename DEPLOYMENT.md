@@ -37,7 +37,8 @@ Every input is pinned so the image matches what CI tested:
   the revision changes both, so update `.nvmrc` with it.
 - The nixpacks install phase runs
   `pip install --no-deps --require-hashes -r requirements.txt`. `build.sh`
-  adds only the package itself (`pip install --no-deps -e .`), swaps
+  adds only the package itself (`pip install --no-deps --no-build-isolation
+  -e .`, built with the locked `setuptools`), swaps
   `opencv-python` for the locked `opencv-python-headless` wheel, refuses an
   image with GUI opencv or CUDA torch, and runs `npm ci` from the npm lock.
 

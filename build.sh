@@ -8,9 +8,10 @@ log() { echo "==> [build] $*"; }
 # ── 1. Install package in editable mode ─────────────────────────────────
 # The nixpacks install phase (nixpacks.toml) already installed the hashed
 # requirements.txt lock, including CPU-only torch. --no-deps keeps this step
-# from resolving anything outside that lock.
+# from resolving anything outside that lock, and --no-build-isolation builds
+# with the locked setuptools instead of fetching the latest one from PyPI.
 log "Installing trader_koo package..."
-pip install --no-deps -e .
+pip install --no-deps --no-build-isolation -e .
 
 # ── 2. Keep only opencv-python-headless ────────────────────────────────
 # ultralytics pulls in GUI opencv-python, which needs libGL.so.1. Both wheels

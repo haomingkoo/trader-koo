@@ -23,7 +23,7 @@ else
 	grep -v -e '^-c ' -e '^-r ' requirements-dev.in > "$$tmp/requirements-dev.in" && \
 	$(PIP) install -c "$$tmp/constraints.txt" -r requirements.in -r "$$tmp/requirements-dev.in"
 endif
-	$(PIP) install --no-deps -e .
+	$(PIP) install --no-deps --no-build-isolation -e .
 
 # Same pip and pip-tools versions Dependabot runs, so its lock updates match.
 LOCK_TOOLS := pip==26.2.1 pip-tools==7.6.1
