@@ -45,6 +45,9 @@ jobs:
       ROLLBACK_POLL_ATTEMPTS: "180"
       ROLLBACK_NEW_DEPLOYMENT_GRACE_POLLS: "12"
       DEPLOYMENT_POLL_INTERVAL_SEC: "5"
+      # Wait up to 15 minutes for a running pipeline before refusing.
+      PIPELINE_WAIT_ATTEMPTS: "30"
+      PIPELINE_WAIT_INTERVAL_SEC: "30"
     steps:
       - name: Check out the exact CI commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -178,8 +181,38 @@ jobs:
             exit 1
           fi
 
-      - name: Bind release identity without starting a second deployment
+      - name: Refuse a restart during the nightly pipeline
         run: |
+          # daily_update runs at 22:00 UTC Mon-Fri (backend/services/scheduler.py)
+          # and took about 35 minutes. The restart lands 10-25 minutes after
+          # this check, so 21:15-23:15 UTC on weekdays is closed; after that
+          # pipeline_active covers an overrun.
+          for attempt in $(seq 1 "$PIPELINE_WAIT_ATTEMPTS"); do
+            now=$(date -u '+%u %H%M')
+            weekday=${now% *}
+            hhmm=$((10#${now#* }))
+            if [ "$weekday" -le 5 ] && [ "$hhmm" -ge 2115 ] && [ "$hhmm" -lt 2315 ]; then
+              echo "Refusing to restart production inside the weekday nightly window (21:15-23:15 UTC, now ${now})."
+              exit 1
+            fi
+            curl --fail --silent --show-error "${BASE_URL}/api/status" > /tmp/pipeline-status.json
+            active=$(jq -r '.pipeline_active | if type == "boolean" then tostring else error("pipeline_active is not a boolean") end' /tmp/pipeline-status.json)
+            stage=$(jq -r '.pipeline_stage // "unknown"' /tmp/pipeline-status.json)
+            echo "Pipeline check ${attempt}/${PIPELINE_WAIT_ATTEMPTS}: active=${active} stage=${stage}"
+            if [ "$active" = "false" ]; then
+              exit 0
+            fi
+            if [ "$attempt" -lt "$PIPELINE_WAIT_ATTEMPTS" ]; then
+              sleep "$PIPELINE_WAIT_INTERVAL_SEC"
+            fi
+          done
+          echo "The pipeline is still active after ${PIPELINE_WAIT_ATTEMPTS} checks; refusing to restart production."
+          exit 1
+
+      - name: Bind release identity without starting a second deployment
+        id: bind
+        run: |
+          echo "started=true" >> "$GITHUB_OUTPUT"
           railway variable set \
           "TRADER_KOO_GIT_SHA=${RELEASE_SHA}" \
           "TRADER_KOO_PAPER_TRADE_ENABLED=${{ steps.previous.outputs.paper_trade_enabled }}" \
@@ -289,7 +322,8 @@ jobs:
       - name: Roll back code and variables after any failed release check
         id: rollback
         timeout-minutes: 25
-        if: ${{ (failure() || cancelled()) && steps.previous.outputs.id != '' }}
+        # Nothing to undo, and no restart to cause, until Railway was touched.
+        if: ${{ (failure() || cancelled()) && steps.previous.outputs.id != '' && steps.bind.outputs.started == 'true' }}
         env:
           PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
