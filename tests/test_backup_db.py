@@ -213,3 +213,30 @@ def test_max_backups_budget_stays_at_least_seven() -> None:
     # maintenance.py re-hashes a named backup across stages and dark-deploy
     # POSTs share this budget.
     assert backup_db.MAX_BACKUPS >= 7
+
+
+def test_latest_backup_is_the_newest_stamp_and_both_lookups_agree(tmp_path: Path) -> None:
+    backups = tmp_path / "backups"
+    names = _touch_backups(backups, ["20261026T030000000000Z", "20261027T030000000000Z"])
+    # "manual" sorts after every digit stamp by name but carries no stamp.
+    (backups / f"{backup_db.BACKUP_PREFIX}manual{backup_db.BACKUP_SUFFIX}").write_bytes(b"xx")
+    (backups / f"{backup_db.BACKUP_PREFIX}20261028T030000000000Z{backup_db.BACKUP_SUFFIX}").symlink_to(
+        backups / names[0]
+    )
+
+    latest = backup_db.latest_backup_path(backups)
+    summary = backup_db.latest_backup_summary(backups)
+
+    assert latest == backups / names[-1]
+    assert summary == {
+        "latest_backup_utc": "2026-10-27T03:00:00+00:00",
+        "latest_backup_size_bytes": latest.stat().st_size,
+    }
+
+
+def test_latest_backup_is_none_without_stamped_backups(tmp_path: Path) -> None:
+    assert backup_db.latest_backup_path(tmp_path / "missing") is None
+    assert backup_db.latest_backup_summary(tmp_path / "missing") == {
+        "latest_backup_utc": None,
+        "latest_backup_size_bytes": None,
+    }

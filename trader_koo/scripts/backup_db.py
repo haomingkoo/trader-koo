@@ -219,12 +219,19 @@ def list_backups(backup_dir: Path = DEFAULT_BACKUP_DIR) -> list[dict[str, str | 
 
 
 def latest_backup_path(backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path | None:
-    """Return the path to the most recent backup, or ``None``."""
-    if not backup_dir.exists():
-        return None
-    pattern = f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"
-    files = sorted(backup_dir.glob(pattern), key=lambda p: p.name, reverse=True)
-    return files[0] if files else None
+    """Return the generated backup with the newest name stamp, or ``None``.
+
+    Files whose name does not parse and symlinks are ignored.
+    """
+    newest: tuple[dt.datetime, Path] | None = None
+    if backup_dir.is_dir():
+        for path in backup_dir.glob(f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"):
+            stamp = _backup_time(path)
+            if stamp is None or path.is_symlink():
+                continue
+            if newest is None or stamp > newest[0]:
+                newest = (stamp, path)
+    return newest[1] if newest else None
 
 
 def latest_backup_summary(backup_dir: Path | None = None) -> dict[str, str | int | None]:
@@ -234,23 +241,17 @@ def latest_backup_summary(backup_dir: Path | None = None) -> dict[str, str | int
     or touched file cannot make an old backup look fresh. *backup_dir*
     defaults to ``DEFAULT_BACKUP_DIR`` read at call time.
     """
-    backup_dir = DEFAULT_BACKUP_DIR if backup_dir is None else backup_dir
-    newest: tuple[dt.datetime, Path] | None = None
-    if backup_dir.is_dir():
-        for path in backup_dir.glob(f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"):
-            stamp = _backup_time(path)
-            if stamp is None or path.is_symlink():
-                continue
-            if newest is None or stamp > newest[0]:
-                newest = (stamp, path)
-    if newest is None:
-        return {"latest_backup_utc": None, "latest_backup_size_bytes": None}
-    stamp, path = newest
+    path = latest_backup_path(DEFAULT_BACKUP_DIR if backup_dir is None else backup_dir)
+    empty: dict[str, str | int | None] = {"latest_backup_utc": None, "latest_backup_size_bytes": None}
+    if path is None:
+        return empty
     try:
         size = path.stat().st_size
     except OSError as exc:
         LOG.warning("Latest backup %s unreadable: %s", path.name, exc)
-        return {"latest_backup_utc": None, "latest_backup_size_bytes": None}
+        return empty
+    stamp = _backup_time(path)
+    assert stamp is not None
     return {
         "latest_backup_utc": stamp.replace(microsecond=0).isoformat(),
         "latest_backup_size_bytes": size,
