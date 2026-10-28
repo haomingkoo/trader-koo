@@ -210,6 +210,34 @@ def latest_backup_path(backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path | None:
     return files[0] if files else None
 
 
+def latest_backup_summary(backup_dir: Path = DEFAULT_BACKUP_DIR) -> dict[str, str | int | None]:
+    """Return the newest generated backup's UTC time and size, or nulls.
+
+    The time comes from the generated name, not the file mtime, so a copied
+    or touched file cannot make an old backup look fresh.
+    """
+    newest: tuple[dt.datetime, Path] | None = None
+    if backup_dir.is_dir():
+        for path in backup_dir.glob(f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"):
+            stamp = _backup_time(path)
+            if stamp is None or path.is_symlink():
+                continue
+            if newest is None or stamp > newest[0]:
+                newest = (stamp, path)
+    if newest is None:
+        return {"latest_backup_utc": None, "latest_backup_size_bytes": None}
+    stamp, path = newest
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        LOG.warning("Latest backup %s unreadable: %s", path.name, exc)
+        return {"latest_backup_utc": None, "latest_backup_size_bytes": None}
+    return {
+        "latest_backup_utc": stamp.replace(microsecond=0).isoformat(),
+        "latest_backup_size_bytes": size,
+    }
+
+
 def backup_path_by_name(
     backup_name: str,
     backup_dir: Path = DEFAULT_BACKUP_DIR,
