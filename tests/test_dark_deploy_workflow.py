@@ -174,3 +174,18 @@ def test_railway_gate_json_shape_fails_closed() -> None:
             capture_output=True, check=False,
         )
         assert result.returncode != 0
+
+
+def test_every_workflow_action_is_pinned_to_a_full_commit_sha() -> None:
+    import re
+
+    workflows = sorted((WORKFLOW.parent).glob("*.yml"))
+    assert workflows
+    for path in workflows:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "uses:" not in line:
+                continue
+            reference = line.split("uses:", 1)[1].strip()
+            assert re.fullmatch(
+                r"[\w.-]+/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*", reference
+            ), f"{path.name}: {reference}"
