@@ -11,24 +11,6 @@ import pytest
 from trader_koo.backend.services import child_processes
 
 
-def test_shutdown_terminates_children_before_scheduler(monkeypatch: pytest.MonkeyPatch):
-    calls: list[str] = []
-
-    class FakeScheduler:
-        def shutdown(self, wait: bool) -> None:
-            calls.append(f"scheduler.shutdown(wait={wait})")
-
-    def fake_terminate(grace_sec: float = 0.0) -> dict[str, int]:
-        calls.append("terminate_running_children")
-        return {"signalled": 1, "killed": 0}
-
-    monkeypatch.setattr(child_processes, "terminate_running_children", fake_terminate)
-
-    child_processes.shutdown_scheduler(FakeScheduler())
-
-    assert calls == ["terminate_running_children", "scheduler.shutdown(wait=True)"]
-
-
 def test_lifespan_exit_stops_writer_child_before_scheduler_shutdown(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
