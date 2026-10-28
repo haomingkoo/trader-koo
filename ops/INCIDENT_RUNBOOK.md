@@ -12,10 +12,10 @@ admin API key or the Railway token. Read it with `read -rs`.
 | In-app scheduler | Telegram (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) | nightly pipeline failed, scheduled backup failed, storage pressure, crypto data stale, a kooexperience.com site down |
 | `dark-deploy.yml` | GitHub Actions failure email | a release check failed; the workflow has already rolled back |
 
-Pipeline and backup alerts repeat at most once per 6 hours per kind. The
-cooldown is in memory, so a restart can repeat an alert. If Telegram is not
-configured the scheduler logs `Telegram not configured` and only the hourly
-GitHub check remains. In-app alerts stop when the container stops.
+Pipeline, backup and storage alerts repeat at most once per 6 hours per kind.
+The cooldown is in memory, so a restart can repeat an alert. If Telegram is
+not configured the scheduler logs `Telegram not configured` and only the
+hourly GitHub check remains. In-app alerts stop when the container stops.
 
 ## First triage
 

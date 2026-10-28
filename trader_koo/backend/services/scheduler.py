@@ -699,15 +699,8 @@ def _run_macro_alert() -> None:
         LOG.error("Scheduler: macro alert check failed: %s", exc)
 
 
-_STORAGE_ALERT_COOLDOWN_SEC = 6 * 3600  # the job is daily; this guards manual re-runs
-_last_storage_alert_ts: float = 0.0
-
-
 def _run_storage_cleanup() -> None:
     """Daily job: prune old rows from ephemeral tables and reclaim space."""
-    global _last_storage_alert_ts
-    import time as _time
-
     from trader_koo.scripts.cleanup_storage import run_cleanup, storage_health_alert
 
     _append_run_log("CLEANUP", "Storage cleanup started")
@@ -734,18 +727,7 @@ def _run_storage_cleanup() -> None:
 
     LOG.error("Scheduler: STORAGE PRESSURE — %s", alert)
     _append_run_log("CLEANUP", f"Storage pressure: {alert}")
-
-    now_mono = _time.monotonic()
-    if now_mono - _last_storage_alert_ts <= _STORAGE_ALERT_COOLDOWN_SEC:
-        return
-    try:
-        from trader_koo.notifications.telegram import is_configured, send_message
-
-        if is_configured():
-            send_message(f"⚠️ *Storage Pressure*\n\n{alert}")
-            _last_storage_alert_ts = now_mono
-    except Exception as exc:
-        LOG.warning("Scheduler: failed to send storage alert: %s", exc)
+    send_ops_alert("storage_pressure", "Storage pressure", alert)
 
 
 _CRYPTO_HEALTH_ALERT_COOLDOWN_SEC = 7200  # 2 hours between alerts

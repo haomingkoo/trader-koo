@@ -553,6 +553,22 @@ def test_backup_skips_while_maintenance_blocks_writers(tmp_path, monkeypatch, te
     assert telegram.sent == []
 
 
+def test_storage_pressure_alerts_once_per_cooldown(tmp_path, monkeypatch, telegram):
+    from trader_koo.scripts import cleanup_storage
+
+    monkeypatch.setattr(scheduler_module, "DB_PATH", tmp_path / "live.db")
+    monkeypatch.setattr(scheduler_module, "_append_run_log", lambda tag, msg: None)
+    monkeypatch.setattr(cleanup_storage, "run_cleanup", lambda path, dry_run: {})
+    monkeypatch.setattr(cleanup_storage, "storage_health_alert", lambda path: "volume 91% full")
+
+    scheduler_module._run_storage_cleanup()
+    scheduler_module._run_storage_cleanup()
+
+    assert len(telegram.sent) == 1
+    assert "Storage pressure" in telegram.sent[0][0]
+    assert "volume 91% full" in telegram.sent[0][0]
+
+
 def test_backup_is_daily_after_the_nightly_pipeline():
     scheduler = create_scheduler()
 
