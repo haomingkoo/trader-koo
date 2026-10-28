@@ -29,6 +29,8 @@ LOG_DIR="${TRADER_KOO_LOG_DIR:-/data/logs}"
 
 # Fails closed (non-zero) on a missing volume, a DB outside it, an unreadable
 # DB, or a failed PRAGMA quick_check. Nothing is written before this passes.
+# An active maintenance run skips the live DB checks ("maintenance") so a
+# corrupt or mid-restore DB can still be recovered over Railway SSH.
 if ! BOOT_STATE="$("$PYTHON" -m trader_koo.scripts.start_preflight --db-path "$DB_PATH")"; then
     echo "[start.sh] Boot preflight failed; refusing to start." >&2
     exit 1
@@ -64,6 +66,8 @@ print('[start.sh] Empty database created with schema')
         > "$LOG_DIR/seed.log" 2>&1 &
 
     echo "[start.sh] Background seed started (PID $!). Check $LOG_DIR/seed.log for progress."
+elif [ "$BOOT_STATE" = "maintenance" ]; then
+    echo "[start.sh] Maintenance run active; starting maintenance-only server without touching the DB."
 elif [ "$BOOT_STATE" != "ready" ]; then
     echo "[start.sh] Unexpected preflight result '$BOOT_STATE'; refusing to start." >&2
     exit 1

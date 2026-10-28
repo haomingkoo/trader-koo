@@ -7,9 +7,15 @@ Prints one word on stdout for start.sh to act on:
     production with ``TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP=1`` on a mounted volume).
 ``ready``
     The DB opened read-only and passed ``PRAGMA quick_check(1)``.
+``maintenance``
+    The maintenance sidecar has an active run (or is unreadable, or its
+    ``.required`` marker exists without it), so the app will boot
+    maintenance-only. The live DB is not opened: it may be corrupt or moved
+    aside mid-restore, and the operator must be able to SSH in to recover it.
 
-Any other condition prints the reason on stderr and exits 1. Nothing here
-writes to the database or creates files.
+Any other condition prints the reason on stderr and exits 1. The preflight
+never writes database contents. Opening a WAL database read-only can still
+create its ``-shm`` sidecar when that file is missing.
 """
 from __future__ import annotations
 
@@ -20,6 +26,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Callable, Mapping
+
+from trader_koo.backend.services.maintenance import ACTIVE_STATES, _required_marker, state_path
 
 ALLOW_EMPTY_ENV = "TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP"
 DB_BUSY_TIMEOUT_SEC = 30.0
@@ -53,6 +61,34 @@ def _verify_volume(db_path: Path, environ: Mapping[str, str], ismount: Callable[
         raise PreflightError(f"DB directory {db_dir_real} is on a different device from the volume")
 
 
+def _maintenance_reason(db_path: Path) -> str | None:
+    """Mirror main.lifespan's maintenance-boot decision without creating the sidecar."""
+    path = state_path(db_path)
+    if path.is_symlink():
+        return f"maintenance state {path} is a symlink"
+    if not path.exists():
+        if _required_marker(db_path).exists():
+            return f"maintenance marker exists but state {path} is missing"
+        return None
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+        try:
+            if not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'maintenance_runs'"
+            ).fetchone():
+                return None
+            row = conn.execute(
+                "SELECT run_id, state FROM maintenance_runs ORDER BY requested_ts DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return f"maintenance state {path} is unreadable ({exc})"
+    if row is not None and row[1] in ACTIVE_STATES:
+        return f"maintenance run {row[0]} is {row[1]}"
+    return None
+
+
 def _inspect_db(db_path: Path) -> int | None:
     """Return the price_daily row count, or None when the table is absent."""
     try:
@@ -83,6 +119,11 @@ def preflight(
     allow_empty = environ.get(ALLOW_EMPTY_ENV, "").strip() == "1"
     if production:
         _verify_volume(db_path, environ, ismount)
+
+    maintenance = _maintenance_reason(db_path)
+    if maintenance:
+        _log(f"{maintenance}; skipping live DB checks for a maintenance-only boot")
+        return "maintenance"
 
     if not db_path.exists():
         if production and not allow_empty:

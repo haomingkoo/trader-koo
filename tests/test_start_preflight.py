@@ -207,3 +207,121 @@ def test_production_empty_price_daily_allowed_with_opt_in(tmp_path):
     )
 
     assert result == "ready"
+
+
+# -- maintenance-only boot ---------------------------------------------------
+
+def _request_maintenance(db: Path) -> None:
+    from trader_koo.backend.services.maintenance import request_maintenance
+
+    request_maintenance(db, run_id="maint-test", boot_id="boot", reason="test", timeout_sec=1)
+
+
+def _corrupt(db: Path) -> Path:
+    db.write_bytes(b"not a database" * 512)
+    return db
+
+
+@pytest.fixture(autouse=True)
+def _no_state_path_override(monkeypatch):
+    monkeypatch.delenv("TRADER_KOO_MAINTENANCE_STATE_PATH", raising=False)
+
+
+def test_active_maintenance_skips_checks_on_corrupt_db(tmp_path):
+    mount = tmp_path / "data"
+    mount.mkdir()
+    db = mount / "trader_koo.db"
+    _request_maintenance(db)
+    _corrupt(db)
+
+    result = preflight(db, environ=_prod_env(mount), ismount=_mounted(mount))
+
+    assert result == "maintenance"
+
+
+def test_active_maintenance_with_missing_db_after_preserve_crash(tmp_path):
+    """restore_backup can crash after moving the live DB aside; boot must allow the retry."""
+    from trader_koo.backend.services.maintenance import decide, quiesce_backup, restore_backup
+    from trader_koo.backend.services.pipeline import ensure_pipeline_runs_schema
+
+    mount = tmp_path / "data"
+    mount.mkdir()
+    db = _db(mount / "trader_koo.db")
+    with sqlite3.connect(db) as conn:
+        ensure_pipeline_runs_schema(conn)
+    _request_maintenance(db)
+    quiesce_backup(db, run_id="maint-test", boot_id="boot-after", backup_dir=tmp_path / "backups")
+    decide(db, run_id="maint-test", decision="restore", reason="crash drill")
+
+    def crash(boundary: str) -> None:
+        if boundary == "after_preserve":
+            raise RuntimeError("injected")
+
+    with pytest.raises(RuntimeError, match="injected"):
+        restore_backup(db, run_id="maint-test", fault=crash)
+    assert not db.exists()
+
+    result = preflight(db, environ=_prod_env(mount), ismount=_mounted(mount))
+
+    assert result == "maintenance"
+    assert not db.exists()
+    assert restore_backup(db, run_id="maint-test")["restore_receipt_json"]
+
+
+def test_maintenance_boot_leaves_live_db_files_untouched(tmp_path):
+    db = _db(tmp_path / "t.db")
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.close()
+    _request_maintenance(db)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    stamp = (db.stat().st_mtime_ns, db.read_bytes())
+
+    assert preflight(db, environ={}) == "maintenance"
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    assert (db.stat().st_mtime_ns, db.read_bytes()) == stamp
+
+
+def test_required_marker_without_state_is_maintenance(tmp_path):
+    from trader_koo.backend.services.maintenance import state_path
+
+    db = _corrupt(tmp_path / "t.db")
+    marker = state_path(db)
+    marker.with_name(f"{marker.name}.required").touch()
+
+    assert preflight(db, environ={}) == "maintenance"
+
+
+def test_unreadable_maintenance_state_is_maintenance(tmp_path):
+    from trader_koo.backend.services.maintenance import state_path
+
+    db = _corrupt(tmp_path / "t.db")
+    state_path(db).write_bytes(b"garbage" * 512)
+
+    assert preflight(db, environ={}) == "maintenance"
+
+
+def test_resolved_maintenance_runs_normal_checks(tmp_path):
+    from trader_koo.backend.services.maintenance import state_path
+
+    db = _db(tmp_path / "t.db")
+    _request_maintenance(db)
+    conn = sqlite3.connect(state_path(db))
+    conn.execute("UPDATE maintenance_runs SET state='resolved'")
+    conn.commit()
+    conn.close()
+    _corrupt(db)
+
+    with pytest.raises(PreflightError, match="cannot read"):
+        preflight(db, environ={})
+
+
+def test_maintenance_does_not_bypass_volume_check(tmp_path):
+    mount = tmp_path / "data"
+    mount.mkdir()
+    db = _db(mount / "trader_koo.db")
+    _request_maintenance(db)
+
+    with pytest.raises(PreflightError, match="not a mount point"):
+        preflight(db, environ=_prod_env(mount), ismount=lambda path: False)

@@ -37,7 +37,8 @@ def harness(tmp_path: Path):
     env = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith("RAILWAY_") and key != "TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP"
+        if not key.startswith("RAILWAY_")
+        and key not in {"TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP", "TRADER_KOO_MAINTENANCE_STATE_PATH"}
     }
     env.update(
         TRADER_KOO_START_PYTHON=str(python),
@@ -158,3 +159,37 @@ def test_corrupt_db_refuses_to_boot(harness):
     assert result.returncode != 0
     assert "cannot read" in result.stderr
     assert not (calls / "uvicorn").exists()
+
+
+def _request_maintenance(db_path: Path) -> None:
+    from trader_koo.backend.services.maintenance import request_maintenance
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    request_maintenance(db_path, run_id="maint-test", boot_id="boot", reason="test", timeout_sec=1)
+
+
+def test_corrupt_db_under_maintenance_boots_maintenance_only(harness):
+    run, calls, db_path = harness
+    _request_maintenance(db_path)
+    db_path.write_bytes(b"not a database" * 512)
+
+    result = run()
+
+    assert result.returncode == 0, result.stderr
+    assert (calls / "uvicorn").exists()
+    assert not (calls / "seed").exists()
+    assert db_path.read_bytes() == b"not a database" * 512
+
+
+def test_missing_db_after_preserve_crash_boots_maintenance_only(harness):
+    run, calls, db_path = harness
+    _seed_db(db_path)
+    _request_maintenance(db_path)
+    os.replace(db_path, db_path.with_name(f"{db_path.name}.pre_restore_maint-test"))
+
+    result = run()
+
+    assert result.returncode == 0, result.stderr
+    assert (calls / "uvicorn").exists()
+    assert not (calls / "seed").exists()
+    assert not db_path.exists()
