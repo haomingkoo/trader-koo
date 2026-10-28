@@ -41,8 +41,10 @@ lock:
 	$(PIP_COMPILE) --output-file=requirements.txt requirements.in
 	$(PIP_COMPILE) --output-file=requirements-dev.txt requirements-dev.in
 
-# Fail when a lock no longer matches its .in input. pip-compile keeps existing
-# pins, so this only changes when an input or a lock was edited by hand.
+# Fail when a lock's pins or layout no longer match its .in input. pip-compile
+# keeps existing pins, so the diff is empty unless an input or a pin changed.
+# It does not verify hashes: pip-compile reuses the committed lock's hashes for
+# unchanged pins, so an edited --hash line passes here and fails at install.
 lock-check:
 	@tmp=$$(mktemp -d) && \
 	cp requirements.in requirements-dev.in requirements.txt requirements-dev.txt "$$tmp/" && \

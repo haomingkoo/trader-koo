@@ -61,9 +61,12 @@ docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src python:3.11 \
 
 `make lock-tools` installs the pip and pip-tools versions Dependabot runs, so
 Dependabot's pip-compile updates produce the same file shape. The CI
-`dependency-lock` job runs `make lock-check` and fails when a lock no longer
-matches its input. It re-resolves against the live indexes while keeping the
-existing pins and hashes, so it needs network access. Dependabot ignores torch
+`dependency-lock` job runs `make lock-check` and fails when a lock's pins or
+layout no longer match its input. It re-resolves against the live indexes
+while keeping the existing pins, so it needs network access. It does not
+verify hashes: pip-compile copies the committed hashes for unchanged pins, so a
+hand-edited `--hash` line passes the check. A wrong hash still fails closed
+when `--require-hashes` installs the lock. Dependabot ignores torch
 and torchvision; bump that pair by hand in `requirements.in`, keeping the
 `+cpu` Linux pins and plain non-Linux pins on the same version.
 
