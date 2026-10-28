@@ -31,6 +31,7 @@ from trader_koo.backend.services.maintenance import ACTIVE_STATES, _required_mar
 
 ALLOW_EMPTY_ENV = "TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP"
 DB_BUSY_TIMEOUT_SEC = 30.0
+MAINTENANCE_STATE_TIMEOUT_SEC = 5.0  # matches maintenance._connect
 
 
 class PreflightError(RuntimeError):
@@ -71,7 +72,7 @@ def _maintenance_reason(db_path: Path) -> str | None:
             return f"maintenance marker exists but state {path} is missing"
         return None
     try:
-        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=MAINTENANCE_STATE_TIMEOUT_SEC)
         try:
             if not conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'maintenance_runs'"
