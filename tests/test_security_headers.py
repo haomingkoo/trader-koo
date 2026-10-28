@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -64,7 +65,18 @@ def test_spa_script_policy_has_no_unsafe_inline():
         for tokens in (item.split() for item in csp.group(1).split(";"))
         if tokens
     }
-    assert "'unsafe-inline'" not in directives["script-src"]
-    assert "https://static.cloudflareinsights.com" in directives["script-src"]
-    for attrs in re.findall(r"<script([^>]*)>", html):
-        assert "src=" in attrs or 'type="application/ld+json"' in attrs, attrs
+    script_src = set(directives["script-src"])
+    assert "'unsafe-inline'" not in script_src
+    assert {"'self'", "https://static.cloudflareinsights.com"} <= script_src
+
+    scripts: list[dict[str, str | None]] = []
+
+    class ScriptTags(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "script":
+                scripts.append(dict(attrs))
+
+    ScriptTags().feed(html)
+    assert scripts
+    for attrs in scripts:
+        assert "src" in attrs or attrs.get("type") == "application/ld+json", attrs
