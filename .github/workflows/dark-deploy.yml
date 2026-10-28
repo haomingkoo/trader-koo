@@ -32,6 +32,7 @@ jobs:
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
       DEPLOYMENT_POLL_ATTEMPTS: "90"
       ROLLBACK_POLL_ATTEMPTS: "120"
+      ROLLBACK_NEW_DEPLOYMENT_GRACE_POLLS: "12"
       DEPLOYMENT_POLL_INTERVAL_SEC: "5"
     steps:
       - name: Check out the exact CI commit
@@ -236,64 +237,130 @@ jobs:
       - name: Roll back code and variables after any failed release check
         id: rollback
         if: ${{ failure() && steps.previous.outputs.id != '' }}
+        env:
+          PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+          DARK_DEPLOYMENT_ID: ${{ steps.deployed.outputs.id }}
+          EXPECTED_CAMPAIGN_STATUS: ${{ steps.previous.outputs.campaign_status }}
+          EXPECTED_CAMPAIGN_WRITE_STATE: ${{ steps.previous.outputs.campaign_write_state }}
+          EXPECTED_PAPER_TRADE_ENABLED: ${{ steps.previous.outputs.paper_trade_enabled }}
         run: |
+          umask 077
+          # The response bodies are Railway errors or booleans, never the token.
+          railway_graphql() {
+            http_status=$(curl --silent --show-error \
+              --request POST \
+              --url https://backboard.railway.com/graphql/v2 \
+              --header "Project-Access-Token: ${RAILWAY_TOKEN}" \
+              --header "Content-Type: application/json" \
+              --data-binary @"$1" \
+              --output "$2" \
+              --write-out '%{http_code}')
+            if [ "$http_status" != "200" ] || ! jq -e '.errors == null' "$2" > /dev/null 2>&1; then
+              echo "Railway GraphQL request failed with HTTP ${http_status}:"
+              jq -c '{errors}' "$2" 2>/dev/null || head -c 2000 "$2"
+              echo
+              return 1
+            fi
+          }
+          list_deployments() {
+            railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > "$1"
+            jq -c '[.[:5][] | {id, status, createdAt, cliMessage: .meta.cliMessage}]' "$1"
+          }
+
+          list_deployments /tmp/pre-rollback-deployments.json
+          if [ -n "$DARK_DEPLOYMENT_ID" ]; then
+            dark_status=$(jq -r --arg id "$DARK_DEPLOYMENT_ID" '.[] | select(.id == $id) | .status' /tmp/pre-rollback-deployments.json)
+            case "$dark_status" in
+              QUEUED|WAITING|NEEDS_APPROVAL|INITIALIZING|BUILDING|DEPLOYING)
+                # An in-flight dark deployment could still pass its health
+                # check after the rollback and take traffic back.
+                jq -n --arg id "$DARK_DEPLOYMENT_ID" \
+                  '{query: "mutation deploymentCancel($id: String!) { deploymentCancel(id: $id) }", variables: {id: $id}}' \
+                  > /tmp/cancel-request.json
+                if railway_graphql /tmp/cancel-request.json /tmp/cancel.json \
+                  && jq -e '.data.deploymentCancel == true' /tmp/cancel.json > /dev/null; then
+                  echo "Cancelled in-flight dark deployment ${DARK_DEPLOYMENT_ID} (${dark_status})."
+                else
+                  echo "::warning::Could not cancel dark deployment ${DARK_DEPLOYMENT_ID} (${dark_status}); the checks below still decide the rollback."
+                fi
+                ;;
+            esac
+          fi
+
           jq -n \
             --rawfile query ops/railway-rollback.graphql \
-            --arg id "${{ steps.previous.outputs.id }}" \
+            --arg id "$PREVIOUS_DEPLOYMENT_ID" \
             '{query: $query, variables: {id: $id}}' \
             > /tmp/rollback-request.json
-          curl --fail --silent --show-error \
-            --request POST \
-            --url https://backboard.railway.com/graphql/v2 \
-            --header "Project-Access-Token: ${RAILWAY_TOKEN}" \
-            --header "Content-Type: application/json" \
-            --data-binary @/tmp/rollback-request.json \
-            --output /tmp/rollback.json
-          jq -e '.errors == null' /tmp/rollback.json > /dev/null
-          rollback_id=$(jq -r '.data.deploymentRollback.id // empty' /tmp/rollback.json)
-          test -n "$rollback_id"
-          echo "id=$rollback_id" >> "$GITHUB_OUTPUT"
+          railway_graphql /tmp/rollback-request.json /tmp/rollback.json
+          # deploymentRollback returns Boolean!, not a deployment.
+          jq -e '.data.deploymentRollback == true' /tmp/rollback.json > /dev/null
+
+          rollback_id=""
           for attempt in $(seq 1 "$ROLLBACK_POLL_ATTEMPTS"); do
-            railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-deployments.json
+            echo "Rollback poll ${attempt}/${ROLLBACK_POLL_ATTEMPTS}:"
+            list_deployments /tmp/rollback-deployments.json
+            if [ -z "$rollback_id" ]; then
+              rollback_id=$(jq -r \
+                --slurpfile before /tmp/pre-rollback-deployments.json '
+                  [.[] | select(.id as $id | ($before[0] | map(.id) | index($id) | not))] as $new
+                  | if ($new | length) == 1 then $new[0].id
+                    elif ($new | length) > 1 then "AMBIGUOUS"
+                    else ""
+                    end
+                ' /tmp/rollback-deployments.json)
+              if [ "$rollback_id" = "AMBIGUOUS" ]; then
+                echo "AMBIGUOUS: more than one deployment appeared after the rollback request."
+                exit 1
+              fi
+              # If Railway reactivates the recorded deployment instead of
+              # creating a new one, accept it only after a grace period.
+              if [ -z "$rollback_id" ] && [ "$attempt" -gt "$ROLLBACK_NEW_DEPLOYMENT_GRACE_POLLS" ]; then
+                previous_status=$(jq -r --arg id "$PREVIOUS_DEPLOYMENT_ID" '.[] | select(.id == $id) | .status' /tmp/rollback-deployments.json)
+                if [ "$previous_status" = "SUCCESS" ]; then
+                  rollback_id="$PREVIOUS_DEPLOYMENT_ID"
+                fi
+              fi
+            fi
             status=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .status' /tmp/rollback-deployments.json)
-            if [ "$status" = "SUCCESS" ]; then
-              rollback_sha=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .meta.commitHash // empty' /tmp/rollback-deployments.json)
-              test "$rollback_sha" = "${{ steps.previous.outputs.sha }}"
-              curl --fail --silent --show-error "${BASE_URL}/api/health" > /tmp/rollback-health.json
-              jq -e '.ok == true' /tmp/rollback-health.json > /dev/null
-              release_status=$(curl --silent --show-error --output /tmp/rollback-release.json --write-out '%{http_code}' "${BASE_URL}/api/release")
-              if [ "$release_status" = "200" ]; then
-                jq -e --arg sha "${{ steps.previous.outputs.sha }}" '.git_sha == $sha' /tmp/rollback-release.json > /dev/null
-              else
-                test "$release_status" = "404"
-              fi
-              curl --fail --silent --show-error \
-                "${BASE_URL}/api/paper-trades/summary" \
-                > /tmp/rollback-paper-summary.json
-              jq -e '.ok == true' /tmp/rollback-paper-summary.json > /dev/null
-              observed_status=$(jq -r '.campaign_health.status // "absent"' /tmp/rollback-paper-summary.json)
-              expected_status="${{ steps.previous.outputs.campaign_status }}"
-              if [ "$expected_status" = "absent" ]; then
-                test "$observed_status" = "draft"
-              else
-                test "$observed_status" = "$expected_status"
-              fi
-              observed_write_state=$(jq -er '.campaign_health.write_state | select(. == "enabled" or . == "paused")' /tmp/rollback-paper-summary.json)
-              test "$observed_write_state" = "${{ steps.previous.outputs.campaign_write_state }}"
-              umask 077
-              railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-variables.json
-              observed_gate=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/rollback-variables.json)
-              test "$observed_gate" = "${{ steps.previous.outputs.paper_trade_enabled }}"
-              echo "observed_campaign_status=$observed_status" >> "$GITHUB_OUTPUT"
-              echo "observed_write_state=$observed_write_state" >> "$GITHUB_OUTPUT"
-              echo "paper_trade_enabled=$observed_gate" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ] || [ "$status" = "REMOVED" ]; then
-              exit 1
-            fi
+            case "$status" in
+              SUCCESS)
+                echo "id=$rollback_id" >> "$GITHUB_OUTPUT"
+                curl --fail --silent --show-error "${BASE_URL}/api/health" > /tmp/rollback-health.json
+                jq -e '.ok == true' /tmp/rollback-health.json > /dev/null
+                # Railway records no commit for `railway up` uploads, so the
+                # public release SHA is the restored-code check.
+                curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/rollback-release.json
+                jq -e --arg sha "$PREVIOUS_SHA" '.git_sha == $sha' /tmp/rollback-release.json > /dev/null
+                curl --fail --silent --show-error \
+                  "${BASE_URL}/api/paper-trades/summary" \
+                  > /tmp/rollback-paper-summary.json
+                jq -e '.ok == true' /tmp/rollback-paper-summary.json > /dev/null
+                observed_status=$(jq -r '.campaign_health.status // "absent"' /tmp/rollback-paper-summary.json)
+                if [ "$EXPECTED_CAMPAIGN_STATUS" = "absent" ]; then
+                  test "$observed_status" = "draft"
+                else
+                  test "$observed_status" = "$EXPECTED_CAMPAIGN_STATUS"
+                fi
+                observed_write_state=$(jq -er '.campaign_health.write_state | select(. == "enabled" or . == "paused")' /tmp/rollback-paper-summary.json)
+                test "$observed_write_state" = "$EXPECTED_CAMPAIGN_WRITE_STATE"
+                railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-variables.json
+                observed_gate=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/rollback-variables.json)
+                test "$observed_gate" = "$EXPECTED_PAPER_TRADE_ENABLED"
+                echo "observed_campaign_status=$observed_status" >> "$GITHUB_OUTPUT"
+                echo "observed_write_state=$observed_write_state" >> "$GITHUB_OUTPUT"
+                echo "paper_trade_enabled=$observed_gate" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              FAILED|CRASHED|REMOVED|REMOVING|SKIPPED)
+                echo "Restored deployment ${rollback_id} ended ${status}."
+                exit 1
+                ;;
+            esac
             sleep "$DEPLOYMENT_POLL_INTERVAL_SEC"
           done
+          echo "Restored deployment ${rollback_id:-unidentified} did not reach SUCCESS within ${ROLLBACK_POLL_ATTEMPTS} polls."
           exit 1
 
       - name: Write deployment manifest

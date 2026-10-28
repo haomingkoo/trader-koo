@@ -58,7 +58,7 @@ def test_dark_deploy_tracks_the_new_id_and_waits_for_its_terminal_status() -> No
     rollback_block = workflow.split(
         "- name: Roll back code and variables after any failed release check", 1
     )[1]
-    assert '|| [ "$status" = "REMOVED" ]' in rollback_block
+    assert "FAILED|CRASHED|REMOVED|REMOVING|SKIPPED)" in rollback_block
 
 
 def test_dark_deploy_reserves_time_for_rollback() -> None:
