@@ -16,17 +16,16 @@ LOG = logging.getLogger("trader_koo.routers.system")
 
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
 from trader_koo.backend.services.market_data import days_since, hours_since, parse_iso_utc
+from trader_koo.backend.routers.readiness import router as readiness_router
 from trader_koo.backend.services.pipeline import (
-    get_cached_status,
-    pipeline_status_snapshot,
-    post_ingest_resume_candidate,
-    set_cached_status,
+    get_cached_status, pipeline_status_snapshot, post_ingest_resume_candidate, set_cached_status,
 )
 from trader_koo.backend.services.report_loader import is_report_fresh
 from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
 router = APIRouter()
+router.include_router(readiness_router)  # GET /api/ready
 
 # ---------------------------------------------------------------------------
 # Module-level constants (read from env once)

@@ -35,6 +35,10 @@ following before calling a release complete:
 - the CI workflow passed for the released SHA;
 - the dark-deploy workflow passed for that same SHA;
 - `/api/health` returns `ok: true`;
+- `/api/ready` returns HTTP 200 with `ok: true`, meaning the scheduler is
+  running, `daily_update` has a next run, and the database opens read-only
+  and passes `PRAGMA quick_check` (cached for five minutes). Railway still
+  gates deploys on the cheaper `/api/health` liveness probe;
 - `/api/release` returns the expected Git SHA;
 - production browser journeys passed; and
 - the paper campaign state matches the pre-deploy state.
