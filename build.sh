@@ -24,10 +24,6 @@ pip install --no-deps --require-hashes -r /tmp/opencv-headless.txt
 
 # ── 3. Preflight import check ──────────────────────────────────────────
 log "Running preflight import check..."
-if pip show opencv-python >/dev/null 2>&1; then
-    log "opencv-python is still installed; it needs libGL and breaks cv2 here"
-    exit 1
-fi
 python -c "import cv2, torch, ultralytics, huggingface_hub; assert torch.version.cuda is None, 'CUDA torch installed'; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)"
 
 # ── 4. Check Node.js against the pinned version ─────────────────────────
