@@ -41,14 +41,12 @@ unstopped() {
 }
 
 list_deployments "$work_dir/pre-rollback-deployments.json"
-# A cancelled or timed-out upload step never wrote its id output, but
-# tee already wrote the Build Logs line. Any upload of this release
-# that the recorded list lacks is also a dark deployment.
-if [ -z "$DARK_DEPLOYMENT_ID" ] && [ -f "$work_dir/railway-up.log" ]; then
-  DARK_DEPLOYMENT_ID=$(grep -oE '[?&]id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$work_dir/railway-up.log" | head -n 1 | cut -d= -f2 || true)
-fi
+# The upload log, not the upload step output, so a cancelled or timed-out
+# upload is covered too. Any upload of this release that the recorded list
+# lacks is also a dark deployment.
+uploaded_id=$(grep -soE '[?&]id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$work_dir/railway-up.log" | head -n 1 | cut -d= -f2 || true)
 dark_ids=$(jq -c \
-  --arg id "$DARK_DEPLOYMENT_ID" \
+  --arg id "$uploaded_id" \
   --arg message "dark release ${RELEASE_SHA}" \
   --slurpfile recorded "$work_dir/previous-deployments.json" '
     ($recorded[0] | map(.id)) as $known

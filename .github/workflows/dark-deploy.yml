@@ -393,7 +393,6 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
           PREVIOUS_SHA: ${{ steps.production.outputs.sha }}
-          DARK_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}
           EXPECTED_CAMPAIGN_STATUS: ${{ steps.previous.outputs.campaign_status }}
           EXPECTED_CAMPAIGN_WRITE_STATE: ${{ steps.previous.outputs.campaign_write_state }}
           EXPECTED_PAPER_TRADE_ENABLED: ${{ steps.previous.outputs.paper_trade_enabled }}
