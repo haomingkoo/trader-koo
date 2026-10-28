@@ -376,7 +376,6 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: ${{ env.BASE_URL }}
           PLAYWRIGHT_EXPECTED_SHA: ${{ env.RELEASE_SHA }}
-          PLAYWRIGHT_ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
         run: npx playwright test --config=playwright.production.config.ts
 
       - name: Fail on purpose to exercise the rollback drill

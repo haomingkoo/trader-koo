@@ -143,7 +143,6 @@ def test_secrets_are_scoped_to_the_steps_that_use_them() -> None:
     admin_steps = {
         "Create and download a fresh consistent production backup",
         "Verify API contracts and exact commit",
-        "Verify production Chromium journeys",
     }
 
     assert "secrets." not in json.dumps(job.get("env", {}))
