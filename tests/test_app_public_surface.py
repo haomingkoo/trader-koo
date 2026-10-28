@@ -67,6 +67,10 @@ def test_main_app_hides_openapi_schema_by_default(tmp_path):
     assert "/openapi.json" not in probe["paths"]
     assert "/docs" not in probe["paths"]
     assert probe["openapi_status"] == 404
+    assert probe["release_status"] == 200
+    assert probe["release_headers"]["x-frame-options"] == "DENY"
+    assert probe["release_headers"]["content-security-policy"] == "frame-ancestors 'none'"
+    assert probe["release_headers"]["x-content-type-options"] == "nosniff"
 
 
 def test_main_app_serves_docs_only_when_enabled(tmp_path):
@@ -75,12 +79,3 @@ def test_main_app_serves_docs_only_when_enabled(tmp_path):
     assert probe["openapi_url"] == "/openapi.json"
     assert {"/openapi.json", "/docs", "/redoc"} <= set(probe["paths"])
     assert probe["openapi_status"] == 200
-
-
-def test_main_app_sends_security_headers(tmp_path):
-    probe = _probe_main_app(tmp_path, None)
-
-    assert probe["release_status"] == 200
-    assert probe["release_headers"]["x-frame-options"] == "DENY"
-    assert probe["release_headers"]["content-security-policy"] == "frame-ancestors 'none'"
-    assert probe["release_headers"]["x-content-type-options"] == "nosniff"
