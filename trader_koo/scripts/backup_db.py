@@ -1,4 +1,4 @@
-"""SQLite database backup — quick-check, compress to timestamped .gz, retain last N copies.
+"""SQLite database backup — quick-checked, compressed, tiered retention.
 
 Usage (standalone)::
 
@@ -23,7 +23,16 @@ from pathlib import Path
 LOG = logging.getLogger("trader_koo.scripts.backup_db")
 
 DEFAULT_BACKUP_DIR = Path("/data/backups")
+# Hard ceiling on generated backups. The scheduled job, dark-deploy POSTs and
+# maintenance quiesce backups all share it, and every copy lives on the same
+# 5 GB Railway volume as the database. Keep it at 7 or more: maintenance.py
+# re-hashes its named backup across several stages.
 MAX_BACKUPS = 7
+# Retention tiers. The union is at most 7 files, because the newest backup is
+# also the newest of its day and of its ISO week.
+KEEP_RECENT = 2
+KEEP_DAILY = 3
+KEEP_WEEKLY = 4
 BACKUP_PREFIX = "trader_koo_backup_"
 BACKUP_SUFFIX = ".db.gz"
 STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
@@ -114,12 +123,53 @@ def backup_database(
     }
 
 
+def _backup_time(path: Path) -> dt.datetime | None:
+    stamp = path.name[len(BACKUP_PREFIX):-len(BACKUP_SUFFIX)]
+    try:
+        return dt.datetime.strptime(stamp, STAMP_FORMAT).replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+
+
 def _prune_old_backups(backup_dir: Path, max_backups: int) -> list[str]:
-    """Delete oldest backups when count exceeds *max_backups*."""
-    pattern = f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"
-    existing = sorted(backup_dir.glob(pattern), key=lambda p: p.name, reverse=True)
+    """Delete generated backups outside the retention tiers.
+
+    Keeps the ``KEEP_RECENT`` newest copies, the newest copy of each of the
+    ``KEEP_DAILY`` most recent UTC days and of each of the ``KEEP_WEEKLY`` most
+    recent ISO weeks, capped at *max_backups*. A burst of same-day backups (for
+    example repeated dark-deploy POSTs) therefore cannot evict every older
+    restore point. Files whose name does not parse are left alone.
+    """
+    dated: list[tuple[dt.datetime, Path]] = []
+    for path in backup_dir.glob(f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"):
+        stamp = _backup_time(path)
+        if stamp is None:
+            LOG.warning("Backup retention ignores unrecognised file %s", path.name)
+            continue
+        dated.append((stamp, path))
+    dated.sort(key=lambda item: item[0], reverse=True)
+
+    keep: set[Path] = {path for _, path in dated[:KEEP_RECENT]}
+    for tier_key, limit in (
+        (lambda ts: ts.date(), KEEP_DAILY),
+        (lambda ts: ts.isocalendar()[:2], KEEP_WEEKLY),
+    ):
+        seen: set[object] = set()
+        for stamp, path in dated:
+            key = tier_key(stamp)
+            if key in seen:
+                continue
+            if len(seen) == limit:
+                break
+            seen.add(key)
+            keep.add(path)
+    kept_newest_first = [path for _, path in dated if path in keep][: max(max_backups, 1)]
+    keep = set(kept_newest_first)
+
     pruned: list[str] = []
-    for old in existing[max_backups:]:
+    for _, old in dated:
+        if old in keep:
+            continue
         try:
             old.unlink()
             pruned.append(old.name)
