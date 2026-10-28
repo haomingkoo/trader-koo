@@ -36,6 +36,7 @@ KEEP_WEEKLY = 4
 BACKUP_PREFIX = "trader_koo_backup_"
 BACKUP_SUFFIX = ".db.gz"
 STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
+QUICK_CHECK_DETAIL_ROWS = 5
 
 
 class BackupIntegrityError(RuntimeError):
@@ -82,7 +83,7 @@ def backup_database(
                 source.backup(target)
         quick_check = _quick_check(snapshot)
         if quick_check != ["ok"]:
-            detail = "; ".join(quick_check[:5])
+            detail = "; ".join(quick_check[:QUICK_CHECK_DETAIL_ROWS])
             LOG.error("Backup aborted: snapshot quick_check failed: %s", detail)
             raise BackupIntegrityError(f"snapshot quick_check failed: {detail}")
         with snapshot.open("rb") as f_in, gzip.open(dest, "wb", compresslevel=6) as f_out:
@@ -210,12 +211,14 @@ def latest_backup_path(backup_dir: Path = DEFAULT_BACKUP_DIR) -> Path | None:
     return files[0] if files else None
 
 
-def latest_backup_summary(backup_dir: Path = DEFAULT_BACKUP_DIR) -> dict[str, str | int | None]:
+def latest_backup_summary(backup_dir: Path | None = None) -> dict[str, str | int | None]:
     """Return the newest generated backup's UTC time and size, or nulls.
 
     The time comes from the generated name, not the file mtime, so a copied
-    or touched file cannot make an old backup look fresh.
+    or touched file cannot make an old backup look fresh. *backup_dir*
+    defaults to ``DEFAULT_BACKUP_DIR`` read at call time.
     """
+    backup_dir = DEFAULT_BACKUP_DIR if backup_dir is None else backup_dir
     newest: tuple[dt.datetime, Path] | None = None
     if backup_dir.is_dir():
         for path in backup_dir.glob(f"{BACKUP_PREFIX}*{BACKUP_SUFFIX}"):

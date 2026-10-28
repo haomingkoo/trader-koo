@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from trader_koo.backend.routers import system
 from trader_koo.backend.services.pipeline import invalidate_status_cache
+from trader_koo.scripts import backup_db
 
 
 def _status_dependencies():
@@ -333,7 +334,7 @@ def _status_with_backups(seeded_conn, tmp_path: Path, backup_dir: Path) -> dict:
     with (
         patch.object(system, "get_conn", return_value=seeded_conn),
         patch.object(system, "DB_PATH", db_path),
-        patch.object(system, "BACKUP_DIR", backup_dir),
+        patch.object(backup_db, "DEFAULT_BACKUP_DIR", backup_dir),
         patch.object(system, "get_cached_status", return_value=None),
         patch.object(system, "set_cached_status"),
         dependencies[0],

@@ -24,7 +24,7 @@ from trader_koo.backend.services.pipeline import (
 )
 from trader_koo.backend.services.report_loader import is_report_fresh
 from trader_koo.report.runs import resolve_published_report
-from trader_koo.scripts.backup_db import DEFAULT_BACKUP_DIR, latest_backup_summary
+from trader_koo.scripts.backup_db import latest_backup_summary
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
 router = APIRouter()
@@ -37,7 +37,6 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 LOG_DIR = Path(os.getenv("TRADER_KOO_LOG_DIR", "/data/logs"))
 REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
 RUN_LOG_PATH = LOG_DIR / "cron_daily.log"
-BACKUP_DIR = DEFAULT_BACKUP_DIR
 
 EXPOSE_STATUS_INTERNAL = str(os.getenv("TRADER_KOO_EXPOSE_STATUS_INTERNAL", "0")).strip().lower() in {
     "1", "true", "yes", "on",
@@ -50,7 +49,7 @@ APP_VERSION = str(os.getenv("TRADER_KOO_APP_VERSION", "0.2.0") or "0.2.0").strip
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")
 
 
-from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
+from trader_koo.backend.utils import clean_optional_url as _clean_optional_url, current_rss_mb as _current_rss_mb
 
 
 def _first_env(names: list[str]) -> str | None:
@@ -114,8 +113,6 @@ CONTROL_CENTER_ACTIONS = [
 # ---------------------------------------------------------------------------
 # Resource helpers
 # ---------------------------------------------------------------------------
-
-from trader_koo.backend.utils import current_rss_mb as _current_rss_mb
 
 
 def _max_rss_mb() -> float | None:
@@ -409,6 +406,7 @@ def status() -> dict[str, Any]:
         "service": "trader_koo-api",
         "now_utc": now.replace(microsecond=0).isoformat(),
         "db_exists": DB_PATH.exists(),
+        "backup": latest_backup_summary(),
     }
     if EXPOSE_STATUS_INTERNAL:
         base["db_name"] = DB_PATH.name
@@ -667,8 +665,6 @@ def status() -> dict[str, Any]:
                 "fund_snapshot": latest_fund_snapshot,
                 "options_snapshot": latest_opt_snapshot,
             },
-            # Time and size only; ops/check_prod_freshness.py alerts on age.
-            "backup": latest_backup_summary(BACKUP_DIR),
         }
         response_payload = _sanitize_status_payload(payload, expose_internal=EXPOSE_STATUS_INTERNAL)
         set_cached_status(dt.datetime.now(dt.timezone.utc), response_payload)

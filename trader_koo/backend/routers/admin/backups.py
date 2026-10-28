@@ -1,6 +1,7 @@
 """Admin backup endpoints — list and download SQLite backups."""
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -25,7 +26,9 @@ def admin_create_backup() -> dict[str, Any]:
     try:
         result = backup_database(DB_PATH, DEFAULT_BACKUP_DIR)
     except BackupIntegrityError as exc:
-        raise HTTPException(status_code=500, detail="backup_quick_check_failed") from exc
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="backup_quick_check_failed"
+        ) from exc
     return {"ok": True, **result}
 
 
