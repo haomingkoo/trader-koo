@@ -43,9 +43,9 @@ restore point at most a day old.
 Disk budget: on 2026-10-28 the database was 1.43 GB and each compressed backup
 about 0.2 GB, so seven backups take about 1.4 GB. The nightly VACUUM needs about
 the database size free. Before you raise `MAX_BACKUPS` or the tier sizes, check
-`df -h /data` against database size plus backups plus VACUUM headroom. Keep
-`MAX_BACKUPS` at 7 or more, because `maintenance.py` re-hashes its named backup
-at several stages.
+`df -h /data` against database size plus backups plus VACUUM headroom. A
+maintenance run's named backup is safe from pruning: while maintenance blocks
+writers the scheduled backup skips and `POST /api/admin/backups` answers 503.
 
 ## Proposed targets (owner decision)
 

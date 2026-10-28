@@ -209,12 +209,6 @@ def test_prune_leaves_files_outside_the_generated_pattern(tmp_path: Path) -> Non
     assert manual in remaining
 
 
-def test_max_backups_budget_stays_at_least_seven() -> None:
-    # maintenance.py re-hashes a named backup across stages and dark-deploy
-    # POSTs share this budget.
-    assert backup_db.MAX_BACKUPS >= 7
-
-
 def test_latest_backup_is_the_newest_stamp_and_both_lookups_agree(tmp_path: Path) -> None:
     backups = tmp_path / "backups"
     names = _touch_backups(backups, ["20261026T030000000000Z", "20261027T030000000000Z"])

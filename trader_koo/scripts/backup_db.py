@@ -26,8 +26,9 @@ LOG = logging.getLogger("trader_koo.scripts.backup_db")
 DEFAULT_BACKUP_DIR = Path("/data/backups")
 # Hard ceiling on generated backups. The scheduled job, dark-deploy POSTs and
 # maintenance quiesce backups all share it, and every copy lives on the same
-# 5 GB Railway volume as the database. Keep it at 7 or more: maintenance.py
-# re-hashes its named backup across several stages.
+# 5 GB Railway volume as the database. A maintenance run's named backup is
+# not pruned under it: while maintenance blocks writers the scheduled backup
+# skips and every HTTP path except /api/health answers 503.
 MAX_BACKUPS = 7
 # Retention tiers. The union is at most 7 files, because the newest backup is
 # also the newest of its day and of its ISO week.
