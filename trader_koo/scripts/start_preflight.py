@@ -8,14 +8,13 @@ Prints one word on stdout for start.sh to act on:
 ``ready``
     The DB opened read-only and passed ``PRAGMA quick_check(1)``.
 ``maintenance``
-    The maintenance sidecar has an active run (or is unreadable, or its
-    ``.required`` marker exists without it), so the app will boot
+    ``maintenance.writers_blocked`` is true or raises, so the app will boot
     maintenance-only. The live DB is not opened: it may be corrupt or moved
     aside mid-restore, and the operator must be able to SSH in to recover it.
 
 Any other condition prints the reason on stderr and exits 1. The preflight
-never writes database contents. Opening a WAL database read-only can still
-create its ``-shm`` sidecar when that file is missing.
+never writes database contents. It can create the maintenance sidecar, and
+opening a WAL database read-only can create its ``-shm`` file when missing.
 """
 from __future__ import annotations
 
@@ -27,11 +26,10 @@ import time
 from pathlib import Path
 from typing import Callable, Mapping
 
-from trader_koo.backend.services.maintenance import ACTIVE_STATES, _required_marker, state_path
+from trader_koo.backend.services.maintenance import MaintenanceError, writers_blocked
 
 ALLOW_EMPTY_ENV = "TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP"
 DB_BUSY_TIMEOUT_SEC = 30.0
-MAINTENANCE_STATE_TIMEOUT_SEC = 5.0  # matches maintenance._connect
 
 
 class PreflightError(RuntimeError):
@@ -63,31 +61,12 @@ def _verify_volume(db_path: Path, environ: Mapping[str, str], ismount: Callable[
 
 
 def _maintenance_reason(db_path: Path) -> str | None:
-    """Mirror main.lifespan's maintenance-boot decision without creating the sidecar."""
-    path = state_path(db_path)
-    if path.is_symlink():
-        return f"maintenance state {path} is a symlink"
-    if not path.exists():
-        if _required_marker(db_path).exists():
-            return f"maintenance marker exists but state {path} is missing"
-        return None
+    """Apply main.lifespan's maintenance-boot decision; state errors block writers."""
     try:
-        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=MAINTENANCE_STATE_TIMEOUT_SEC)
-        try:
-            if not conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'maintenance_runs'"
-            ).fetchone():
-                return None
-            row = conn.execute(
-                "SELECT run_id, state FROM maintenance_runs ORDER BY requested_ts DESC LIMIT 1"
-            ).fetchone()
-        finally:
-            conn.close()
-    except sqlite3.Error as exc:
-        return f"maintenance state {path} is unreadable ({exc})"
-    if row is not None and row[1] in ACTIVE_STATES:
-        return f"maintenance run {row[0]} is {row[1]}"
-    return None
+        blocked = writers_blocked(db_path)
+    except MaintenanceError as exc:
+        return f"maintenance state error {exc.code}"
+    return "maintenance run is active" if blocked else None
 
 
 def _inspect_db(db_path: Path) -> int | None:

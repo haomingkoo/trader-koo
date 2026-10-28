@@ -71,7 +71,7 @@ def test_preflight_does_not_write_existing_db(tmp_path):
     preflight(db, environ={})
 
     assert (db.stat().st_mtime_ns, db.read_bytes()) == before
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["t.db"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".t.db.maintenance.sqlite3", "t.db"]
 
 
 # -- production -------------------------------------------------------------
@@ -325,3 +325,14 @@ def test_maintenance_does_not_bypass_volume_check(tmp_path):
 
     with pytest.raises(PreflightError, match="not a mount point"):
         preflight(db, environ=_prod_env(mount), ismount=lambda path: False)
+
+
+def test_state_path_overlapping_live_db_is_maintenance(tmp_path, monkeypatch):
+    db = _db(tmp_path / "t.db")
+    stamp = (db.stat().st_mtime_ns, db.read_bytes())
+    monkeypatch.setenv("TRADER_KOO_MAINTENANCE_STATE_PATH", str(db))
+
+    assert preflight(db, environ={}) == "maintenance"
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["t.db"]
+    assert (db.stat().st_mtime_ns, db.read_bytes()) == stamp
