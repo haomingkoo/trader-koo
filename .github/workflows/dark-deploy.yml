@@ -101,7 +101,10 @@ jobs:
         run: |
           curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/previous-release.json
           previous_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
-          test -n "$previous_sha"
+          if [[ ! $previous_sha =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Production /api/release returned no full commit SHA; refusing to deploy over it."
+            exit 1
+          fi
           echo "sha=$previous_sha" >> "$GITHUB_OUTPUT"
           if ! git cat-file -e "${previous_sha}^{commit}" 2>/dev/null; then
             echo "Production SHA ${previous_sha} is not in the repository history; refusing to deploy over it."

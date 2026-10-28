@@ -75,6 +75,15 @@ def test_guard_refuses_an_unknown_production_sha(tmp_path: Path) -> None:
     assert "not in the repository history" in result.stdout
 
 
+def test_guard_refuses_a_production_sha_that_is_not_a_full_commit(tmp_path: Path) -> None:
+    for production_sha in ("", "abc123", "A" * 40, f"{PREVIOUS_SHA}\nsha={RELEASE_SHA}"):
+        result, calls, outputs = _run(tmp_path, production_sha=production_sha)
+
+        assert result.returncode != 0, production_sha
+        assert "sha" not in outputs, production_sha
+        assert not any(call["tool"] == "git" for call in calls), production_sha
+
+
 def test_head_guard_runs_before_install_and_the_production_backup() -> None:
     names = [s["name"] for s in yaml.safe_load(WORKFLOW.read_text())["jobs"]["dark-deploy"]["steps"]]
 
