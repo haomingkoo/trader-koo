@@ -501,7 +501,7 @@ jobs:
           name: dark-deploy-evidence-${{ github.event.workflow_run.head_sha }}
           path: release-evidence/*.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
       # Deliberately absent: campaign activate/reset endpoints. Activation is a
       # separate authenticated human action after production verification.

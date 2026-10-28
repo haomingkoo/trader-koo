@@ -33,6 +33,7 @@ def test_dark_deploy_does_not_publish_variable_inventory() -> None:
     upload_block = workflow.split("- name: Upload deployment evidence", 1)[1]
 
     assert "release-evidence/*.json" in upload_block
+    assert "retention-days: 90" in upload_block
     assert "variables.json" not in upload_block
     assert "/tmp/previous-variables.json" in workflow
     assert "/tmp/deployed-variables.json" in workflow
