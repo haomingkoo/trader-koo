@@ -32,13 +32,15 @@ jobs:
     environment:
       name: production-dark
       url: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
+    defaults:
+      run:
+        shell: bash
+    # Secrets are set per step so install steps run with none in scope.
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
       RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
       RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
       BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
-      ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
       # 180 polls x 5 s = 900 s: the 600 s Railway health check plus margin.
       DEPLOYMENT_POLL_ATTEMPTS: "180"
@@ -54,6 +56,7 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -73,11 +76,13 @@ jobs:
         timeout-minutes: 25
         run: |
           make backend-install
-          npm ci --prefix trader_koo/frontend-v2
+          npm ci --ignore-scripts --prefix trader_koo/frontend-v2
           npx --prefix trader_koo/frontend-v2 playwright install --with-deps chromium
           npm install --global @railway/cli@5.27.0
 
       - name: Verify exact Railway project-token scope
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           curl --fail --silent --show-error \
             --request POST \
@@ -95,6 +100,8 @@ jobs:
             > /dev/null
 
       - name: Refuse a Railway GitHub autodeploy bypass
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           railway environment config --environment "$RAILWAY_ENVIRONMENT" --json \
             | jq -e --arg service "$RAILWAY_SERVICE" \
@@ -102,6 +109,8 @@ jobs:
             > /dev/null
 
       - name: Create and download a fresh consistent production backup
+        env:
+          ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
         run: |
           curl --fail --silent --show-error \
             --request POST \
@@ -130,6 +139,8 @@ jobs:
 
       - name: Record previous verified deployment
         id: previous
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           umask 077
           railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-deployments.json
@@ -211,6 +222,8 @@ jobs:
 
       - name: Bind release identity without starting a second deployment
         id: bind
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           echo "started=true" >> "$GITHUB_OUTPUT"
           railway variable set \
@@ -227,6 +240,7 @@ jobs:
         id: upload
         timeout-minutes: 25
         env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           NO_COLOR: "1"
         run: |
           # `railway up --ci` can exit 0 once build logs end, before the health
@@ -251,6 +265,7 @@ jobs:
         id: deployed
         timeout-minutes: 20
         env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           UPLOAD_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}
         run: |
           if [ -z "$UPLOAD_DEPLOYMENT_ID" ]; then
@@ -288,6 +303,8 @@ jobs:
 
       - name: Verify deployed Railway write gate
         id: deployed_config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           umask 077
           railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/deployed-variables.json
@@ -297,6 +314,8 @@ jobs:
 
       - name: Verify API contracts and exact commit
         id: verified
+        env:
+          ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
         run: |
           umask 077
           python -m trader_koo.scripts.verify_deployment \
@@ -316,7 +335,7 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: ${{ env.BASE_URL }}
           PLAYWRIGHT_EXPECTED_SHA: ${{ env.RELEASE_SHA }}
-          PLAYWRIGHT_ADMIN_API_KEY: ${{ env.ADMIN_API_KEY }}
+          PLAYWRIGHT_ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
         run: npx playwright test --config=playwright.production.config.ts
 
       - name: Roll back code and variables after any failed release check
@@ -325,6 +344,7 @@ jobs:
         # Nothing to undo, and no restart to cause, until Railway was touched.
         if: ${{ (failure() || cancelled()) && steps.previous.outputs.id != '' && steps.bind.outputs.started == 'true' }}
         env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
           DARK_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}

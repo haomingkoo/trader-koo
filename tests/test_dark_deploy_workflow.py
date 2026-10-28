@@ -121,3 +121,37 @@ def test_every_workflow_action_is_pinned_to_a_full_commit_sha() -> None:
             assert re.fullmatch(
                 r"[\w.-]+/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*", reference
             ), f"{path.name}: {reference}"
+
+
+def test_secrets_are_scoped_to_the_steps_that_use_them() -> None:
+    import yaml
+
+    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["dark-deploy"]
+    railway_steps = {
+        "Verify exact Railway project-token scope",
+        "Refuse a Railway GitHub autodeploy bypass",
+        "Record previous verified deployment",
+        "Bind release identity without starting a second deployment",
+        "Upload dark release and wait for Railway health gate",
+        "Record dark deployment",
+        "Verify deployed Railway write gate",
+        "Roll back code and variables after any failed release check",
+    }
+    admin_steps = {
+        "Create and download a fresh consistent production backup",
+        "Verify API contracts and exact commit",
+        "Verify production Chromium journeys",
+    }
+
+    assert "secrets." not in json.dumps(job.get("env", {}))
+    assert job["defaults"]["run"]["shell"] == "bash"
+    for item in job["steps"]:
+        env = json.dumps(item.get("env", {}))
+        name = item["name"]
+        assert ("secrets.RAILWAY_TOKEN" in env) == (name in railway_steps), name
+        assert ("secrets.TRADER_KOO_API_KEY" in env) == (name in admin_steps), name
+        assert "secrets." not in json.dumps(item.get("with", {})), name
+        assert "secrets." not in item.get("run", ""), name
+    steps = {item["name"]: item for item in job["steps"]}
+    assert "npm ci --ignore-scripts" in steps["Install release tooling"]["run"]
+    assert steps["Check out the exact CI commit"]["with"]["persist-credentials"] is False
