@@ -8,7 +8,9 @@ Checks, all fail-closed (a missing or unparseable field is a failure):
 
 - ``/api/health`` is ok and the database exists;
 - ``latest_data.price_date`` is not behind the expected trading session;
-- ``freshness.report_fresh`` is true;
+- ``freshness.report_generated_ts`` is at or after the close of that expected
+  session (the app's ``report_fresh`` flag measures age from the report's
+  weekday and reads false all weekend after the Saturday weekly_yolo report);
 - ``backup.latest_backup_utc`` is within the daily cadence plus grace;
 - the ``/api/release`` git_sha is on ``main`` and the oldest commit not yet
   deployed landed less than ``RELEASE_LAG_MAX`` ago (GitHub compare API);
@@ -30,7 +32,12 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from trader_koo.report.utils import expected_price_date  # noqa: E402
+from trader_koo.report.utils import (  # noqa: E402
+    MARKET_CLOSE_HOUR,
+    MARKET_TZ,
+    expected_price_date,
+    nyse_early_closes_for_year,
+)
 
 # Covers GitHub's delayed cron and a slow nightly run on top of INGEST_DUE_LAG.
 EXTRA_GRACE = dt.timedelta(hours=2)
@@ -120,12 +127,25 @@ def _check_backup(status: dict[str, Any], now_utc: dt.datetime) -> str | None:
     return None
 
 
+def _check_report(freshness: dict[str, Any], expected: dt.date) -> str | None:
+    generated_value = freshness.get("report_generated_ts")
+    generated = _parse_utc(generated_value)
+    close_hour = 13 if expected in nyse_early_closes_for_year(expected.year) else MARKET_CLOSE_HOUR
+    close = dt.datetime.combine(expected, dt.time(hour=close_hour), tzinfo=MARKET_TZ)
+    if generated is None or generated < close:
+        return (
+            f"report not fresh (report_generated_ts={generated_value}; "
+            f"expected a report generated after the {expected.isoformat()} close)"
+        )
+    return None
+
+
 def _check_release_lag(
     release: dict[str, Any], compare: dict[str, Any], now_utc: dt.datetime
 ) -> str | None:
     sha = str(release.get("git_sha") or "")
     state = compare.get("status")
-    if state in {"identical", "behind"}:
+    if state == "identical":
         return None
     if state != "ahead":
         return f"deployed git_sha {sha[:8]} is not on main (compare status {state!r})"
@@ -181,22 +201,19 @@ def evaluate(
     if not (health.get("ok") and health.get("db_exists")):
         problems.append(f"{where('/api/health')}: not ok: {health}")
 
+    expected = expected_price_date(now_utc - EXTRA_GRACE)
     price_date = (status.get("latest_data") or {}).get("price_date")
     if not price_date:
         problems.append(f"{where('/api/status')}: no latest_data.price_date")
-    else:
-        expected = expected_price_date(now_utc - EXTRA_GRACE)
-        if str(price_date)[:10] < expected.isoformat():
-            problems.append(
-                f"{where('/api/status')}: price_date {price_date} is behind expected {expected.isoformat()}"
-            )
+    elif str(price_date)[:10] < expected.isoformat():
+        problems.append(
+            f"{where('/api/status')}: price_date {price_date} is behind expected {expected.isoformat()}"
+        )
 
     freshness = status.get("freshness") if isinstance(status.get("freshness"), dict) else {}
-    if freshness.get("report_fresh") is not True:
-        problems.append(
-            f"{where('/api/status')}: report not fresh "
-            f"(report_generated_ts={freshness.get('report_generated_ts')})"
-        )
+    report_problem = _check_report(freshness, expected)
+    if report_problem:
+        problems.append(f"{where('/api/status')}: {report_problem}")
 
     backup_problem = _check_backup(status, now_utc)
     if backup_problem:

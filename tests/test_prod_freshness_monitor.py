@@ -58,6 +58,7 @@ def _evaluate(**overrides):
 def _status(price_date: str | None, now: dt.datetime) -> dict:
     status = _fresh_backup_status(now)
     status["latest_data"]["price_date"] = price_date
+    status["freshness"]["report_generated_ts"] = (now - dt.timedelta(hours=1)).isoformat()
     return status
 
 
@@ -107,13 +108,45 @@ def test_missing_latest_data_block_fails():
 
 
 def test_stale_report_fails():
+    # Generated before Tuesday's close, so Tuesday's report never published.
     status = _fresh_backup_status()
-    status["freshness"]["report_fresh"] = False
+    status["freshness"]["report_generated_ts"] = "2026-10-26T22:27:53Z"
 
     problems = _evaluate(status=status)
 
     assert len(problems) == 1
-    assert "report" in problems[0] and "2026-10-27T22:27:53Z" in problems[0]
+    assert "report" in problems[0] and "2026-10-26T22:27:53Z" in problems[0]
+    assert "2026-10-27" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        # weekly_yolo publishes a Saturday 00:35Z report. The app's
+        # report_fresh flag gives it 26 hours, so it reads false from Sunday
+        # 02:35Z until the Monday nightly run.
+        dt.datetime(2026, 10, 25, 12, tzinfo=UTC),
+        dt.datetime(2026, 10, 26, 12, tzinfo=UTC),
+    ],
+)
+def test_saturday_report_is_fresh_until_the_next_session_is_due(now):
+    status = _fresh_backup_status(now)
+    status["latest_data"]["price_date"] = "2026-10-23"
+    status["freshness"]["report_generated_ts"] = "2026-10-24T00:35:00Z"
+    status["freshness"]["report_fresh"] = False
+
+    assert _evaluate(status=status, now_utc=now) == []
+
+
+def test_saturday_report_goes_stale_once_monday_is_due():
+    now = dt.datetime(2026, 10, 27, 3, tzinfo=UTC)
+    status = _fresh_backup_status(now)
+    status["latest_data"]["price_date"] = "2026-10-26"
+    status["freshness"]["report_generated_ts"] = "2026-10-24T00:35:00Z"
+
+    problems = _evaluate(status=status, now_utc=now)
+
+    assert len(problems) == 1 and "report" in problems[0]
 
 
 def test_missing_report_freshness_fails_closed():
@@ -174,6 +207,7 @@ def test_release_lag_beyond_three_days_fails():
     later = RECORDED_NOW + dt.timedelta(days=2)
     status = _fresh_backup_status(later)
     status["latest_data"]["price_date"] = "2026-10-29"
+    status["freshness"]["report_generated_ts"] = "2026-10-29T22:27:53Z"
 
     problems = _evaluate(compare=compare, now_utc=later, status=status)
 
@@ -181,11 +215,22 @@ def test_release_lag_beyond_three_days_fails():
     assert "223aa607" in problems[0] and "behind main" in problems[0]
 
 
-@pytest.mark.parametrize("state", ["diverged", None])
+@pytest.mark.parametrize("state", ["diverged", "behind", None])
 def test_release_not_on_main_fails(state):
     compare = {"status": state, "commits": []} if state else {}
 
-    assert any("main" in p for p in _evaluate(compare=compare))
+    assert any("not on main" in p for p in _evaluate(compare=compare))
+
+
+def test_release_built_from_an_unmerged_descendant_of_main_fails():
+    # compare/{deployed}...main is "behind" when the deployed commit sits on
+    # top of main without being merged (recorded: 223aa607...a561085f).
+    compare = {"status": "behind", "ahead_by": 0, "behind_by": 2, "commits": []}
+
+    problems = _evaluate(compare=compare)
+
+    assert len(problems) == 1
+    assert "223aa607 is not on main" in problems[0]
 
 
 def test_release_without_git_sha_fails():
@@ -224,13 +269,12 @@ def test_missing_workflow_runs_fails_closed():
 
 def test_fail_messages_carry_the_http_status():
     status = _fresh_backup_status()
-    status["freshness"]["report_fresh"] = False
+    status["freshness"]["report_generated_ts"] = None
 
     problems = _evaluate(status=status, http_status={"/api/status": 200})
 
-    assert problems == [
-        "/api/status (HTTP 200): report not fresh (report_generated_ts=2026-10-27T22:27:53Z)"
-    ]
+    assert len(problems) == 1
+    assert problems[0].startswith("/api/status (HTTP 200): report not fresh")
 
 
 def test_main_fails_closed_when_unreachable(monkeypatch, capsys):
