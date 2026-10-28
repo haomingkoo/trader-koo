@@ -19,20 +19,21 @@ release, the workflow:
 1. checks out the exact CI-tested commit, confirms a successful CI push run
    exists for it, and refuses a commit that is no longer the `main` head (a
    re-run of an old workflow);
-2. refuses deployment if Railway GitHub autodeploy is connected;
-3. refuses to restart production while `/api/status` reports
+2. reads the production SHA from the public `/api/release` endpoint and
+   refuses a commit that does not descend from it;
+3. refuses deployment if Railway GitHub autodeploy is connected;
+4. refuses to restart production while `/api/status` reports
    `pipeline_active`, waiting up to 15 minutes, and inside the weekday nightly
    window of 21:15-23:15 UTC around the 22:00 UTC `daily_update` job. These
    checks run before the backup, so a refused run writes nothing to the
    production volume;
-4. creates and verifies a named production database backup;
-5. tests migrations and replay against a downloaded copy;
-6. records the previous deployment and its public `/api/release` SHA, plus the
-   campaign state and the `TRADER_KOO_PAPER_TRADE_ENABLED` write gate;
-7. refuses a commit that does not descend from the production SHA;
+5. creates and verifies a named production database backup;
+6. tests migrations and replay against a downloaded copy;
+7. records the previous deployment, the campaign state and the
+   `TRADER_KOO_PAPER_TRADE_ENABLED` write gate;
 8. uploads the exact commit with the pre-deploy write gate preserved, then
    waits for the deployment that `railway up` printed to pass Railway's health
-   check (each poll logs its id, status, `createdAt` and message);
+   check;
 9. verifies the public release SHA, API contracts, and Chromium journeys; and
 10. rolls back to the recorded deployment if any later step fails or the run is
     cancelled.
@@ -44,20 +45,19 @@ cover that plus about 2 seconds of CLI time per poll, and the 135-minute job
 timeout also counts the 15-minute pipeline wait. It leaves room for the
 rollback because a job timeout skips cleanup steps.
 
-Rollback calls Railway's `deploymentRollback` mutation, which returns only a
-Boolean. First it finds every dark deployment: the id `railway up` printed
-(read back from the upload log if a cancel stopped the upload step before it
-saved the id), plus any upload of this release missing from the recorded
-deployment list. It cancels each one still in flight. The restored deployment
-is the one new entry in the deployment list. If no new entry appears within 12
-polls, the step accepts the recorded previous deployment once Railway reports
-it `SUCCESS` again. Before it succeeds, every dark deployment must have
-stopped (`REMOVED`, `FAILED`, `CRASHED` or `SKIPPED`), because one still
-building could pass its health check later and take traffic back. It then
-verifies health, the previous SHA through `/api/release`, the campaign state
-and the write gate. Railway records no commit hash for `railway up` uploads,
-so the public release SHA is the code check. GraphQL error bodies are printed;
-they never contain the token.
+Rollback (`ops/dark_deploy_rollback.sh`) calls Railway's `deploymentRollback`
+mutation for the recorded deployment, which restores its image and custom
+variables. It first finds every dark deployment, from the id in the
+`railway up` log plus any upload of this release missing from the recorded
+deployment list, and cancels each one still in flight. The restored deployment
+is the one new entry in the deployment list, or the recorded deployment if
+Railway reactivates it instead. The rollback succeeds only once every dark
+deployment has stopped, because one still building could pass its health check
+later and take traffic back, and then only if health, the previous SHA through
+`/api/release`, the campaign state and the write gate all match. Railway
+records no commit hash for `railway up` uploads, so the public release SHA is
+the code check. GraphQL error bodies are printed; they never contain the
+token.
 
 The release evidence manifest (`dark-deploy-manifest-v3`) is kept for 90 days.
 

@@ -25,16 +25,10 @@ expand-compatible migrations against a separate copy, and retains only manifests
 in GitHub Actions—not the database itself. A missing named backup is HTTP 404;
 path traversal and symlinks are rejected.
 
-Before upload, the workflow records the active Railway deployment and the
-release SHA served by the public `/api/release` endpoint. Railway records no
-commit hash for `railway up` uploads. Any failed or cancelled step after the
-first Railway change invokes Railway's `deploymentRollback` mutation for that
-exact previous deployment. The workflow cancels any in-flight dark deployment,
-requires every dark deployment to have stopped, then verifies health and
-requires `/api/release` to return the previous SHA. Railway rollback restores its image
-and custom variables. The pre-deploy database
-backup remains available for a separately approved data recovery; CD never
-overwrites the live SQLite volume. Dark-deploy verification also fails unless
+Any failed or cancelled step after the first Railway change rolls back to the
+deployment recorded before upload; `DEPLOYMENT.md` describes the mechanics.
+The pre-deploy database backup remains available for a separately approved
+data recovery; CD never overwrites the live SQLite volume. Dark-deploy verification also fails unless
 the `paper-v2` status exactly matches its pre-deploy state. When Campaign v2 is
 first introduced, the only exception is `absent` to inactive `draft`. Activation requires a
 different, explicitly approved release transition; later code releases can
