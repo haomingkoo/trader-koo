@@ -17,10 +17,7 @@ pip install --no-deps --no-build-isolation -e .
 # ultralytics pulls in GUI opencv-python, which needs libGL.so.1. Both wheels
 # own cv2/, so remove both and reinstall the headless one from its locked hashes.
 log "Switching to opencv-python-headless..."
-pip uninstall -y opencv-python opencv-python-headless
-awk '/^opencv-python-headless==/ {found = 1} found {print} found && !/\\$/ {exit}' \
-    requirements.txt > /tmp/opencv-headless.txt
-pip install --no-deps --require-hashes -r /tmp/opencv-headless.txt
+bash scripts/use-headless-opencv.sh python
 
 # ── 3. Preflight import check ──────────────────────────────────────────
 log "Running preflight import check..."

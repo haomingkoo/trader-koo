@@ -12,11 +12,7 @@ backend-install:
 ifeq ($(shell uname -s),Linux)
 	$(PIP) install --no-deps --require-hashes -r requirements-dev.txt
 	@# Match build.sh: drop GUI opencv-python, reinstall the locked headless wheel.
-	$(PIP) uninstall -y opencv-python opencv-python-headless
-	awk '/^opencv-python-headless==/ {found = 1} found {print} found && !/\\$$/ {exit}' \
-		requirements.txt > opencv-headless.lock.tmp
-	$(PIP) install --no-deps --require-hashes -r opencv-headless.lock.tmp
-	rm -f opencv-headless.lock.tmp
+	bash scripts/use-headless-opencv.sh "$(PYTHON)"
 else
 	@tmp=$$(mktemp -d) && \
 	sed -e '/--hash=/d' -e 's/ \\$$//' requirements-dev.txt > "$$tmp/constraints.txt" && \
