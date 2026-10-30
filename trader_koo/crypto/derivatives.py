@@ -328,30 +328,32 @@ def _previous_fng_zone(db_path: Path) -> str | None:
         conn.close()
 
 
-_DERIV_ALERT_COOLDOWN: dict[str, dt.datetime] = {}
 _DERIV_ALERT_COOLDOWN_HOURS = 6
+_COOLDOWN_SCHEMA = "CREATE TABLE IF NOT EXISTS derivatives_alert_cooldown (alert_key TEXT PRIMARY KEY, last_alert_ts TEXT NOT NULL)"
 
 
 def check_and_alert(db_path: Path, summary: dict[str, Any]) -> int:
-    """Evaluate derivatives summary and send Telegram alerts for extremes.
+    """Send Telegram alerts for derivatives extremes; returns the number of alerts sent.
 
-    Includes a 6h cooldown per alert type to avoid spamming during
-    sustained extreme conditions (e.g., persistent fear or skewed L/S).
-
-    Returns number of alerts sent.
+    Each alert type has a 6h cooldown, kept in the DB so a restart does not resend and spent only by a sent alert.
     """
     from trader_koo.notifications.telegram import is_configured, send_message
 
     if not is_configured():
         return 0
 
-    def _cooldown_ok(alert_key: str) -> bool:
-        """Return True if this alert type hasn't fired within cooldown window."""
-        now = dt.datetime.now(dt.timezone.utc)
-        last = _DERIV_ALERT_COOLDOWN.get(alert_key)
+    now = dt.datetime.now(dt.timezone.utc)
+    with sqlite3.connect(str(db_path)) as cd:
+        cd.execute(_COOLDOWN_SCHEMA)
+        last_sent = {k: dt.datetime.fromisoformat(ts) for k, ts in cd.execute(
+            "SELECT alert_key, last_alert_ts FROM derivatives_alert_cooldown")}
+    due: list[str] = []
+
+    def _cooldown_ok(alert_key: str) -> bool:  # True if this alert type has not been sent within the window
+        last = last_sent.get(alert_key)
         if last and (now - last).total_seconds() < _DERIV_ALERT_COOLDOWN_HOURS * 3600:
             return False
-        _DERIV_ALERT_COOLDOWN[alert_key] = now
+        due.append(alert_key)
         return True
 
     alerts: list[str] = []
@@ -410,13 +412,11 @@ def check_and_alert(db_path: Path, summary: dict[str, Any]) -> int:
         return 0
 
     # Build combined alert message
-    lines = ["\U0001f4ca <b>Crypto Derivatives Alert</b>", ""]
-    lines.extend(alerts)
-    lines.append("")
-    lines.append("<i>NFA</i>")
-    text = "\n".join(lines)
+    text = "\n".join(["\U0001f4ca <b>Crypto Derivatives Alert</b>", "", *alerts, "", "<i>NFA</i>"])
 
     if send_message(text, parse_mode="HTML"):
+        with sqlite3.connect(str(db_path)) as cd:
+            cd.executemany("INSERT OR REPLACE INTO derivatives_alert_cooldown VALUES (?, ?)", [(k, now.isoformat()) for k in due])
         LOG.info("Derivatives alert sent: %d signals", len(alerts))
         return len(alerts)
     return 0

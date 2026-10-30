@@ -29,6 +29,8 @@ from trader_koo.paper_trade.campaign import (
 )
 from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trades import _build_config
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID as CAMPAIGN, _PAPER_DECISION_VERSION as DECISION_VERSION
+from trader_koo.paper_trade.registry import register_declared_campaign
 from trader_koo.paper_trades import create_paper_trades_from_report as _create_paper_trades_from_report
 from trader_koo.paper_trades import fill_pending_paper_orders
 from trader_koo.paper_trades import paper_trade_summary
@@ -113,10 +115,10 @@ def _db(*, contracted: bool = False) -> sqlite3.Connection:
             .read_text()
         )
         config = _build_config()
+        register_declared_campaign(conn, config)  # the runtime campaign, as production registers it
         conn.execute(
-            "UPDATE paper_campaigns SET policy_version=?,policy_hash=?,"
-            "replay_live_parity='matched' WHERE campaign_id='paper-v2'",
-            (config.decision_version, canonical_hash(config_snapshot(config))),
+            "UPDATE paper_campaigns SET policy_hash=?,replay_live_parity='matched' WHERE campaign_id=?",
+            (canonical_hash(config_snapshot(config)), CAMPAIGN),
         )
         conn.commit()
     else:
@@ -132,11 +134,14 @@ def _db(*, contracted: bool = False) -> sqlite3.Connection:
                UNIQUE(ticker, date)
            )"""
     )
-    # The critic fails closed when no VIX observation exists, so every business
-    # fixture supplies one; regime-specific behaviour is covered in test_critic.
+    # The critic fails closed without a VIX observation or SPY history (no
+    # regime), so every business fixture supplies both; regime-specific
+    # behaviour is covered in test_critic.
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('^VIX','2026-08-18',14,14.5,13.5,14.0,0)"""
+           VALUES ('^VIX','2026-08-18',14,14.5,13.5,14.0,0),
+                  ('SPY','2026-08-13',638,640,637,639,1000000),
+                  ('SPY','2026-08-14',639,642,638,641,1000000)"""
     )
     ensure_price_series_revision_schema(conn)
     return conn
@@ -236,10 +241,11 @@ def _promotion_metrics(*, drawdown: float = 1.0, active_return: float = 1.0) -> 
 
 def _seed_promotion(conn: sqlite3.Connection) -> None:
     config = _build_config()
+    register_declared_campaign(conn, config)
     experiment_id = f"experiment-{id(conn)}"
     preregistration_id = f"prereg-{id(conn)}"
     record_experiment_preregistration(
-        conn, preregistration_id=preregistration_id, campaign_id="paper-v2",
+        conn, preregistration_id=preregistration_id, campaign_id=CAMPAIGN,
         policy_version=config.decision_version,
         policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
         gates={
@@ -249,7 +255,7 @@ def _seed_promotion(conn: sqlite3.Connection) -> None:
     )
     experiment = record_promotion_experiment(
         conn, experiment_id=experiment_id,
-        preregistration_id=preregistration_id, campaign_id="paper-v2",
+        preregistration_id=preregistration_id, campaign_id=CAMPAIGN,
         policy_version=config.decision_version,
         policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
         metrics=_promotion_metrics(),
@@ -257,7 +263,7 @@ def _seed_promotion(conn: sqlite3.Connection) -> None:
     )
     record_human_approval(
         conn, approval_id=f"approval-{id(conn)}", experiment_id=experiment_id,
-        campaign_id="paper-v2", actor="human-reviewer", reason="approved test evidence",
+        campaign_id=CAMPAIGN, actor="human-reviewer", reason="approved test evidence",
         experiment_evidence_hash=experiment["evidence_hash"],
         artifact={"approved": True, "signed": True},
     )
@@ -267,9 +273,10 @@ def _seed_promotion(conn: sqlite3.Connection) -> None:
 def _activate(conn: sqlite3.Connection) -> None:
     # Business-path fixtures exercise a historically active campaign. The v4
     # production transition itself is unconditionally interlocked.
+    register_declared_campaign(conn, _build_config())
     conn.execute(
         "UPDATE paper_campaigns SET status='active',replay_live_parity='matched' "
-        "WHERE campaign_id='paper-v2'"
+        "WHERE campaign_id=?", (CAMPAIGN,)
     )
     conn.commit()
 
@@ -390,7 +397,7 @@ def test_live_path_persists_every_ranked_candidate_and_exact_disposition():
     trade = conn.execute(
         "SELECT campaign_id, report_run_id, policy_version FROM paper_trades"
     ).fetchone()
-    assert trade == ("paper-v2", "immutable-run-id-1", "paper-campaign-v2.0")
+    assert trade == (CAMPAIGN, "immutable-run-id-1", DECISION_VERSION)
 
 
 def test_three_eligible_zero_admission_reports_warn_without_claiming_outage():
@@ -458,16 +465,16 @@ def test_lifecycle_is_idempotent_audited_atomic_and_reversible():
     conn = _db(contracted=True)
     _seed_promotion(conn)
     first = transition_campaign(
-        conn, campaign_id="paper-v2", action="activate", actor="alice",
+        conn, campaign_id=CAMPAIGN, action="activate", actor="alice",
         reason="paper validation approved", idempotency_key="activate-paper-v2-001",
     )
     retry = transition_campaign(
-        conn, campaign_id="paper-v2", action="activate", actor="alice",
+        conn, campaign_id=CAMPAIGN, action="activate", actor="alice",
         reason="paper validation approved", idempotency_key="activate-paper-v2-001",
     )
     assert first["to_status"] == "active" and retry["idempotent"] is True
     rollback = transition_campaign(
-        conn, campaign_id="paper-v2", action="rollback", actor="alice",
+        conn, campaign_id=CAMPAIGN, action="rollback", actor="alice",
         reason="rollback drill", idempotency_key="rollback-paper-v2-001",
     )
     assert rollback["to_status"] == "draft"
@@ -483,22 +490,22 @@ def test_observation_campaign_can_activate_from_canonical_sealed_report():
     _publish(conn, "sealed-observation", [])
     policy_hash = "a" * 64
     conn.execute(
-        "UPDATE paper_campaigns SET policy_hash=? WHERE campaign_id='paper-v2'",
-        (policy_hash,),
+        "UPDATE paper_campaigns SET policy_hash=? WHERE campaign_id=?",
+        (policy_hash, CAMPAIGN),
     )
     conn.execute(
         """INSERT INTO paper_decision_sets
                (report_run_id,campaign_id,report_date,generated_ts,policy_version,
                 candidate_count,request_hash,candidates_hash,policy_hash,context_hash,
                 report_complete,is_canonical,status)
-           VALUES ('sealed-observation','paper-v2','2026-08-25','2026-08-25T22:00:00Z',
-                   'paper-campaign-v2.0',0,?,?,?,?,1,1,'sealed')""",
-        ("b" * 64, "c" * 64, policy_hash, "d" * 64),
+           VALUES ('sealed-observation',?,'2026-08-25','2026-08-25T22:00:00Z',
+                   ?,0,?,?,?,?,1,1,'sealed')""",
+        (CAMPAIGN, DECISION_VERSION, "b" * 64, "c" * 64, policy_hash, "d" * 64),
     )
     conn.commit()
     result = transition_campaign(
         conn,
-        campaign_id="paper-v2",
+        campaign_id=CAMPAIGN,
         action="activate",
         actor="alice",
         reason="start prospective paper observation",
@@ -682,6 +689,7 @@ def test_continuation_long_is_refused_in_a_non_bull_regime():
     """
     conn = _db()
     _activate(conn)
+    conn.execute("DELETE FROM price_daily WHERE ticker='SPY'")  # this test supplies its own SPY history
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
            VALUES ('SPY','2026-08-19',650,651,648,649,1000000),
@@ -908,14 +916,14 @@ def test_human_approval_requires_exact_eligible_experiment_even_without_foreign_
     with pytest.raises(ValueError, match="exact eligible experiment evidence hash"):
         record_human_approval(
             conn, approval_id="wrong-hash-approval", experiment_id=experiment_id,
-            campaign_id="paper-v2", actor="reviewer", reason="wrong evidence",
+            campaign_id=CAMPAIGN, actor="reviewer", reason="wrong evidence",
             experiment_evidence_hash="0" * 64,
             artifact={"approved": True},
         )
     with pytest.raises(ValueError, match="exact eligible experiment evidence hash"):
         record_human_approval(
             conn, approval_id="missing-experiment-approval", experiment_id="missing",
-            campaign_id="paper-v2", actor="reviewer", reason="missing evidence",
+            campaign_id=CAMPAIGN, actor="reviewer", reason="missing evidence",
             experiment_evidence_hash=evidence_hash,
             artifact={"approved": True},
         )
@@ -936,7 +944,7 @@ def test_seal_rejects_later_insert_and_verifier_detects_forged_child():
                       reason_code,reasons_json,inputs_hash,policy_hash,context_hash,disposition
                FROM paper_candidate_decisions WHERE candidate_rank=1"""
         )
-    verify_decision_set(conn, report_run_id="sealed-run", campaign_id="paper-v2")
+    verify_decision_set(conn, report_run_id="sealed-run", campaign_id=CAMPAIGN)
     conn.execute("DROP TRIGGER paper_candidate_decisions_no_insert_after_seal")
     conn.execute(
         """INSERT INTO paper_candidate_decisions
@@ -949,7 +957,7 @@ def test_seal_rejects_later_insert_and_verifier_detects_forged_child():
            FROM paper_candidate_decisions WHERE candidate_rank=1"""
     )
     with pytest.raises(EvidenceIntegrityError, match="count/hash mismatch"):
-        verify_decision_set(conn, report_run_id="sealed-run", campaign_id="paper-v2")
+        verify_decision_set(conn, report_run_id="sealed-run", campaign_id=CAMPAIGN)
 
 
 def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload(monkeypatch):
@@ -971,17 +979,17 @@ def test_lineage_and_activation_are_fail_closed_and_idempotency_binds_payload(mo
     conn.commit()
     with pytest.raises(ValueError, match="activation requires"):
         transition_campaign(
-            conn, campaign_id="paper-v2", action="activate", actor="alice",
+            conn, campaign_id=CAMPAIGN, action="activate", actor="alice",
             reason="attempt without evidence", idempotency_key="no-evidence-001",
         )
     _seed_promotion(conn)
     transition_campaign(
-        conn, campaign_id="paper-v2", action="activate", actor="alice",
+        conn, campaign_id=CAMPAIGN, action="activate", actor="alice",
         reason="approved evidence", idempotency_key="payload-bound-001",
     )
     with pytest.raises(ValueError, match="different request payload"):
         transition_campaign(
-            conn, campaign_id="paper-v2", action="activate", actor="mallory",
+            conn, campaign_id=CAMPAIGN, action="activate", actor="mallory",
             reason="changed reason", idempotency_key="payload-bound-001",
         )
 
@@ -1259,7 +1267,7 @@ def test_activation_never_falls_back_to_older_eligible_experiment():
     conn.rollback()
     config = _build_config()
     record_experiment_preregistration(
-        conn, preregistration_id="newer-failed-prereg", campaign_id="paper-v2",
+        conn, preregistration_id="newer-failed-prereg", campaign_id=CAMPAIGN,
         policy_version=config.decision_version,
         policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="e" * 64,
         gates={
@@ -1269,7 +1277,7 @@ def test_activation_never_falls_back_to_older_eligible_experiment():
     )
     record_promotion_experiment(
         conn, experiment_id="newer-failed",
-        preregistration_id="newer-failed-prereg", campaign_id="paper-v2",
+        preregistration_id="newer-failed-prereg", campaign_id=CAMPAIGN,
         policy_version=config.decision_version,
         policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="e" * 64,
         metrics=_promotion_metrics(drawdown=12.0, active_return=-2.0),
@@ -1278,6 +1286,6 @@ def test_activation_never_falls_back_to_older_eligible_experiment():
     conn.commit()
     with pytest.raises(ValueError, match="promotion evidence"):
         transition_campaign(
-            conn, campaign_id="paper-v2", action="activate", actor="alice",
+            conn, campaign_id=CAMPAIGN, action="activate", actor="alice",
             reason="must not use stale evidence", idempotency_key="stale-evidence-001",
         )

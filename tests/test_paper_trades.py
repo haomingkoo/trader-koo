@@ -34,6 +34,9 @@ from trader_koo.paper_trades import (
     paper_trade_summary,
     qualify_setup_for_paper_trade,
 )
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID as CAMPAIGN, _PAPER_DECISION_VERSION as DECISION_VERSION
+from trader_koo.paper_trade.registry import register_declared_campaign
+from trader_koo.paper_trades import _build_config
 from trader_koo.db.price_contract import (
     ensure_price_series_revision_schema,
     record_price_series_revision,
@@ -159,7 +162,8 @@ def conn(tmp_path: Path):
         "UPDATE report_runs SET is_generation_canonical=1 WHERE run_id=?",
         (TEST_REPORT_RUN_ID,),
     )
-    db.execute("UPDATE paper_campaigns SET status='active' WHERE campaign_id='paper-v2'")
+    register_declared_campaign(db, _build_config())  # the runtime campaign, as production registers it
+    db.execute("UPDATE paper_campaigns SET status='active' WHERE campaign_id=?", (CAMPAIGN,))
     db.execute("""
         CREATE TABLE IF NOT EXISTS price_daily (
             ticker TEXT NOT NULL,
@@ -174,11 +178,13 @@ def conn(tmp_path: Path):
     ensure_price_series_revision_schema(db)
     for ticker, close in (("AAPL", 150.0), ("MSFT", 300.0)):
         _seed_price(db, ticker, close)
-    # The critic fails closed when no VIX observation exists, so the business
-    # fixture supplies one; regime behaviour itself is covered in test_critic.
+    # The critic fails closed without a VIX observation or SPY history (no
+    # regime), so the business fixture supplies both; regime behaviour itself
+    # is covered in test_critic.
     db.execute(
         "INSERT INTO price_daily (ticker,date,open,high,low,close,volume) "
-        "VALUES ('^VIX','2026-03-13',14,14.5,13.5,14.0,0)"
+        "VALUES ('^VIX','2026-03-13',14,14.5,13.5,14.0,0),"
+        "('SPY','2026-03-10',495,497,494,496,1000000),('SPY','2026-03-11',496,499,495,498,1000000)"
     )
     db.commit()
     return db
@@ -205,12 +211,12 @@ def test_same_day_snapshot_replacement_preserves_intraday_high_water(
         }
 
     monkeypatch.setattr(paper_summary_module, "reconcile_portfolio", account_projection)
-    paper_summary_module.update_portfolio_snapshot(conn, campaign_id="paper-v2")
-    paper_summary_module.update_portfolio_snapshot(conn, campaign_id="paper-v2")
+    paper_summary_module.update_portfolio_snapshot(conn, campaign_id=CAMPAIGN)
+    paper_summary_module.update_portfolio_snapshot(conn, campaign_id=CAMPAIGN)
 
     high_water, drawdown = conn.execute(
         """SELECT high_water_equity,drawdown_pct FROM paper_portfolio_snapshots
-           WHERE campaign_id='paper-v2' AND snapshot_date='2026-08-23'"""
+           WHERE campaign_id=? AND snapshot_date='2026-08-23'""", (CAMPAIGN,)
     ).fetchone()
     assert high_water == pytest.approx(1_100_000)
     assert drawdown == pytest.approx(18.18181818)
@@ -241,7 +247,7 @@ def test_v2_snapshot_never_replaces_frozen_v1_snapshot_during_expand_window(
     )
 
     written = paper_summary_module.update_portfolio_snapshot(
-        conn, campaign_id="paper-v2"
+        conn, campaign_id=CAMPAIGN
     )
 
     assert written is False
@@ -628,7 +634,7 @@ class TestCreatePaperTrades:
         snapshot = conn.execute(
             """SELECT starting_capital,cash,equity,unrealized_pnl_usd,
                       accounting_breaks_json
-               FROM paper_portfolio_snapshots WHERE campaign_id='paper-v2'"""
+               FROM paper_portfolio_snapshots WHERE campaign_id=?""", (CAMPAIGN,)
         ).fetchone()
         assert snapshot[2] == pytest.approx(snapshot[0] + snapshot[3])
         assert json.loads(snapshot[4]) == []
@@ -708,6 +714,7 @@ class TestCreatePaperTrades:
         assert "ML did not filter" in trade[2]
 
     def test_stores_bot_version_and_entry_context(self, conn):
+        conn.execute("DELETE FROM price_daily WHERE ticker='SPY'")  # this test supplies its own SPY history
         for idx in range(25):
             date = (dt.date(2026, 2, 18) + dt.timedelta(days=idx)).isoformat()
             _seed_price(conn, "^VIX", 16.0 + (idx % 5), date=date)
@@ -739,7 +746,7 @@ class TestCreatePaperTrades:
         version_row = conn.execute(
             "SELECT bot_version, decision_version FROM bot_versions WHERE bot_version = 'v1.0.0'",
         ).fetchone()
-        assert version_row == ("v1.0.0", "paper-campaign-v2.0")
+        assert version_row == ("v1.0.0", DECISION_VERSION)
 
     def test_skips_trade_with_poor_reward_to_risk(self, conn):
         rows = [_make_setup_row(resistance_level=151.0)]
@@ -818,7 +825,7 @@ class TestCreatePaperTrades:
         monkeypatch.setattr("trader_koo.paper_trade.critic.critic_review", _boom)
         cfg = _default_trail_config(
             critic_fail_open=True,
-            decision_version="paper-campaign-v2.0",
+            decision_version=DECISION_VERSION,
             min_reward_r_multiple=2.0,
         )
         _seed_price(conn, "AAPL", 150.0, date="2026-03-16")
@@ -844,10 +851,10 @@ class TestMarkToMarket:
         if entry_date is None:
             entry_date = "2026-03-13"
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, status, current_price, unrealized_pnl_pct,
                high_water_mark, low_water_mark, generated_ts, report_run_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?, ?)""",
+            VALUES ({CAMPAIGN!r}, ?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?, ?)""",
             (entry_date, ticker, direction, entry_price, entry_date,
              target_price, stop_loss, entry_price, entry_price, entry_price, "ts",
              TEST_REPORT_RUN_ID),
@@ -880,11 +887,11 @@ class TestMarkToMarket:
         # reinstalls the guard, while MTM must still exclude the preserved row.
         conn.execute("DROP TRIGGER paper_trades_require_canonical_run")
         conn.execute(
-            """INSERT INTO paper_trades (
+            f"""INSERT INTO paper_trades (campaign_id,
                    report_date, generated_ts, report_run_id, ticker, direction,
                    entry_price, entry_date, target_price, stop_loss, status,
                    current_price, unrealized_pnl_pct, high_water_mark, low_water_mark
-               ) VALUES ('2026-03-14', 'ts', 'started-run', 'LEGACY', 'long',
+               ) VALUES ({CAMPAIGN!r}, '2026-03-14', 'ts', 'started-run', 'LEGACY', 'long',
                          100, '2026-03-14', 110, 95, 'open', 100, 0, 100, 100)"""
         )
         conn.commit()
@@ -1239,10 +1246,10 @@ class TestMarkToMarket:
 class TestManuallyCloseTrade:
     def test_closes_trade_with_explicit_price(self, conn):
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                stop_loss, status, current_price, unrealized_pnl_pct,
                high_water_mark, low_water_mark, generated_ts, report_run_id)
-            VALUES ('2026-03-14', 'MSFT', 'long', 300.0, '2026-03-14',
+            VALUES ({CAMPAIGN!r}, '2026-03-14', 'MSFT', 'long', 300.0, '2026-03-14',
                290.0, 'open', 300.0, 0.0, 300.0, 300.0, 'ts',
                'paper-trade-test-run')""",
         )
@@ -1257,11 +1264,11 @@ class TestManuallyCloseTrade:
 
     def test_unresolved_price_rejects_even_explicit_manual_exit(self, conn):
         conn.execute(
-            """INSERT INTO paper_trades (
+            f"""INSERT INTO paper_trades (campaign_id,
                report_date,ticker,direction,entry_price,entry_date,stop_loss,status,
                current_price,unrealized_pnl_pct,high_water_mark,low_water_mark,generated_ts,
                report_run_id
-            ) VALUES ('2026-03-14','MSFT','long',300,'2026-03-14',290,'open',
+            ) VALUES ({CAMPAIGN!r}, '2026-03-14','MSFT','long',300,'2026-03-14',290,'open',
                       300,0,300,300,'ts',?)"""
             , (TEST_REPORT_RUN_ID,)
         )
@@ -1277,9 +1284,9 @@ class TestManuallyCloseTrade:
 
     def test_raises_on_already_closed(self, conn):
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                status, current_price, generated_ts, report_run_id)
-            VALUES ('2026-03-14', 'GOOG', 'long', 150.0, '2026-03-14',
+            VALUES ({CAMPAIGN!r}, '2026-03-14', 'GOOG', 'long', 150.0, '2026-03-14',
                'closed', 150.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.commit()
@@ -1298,15 +1305,15 @@ class TestManuallyCloseTrade:
 class TestListPaperTrades:
     def test_filters_by_status(self, conn):
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                status, current_price, generated_ts, report_run_id)
-            VALUES ('2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open',
+            VALUES ({CAMPAIGN!r}, '2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open',
                     150.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                status, current_price, generated_ts, report_run_id)
-            VALUES ('2026-03-14', 'MSFT', 'long', 300.0, '2026-03-14', 'closed',
+            VALUES ({CAMPAIGN!r}, '2026-03-14', 'MSFT', 'long', 300.0, '2026-03-14', 'closed',
                     310.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.commit()
@@ -1320,9 +1327,9 @@ class TestListPaperTrades:
 
     def test_filters_by_ticker(self, conn):
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                status, current_price, generated_ts, report_run_id)
-            VALUES ('2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open',
+            VALUES ({CAMPAIGN!r}, '2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14', 'open',
                     150.0, 'ts', 'paper-trade-test-run')""",
         )
         conn.commit()
@@ -1334,13 +1341,13 @@ class TestListPaperTrades:
 
     def test_returns_notes_and_ml_fields_for_frontend(self, conn):
         conn.execute(
-            """INSERT INTO paper_trades (
+            f"""INSERT INTO paper_trades (campaign_id,
                    report_date, ticker, direction, entry_price, entry_date,
                    status, current_price, generated_ts, notes,
                    ml_predicted_win_prob, ml_confidence, ml_signal,
                    entry_reason, entry_evidence, entry_risks, report_run_id
                )
-               VALUES (
+               VALUES ({CAMPAIGN!r},
                    '2026-03-14', 'AAPL', 'long', 150.0, '2026-03-14',
                    'closed', 155.0, 'ts', 'Review breakout quality',
                    0.62, 0.71, 'bullish',
@@ -1373,7 +1380,7 @@ class TestPaperTradeSummary:
         assert result["by_direction"] == {}
         assert result["equity_curve"] == []
         assert result["policy"]["bot_version"] == "v1.0.0"
-        assert result["policy"]["decision_version"] == "paper-campaign-v2.0"
+        assert result["policy"]["decision_version"] == DECISION_VERSION
         assert result["feedback"] == []
         assert result["strategy_evidence"]["readiness_status"] == "insufficient_history"
         assert result["strategy_evidence"]["decision_eligible"] is False
@@ -1384,10 +1391,10 @@ class TestPaperTradeSummary:
         exit_ = (entry + dt.timedelta(days=4)).isoformat()
         for ticker, pnl, r in [("AAPL", 5.0, 1.0), ("MSFT", -3.0, -0.6), ("GOOG", 8.0, 1.6)]:
             conn.execute(
-                """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+                f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                    status, pnl_pct, r_multiple, exit_date, exit_reason, current_price,
                    generated_ts, report_run_id)
-                VALUES (?, ?, 'long', 100.0, ?,
+                VALUES ({CAMPAIGN!r}, ?, ?, 'long', 100.0, ?,
                    'closed', ?, ?, ?, 'manual_close', 100.0, 'ts',
                    'paper-trade-test-run')""",
                 (entry.isoformat(), ticker, entry.isoformat(), pnl, r, exit_),
@@ -1413,10 +1420,10 @@ class TestPaperTradeSummary:
         base_date = dt.date.today() - dt.timedelta(days=30)
         entry_date = base_date.isoformat()
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                status, pnl_pct, r_multiple, exit_date, exit_reason, current_price,
                generated_ts, report_run_id)
-            VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 3.0, 0.6, ?,
+            VALUES ({CAMPAIGN!r}, ?, 'PIPE', 'long', 100.0, ?, 'closed', 3.0, 0.6, ?,
                     'expired', 103.0, 'ts', 'paper-trade-test-run')""",
             (entry_date, entry_date, (base_date + dt.timedelta(days=5)).isoformat()),
         )
@@ -1466,10 +1473,10 @@ class TestPaperTradeSummary:
                 date=(base_date + dt.timedelta(days=idx)).isoformat(),
             )
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                status, pnl_pct, r_multiple, exit_date, exit_reason, current_price,
                generated_ts, report_run_id)
-            VALUES (?, 'AAPL', 'long', 100.0, ?, 'closed', 2.0, 0.4, ?,
+            VALUES ({CAMPAIGN!r}, ?, 'AAPL', 'long', 100.0, ?, 'closed', 2.0, 0.4, ?,
                     'expired', 102.0, 'ts', 'paper-trade-test-run')""",
             (entry_date, entry_date, (base_date + dt.timedelta(days=5)).isoformat()),
         )
@@ -1491,12 +1498,12 @@ class TestPaperTradeSummary:
         _seed_price(conn, "SPY", 100.0, date=entry_date)
         _seed_price(conn, "SPY", 110.0, date=exit_date)
         conn.execute(
-            """INSERT INTO paper_trades (
+            f"""INSERT INTO paper_trades (campaign_id,
                    report_date, ticker, direction, entry_price, entry_date,
                    status, pnl_pct, r_multiple, exit_date, exit_reason,
                    current_price, generated_ts, position_size_pct, report_run_id
                )
-               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 1.0, 0.2, ?,
+               VALUES ({CAMPAIGN!r}, ?, 'PIPE', 'long', 100.0, ?, 'closed', 1.0, 0.2, ?,
                        'expired', 101.0, 'ts', 8.0, 'paper-trade-test-run')""",
             (entry_date, entry_date, exit_date),
         )
@@ -1516,12 +1523,12 @@ class TestPaperTradeSummary:
         _seed_price(conn, "SPY", 100.0, date=entry_date)
         _seed_price(conn, "SPY", 110.0, date=exit_date)
         conn.execute(
-            """INSERT INTO paper_trades (
+            f"""INSERT INTO paper_trades (campaign_id,
                    report_date, ticker, direction, entry_price, entry_date,
                    status, pnl_pct, r_multiple, exit_date, exit_reason,
                    current_price, generated_ts, position_size_pct, report_run_id
                )
-               VALUES (?, 'PIPE', 'long', 100.0, ?, 'closed', 10.0, 2.0, ?,
+               VALUES ({CAMPAIGN!r}, ?, 'PIPE', 'long', 100.0, ?, 'closed', 10.0, 2.0, ?,
                        'target_hit', 110.0, 'ts', 10.0, 'paper-trade-test-run')""",
             (entry_date, entry_date, exit_date),
         )
@@ -1549,8 +1556,8 @@ class TestPaperTradeSummary:
         conn.execute(
             """INSERT INTO paper_trades
                (id,report_date,ticker,direction,entry_price,entry_date,status,campaign_id,report_run_id)
-               VALUES (99,?,'AAPL','long',100,?,'closed','paper-v2',?)""",
-            (entry_date, entry_date, TEST_REPORT_RUN_ID),
+               VALUES (99,?,'AAPL','long',100,?,'closed',?,?)""",
+            (entry_date, entry_date, CAMPAIGN, TEST_REPORT_RUN_ID),
         )
         conn.execute(
             """
@@ -1577,12 +1584,12 @@ class TestPaperTradeSummary:
         for idx in range(6):
             entry_date = (base_date + dt.timedelta(days=idx)).isoformat()
             conn.execute(
-                """INSERT INTO paper_trades (
+                f"""INSERT INTO paper_trades (campaign_id,
                     report_date, ticker, direction, entry_price, entry_date, status,
                     pnl_pct, r_multiple, exit_date, exit_reason, current_price, generated_ts,
                     setup_family, regime_state_at_entry, vix_at_entry, bot_version,
                     report_run_id
-                ) VALUES (?, ?, 'long', 100.0, ?, 'closed', ?, ?, ?, ?, 100.0,
+                ) VALUES ({CAMPAIGN!r}, ?, ?, 'long', 100.0, ?, 'closed', ?, ?, ?, ?, 100.0,
                           'ts', ?, ?, ?, ?, 'paper-trade-test-run')""",
                 (
                     entry_date,
@@ -1813,10 +1820,10 @@ class TestTradingDayExpiry:
         if entry_date is None:
             entry_date = "2026-03-13"
         conn.execute(
-            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+            f"""INSERT INTO paper_trades (campaign_id, report_date, ticker, direction, entry_price, entry_date,
                target_price, stop_loss, status, current_price, unrealized_pnl_pct,
                high_water_mark, low_water_mark, generated_ts, report_run_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?, ?)""",
+            VALUES ({CAMPAIGN!r}, ?, ?, ?, ?, ?, ?, ?, 'open', ?, 0.0, ?, ?, ?, ?)""",
             (entry_date, ticker, direction, entry_price, entry_date,
              target_price, stop_loss, entry_price, entry_price, entry_price, "ts",
              TEST_REPORT_RUN_ID),

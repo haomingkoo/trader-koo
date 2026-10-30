@@ -16,7 +16,7 @@ test("public research pages remain useful and lifecycle-honest with partial data
   await expect(campaign).not.toContainText("Campaign is ready");
 
   await page.goto("/methodology");
-  await expect(page.getByText(/Current campaign:/)).toContainText("paper-v2");
+  await expect(page.getByText(/Current campaign:/)).toContainText("paper-v3");
   await expect(page.getByText(/Frozen v1 figures below/)).toContainText("historical and unreconciled");
   await expect(page.getByText("Frozen v1 Trades")).toBeVisible();
   await expect(page.getByRole("link", { name: "Agent Traces" })).toHaveCount(0);

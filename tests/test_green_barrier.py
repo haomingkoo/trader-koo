@@ -16,6 +16,10 @@ from trader_koo.analysis.green_barrier import (
 )
 from trader_koo.backend.services import chart_builder
 from trader_koo.db.price_contract import record_price_series_revision
+from trader_koo.notifications.green_barrier_text import (
+    format_green_barrier_line,
+    green_barrier_caption,
+)
 from trader_koo.notifications.morning_summary import (
     _select_green_barrier_attachments,
     send_morning_summary,
@@ -426,3 +430,79 @@ def test_photo_failure_is_explicit_partial_without_text_retry(
 
     send_text.assert_called_once_with("brief")
     assert "MORNING_SUMMARY_PARTIAL" in caplog.text
+
+
+def test_scan_reports_in_progress_bar_beside_completed_hit(tmp_path: Path) -> None:
+    conn = _make_price_db(tmp_path / "prices.db")
+    try:
+        conn.execute(
+            """INSERT INTO price_daily
+            (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("HIT", "2025-07-15", 80, 112, 80, 110, 1000),
+        )
+        record_price_series_revision(
+            conn,
+            "HIT",
+            evidence={"provider": "fixture", "vendor_action_ledger_checked": True},
+            fetch_timestamp="2026-08-22T00:00:00Z",
+        )
+        conn.commit()
+        hits = scan_green_barriers(
+            conn,
+            timeframes=("monthly",),
+            as_of=pd.Timestamp("2025-07-15").date(),
+        )
+        assert [row["ticker"] for row in hits] == ["HIT"]
+        assert hits[0]["value"] == -100.0
+        assert hits[0]["asof"] == "2025-06-30"
+        assert hits[0]["in_progress_value"] == -25.0
+        assert hits[0]["in_progress_asof"] == "2025-07-15"
+    finally:
+        conn.close()
+
+
+def test_scan_has_no_in_progress_bar_when_period_is_complete(tmp_path: Path) -> None:
+    conn = _make_price_db(tmp_path / "prices.db")
+    try:
+        hits = scan_green_barriers(
+            conn,
+            timeframes=("monthly",),
+            as_of=pd.Timestamp("2025-06-30").date(),
+        )
+        assert hits[0]["in_progress_value"] is None
+        assert hits[0]["in_progress_asof"] is None
+    finally:
+        conn.close()
+
+
+def test_summary_line_names_completed_bar_and_shows_bar_in_progress() -> None:
+    line = format_green_barrier_line(
+        {
+            "ticker": "MCD",
+            "timeframe": "monthly",
+            "value": -99.95,
+            "asof": "2026-09-30",
+            "in_progress_value": -82.89,
+            "in_progress_asof": "2026-10-23",
+        }
+    )
+    assert line == "  🟢 MCD Monthly %R -100.0 at 2026-09-30 close · now -82.9 (2026-10-23)"
+
+
+def test_summary_line_without_in_progress_bar_keeps_close_date() -> None:
+    line = format_green_barrier_line(
+        {"ticker": "T", "timeframe": "weekly", "value": -99.8, "asof": "2026-10-23"}
+    )
+    assert line == "  🟢 T Weekly %R -99.8 at 2026-10-23 close"
+
+
+def test_photo_caption_shows_bar_in_progress() -> None:
+    caption = green_barrier_caption(
+        {"asof": "2026-09-30", "in_progress_value": -82.89, "in_progress_asof": "2026-10-23"},
+        ticker="MCD",
+        timeframe="monthly",
+        value=-99.95,
+        threshold=-98.0,
+    )
+    assert "Williams %R(14) at 2026-09-30 close: *-100.0*" in caption
+    assert "Now: *-82.9* (2026-10-23, bar still forming)" in caption

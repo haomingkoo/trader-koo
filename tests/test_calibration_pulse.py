@@ -424,3 +424,21 @@ class TestTelegramMessage:
         })
         assert "bullish_reversal:long" in msg
         assert "Blocked" in msg or "\u274c" in msg
+
+
+def test_rows_from_unverified_runs_are_reported_not_silently_dropped(tmp_path: Path):
+    conn = _make_conn(tmp_path)
+    _seed_eval(conn, "bullish_breakout", "long", [-2.0] * MIN_EVAL_SAMPLE)
+    conn.execute("UPDATE setup_call_evaluations SET report_run_id='never-published-run'")
+    conn.commit()
+    result = run_calibration_pulse(conn, trigger="test")
+    assert result["ok"] is False
+    assert any("setup_call_evaluations" in note for note in result["lineage_excluded"])
+
+
+def test_missing_lineage_column_is_reported(tmp_path: Path):
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE paper_trades (setup_family TEXT, direction TEXT, status TEXT, pnl_pct REAL, exit_date TEXT)")
+    result = run_calibration_pulse(conn, trigger="test")
+    assert result["ok"] is False
+    assert any("paper_trades" in note for note in result["lineage_excluded"])

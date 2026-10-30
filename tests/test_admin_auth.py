@@ -12,6 +12,7 @@ from trader_koo.middleware.auth import (
     AdminAuthConfig,
     AdminAuthenticator,
     admin_route_inventory,
+    resolved_routes,
     require_admin,
     route_uses_admin_dependency,
 )
@@ -162,7 +163,7 @@ def test_every_production_admin_route_has_the_native_dependency():
     initialize_rate_limiting(app)
     admin_routes = [
         route
-        for route in app.routes
+        for route in resolved_routes(app)
         if getattr(route, "path", "").startswith("/api/admin/")
     ]
     assert admin_routes

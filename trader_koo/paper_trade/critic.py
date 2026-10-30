@@ -130,7 +130,7 @@ def _check_regime_alignment(
             return False, "Regime unknown and VIX unavailable. Blocking without regime data."
         if vix > REGIME_VIX_UNKNOWN_BLOCK:
             return False, f"Regime unknown but VIX={vix:.1f} elevated. Blocking without regime data."
-        return True, "Regime unknown, low-vol environment — allowing"
+        return False, f"Regime unknown (VIX={vix:.1f}). Blocking without regime data."
 
     is_bull = "bull" in regime
     is_bear = "bear" in regime
@@ -232,8 +232,9 @@ def _check_portfolio_concentration(
                 "SELECT ticker,direction,setup_family FROM paper_trades WHERE status='open' AND campaign_id=?",
                 (campaign_id,),
             ).fetchall()
-    except Exception:
-        return True, "Could not check portfolio — allowing"
+    except sqlite3.Error as exc:
+        LOG.error("Critic could not read open paper trades: %s", exc)
+        return False, f"Could not check portfolio ({exc}) — blocking"
 
     open_count = len(open_trades)
 
@@ -430,23 +431,25 @@ def _check_family_edge(
 def _check_rolling_expectancy(
     conn: sqlite3.Connection,
     campaign_id: str | None = None,
+    *,
+    as_of: str | None = None,
+    window_days: int | None = None,
 ) -> tuple[bool, str]:
-    """Reject if last 20 closed trades have negative avg return."""
-    if campaign_id is None:
-        rows = conn.execute(
-            "SELECT pnl_pct FROM paper_trades WHERE status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20"
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT pnl_pct FROM paper_trades WHERE campaign_id=? AND status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20",
-            (campaign_id,),
-        ).fetchall()
+    """Reject if the last 20 closed trades (within ``window_days`` of ``as_of`` when given) average below the bar."""
+    where, params = ["status!='open'", "pnl_pct IS NOT NULL"], []
+    if campaign_id is not None:
+        where, params = [*where, "campaign_id=?"], [campaign_id]
+    windowed = as_of is not None and window_days is not None  # lets a losing streak age out of the brake
+    if windowed:
+        where, params = [*where, "exit_date > date(?, ?) AND exit_date <= ?"], [*params, as_of, f"-{int(window_days)} days", as_of]
+    rows = conn.execute(f"SELECT pnl_pct FROM paper_trades WHERE {' AND '.join(where)} ORDER BY exit_date DESC LIMIT 20", params).fetchall()
+    scope = f" closed in the {window_days} days to {as_of}" if windowed else ""
     if len(rows) < ROLLING_EXPECTANCY_MIN_SAMPLE:
-        return True, f"Insufficient history ({len(rows)} trades) for expectancy check"
+        return True, f"Insufficient history ({len(rows)} trades{scope}) for expectancy check"
     avg_pnl = sum(float(r[0]) for r in rows) / len(rows)
     if avg_pnl < ROLLING_EXPECTANCY_MIN:
-        return False, f"Rolling expectancy negative ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
-    return True, f"Rolling expectancy OK ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
+        return False, f"Rolling expectancy negative ({avg_pnl:.2f}% avg over last {len(rows)} trades{scope})"
+    return True, f"Rolling expectancy OK ({avg_pnl:.2f}% avg over last {len(rows)} trades{scope})"
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +465,8 @@ def critic_review(
     market_ctx: dict[str, Any],
     max_open: int = 5,
     campaign_id: str | None = None,
+    as_of: str | None = None,
+    rolling_window_days: int | None = None,
 ) -> dict[str, Any]:
     """Run all critic checks against a proposed trade.
 
@@ -491,24 +496,18 @@ def critic_review(
         ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row, max_open=max_open, campaign_id=campaign_id)),
         ("volatility_environment", lambda: _check_volatility_environment(market_ctx)),
         ("caution_flags", lambda: _check_caution_flags(evaluation)),
-        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn, campaign_id)),
+        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn, campaign_id, as_of=as_of, window_days=rolling_window_days)),
         ("family_edge", lambda: _check_family_edge(conn, row, evaluation, campaign_id)),
     ]
 
-    # Checks that depend on external data availability — fail open on error
-    data_dependent_checks = {"regime_alignment", "volatility_environment", "rolling_expectancy", "family_edge"}
-
+    # A check that cannot run is missing evidence, so it rejects the trade.
     for name, fn in name_fn_pairs:
         try:
             passed, reason = fn()
             checks.append((name, passed, reason))
         except Exception as exc:
-            if name in data_dependent_checks:
-                LOG.warning("Critic check '%s' failed open (data unavailable): %s", name, exc)
-                checks.append((name, True, f"Check error — data unavailable (allowing): {exc}"))
-            else:
-                LOG.error("Critic check '%s' failed closed (rejecting): %s", name, exc)
-                checks.append((name, False, f"Check error (rejecting): {exc}"))
+            LOG.error("Critic check '%s' failed closed (rejecting): %s", name, exc)
+            checks.append((name, False, f"Check error (rejecting): {exc}"))
 
     passed_count = sum(1 for _, p, _ in checks if p)
     total = len(checks)

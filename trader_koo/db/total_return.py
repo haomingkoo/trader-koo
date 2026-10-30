@@ -51,7 +51,7 @@ def _one_ticker(px: pd.DataFrame, acts: pd.DataFrame, unapplied: list) -> pd.Dat
     px = px.sort_values("date").reset_index(drop=True)
     n = len(px)
     dates = px["date"].astype(str).tolist()
-    close = pd.to_numeric(px["close"], errors="coerce").to_numpy(dtype=float)
+    close = pd.to_numeric(px["close"], errors="coerce").to_numpy(dtype=float, copy=True)  # written below; pandas 3 views are read-only
     div = np.zeros(n)
     flags = [""] * n
 
@@ -94,7 +94,7 @@ def _one_ticker(px: pd.DataFrame, acts: pd.DataFrame, unapplied: list) -> pd.Dat
     segment = np.cumsum(np.isnan(ret))
     segment = segment - segment[0]
     growth = np.where(np.isnan(ret), 1.0, 1.0 + ret)
-    index = pd.Series(growth).groupby(segment).cumprod().to_numpy()
+    index = pd.Series(growth).groupby(segment).cumprod().to_numpy(copy=True)
     index[~valid] = np.nan
     return pd.DataFrame({
         "ticker": px["ticker"].iloc[0], "date": dates, "close": close, "dividend": div,

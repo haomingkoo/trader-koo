@@ -18,7 +18,7 @@ import pandas as pd
 
 from trader_koo.research.settings import get as _settings
 
-from . import hypotheses, quality, spinoffs
+from . import hypotheses, quality, spinoffs, v4_signals, v5_signals, v6_signals
 from .data import AsOfView, Market
 from .diagnostics import Diagnostics
 
@@ -61,6 +61,12 @@ CANDIDATES: dict[str, Callable[[dict], Signal]] = {
     "h2_accelerating_fundamentals": hypotheses.accelerating_fundamentals,
     "h3_momentum_confirmed": hypotheses.momentum_confirmed_by_earnings,
     "h4_market_cap_leaders": hypotheses.market_cap_leaders,
+    "v4_h1_magic_formula": v4_signals.magic_formula,
+    "v4_h2_piotroski_value": v4_signals.piotroski_value,
+    "v4_h3_trend_template": v4_signals.trend_template,
+    "v5_composite": v5_signals.composite,
+    "v6_h1_insider_clusters": v6_signals.insider_clusters,
+    "v6_h2_insider_opportunistic": v6_signals.insider_opportunistic,
 }
 # Candidates that rebalance on the last session of each calendar year instead of every N sessions.
 ANNUAL_CANDIDATES = frozenset({"h4_market_cap_leaders"})
@@ -88,6 +94,8 @@ def _view_sql(conn: sqlite3.Connection, table: str, as_of: str) -> str:
     elif table == "sec_fundamentals":
         scale = {"value": f"value * {_B.lookahead_fact_scale!r} + {_B.lookahead_fact_shift!r}"}
         when = f"filed_date >= '{as_of}'"  # a filing dated as_of is not usable until the next session
+    elif table == "sec_insider_trades":  # a later filing is removed, so any use of one changes the scores
+        return f"SELECT * FROM src.{table} WHERE filing_date < '{as_of}'"
     else:
         return f"SELECT * FROM src.{table}"
     sel = ", ".join(f"CASE WHEN {when} THEN {scale[c]} ELSE {c} END AS {c}" if c in scale else c for c in cols)
@@ -111,6 +119,8 @@ def _perturbed_conn(conn: sqlite3.Connection, as_of: str) -> sqlite3.Connection:
             if name == "sec_fundamentals":
                 mem.execute("UPDATE sec_fundamentals SET value = value * ? + ? WHERE filed_date >= ?",
                             (_B.lookahead_fact_scale, _B.lookahead_fact_shift, as_of))
+            elif name == "sec_insider_trades":
+                mem.execute("DELETE FROM sec_insider_trades WHERE filing_date >= ?", (as_of,))
             elif name == "price_daily":
                 mem.execute("UPDATE price_daily SET open = open * ?, close = close * ? WHERE date > ?",
                             (_B.lookahead_price_factor, _B.lookahead_price_factor, as_of))
