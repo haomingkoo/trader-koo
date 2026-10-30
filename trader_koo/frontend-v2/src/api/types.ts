@@ -1636,6 +1636,11 @@ export interface VixMetrics {
 
 export interface VixMetricsPayload {
   ok: boolean;
+  /** "daily_close": computed from stored closes, not intraday quotes. */
+  source?: string;
+  /** Date of the ^VIX close the metrics were computed from. */
+  as_of?: string | null;
+  vix_close?: number | null;
   vix_vix3m_ratio: number | null;
   term_structure_signal: string;
   realized_vol_20d: number | null;
@@ -1790,6 +1795,9 @@ export interface MacroInstrument {
   emoji: string;
   current: number | null;
   prev_close: number | null;
+  /** Date of `prev_close`; shown when no live quote exists. */
+  prev_close_date?: string | null;
+  quote_source?: "live" | null;
   change_pct: number | null;
   threshold_pct: number;
   exceeded: boolean;

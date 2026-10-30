@@ -1,5 +1,6 @@
 import { useMacroLive } from "../../api/hooks";
-import type { MacroInstrument } from "../../api/types";
+import { QuoteChip } from "./HeaderMarketStrips";
+import { macroQuoteView } from "./quoteView";
 
 /** Display order for the macro strip — most important first. */
 const DISPLAY_ORDER = [
@@ -36,34 +37,6 @@ function formatMacroPrice(ticker: string, price: number): string {
   return `$${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function MacroPriceChip({ instrument }: { instrument: MacroInstrument }) {
-  if (instrument.current == null || instrument.change_pct == null) {
-    return null;
-  }
-
-  const isPositive = instrument.change_pct >= 0;
-  const changeColor = isPositive ? "text-[var(--green)]" : "text-[var(--red)]";
-  const sign = isPositive ? "+" : "";
-  const label = SHORT_LABELS[instrument.ticker] ?? instrument.name;
-
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text)] opacity-70">
-        {label}
-      </span>
-      <span className="tabular-nums text-[var(--text)]">
-        {formatMacroPrice(instrument.ticker, instrument.current)}
-      </span>
-      <span className={`tabular-nums text-[10px] font-semibold ${changeColor}`}>
-        {sign}{instrument.change_pct.toFixed(2)}%
-        {instrument.exceeded && (
-          <span className="ml-0.5" title="Threshold exceeded">!</span>
-        )}
-      </span>
-    </div>
-  );
-}
-
 const REGIME_STYLES: Record<string, { bg: string; text: string }> = {
   RISK_OFF: { bg: "bg-red-500/10", text: "text-[var(--red)]" },
   RISK_ON: { bg: "bg-green-500/10", text: "text-[var(--green)]" },
@@ -92,10 +65,12 @@ export default function MacroStrip() {
     data.instruments.map((inst) => [inst.ticker, inst]),
   );
 
-  // Filter to instruments with data, in display order
-  const orderedInstruments = DISPLAY_ORDER
-    .map((ticker) => instrumentMap.get(ticker))
-    .filter((inst): inst is MacroInstrument => inst != null && inst.current != null);
+  // Instruments without a live quote (indices and yields) show their dated close.
+  const orderedInstruments = DISPLAY_ORDER.flatMap((ticker) => {
+    const inst = instrumentMap.get(ticker);
+    const quote = inst ? macroQuoteView(inst) : null;
+    return inst && quote ? [{ inst, quote }] : [];
+  });
 
   if (orderedInstruments.length === 0) {
     return (
@@ -126,9 +101,14 @@ export default function MacroStrip() {
       )}
 
       {/* Instrument chips */}
-      {orderedInstruments.map((inst) => (
+      {orderedInstruments.map(({ inst, quote }) => (
         <span key={inst.ticker} className="flex items-center whitespace-nowrap">
-          <MacroPriceChip instrument={inst} />
+          <QuoteChip
+            label={SHORT_LABELS[inst.ticker] ?? inst.name}
+            exceeded={inst.exceeded}
+            quote={quote}
+            formatValue={(price) => formatMacroPrice(inst.ticker, price)}
+          />
         </span>
       ))}
     </div>

@@ -30,6 +30,7 @@ import type {
   VixMetricsPayload,
   FearGreedPayload,
   AlertsPayload,
+  EquityTick,
   MacroLivePayload,
 } from "./types";
 
@@ -173,6 +174,14 @@ export function useMarketSummary(days: number = 90) {
     queryKey: ["market-summary", days],
     queryFn: () => apiFetch<MarketSummary>(`/api/market-summary?days=${days}`),
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useStreamingPrices() {
+  return useQuery({
+    queryKey: ["streaming-prices"],
+    queryFn: () => apiFetch<{ ok: boolean; prices: Record<string, EquityTick> }>("/api/streaming/prices"),
+    staleTime: 30_000,
   });
 }
 

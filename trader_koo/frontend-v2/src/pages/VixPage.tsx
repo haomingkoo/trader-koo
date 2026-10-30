@@ -14,6 +14,16 @@ import {
 } from "../components/vix/VixSections";
 import { formatVixState } from "../components/vix/vixUtils";
 
+function VixMetricsAsOf({ asOf }: { asOf: string | null | undefined }) {
+  return (
+    <p className="text-[10px] text-[var(--muted)]" data-testid="vix-metrics-as-of">
+      {asOf
+        ? `Computed from the VIX close of ${asOf}, not intraday quotes.`
+        : "Close date not reported; treat these metrics as end-of-day, not intraday."}
+    </p>
+  );
+}
+
 export default function VixPage() {
   useEffect(() => {
     document.title = "VIX \u2014 Trader Koo";
@@ -45,12 +55,13 @@ export default function VixPage() {
         <div className="space-y-6" data-testid="vix-live-metrics-only">
           <h2 className="text-xl font-bold tracking-tight">VIX / Regime Analysis</h2>
           <div className="rounded-lg border border-[var(--amber)]/40 bg-[rgba(248,194,78,0.06)] p-3 text-xs text-[var(--muted)]" role="status">
-            The sealed daily regime report is unavailable. Live volatility metrics remain available below and are not a substitute for the missing report.
+            The sealed daily regime report is unavailable. Volatility metrics from the latest daily close remain available below and are not a substitute for the missing report.
           </div>
           <SpikeAlertBanner metrics={metricsData} />
           <VixMetricCardsGrid metrics={metricsData} />
+          <VixMetricsAsOf asOf={metricsData.as_of} />
           <p className="text-[10px] text-[var(--muted)]">
-            Live metrics are descriptive and research-only. No regime or sizing decision is inferred from missing report evidence.
+            These metrics are descriptive and research-only. No regime or sizing decision is inferred from missing report evidence.
           </p>
         </div>
       );
@@ -87,6 +98,7 @@ export default function VixPage() {
       </p>
 
       {metrics && <VixMetricCardsGrid metrics={metrics} />}
+      {metrics && <VixMetricsAsOf asOf={metrics.as_of} />}
       {metricsError && (
         <div className="text-xs text-[var(--red)]">
           Failed to load VIX metrics: {String((metricsError as Error)?.message ?? "Unknown error")}

@@ -108,7 +108,11 @@ def compute_vix_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
     All fields are explicitly null when data is unavailable --
     no hidden fallbacks.
     """
-    vix_close = _fetch_latest_close(conn, "^VIX")
+    latest = conn.execute(
+        "SELECT CAST(close AS REAL), date FROM price_daily "
+        "WHERE ticker = '^VIX' AND close IS NOT NULL ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    vix_close = float(latest[0]) if latest else None
     if vix_close is None:
         logger.warning("VIX close unavailable -- returning null metrics")
         return _null_metrics()
@@ -206,6 +210,8 @@ def compute_vix_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
     gauge_zone, gauge_color = _gauge_for_vix(vix_close)
 
     return {
+        "as_of": str(latest[1]),
+        "vix_close": vix_close,
         "vix_vix3m_ratio": vix_vix3m_ratio,
         "term_structure_signal": term_structure_signal,
         "realized_vol_20d": (
@@ -258,6 +264,8 @@ def _position_sizing(
 def _null_metrics() -> dict[str, Any]:
     """Return a metrics dict with all nullable fields set to None."""
     return {
+        "as_of": None,
+        "vix_close": None,
         "vix_vix3m_ratio": None,
         "term_structure_signal": "unavailable",
         "realized_vol_20d": None,
