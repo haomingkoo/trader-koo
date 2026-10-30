@@ -14,6 +14,7 @@ from trader_koo.paper_trade.config import PaperTradeConfig, config_snapshot
 from trader_koo.paper_trade.schema import decode_json_list, ensure_paper_trade_schema
 from trader_koo.paper_trade.portfolio_accounting import reconcile_portfolio
 from trader_koo.research.strategy_evidence import evidence_allows_action, strategy_evidence_state
+from trader_koo.schemas import PaperTrade
 
 LOG = logging.getLogger(__name__)
 
@@ -1084,5 +1085,6 @@ def list_paper_trades(
         trade["entry_evidence"] = decode_json_list(trade.get("entry_evidence"))
         trade["entry_risks"] = decode_json_list(trade.get("entry_risks"))
         trade["lineage"] = "linked" if trade.get("report_run_id") else "unlinked legacy"
+        PaperTrade.model_validate(trade)
         trades.append(trade)
     return trades

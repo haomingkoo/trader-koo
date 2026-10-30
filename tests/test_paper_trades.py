@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from trader_koo.paper_trade import summary as paper_summary_module
 from trader_koo.paper_trade.config import PaperTradeConfig
@@ -38,6 +39,8 @@ from trader_koo.db.price_contract import (
     ensure_price_series_revision_schema,
     record_price_series_revision,
 )
+
+from trader_koo.schemas import PaperTrade
 
 TEST_REPORT_RUN_ID = "paper-trade-test-run"
 
@@ -1320,6 +1323,34 @@ class TestListPaperTrades:
         assert len(open_trades) == 1
         assert open_trades[0]["ticker"] == "AAPL"
         assert len(all_trades) == 2
+
+    def test_rows_validate_as_paper_trade_without_changing_shape(self, conn):
+        conn.execute(
+            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+               status, current_price, generated_ts, report_run_id)
+            VALUES ('2026-03-14', 'AAPL', 'short', 150.0, '2026-03-14', 'open',
+                    150.0, 'ts', 'paper-trade-test-run')""",
+        )
+        conn.commit()
+
+        [trade] = list_paper_trades(conn)
+
+        assert PaperTrade.model_validate(trade).direction == "short"
+        assert trade["lineage"] == "linked"
+        assert isinstance(trade["entry_date"], str)
+
+    def test_fails_closed_on_a_row_that_breaks_the_contract(self, conn):
+        # SQLite REAL affinity stores unparseable text as-is.
+        conn.execute(
+            """INSERT INTO paper_trades (report_date, ticker, direction, entry_price, entry_date,
+               status, current_price, generated_ts, report_run_id)
+            VALUES ('2026-03-14', 'AAPL', 'long', 'n/a', '2026-03-14', 'open',
+                    150.0, 'ts', 'paper-trade-test-run')""",
+        )
+        conn.commit()
+
+        with pytest.raises(ValidationError):
+            list_paper_trades(conn)
 
     def test_filters_by_ticker(self, conn):
         conn.execute(
