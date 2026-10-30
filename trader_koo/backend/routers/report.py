@@ -149,6 +149,9 @@ def earnings_calendar(
             tickers=requested,
             setup_map=setup_lookup,
         )
+        # The UI reads only rows; groups repeats every row and doubled the response.
+        # report_email still reads groups from the nightly report payload.
+        payload.pop("groups", None)
 
         # Post-filter to S&P 500 tickers when requested
         if sp500_tickers is not None:
@@ -156,31 +159,6 @@ def earnings_calendar(
                 r for r in payload["rows"]
                 if str(r.get("ticker") or "").upper() in sp500_tickers
             ]
-            payload["groups"] = [
-                {
-                    **g,
-                    "sessions": [
-                        {
-                            **s,
-                            "rows": [
-                                r for r in s["rows"]
-                                if str(r.get("ticker") or "").upper() in sp500_tickers
-                            ],
-                        }
-                        for s in g.get("sessions", [])
-                    ],
-                    "count": sum(
-                        len([
-                            r for r in s["rows"]
-                            if str(r.get("ticker") or "").upper() in sp500_tickers
-                        ])
-                        for s in g.get("sessions", [])
-                    ),
-                }
-                for g in payload.get("groups", [])
-            ]
-            # Remove empty groups
-            payload["groups"] = [g for g in payload["groups"] if g["count"] > 0]
             payload["count"] = len(payload["rows"])
             payload["sp500_filtered"] = True
         else:

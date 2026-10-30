@@ -426,3 +426,24 @@ class TestMarketSentimentEndpoint:
         response = test_app.get("/api/market-sentiment")
 
         assert response.status_code == 200
+
+
+class TestEarningsCalendarEndpoint:
+    @pytest.mark.parametrize("sp500_only", ["true", "false"])
+    def test_earnings_calendar_omits_duplicated_groups(self, test_app, sp500_only):
+        with (
+            patch(
+                "trader_koo.backend.routers.report.latest_daily_report_json",
+                return_value=(None, None),
+            ),
+            patch(
+                "trader_koo.backend.routers.report.fetch_economic_calendar",
+                return_value=[],
+            ),
+        ):
+            response = test_app.get(f"/api/earnings-calendar?sp500_only={sp500_only}")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "rows" in body
+        assert "groups" not in body
