@@ -382,3 +382,41 @@ def test_load_options_snapshot_tickers_prefers_latest_report_then_defaults(tmp_p
     )
 
     assert tickers == ["NVDA", "AMD", "MSFT", "SPY"]
+
+
+def test_options_premium_route_recomputes_only_after_new_ingest():
+    from unittest.mock import MagicMock, patch
+
+    from trader_koo.backend.routers import options
+
+    conn = _conn_with_options()
+    handle = MagicMock(wraps=conn)
+    handle.close = lambda: None
+    options._PREMIUM_CACHE.clear()
+
+    with (
+        patch.object(options, "get_conn", return_value=handle),
+        patch.object(options, "build_options_premium_proxy", wraps=build_options_premium_proxy) as build,
+    ):
+        first = options.options_premium(limit=10, sort_by="volume_premium")
+        again = options.options_premium(limit=10, sort_by="volume_premium")
+        assert build.call_count == 1
+        assert again == first
+
+        options.options_premium(limit=5, sort_by="volume_premium")
+        assert build.call_count == 2
+
+        conn.execute(
+            """
+            INSERT INTO options_iv (
+                snapshot_ts, ticker, expiration, option_type, strike,
+                last_price, bid, ask, implied_vol, open_interest, volume, moneyness
+            ) VALUES ('2026-03-29T00:00:00Z', 'AMD', '2026-05-15', 'call', 100, 4.0, 3.9, 4.1, 0.4, 5100, 600, 1.0)
+            """
+        )
+        conn.commit()
+        fresh = options.options_premium(limit=10, sort_by="volume_premium")
+
+    assert build.call_count == 3
+    assert fresh["latest_snapshot_ts"] == "2026-03-29T00:00:00Z"
+    options._PREMIUM_CACHE.clear()
