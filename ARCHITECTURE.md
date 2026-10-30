@@ -53,13 +53,10 @@ Config-as-Code format in favor of `.railway/railway.ts`; the existing file
 remains supported until 2026-12-01. Treat migration as a release change and run
 the copied-database and production-browser gates before replacing it.
 
-Nixpacks installs the single canonical production dependency manifest at
-`requirements.txt` before running `build.sh`. Development-only packages live in
-`requirements-dev.txt`, which includes that production manifest.
+Python and Node come from one pinned nixpkgs revision and Python packages from
+hashed locks; see DEPLOYMENT.md, "Build inputs" and "Python dependency lock".
 
-The torch/torchvision pair must come from the same CPU index — installing them separately risks an ABI mismatch that breaks the `torchvision::nms` operator at runtime. The `opencv-python-headless` force-reinstall runs last because `ultralytics` installs the non-headless `opencv-python`, which requires `libGL.so.1` and fails on headless servers.
-
-**Runtime**: Python 3.11 via nixpacks. 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
+**Runtime**: 50+ environment variables for configuration (data sources, API keys, SMTP, feature flags).
 
 ### First-run DB seed
 

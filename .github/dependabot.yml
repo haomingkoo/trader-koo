@@ -9,6 +9,10 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+    # torch/torchvision are bumped by hand; see DEPLOYMENT.md, "Python dependency lock".
+    ignore:
+      - dependency-name: "torch"
+      - dependency-name: "torchvision"
     labels:
       - "dependencies"
       - "python"

@@ -49,7 +49,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version-file: trader_koo/frontend-v2/.nvmrc
           cache: "npm"
           cache-dependency-path: trader_koo/frontend-v2/package-lock.json
 
