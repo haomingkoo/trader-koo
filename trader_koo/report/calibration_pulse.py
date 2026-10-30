@@ -101,9 +101,10 @@ def ensure_calibration_schema(conn: sqlite3.Connection) -> None:
 # Data collection
 # ---------------------------------------------------------------------------
 
-def _published_lineage_clause(conn: sqlite3.Connection, table_name: str) -> str:
+def _published_lineage_clause(conn: sqlite3.Connection, table_name: str, excluded: list[str]) -> str:
     columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})")}
     if "report_run_id" not in columns or not table_exists(conn, "report_runs"):
+        excluded.append(f"{table_name}: no report-run lineage (report_run_id column or report_runs table missing)")
         return " AND 0"
     from trader_koo.report.runs import verified_report_run_ids
 
@@ -114,6 +115,8 @@ def _published_lineage_clause(conn: sqlite3.Connection, table_name: str) -> str:
         )
     }
     verified = verified_report_run_ids(conn, run_ids)
+    if run_ids and not verified:
+        excluded.append(f"{table_name}: none of {len(run_ids)} report runs is verified; all rows excluded")
     if not verified:
         return " AND 0"
     quoted = ",".join(str(conn.execute("SELECT quote(?)", (run_id,)).fetchone()[0]) for run_id in sorted(verified))
@@ -122,7 +125,7 @@ def _published_lineage_clause(conn: sqlite3.Connection, table_name: str) -> str:
 def _eval_stats(
     conn: sqlite3.Connection,
     *,
-    window_days: int,
+    window_days: int, excluded: list[str] | None = None,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Read setup_call_evaluations outcomes for the last N days."""
     if not table_exists(conn, "setup_call_evaluations"):
@@ -130,7 +133,7 @@ def _eval_stats(
     cutoff = (
         dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=window_days)
     ).isoformat()
-    lineage_clause = _published_lineage_clause(conn, "setup_call_evaluations")
+    lineage_clause = _published_lineage_clause(conn, "setup_call_evaluations", [] if excluded is None else excluded)
     rows = conn.execute(
         f"""
         SELECT setup_family, call_direction, direction_hit, signed_return_pct
@@ -166,7 +169,7 @@ def _eval_stats(
 def _paper_stats(
     conn: sqlite3.Connection,
     *,
-    lookback: int,
+    lookback: int, excluded: list[str] | None = None,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Read the N most-recent closed paper trades per (family, direction).
 
@@ -175,7 +178,7 @@ def _paper_stats(
     """
     if not table_exists(conn, "paper_trades"):
         return {}
-    lineage_clause = _published_lineage_clause(conn, "paper_trades")
+    lineage_clause = _published_lineage_clause(conn, "paper_trades", [] if excluded is None else excluded)
     rows = conn.execute(
         f"""
         WITH ranked AS (
@@ -327,8 +330,9 @@ def run_calibration_pulse(
     """
     ensure_calibration_schema(conn)
 
-    eval_stats = _eval_stats(conn, window_days=EVAL_WINDOW_DAYS)
-    paper_stats = _paper_stats(conn, lookback=PAPER_LOOKBACK)
+    excluded: list[str] = []
+    eval_stats = _eval_stats(conn, window_days=EVAL_WINDOW_DAYS, excluded=excluded)
+    paper_stats = _paper_stats(conn, lookback=PAPER_LOOKBACK, excluded=excluded)
 
     # Union of all (family, direction) pairs seen in either source
     all_keys: set[tuple[str, str]] = set(eval_stats) | set(paper_stats)
@@ -439,7 +443,7 @@ def run_calibration_pulse(
     conn.commit()
 
     summary = {
-        "ok": True,
+        "ok": not excluded, "lineage_excluded": excluded,  # excluded evidence leaves stale rows in force
         "trigger": trigger,
         "ts": now_ts,
         "families_updated": len(all_keys),
@@ -447,13 +451,8 @@ def run_calibration_pulse(
         "blocks_added": blocks_added,
         "blocks_lifted": blocks_lifted,
     }
-    LOG.info(
-        "Calibration pulse complete: families=%d changes=%d blocks_added=%s blocks_lifted=%s",
-        len(all_keys),
-        len(changes),
-        blocks_added,
-        blocks_lifted,
-    )
+    LOG.log(logging.WARNING if excluded else logging.INFO, "Calibration pulse complete: families=%d changes=%d "
+            "blocks_added=%s blocks_lifted=%s evidence_excluded=%s", len(all_keys), len(changes), blocks_added, blocks_lifted, excluded)
     return summary
 
 

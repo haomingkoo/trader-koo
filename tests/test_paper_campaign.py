@@ -132,11 +132,14 @@ def _db(*, contracted: bool = False) -> sqlite3.Connection:
                UNIQUE(ticker, date)
            )"""
     )
-    # The critic fails closed when no VIX observation exists, so every business
-    # fixture supplies one; regime-specific behaviour is covered in test_critic.
+    # The critic fails closed without a VIX observation or SPY history (no
+    # regime), so every business fixture supplies both; regime-specific
+    # behaviour is covered in test_critic.
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
-           VALUES ('^VIX','2026-08-18',14,14.5,13.5,14.0,0)"""
+           VALUES ('^VIX','2026-08-18',14,14.5,13.5,14.0,0),
+                  ('SPY','2026-08-13',638,640,637,639,1000000),
+                  ('SPY','2026-08-14',639,642,638,641,1000000)"""
     )
     ensure_price_series_revision_schema(conn)
     return conn
@@ -682,6 +685,7 @@ def test_continuation_long_is_refused_in_a_non_bull_regime():
     """
     conn = _db()
     _activate(conn)
+    conn.execute("DELETE FROM price_daily WHERE ticker='SPY'")  # this test supplies its own SPY history
     conn.execute(
         """INSERT INTO price_daily (ticker,date,open,high,low,close,volume)
            VALUES ('SPY','2026-08-19',650,651,648,649,1000000),
