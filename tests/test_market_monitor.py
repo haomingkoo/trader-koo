@@ -618,3 +618,21 @@ class TestGetRecentSpikes:
         assert "crypto_spikes" in result
         assert "total_spikes" in result
         assert "checked_at" in result
+
+
+@patch("trader_koo.notifications.telegram.is_configured", return_value=True)
+@patch("trader_koo.notifications.telegram.send_message", return_value=True)
+def test_crypto_realerts_on_a_percent_move_not_a_dollar_move(
+    mock_send: MagicMock, _mock_configured: MagicMock, db_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trader_koo.notifications import market_monitor
+
+    prices = iter([85_000.0, 85_010.0, 89_300.0])  # then +$10 (0.01%), then +5.06% from the alerted price
+
+    def one_spike(_path):
+        return [{"symbol": "BTC-USD", "direction": "up", "price_change_pct": 6.0, "new_price": next(prices)}]
+
+    monkeypatch.setattr(market_monitor, "detect_crypto_spikes", one_spike)
+    assert send_spike_alerts(db_path) == 1
+    assert send_spike_alerts(db_path) == 0  # a $10 move on BTC is not a new spike
+    assert send_spike_alerts(db_path) == 1

@@ -20,6 +20,7 @@ from trader_koo.paper_trades import (
     PAPER_TRADE_ENABLED,
     mark_to_market,
 )
+from trader_koo.report.ensemble_adjustment import apply_ensemble_adjustment as _apply_ensemble_adjustment
 from trader_koo.report.market_context import (
     _build_regime_context,
     _fetch_technical_context,
@@ -196,42 +197,8 @@ def _report_stale_price_guard_error(
     return None
 
 
-def _apply_ensemble_adjustment(row: dict[str, Any]) -> None:
-    """Adjust score and tier based on technical ensemble agreement.
-
-    If the 5-strategy ensemble agrees with confluence bias, boost score.
-    If it disagrees, penalize. High agreement (>70%) = bigger effect.
-    """
-    ensemble_bias = row.get("ensemble_bias")
-    confluence_bias = row.get("signal_bias")
-    agreement = row.get("ensemble_agreement_pct", 0)
-    net_score = row.get("ensemble_net_score", 0)
-
-    if not ensemble_bias or not confluence_bias:
-        return
-
-    score = float(row.get("score") or 0)
-    tier = str(row.get("setup_tier") or "D")
-
-    if ensemble_bias == confluence_bias:
-        # Agreement: boost score proportionally to ensemble confidence
-        boost = min(8.0, abs(net_score) * 0.1)
-        if agreement >= 80:
-            boost *= 1.5
-        score = min(100.0, score + boost)
-    elif ensemble_bias != "neutral" and confluence_bias != "neutral" and ensemble_bias != confluence_bias:
-        # Disagreement: penalize and potentially downgrade tier
-        penalty = min(10.0, abs(net_score) * 0.12)
-        if agreement >= 80:
-            penalty *= 1.5
-        score = max(0.0, score - penalty)
-        # Strong disagreement with high agreement: downgrade tier
-        if penalty >= 8.0 and tier in {"A", "B"}:
-            tier = "B" if tier == "A" else "C"
-
-    row["score"] = round(score, 1)
-    row["confluence_score"] = round(score, 1)
-    row["setup_tier"] = tier
+# Computed by market_context and read by setup_scoring, debate_engine and llm_narrative.
+_SCORER_CONTEXT_FIELDS = ("ma_signal", "ma_major_signal", "ma_reclaim_state", "level_event", "recent_gap_state", "recent_gap_days")
 
 
 def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -963,6 +930,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                 "stretch_state": tech.get("stretch_state") or "normal",
                 "breakout_state": tech.get("breakout_state") or "none",
                 "structure_state": tech.get("structure_state") or "normal",
+                **{k: tech.get(k) for k in _SCORER_CONTEXT_FIELDS},
                 "candle_pattern": None,
                 "candle_bias": "neutral",
                 "candle_confidence": None,
@@ -1153,6 +1121,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                         row["candle_bias"] = candle.get("bias") or "neutral"
                         row["candle_confidence"] = candle.get("confidence")
                     row.update(_score_setup_from_confluence(row))
+                    _apply_ensemble_adjustment(row)  # the re-score above resets score and tier
                     readout = _describe_setup(row)
                     row.update(readout)
 
