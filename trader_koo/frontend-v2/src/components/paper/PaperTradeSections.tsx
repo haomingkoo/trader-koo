@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { useState, useCallback } from "react";
 import type {
   PaperTrade,
   PaperCampaignHealth,
@@ -14,7 +13,6 @@ import type {
   StrategyEvidenceState,
   NextOpenBaselineState,
 } from "../../api/types";
-import { useUpdateTradeNotes } from "../../api/hooks";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
 import PlotlyWrapper from "../PlotlyWrapper";
 import Badge from "../ui/Badge";
@@ -334,70 +332,18 @@ const pnlColor = (value: number | null | undefined): string => {
   return "";
 };
 
-/* ── Inline Trade Notes ── */
+/* ── Trade Notes (read-only; edits need the admin key via the API) ── */
 function TradeNotes({ trade }: { trade: PaperTrade }) {
-  const mutation = useUpdateTradeNotes();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(trade.notes ?? "");
-
-  const save = useCallback(() => {
-    const trimmed = draft.trim();
-    mutation.mutate(
-      { tradeId: trade.id, notes: trimmed },
-      { onSuccess: () => setEditing(false) },
-    );
-  }, [draft, mutation, trade.id]);
-
-  const cancel = useCallback(() => {
-    setDraft(trade.notes ?? "");
-    setEditing(false);
-  }, [trade.notes]);
-
-  if (editing) {
-    return (
-      <div className="mt-1 flex flex-col gap-1">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={2}
-          className="w-full rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
-          placeholder="Add a note..."
-          autoFocus
-        />
-        <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={save}
-            disabled={mutation.isPending}
-            className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] font-medium text-[var(--on-fill)] hover:opacity-90 disabled:opacity-50"
-          >
-            {mutation.isPending ? "Saving..." : "Save"}
-          </button>
-          <button
-            type="button"
-            onClick={cancel}
-            className="rounded border border-[var(--line)] px-2 py-0.5 text-[10px] text-[var(--muted)] hover:bg-[var(--panel)]"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
+  if (!trade.notes) {
+    return <span className="mt-1 block text-[10px] text-[var(--muted)]">{"\u2014"}</span>;
   }
-
-  const hasNotes = Boolean(trade.notes);
   return (
-    <button
-      type="button"
-      onClick={() => {
-        setDraft(trade.notes ?? "");
-        setEditing(true);
-      }}
-      className="mt-1 block max-w-full truncate text-left text-[10px] text-[var(--muted)] hover:text-[var(--accent)]"
-      title={hasNotes ? trade.notes! : "Click to add a note"}
+    <span
+      className="mt-1 block max-w-full truncate text-[10px] text-[var(--muted)]"
+      title={trade.notes}
     >
-      {hasNotes ? trade.notes : "+ note"}
-    </button>
+      {trade.notes}
+    </span>
   );
 }
 

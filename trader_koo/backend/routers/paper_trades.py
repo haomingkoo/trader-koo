@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from trader_koo.backend.services.database import get_conn
+from trader_koo.middleware.auth import require_admin
 from trader_koo.paper_trades import (
     ensure_paper_trade_schema,
     list_paper_trades,
@@ -275,9 +276,12 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
         conn.close()
 
 
-@router.patch("/api/paper-trades/{trade_id}/notes")
+@router.patch(
+    "/api/paper-trades/{trade_id}/notes",
+    dependencies=[Depends(require_admin)],
+)
 def api_update_trade_notes(trade_id: int, body: NotesUpdate) -> dict[str, Any]:
-    """Update the notes field on a paper trade."""
+    """Update the notes field on a paper trade. Requires the admin key."""
     try:
         require_paper_trade_writes()
     except ValueError as exc:
