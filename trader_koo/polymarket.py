@@ -20,6 +20,7 @@ _polymarket_fetch_status: dict[str, Any] = {
     "error": "not_fetched",
 }
 _cache_ttl_sec = 3600  # 1 hour
+POLYMARKET_TOP_N = 50  # one ranked list serves every request limit; the archival scheduler refreshes it
 
 _POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
 
@@ -159,7 +160,7 @@ def fetch_polymarket_events(
     Uses events API for better grouping, filters for macro/finance relevance,
     sorts by total volume. Returns event-level data with embedded markets.
     """
-    cache_key = f"poly_events_{limit}"
+    cache_key = "poly_events_top"
     if use_cache:
         with _cache_lock:
             cached = _polymarket_cache.get(cache_key)
@@ -170,7 +171,7 @@ def fetch_polymarket_events(
                     "cache_hit": True,
                     "error": None,
                 })
-                return cached["data"]
+                return cached["data"][:limit]
 
     try:
         raw_events: list[dict[str, Any]] = []
@@ -259,11 +260,9 @@ def fetch_polymarket_events(
             key=lambda e: (e["active_volume_24h"], e["active_liquidity"]),
             reverse=True,
         )
-        result = relevant[:limit]
-
         with _cache_lock:
             _polymarket_cache[cache_key] = {
-                "data": result,
+                "data": relevant[:POLYMARKET_TOP_N],
                 "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=_cache_ttl_sec)).timestamp(),
                 "source_fetched_at": source_fetched_at,
             }
@@ -275,7 +274,7 @@ def fetch_polymarket_events(
             })
 
         LOG.info("Polymarket events: %d relevant / %d total", len(relevant), len(raw_events))
-        return result
+        return relevant[:min(limit, POLYMARKET_TOP_N)]
 
     except Exception as exc:
         LOG.warning("Polymarket events fetch failed: %s", exc)

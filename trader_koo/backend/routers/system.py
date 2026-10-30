@@ -24,6 +24,8 @@ from trader_koo.backend.services.pipeline import (
     STATUS_REFRESH_LOCK,
 )
 from trader_koo.backend.services.report_loader import is_report_fresh
+from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
+from trader_koo.polymarket import POLYMARKET_TOP_N
 from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
@@ -47,9 +49,6 @@ CONTROL_CENTER_CONTRACT_VERSION = "2026-03-01"
 APP_VERSION = str(os.getenv("TRADER_KOO_APP_VERSION", "0.2.0") or "0.2.0").strip() or "0.2.0"
 
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")
-
-
-from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
 
 
 def _first_env(names: list[str]) -> str | None:
@@ -354,7 +353,7 @@ def vix_pattern_markers() -> dict[str, Any]:
 
 
 @router.get("/api/polymarket")
-def polymarket_data(limit: int = 15) -> dict[str, Any]:
+def polymarket_data(limit: int = Query(15, ge=1, le=POLYMARKET_TOP_N)) -> dict[str, Any]:
     """Public endpoint: curated finance-relevant Polymarket events."""
     try:
         from trader_koo.polymarket import fetch_polymarket_events, polymarket_fetch_status
