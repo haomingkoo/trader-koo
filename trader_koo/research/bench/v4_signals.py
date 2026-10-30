@@ -92,6 +92,20 @@ def magic_formula(params: dict):
 
 # ---- H2 Piotroski F-score, 7-signal adaptation --------------------------------------------------
 
+def share_count_change(data: AsOfView, t: str) -> float:
+    """Latest accepted filed share count over the one filed 350 to 380 days earlier, split adjusted, minus 1."""
+    shares = hyp.latest_filed_shares(data, t)
+    if shares is None:
+        return np.nan
+    count, filed = shares
+    history = [h for h in hyp.filed_share_counts(data, t)
+               if YEAR_SPAN_DAYS[0] <= (pd.Timestamp(filed) - pd.Timestamp(h[0])).days <= YEAR_SPAN_DAYS[1]]
+    if not history:
+        return np.nan
+    old_filed, old_count = history[0]
+    return count / (old_count * hyp.split_factor(data.splits.get(t, []), old_filed, filed)) - 1.0
+
+
 def f_score(data: AsOfView, t: str) -> float:
     """Seven-signal F-score (0 to 7), NaN when an input is missing (long-term debt has its own rule)."""
     ni, cfo, rev = (data.ttm(t, c) for c in ("net_income", "operating_cash_flow", "revenue"))
@@ -118,20 +132,13 @@ def f_score(data: AsOfView, t: str) -> float:
         data.diag.count("v4h2_unscored_debt_in_one_period_only")
         return np.nan
 
-    shares = hyp.latest_filed_shares(data, t)
-    if shares is None:
+    share_change = share_count_change(data, t)
+    if np.isnan(share_change):
         return np.nan
-    count, filed = shares
-    history = [h for h in hyp.filed_share_counts(data, t)
-               if YEAR_SPAN_DAYS[0] <= (pd.Timestamp(filed) - pd.Timestamp(h[0])).days <= YEAR_SPAN_DAYS[1]]
-    if not history:
-        return np.nan
-    old_filed, old_count = history[0]
-    old_on_new_basis = old_count * hyp.split_factor(data.splits.get(t, []), old_filed, filed)
 
     return float(sum((
         roa > 0, cfo.value > 0, roa > roa_0, cfo.value > ni.value,
-        leverage_down, count <= old_on_new_basis, turn > turn_0,
+        leverage_down, share_change <= 0, turn > turn_0,
     )))
 
 

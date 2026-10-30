@@ -11,6 +11,7 @@ import pytest
 from tests.test_research_hypotheses import AS_OF_IDX, _build
 from trader_koo.research.bench import hypotheses as hyp
 from trader_koo.research.bench import v4_signals as v4
+from trader_koo.research.bench import v5_signals as v5
 from trader_koo.research.bench.data import load_market
 from trader_koo.research.bench.signals import assert_no_lookahead, make_signal
 
@@ -96,3 +97,24 @@ def test_trend_template_needs_eps_growth_of_25_percent(market, view):
 def test_v4_signals_pass_the_lookahead_guard(market, name):
     d = market.sessions[AS_OF_IDX]
     assert_no_lookahead(make_signal(name, {}), market, d, market.universe(AS_OF_IDX))
+
+
+def test_share_count_change_on_aapl(view):
+    # Cover counts: 14.594bn filed 2026-07-31 against 14.840bn filed 2025-08-01 (no split in between).
+    assert v4.share_count_change(view, "AAPL") == pytest.approx(14.59418e9 / 14.84039e9 - 1, rel=1e-5)
+
+
+def test_v5_composite_needs_four_of_five_components(market, view):
+    uni = market.universe(AS_OF_IDX)
+    scores = make_signal("v5_composite", {})(view.as_of, uni, view)
+    z = hyp.zscores(v5.composite_components(view, uni), hyp.WINSOR)
+    n = z.notna().sum(axis=1)
+    assert scores.notna().equals(n >= v5.MIN_COMPONENTS)
+    assert scores.dropna().to_dict() == pytest.approx(z.mean(axis=1)[n >= v5.MIN_COMPONENTS].to_dict())
+    jpm = v5.composite_components(view, uni).loc["JPM"]
+    assert jpm[["quality", "value"]].isna().all() and "JPM" not in scores.dropna().index  # banks: 3 of 5
+
+
+def test_v5_composite_passes_the_lookahead_guard(market):
+    d = market.sessions[AS_OF_IDX]
+    assert_no_lookahead(make_signal("v5_composite", {}), market, d, market.universe(AS_OF_IDX))

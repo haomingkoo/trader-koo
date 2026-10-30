@@ -18,7 +18,7 @@ import pandas as pd
 
 from trader_koo.research.settings import get as _settings
 
-from . import hypotheses, quality, spinoffs, v4_signals
+from . import hypotheses, quality, spinoffs, v4_signals, v5_signals
 from .data import AsOfView, Market
 from .diagnostics import Diagnostics
 
@@ -64,6 +64,7 @@ CANDIDATES: dict[str, Callable[[dict], Signal]] = {
     "v4_h1_magic_formula": v4_signals.magic_formula,
     "v4_h2_piotroski_value": v4_signals.piotroski_value,
     "v4_h3_trend_template": v4_signals.trend_template,
+    "v5_composite": v5_signals.composite,
 }
 # Candidates that rebalance on the last session of each calendar year instead of every N sessions.
 ANNUAL_CANDIDATES = frozenset({"h4_market_cap_leaders"})
