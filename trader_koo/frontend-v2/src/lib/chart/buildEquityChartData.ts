@@ -406,6 +406,23 @@ function mondayWeekKey(value: string | null | undefined): string | null {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * Day change for a live tick. The stream's `prev_price` is the previous trade,
+ * so compare with the last stored daily close before the tick's NY session.
+ */
+export function liveDailyChangePct(
+  tick: EquityTick | null | undefined,
+  chart: ReadonlyArray<{ date: string; close: number }>,
+): number | null {
+  const session = tick ? nyDateStringFromIso(tick.timestamp) : null;
+  if (!tick || !session) return null;
+  let prior: { date: string; close: number } | undefined;
+  for (let i = chart.length - 1; i >= 0 && !prior; i -= 1) {
+    if (chart[i].date < session) prior = chart[i];
+  }
+  return prior && prior.close > 0 ? (tick.price / prior.close - 1) * 100 : null;
+}
+
 export function applyLivePriceToPayload(
   payload: DashboardPayload | undefined,
   livePrice: EquityTick | null,

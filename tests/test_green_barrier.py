@@ -311,7 +311,7 @@ def test_dashboard_and_commentary_do_not_compute_unresolved_series(
 
     assert quick["chart"] == []
     assert full["chart_commentary"] is None
-    assert commentary["hmm_regime"] is None
+    assert commentary["chart_commentary"] is None
     assert quick["data_sources"]["research_eligible"] is False
 
 
