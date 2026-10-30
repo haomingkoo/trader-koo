@@ -856,6 +856,7 @@ function BenchmarkColumn({
   returnPct,
   metricLabel = "return",
   winRate,
+  winRateLabel = "win rate",
   subtext,
   highlight = false,
 }: {
@@ -863,6 +864,7 @@ function BenchmarkColumn({
   returnPct: number | null | undefined;
   metricLabel?: string;
   winRate?: number | null;
+  winRateLabel?: string;
   subtext?: string;
   highlight?: boolean;
 }) {
@@ -889,7 +891,7 @@ function BenchmarkColumn({
       <div className="mt-0.5 text-[10px] text-[var(--muted)]">{metricLabel}</div>
       {winRate != null && (
         <div className="mt-2 text-sm text-[var(--text)]">
-          {winRate.toFixed(1)}% win rate
+          {winRate.toFixed(1)}% {winRateLabel}
         </div>
       )}
       {subtext && (
@@ -981,6 +983,7 @@ export function PaperTradeBenchmarkComparison({
             returnPct={unfiltered.return_pct}
             metricLabel="avg setup return"
             winRate={unfiltered.win_rate}
+            winRateLabel="had a positive return"
             subtext={`${unfiltered.trades} ${fixedHoldUnit}, ${fixedHoldDays}`}
           />
         )}

@@ -37,7 +37,6 @@ from trader_koo.report.setup_scoring import (
     DEBATE_ENGINE_ENABLED,
     OPTIONS_RESEARCH_ENABLED,
     SETUP_EVAL_ENABLED,
-    SETUP_EVAL_HIT_THRESHOLD_PCT,
     SETUP_EVAL_MIN_SAMPLE,
     SETUP_NEWS_ENABLED,
     SETUP_EVAL_TRACK_LIMIT,
@@ -1514,13 +1513,15 @@ def fetch_report_payload(
                 try:
                     from trader_koo.report.calibration_pulse import load_calibration_state
                     _calib_state = load_calibration_state(conn)
-                except Exception:
+                except Exception as exc:
+                    LOG.error("calibration_state unavailable; setup scores use inline reliability: %s", exc)
+                    payload.setdefault("warnings", []).append(f"calibration_state unavailable: {exc}")
                     _calib_state = {}
+                # The hit-rate bar is the baseline hit rate; SETUP_EVAL_HIT_THRESHOLD_PCT is a return threshold.
                 calibration = _apply_setup_eval_fields(
                     setup_rows_ref,
                     reliability_lookup=reliability_lookup,
                     min_sample=SETUP_EVAL_MIN_SAMPLE,
-                    hit_threshold_pct=SETUP_EVAL_HIT_THRESHOLD_PCT,
                     baseline_hit_rate_pct=(summary.get("overall") or {}).get("hit_rate_pct") if isinstance(summary, dict) else None,
                     calibration_state=_calib_state,
                 )
