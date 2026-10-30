@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
+from trader_koo.analysis.green_barrier_universe import current_ingest_universe as _current_ingest_universe
 from trader_koo.db.price_contract import research_eligible_tickers
 from trader_koo.report.utils import completed_nyse_period_through
 
@@ -29,50 +30,6 @@ def _configured_threshold() -> float:
 
 
 GREEN_BARRIER_THRESHOLD = _configured_threshold()
-
-
-def _current_ingest_universe(conn: sqlite3.Connection) -> tuple[set[str] | None, str]:
-    """Return the tickers the latest ingest run covered, and where that came from.
-
-    ``price_daily`` is append-only, so it is not a universe: it accumulates every
-    symbol ever ingested, including delisted and index-rotated ones. Those cannot
-    go fresh again, so scanning them guarantees a staleness warning forever. The
-    ingest ledger is the only record of what the pipeline is currently
-    responsible for.
-
-    Returns ``(None, "price_daily")`` when the ledger is unavailable, which keeps
-    the conservative behaviour of scanning everything. That still raises the
-    coverage warning and blocks publication, whereas scanning nothing would
-    publish a clean report on no evidence.
-    """
-    try:
-        row = conn.execute(
-            "SELECT run_id FROM ingest_runs ORDER BY started_ts DESC LIMIT 1"
-        ).fetchone()
-        if not row or not row[0]:
-            return None, "price_daily"
-        run_id = str(row[0])
-        tickers = {
-            str(record[0]).upper()
-            for record in conn.execute(
-                "SELECT DISTINCT ticker FROM ingest_ticker_status WHERE run_id = ?",
-                (run_id,),
-            )
-            if record[0]
-        }
-    except sqlite3.Error as exc:
-        LOG.warning(
-            "Ingest universe unavailable (%s); scanning every ticker in price_daily", exc
-        )
-        return None, "price_daily"
-
-    if not tickers:
-        LOG.warning(
-            "Ingest run %s recorded no tickers; scanning every ticker in price_daily",
-            run_id,
-        )
-        return None, "price_daily"
-    return tickers, f"ingest_runs:{run_id}"
 
 
 def _configured_max_age_days() -> int:
@@ -238,6 +195,19 @@ def scan_green_barrier_snapshot(
             value = compute_williams_percent_r(bars).iloc[-1]
             if not np.isfinite(value) or float(value) > configured_threshold:
                 continue
+            # The signal stays on completed bars; the forming bar is shown beside
+            # it so a stock that has already bounced does not read as still at -100.
+            in_progress_value: float | None = None
+            in_progress_asof: str | None = None
+            known_daily = ticker_daily.loc[
+                pd.to_datetime(ticker_daily["date"], errors="coerce").dt.date <= reference_date
+            ]
+            all_bars = resample_ohlcv(known_daily, timeframe)
+            if len(all_bars) > len(bars):
+                forming = compute_williams_percent_r(all_bars).iloc[-1]
+                if np.isfinite(forming):
+                    in_progress_value = round(float(forming), 2)
+                    in_progress_asof = pd.Timestamp(all_bars["date"].iloc[-1]).date().isoformat()
             hits.append(
                 {
                     "ticker": str(ticker),
@@ -249,6 +219,8 @@ def scan_green_barrier_snapshot(
                     "close": round(float(bars["close"].iloc[-1]), 4),
                     "distance_to_barrier": round(float(value) + 100.0, 2),
                     "age_days": max(0, age_days),
+                    "in_progress_value": in_progress_value,
+                    "in_progress_asof": in_progress_asof,
                 }
             )
     if stale_tickers:

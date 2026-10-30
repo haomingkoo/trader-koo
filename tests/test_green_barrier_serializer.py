@@ -18,6 +18,8 @@ def test_to_markdown_includes_green_barrier_conditions_and_coverage() -> None:
                     "distance_to_barrier": 1.0,
                     "asof": "2026-08-13",
                     "close": 100.0,
+                    "in_progress_value": -80.5,
+                    "in_progress_asof": "2026-08-20",
                 }
             ],
             "green_barrier_coverage": {
@@ -38,6 +40,8 @@ def test_to_markdown_includes_green_barrier_conditions_and_coverage() -> None:
 
     assert "## Green Barrier Current Conditions" in text
     assert "Repeated daily while active" in text
+    assert "| now (bar forming) | now as of |" in text
+    assert "| 100.0 | -80.5 | 2026-08-20 |" in text
     assert "### Green Barrier Scan Coverage" in text
     assert "**stale_skipped_tickers**: STALE" in text
     assert "**insufficient_history_skipped_count**: 5" in text
