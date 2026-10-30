@@ -40,6 +40,7 @@ HTTP_TIMEOUT_SEC = 60
 USER_AGENT = "Mozilla/5.0 trader-koo research haomingkoo@gmail.com"
 ALL_TIME = ("1776-07-04", "9999-12-31")  # ALFRED's documented full real-time range
 MISSING = "."                # FRED's marker for no value
+SOURCE_COL = 5               # position of "source" in a macro_series row
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS macro_series (
@@ -117,7 +118,7 @@ def store(conn: sqlite3.Connection, series: str, rows: list[tuple]) -> None:
         conn.execute("DELETE FROM macro_series WHERE series = ?", (series,))
         conn.executemany("INSERT INTO macro_series VALUES (?,?,?,?,?,?)", rows)
         conn.execute("INSERT OR REPLACE INTO macro_loads VALUES (?,?,?,?,?,?)",
-                     (series, rows[0][5], len(rows), min(r[1] for r in rows), max(r[1] for r in rows),
+                     (series, rows[0][SOURCE_COL], len(rows), min(r[1] for r in rows), max(r[1] for r in rows),
                       dt.datetime.now(dt.timezone.utc).isoformat()))
 
 
