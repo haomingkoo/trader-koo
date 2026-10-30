@@ -312,14 +312,14 @@ class TestRegimeAlignment:
         )
         assert passed is False
 
-    def test_unknown_regime_low_vix_allowed(self):
-        """Unknown regime + VIX below unknown block threshold → allow."""
+    def test_unknown_regime_low_vix_blocked(self):
+        """Unknown regime fails closed even when VIX is low: a calm VIX is not a regime reading."""
         passed, reason = _check_regime_alignment(
             _row(),
             _eval(direction="long"),
             _ctx(regime="unknown", vix=REGIME_VIX_UNKNOWN_BLOCK - 0.1, dir_regime=""),
         )
-        assert passed is True, reason
+        assert passed is False, reason
 
     def test_unknown_regime_missing_vix_blocked(self):
         """Unknown regime with no VIX reading must fail closed, not allow."""
@@ -737,3 +737,24 @@ def test_sector_gate_cannot_evaluate_when_an_open_position_is_unresolved():
     assert allowed is True
     assert "SECTOR GATE NOT EVALUATED" in reason
     assert "ZZZZ" in reason, "the reason must name the position it could not resolve"
+
+
+def test_portfolio_check_fails_closed_when_the_table_cannot_be_read():
+    from trader_koo.paper_trade.critic import _check_portfolio_concentration
+
+    conn = sqlite3.connect(":memory:")  # no paper_trades table
+    passed, reason = _check_portfolio_concentration(conn, "AAPL", "long", _row())
+    assert passed is False and "blocking" in reason.lower()
+
+
+@pytest.mark.parametrize("check", ["_check_regime_alignment", "_check_volatility_environment",
+                                   "_check_rolling_expectancy", "_check_family_edge"])
+def test_a_data_check_that_raises_rejects_the_trade(monkeypatch, check):
+    from trader_koo.paper_trade import critic
+
+    def boom(*_a, **_k):
+        raise RuntimeError("source unavailable")
+
+    monkeypatch.setattr(critic, check, boom)
+    result = critic_review(_make_conn(), row=_row(), evaluation=_eval(), plan=_plan(), market_ctx=_ctx())
+    assert result["approved"] is False
