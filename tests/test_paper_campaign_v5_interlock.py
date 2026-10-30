@@ -218,3 +218,37 @@ def test_v5_trading_facade_rejects_unverified_schema(tmp_path: Path) -> None:
 
     with pytest.raises(PaperSchemaV5VerificationError, match="missing_index"):
         mark_to_market(conn, config=_build_config())
+
+
+def test_activation_scans_pages_before_taking_the_write_lock(tmp_path: Path) -> None:
+    """The whole-file integrity scan runs on a read snapshot, so live writers are not locked out for it."""
+    conn = _eligible_v5(tmp_path / "paper.db")
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    _activate(conn)
+
+    lowered = [statement.strip().lower() for statement in statements]
+    lock = lowered.index("begin immediate")
+    assert any("integrity_check" in s for s in lowered[:lock])
+    assert not any("integrity_check" in s for s in lowered[lock:])
+    assert any("foreign_key_check" in s for s in lowered[lock:])
+    assert conn.execute(
+        "SELECT status FROM paper_campaigns WHERE campaign_id='paper-v2'"
+    ).fetchone() == ("active",)
+
+
+def test_activation_rejects_page_corruption_found_before_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _eligible_v5(tmp_path / "paper.db")
+    from trader_koo.paper_trade import schema_v5_verifier
+
+    def corrupt(*_args, **_kwargs):
+        raise PaperSchemaV5VerificationError([{"code": "sqlite_integrity", "result": ["page 4 malformed"]}])
+
+    monkeypatch.setattr(schema_v5_verifier, "verify_paper_schema_v5", corrupt)
+    with pytest.raises(ValueError, match="activation interlock"):
+        _activate(conn)
+
+    _assert_unmodified(conn)

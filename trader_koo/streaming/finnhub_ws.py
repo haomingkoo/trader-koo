@@ -52,6 +52,8 @@ class FinnhubWSClient:
 
         # Currently subscribed symbols (includes always-on)
         self._subscribed: set[str] = set()
+        # On-demand symbols, least recently requested first
+        self._on_demand: dict[str, None] = {}
 
         # Latest trade data per symbol: {symbol: {price, volume, timestamp}}
         self._prices: dict[str, dict] = {}
@@ -78,22 +80,40 @@ class FinnhubWSClient:
             return self._last_message_at
 
     def subscribe(self, symbol: str) -> bool:
-        """Subscribe to a symbol. Returns False if at 50 limit."""
+        """Subscribe to a symbol.
+
+        At the 50 limit, the least recently requested on-demand symbol is
+        dropped to make room. Returns False only when every slot is always-on.
+        """
         sym = symbol.upper()
+        evicted: str | None = None
         with self._lock:
             if sym in self._subscribed:
+                if sym in self._on_demand:
+                    self._on_demand[sym] = self._on_demand.pop(sym)
                 return True
             if len(self._subscribed) >= MAX_SUBSCRIPTIONS:
-                LOG.warning(
-                    "Cannot subscribe to %s: at %d/%d limit",
-                    sym, len(self._subscribed), MAX_SUBSCRIPTIONS,
-                )
-                return False
+                if not self._on_demand:
+                    LOG.warning(
+                        "Cannot subscribe to %s: at %d/%d limit",
+                        sym, len(self._subscribed), MAX_SUBSCRIPTIONS,
+                    )
+                    return False
+                evicted = next(iter(self._on_demand))
+                del self._on_demand[evicted]
+                self._subscribed.discard(evicted)
+                self._prices.pop(evicted, None)
+                self._prev_prices.pop(evicted, None)
             self._subscribed.add(sym)
+            if sym not in self._always_on:
+                self._on_demand[sym] = None
             ws = self._ws
 
         if ws is not None:
             try:
+                if evicted is not None:
+                    ws.send(json.dumps({"type": "unsubscribe", "symbol": evicted}))
+                    LOG.info("Evicted %s to make room for %s", evicted, sym)
                 ws.send(json.dumps({"type": "subscribe", "symbol": sym}))
                 LOG.info("Subscribed to %s", sym)
             except Exception as exc:
@@ -112,6 +132,7 @@ class FinnhubWSClient:
             if sym not in self._subscribed:
                 return True
             self._subscribed.discard(sym)
+            self._on_demand.pop(sym, None)
             self._prices.pop(sym, None)
             self._prev_prices.pop(sym, None)
             ws = self._ws
@@ -220,6 +241,7 @@ class FinnhubWSClient:
             # Subscribe to always-on symbols first
             for sym in self._always_on:
                 self._subscribed.add(sym)
+                self._on_demand.pop(sym, None)
 
         # Send subscription messages for all tracked symbols
         with self._lock:
