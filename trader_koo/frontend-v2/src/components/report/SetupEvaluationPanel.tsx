@@ -143,7 +143,7 @@ export default function SetupEvaluationPanel({
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <GlassCard
-          label="Hit Rate"
+          label={`Hit Rate (return ≥ ${eval_.hit_threshold_pct ?? "\u2014"}%)`}
           value={
             overall.hit_rate_pct != null
               ? `${overall.hit_rate_pct.toFixed(1)}%`
