@@ -44,6 +44,15 @@ class SecClient:
 
     def get_json(self, url: str) -> tuple[int, Any | None]:
         """Return (status, payload). 404 yields (404, None); other failures raise."""
+        status, resp = self._get(url)
+        return status, None if resp is None else resp.json()
+
+    def get_bytes(self, url: str) -> tuple[int, bytes | None]:
+        """Return (status, body). 404 yields (404, None); other failures raise."""
+        status, resp = self._get(url)
+        return status, None if resp is None else resp.content
+
+    def _get(self, url: str) -> tuple[int, requests.Response | None]:
         last = "no attempt"
         for attempt in range(cfg.MAX_ATTEMPTS):
             self._throttle()
@@ -55,7 +64,7 @@ class SecClient:
                 if resp.status_code == cfg.HTTP_NOT_FOUND:
                     return cfg.HTTP_NOT_FOUND, None
                 if resp.status_code == cfg.HTTP_OK:
-                    return cfg.HTTP_OK, resp.json()
+                    return cfg.HTTP_OK, resp
                 last = f"HTTP {resp.status_code}"
                 if resp.status_code not in cfg.RETRY_STATUSES:
                     raise SecFetchError(f"{url}: {last}")
