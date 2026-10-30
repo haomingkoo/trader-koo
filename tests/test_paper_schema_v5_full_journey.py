@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID as CAMPAIGN
 from trader_koo.backend.services.maintenance import MaintenanceError, acquire_lease, status
 from trader_koo.db.price_contract import (
     record_price_series_revision,
@@ -481,8 +482,11 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
 
     with _server(tmp_path, db_path, writes=False) as (port, _):
         summary = _request(port, "/api/paper-trades/summary")[1]
-        assert summary["campaign_health"]["status"] == "draft"
-        assert summary["campaign_health"]["write_state"] == "paused"
+        assert summary["campaign_health"]["available"] is False  # a paused boot writes nothing
+        assert summary["campaign_health"]["campaign_id"] == CAMPAIGN
+        legacy = _request(port, "/api/paper-trades/summary?campaign_id=paper-v2")[1]
+        assert legacy["campaign_health"]["status"] == "draft"
+        assert legacy["campaign_health"]["write_state"] == "paused"
 
     with _server(tmp_path, db_path, writes=True) as (port, enabled_env):
         summary = _request(port, "/api/paper-trades/summary")[1]
@@ -515,18 +519,18 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
             "idempotency_key": "journey-activation-001",
         }
         code, first = _request(
-            port, "/api/admin/paper-campaigns/paper-v2/transition",
+            port, f"/api/admin/paper-campaigns/{CAMPAIGN}/transition",
             payload=transition, authenticated=True,
         )
         assert code == 200 and first["transition"]["idempotent"] is False
         code, retry = _request(
-            port, "/api/admin/paper-campaigns/paper-v2/transition",
+            port, f"/api/admin/paper-campaigns/{CAMPAIGN}/transition",
             payload=transition, authenticated=True,
         )
         assert code == 200 and retry["transition"]["idempotent"] is True
         changed = {**transition, "reason": "changed payload must fail"}
         assert _request(
-            port, "/api/admin/paper-campaigns/paper-v2/transition",
+            port, f"/api/admin/paper-campaigns/{CAMPAIGN}/transition",
             payload=changed, authenticated=True,
         )[0] == 409
     admitted = _publish_and_admit(enabled_env, db_path, report_dir, candidate=True)
@@ -540,7 +544,7 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
     with _server(tmp_path, db_path, writes=True) as (port, _):
         code, trades = _request(port, "/api/paper-trades")
         assert code == 200
-        assert trades["count"] == len(evidence["pre_migration"]["v2_trade_ids"]) + 1
+        assert trades["count"] == 1  # the running campaign starts with a clean record
         summary = _request(port, "/api/paper-trades/summary")[1]
         assert summary["campaign_health"]["status"] == "active"
         assert summary["campaign_health"]["write_state"] == "enabled"
@@ -553,8 +557,8 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
             evidence["application"]["admitted_report_run_id"],
         )
         assert conn.execute(
-            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id='paper-v2' "
-            "AND report_run_id=?", (new_runs[1],),
+            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? "
+            "AND report_run_id=?", (CAMPAIGN, new_runs[1]),
         ).fetchone() == (1,)
         assert conn.execute(
             "SELECT status,publication_verified,is_generation_canonical "
@@ -566,7 +570,7 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
         ).fetchone() == (1,)
         assert conn.execute(
             "SELECT status,report_complete,is_canonical FROM paper_decision_sets "
-            "WHERE report_run_id=? AND campaign_id='paper-v2'", (new_runs[1],),
+            "WHERE report_run_id=? AND campaign_id=?", (new_runs[1], CAMPAIGN),
         ).fetchone() == ("sealed", 1, 1)
         assert conn.execute(
             "SELECT COUNT(*) FROM paper_decision_sets WHERE report_run_id IN (?,?)",
@@ -584,11 +588,15 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
             "SELECT COUNT(*) FROM audit_logs WHERE request_path LIKE '%paper-campaigns%'"
         ).fetchone()[0] >= 3
         assert conn.execute(
-            "SELECT COUNT(*) FROM paper_portfolio_snapshots WHERE campaign_id='paper-v2'"
+            "SELECT COUNT(*) FROM paper_portfolio_snapshots WHERE campaign_id=?", (CAMPAIGN,)
         ).fetchone()[0] >= 1
+        assert conn.execute(  # activating the new campaign retires the old one
+            "SELECT campaign_id,status FROM paper_campaigns WHERE campaign_id IN ('paper-v2',?) ORDER BY campaign_id",
+            (CAMPAIGN,),
+        ).fetchall() == [("paper-v2", "draft"), (CAMPAIGN, "active")]
         assert conn.execute(
-            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id='paper-v2' "
-            "AND accounting_status!='reconciled'"
+            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id=? "
+            "AND accounting_status!='reconciled'", (CAMPAIGN,)
         ).fetchone() == (0,)
         evidence["contract"] = {
             "contract_id": verified["contract_id"],
@@ -597,8 +605,8 @@ def test_copied_v4_migrate_activate_admit_restart_and_persist(tmp_path: Path) ->
         }
         evidence["application"]["trade_ids"] = [
             int(row[0]) for row in conn.execute(
-                "SELECT id FROM paper_trades WHERE campaign_id='paper-v2' "
-                "AND report_run_id=? ORDER BY id", (new_runs[1],),
+                "SELECT id FROM paper_trades WHERE campaign_id=? "
+                "AND report_run_id=? ORDER BY id", (CAMPAIGN, new_runs[1]),
             )
         ]
     evidence["post_restart"] = _campaign_evidence(db_path)

@@ -68,8 +68,11 @@ class PaperTradeConfig:
     # This prevents hidden fail-open behavior from creating paper trades when
     # risk checks are unavailable.
     critic_fail_open: bool = False
-    campaign_id: str = "paper-v2"
+    campaign_id: str = "paper-v3"
     zero_admission_streak_limit: int = 3
+    # The rolling-expectancy brake counts trades closed within this many days of
+    # the report date, so a losing streak blocks entries and then ages out.
+    rolling_expectancy_window_days: int = 90
 
 
 def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
@@ -79,6 +82,7 @@ def config_snapshot(config: PaperTradeConfig) -> dict[str, Any]:
         "decision_version": config.decision_version,
         "campaign_id": config.campaign_id,
         "zero_admission_streak_limit": config.zero_admission_streak_limit,
+        "rolling_expectancy_window_days": config.rolling_expectancy_window_days,
         "min_tier": config.min_tier,
         "min_score": config.min_score,
         "max_open": config.max_open,

@@ -17,6 +17,7 @@ from trader_koo.backend.routers.paper_trades import router
 from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator, require_admin
 from trader_koo.paper_trades import create_paper_trades_from_report, ensure_paper_trade_schema
 from trader_koo.paper_trades import _build_config
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID
 from trader_koo.paper_trade.shadow import record_breadth_shadow
 from trader_koo.report.runs import complete_report_run, publish_report_run, sha256_file
 from trader_koo.report.serializer import write_reports
@@ -214,7 +215,7 @@ def methodology_stats_fixture():
         "paper_trades_total": 0,
         "paper_trades_open": 0,
         "win_rate": None,
-        "paper_campaign_id": "paper-v2",
+        "paper_campaign_id": PAPER_TRADE_CAMPAIGN_ID,
         "paper_campaign_status": "draft",
         "paper_campaign_write_state": "paused",
         "legacy_paper_trades_total": 42,
