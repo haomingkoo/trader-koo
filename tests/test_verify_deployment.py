@@ -46,7 +46,7 @@ def test_verify_deployment_checks_exact_sha_auth_and_public_contracts(monkeypatc
         "/api/admin/routes": (401, {"detail": "unauthorized"}),
         "/api/daily-report": (200, {"ok": True}),
         "/api/dashboard/SPY/quick?months=12": (200, {"ticker": "SPY"}),
-        "/api/paper-trades/summary": (
+        "/api/paper-trades/summary?campaign_id=paper-v2": (
             200,
             {"ok": True, "campaign_health": {
                 "campaign_id": "paper-v2", "status": "draft", "write_state": "paused",
@@ -90,7 +90,7 @@ def test_verify_deployment_preserves_active_campaign_on_later_releases(monkeypat
             return 200, {"ok": True, "service_meta": {}}
         if path == "/api/admin/routes":
             return (200, {"total": 1}) if api_key else (401, {})
-        if path == "/api/paper-trades/summary":
+        if path.startswith("/api/paper-trades/summary"):
             return 200, {"ok": True, "campaign_health": {
                 "campaign_id": "paper-v2", "status": "active", "write_state": "enabled",
             }}
@@ -115,7 +115,7 @@ def test_verify_deployment_preserves_active_campaign_on_later_releases(monkeypat
 
     def degraded_get(base_url, path, *, api_key=None):
         code, payload = fake_get(base_url, path, api_key=api_key)
-        if path == "/api/paper-trades/summary":
+        if path.startswith("/api/paper-trades/summary"):
             payload = {**payload, "ok": False}
         return code, payload
 
@@ -136,7 +136,7 @@ def test_verify_deployment_allows_only_absent_to_draft_bootstrap(monkeypatch) ->
             return 200, {"ok": True, "service_meta": {}}
         if path == "/api/admin/routes":
             return (200, {"total": 1}) if api_key else (401, {})
-        if path == "/api/paper-trades/summary":
+        if path.startswith("/api/paper-trades/summary"):
             return 200, {"ok": True, "campaign_health": {
                 "campaign_id": "paper-v2", "status": "draft", "write_state": "paused",
             }}
@@ -158,7 +158,7 @@ def test_verify_deployment_rejects_missing_or_unknown_write_state(monkeypatch) -
             return 200, {"ok": True, "service_meta": {}}
         if path == "/api/admin/routes":
             return (200, {"total": 1}) if api_key else (401, {})
-        if path == "/api/paper-trades/summary":
+        if path.startswith("/api/paper-trades/summary"):
             return 200, {"campaign_health": {"campaign_id": "paper-v2", "status": "draft"}}
         return 200, {"ok": True}
 
@@ -174,4 +174,34 @@ def test_verify_deployment_rejects_missing_or_unknown_write_state(monkeypatch) -
     with pytest.raises(ValueError, match="enabled or paused"):
         verify_deployment.verify(
             "https://example.invalid", "a" * 40, "key", "draft", "unknown"
+        )
+
+
+def test_verify_deployment_checks_the_campaign_recorded_before_release(monkeypatch) -> None:
+    """A release that changes the default campaign must still find the pre-release one unchanged."""
+    seen: list[str] = []
+
+    def fake_get(_base_url, path, *, api_key=None):
+        if path == "/api/release":
+            return 200, {"ok": True, "git_sha": "a" * 40}
+        if path == "/api/admin/routes":
+            return (200, {"total": 1}) if api_key else (401, {})
+        if path.startswith("/api/paper-trades/summary"):
+            seen.append(path)
+            if path.endswith("?campaign_id=paper-v2"):
+                return 200, {"ok": True, "campaign_health": {
+                    "campaign_id": "paper-v2", "status": "active", "write_state": "enabled"}}
+            return 200, {"ok": True, "campaign_health": {
+                "campaign_id": "paper-v3", "status": "draft", "write_state": "enabled"}}
+        return 200, {"ok": True, "service_meta": {}}
+
+    monkeypatch.setattr(verify_deployment, "_get", fake_get)
+    result = verify_deployment.verify(
+        "https://example.invalid", "a" * 40, "key", "active", "enabled", expected_campaign_id="paper-v2"
+    )
+    assert seen == ["/api/paper-trades/summary?campaign_id=paper-v2"]
+    assert result["observed_campaign_status"] == "active"
+    with pytest.raises(RuntimeError, match="campaign_v2_status_preserved"):
+        verify_deployment.verify(
+            "https://example.invalid", "a" * 40, "key", "active", "enabled", expected_campaign_id="paper-v3"
         )

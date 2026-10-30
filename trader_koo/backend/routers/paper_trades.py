@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from trader_koo.backend.services.database import get_conn
 from trader_koo.paper_trades import (
+    PAPER_TRADE_CAMPAIGN_ID,
     ensure_paper_trade_schema,
     list_paper_trades,
     paper_trade_summary,
@@ -44,7 +45,7 @@ def api_paper_trades(
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
-    campaign_id: str = Query(default="paper-v2", min_length=1, max_length=80),
+    campaign_id: str = Query(default=PAPER_TRADE_CAMPAIGN_ID, min_length=1, max_length=80),
 ) -> dict[str, Any]:
     """List paper trades with optional filters."""
     conn = get_conn()
@@ -68,7 +69,7 @@ def api_paper_trades(
 @router.get("/api/paper-trades/summary")
 def api_paper_trade_summary(
     window_days: int = Query(default=180, ge=7, le=730),
-    campaign_id: str = Query(default="paper-v2", min_length=1, max_length=80),
+    campaign_id: str = Query(default=PAPER_TRADE_CAMPAIGN_ID, min_length=1, max_length=80),
 ) -> dict[str, Any]:
     """Paper trading performance summary with metrics and equity curve."""
     conn = get_conn()
@@ -134,7 +135,7 @@ def api_experiment_analysis(
 
 @router.get("/api/paper-trades/decisions")
 def api_paper_candidate_decisions(
-    campaign_id: str = Query(default="paper-v2", min_length=1, max_length=80),
+    campaign_id: str = Query(default=PAPER_TRADE_CAMPAIGN_ID, min_length=1, max_length=80),
     report_run_id: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=500, ge=1, le=2000),
 ) -> dict[str, Any]:

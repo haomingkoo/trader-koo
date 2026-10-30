@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -33,6 +34,7 @@ def verify(
     api_key: str,
     expected_campaign_status: str,
     expected_campaign_write_state: str,
+    expected_campaign_id: str = "paper-v2",
 ) -> dict[str, Any]:
     if expected_campaign_write_state not in {"enabled", "paused"}:
         raise ValueError("expected campaign write state must be enabled or paused")
@@ -43,7 +45,11 @@ def verify(
     auth_code, agents = _get(
         base_url, "/api/admin/routes", api_key=api_key,
     )
-    paper_status, paper = _get(base_url, "/api/paper-trades/summary")
+    # The campaign recorded before the release, named explicitly: a release may change
+    # which campaign the API serves by default, and must not change this one's state.
+    paper_status, paper = _get(
+        base_url, f"/api/paper-trades/summary?campaign_id={urllib.parse.quote(expected_campaign_id)}"
+    )
     campaign = paper.get("campaign_health") or {}
     campaign_status = str(campaign.get("status") or "")
     campaign_write_state = str(campaign.get("write_state") or "")
@@ -66,7 +72,7 @@ def verify(
         "paper_summary": paper_status == 200 and paper.get("ok") is True,
         "campaign_v2_status_preserved": (
             paper_status == 200
-            and campaign.get("campaign_id") == "paper-v2"
+            and campaign.get("campaign_id") == expected_campaign_id
             and campaign_status_matches
         ),
         "campaign_v2_write_state_preserved": (
@@ -88,6 +94,7 @@ def verify(
     return {
         "ok": True,
         "expected_sha": expected_sha,
+        "expected_campaign_id": expected_campaign_id,
         "expected_campaign_status": expected_campaign_status,
         "expected_campaign_write_state": expected_campaign_write_state,
         "observed_campaign_status": campaign_status,
@@ -101,6 +108,7 @@ def main() -> None:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--api-key", required=True)
+    parser.add_argument("--expected-campaign-id", required=True)
     parser.add_argument("--expected-campaign-status", required=True)
     parser.add_argument(
         "--expected-campaign-write-state",
@@ -114,6 +122,7 @@ def main() -> None:
         args.api_key,
         args.expected_campaign_status,
         args.expected_campaign_write_state,
+        expected_campaign_id=args.expected_campaign_id,
     ), sort_keys=True))
 
 

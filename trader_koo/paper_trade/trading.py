@@ -15,6 +15,7 @@ from trader_koo.paper_trade.chronology import (
     publication_precedes_session_open,
 )
 from trader_koo.paper_trade.errors import ReportLineageError
+from trader_koo.paper_trade.registry import register_declared_campaign, registered_campaign_row
 from trader_koo.paper_trade.campaign import (
     canonical_hash,
     canonical_json,
@@ -876,10 +877,7 @@ def _create_paper_trades_from_report_in_transaction(
     report_complete = bool(lineage["report_complete"])
     is_canonical = bool(lineage["is_canonical"])
 
-    campaign_row = conn.execute(
-        "SELECT status, policy_version, starting_capital, policy_hash FROM paper_campaigns WHERE campaign_id=?",
-        (config.campaign_id,),
-    ).fetchone()
+    campaign_row = registered_campaign_row(conn, config)
     if not campaign_row:
         raise ValueError(f"paper campaign {config.campaign_id} is not registered")
     runtime_policy_hash = canonical_hash(config_snapshot(config))
@@ -1341,6 +1339,7 @@ def _create_paper_trades_from_report_in_transaction(
                 market_ctx=market_ctx,
                 max_open=config.max_open,
                 campaign_id=config.campaign_id,
+                as_of=report_date, rolling_window_days=config.rolling_expectancy_window_days,
             )
             failed_check = None
             for raw_reason in critic.get("critic_reasons") or []:
@@ -2086,6 +2085,7 @@ def _mark_to_market(
     """Update all open paper trades with latest prices."""
 
     from trader_koo.report.runs import verified_report_run_ids
+    register_declared_campaign(conn, config)  # the snapshot below needs the row before any report has run
 
     linked_ids = {
         str(row[0])
