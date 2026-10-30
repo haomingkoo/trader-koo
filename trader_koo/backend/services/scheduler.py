@@ -923,7 +923,7 @@ def _run_calibration_pulse(trigger: str = "scheduled") -> None:
         _append_run_log(
             "CALIB_PULSE",
             f"Done: families={summary.get('families_updated', 0)} changes={n_changes} "
-            f"blocks_added={blocks} blocks_lifted={lifts}",
+            f"blocks_added={blocks} blocks_lifted={lifts} evidence_excluded={summary.get('lineage_excluded') or []}",
         )
         LOG.info(
             "Calibration pulse complete: families=%d changes=%d blocks_added=%s blocks_lifted=%s",
