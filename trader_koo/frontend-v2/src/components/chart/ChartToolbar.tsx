@@ -6,6 +6,8 @@ type TimeframeValue = "daily" | "weekly" | "monthly";
 interface ChartToolbarProps {
   ticker: string | null | undefined;
   livePrice: EquityTick | null;
+  /** Live price vs the last stored daily close before the tick's session. */
+  liveChangePct: number | null;
   streamingActive: boolean;
   inputValue: string;
   isLoading: boolean;
@@ -20,6 +22,7 @@ interface ChartToolbarProps {
 export default function ChartToolbar({
   ticker,
   livePrice,
+  liveChangePct,
   streamingActive,
   inputValue,
   isLoading,
@@ -93,16 +96,14 @@ export default function ChartToolbar({
             <span className="font-semibold text-[var(--text)] tabular-nums">
               ${livePrice.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
-            {livePrice.prev_price != null && livePrice.prev_price > 0 && (
+            {liveChangePct != null && (
               <span
                 className={`text-[10px] font-semibold tabular-nums ${
-                  livePrice.price >= livePrice.prev_price
-                    ? "text-[var(--green)]"
-                    : "text-[var(--red)]"
+                  liveChangePct >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"
                 }`}
               >
-                {livePrice.price >= livePrice.prev_price ? "+" : ""}
-                {(((livePrice.price - livePrice.prev_price) / livePrice.prev_price) * 100).toFixed(2)}%
+                {liveChangePct >= 0 ? "+" : ""}
+                {liveChangePct.toFixed(2)}%
               </span>
             )}
             <span className="text-[9px] font-semibold uppercase tracking-wider text-[var(--green)]">Live</span>

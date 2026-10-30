@@ -24,6 +24,7 @@ import {
   resampleToMonthly,
   resampleToWeekly,
   isResearchChartEligible,
+  liveDailyChangePct,
   type ChartOverlayKey,
   type ChartOverlayState,
 } from "../lib/chart/buildEquityChartData";
@@ -202,6 +203,13 @@ export default function ChartPage() {
     discount_pct: null,
   };
   const currentPrice = livePrice?.price ?? fundamentals.price;
+  const liveChangePct = useMemo(
+    () =>
+      livePrice && livePrice.symbol === quickData?.ticker
+        ? liveDailyChangePct(livePrice, quickData.chart ?? [])
+        : null,
+    [livePrice, quickData],
+  );
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
   const commentary = commentaryData?.chart_commentary ?? null;
   const freshness = quickData?.data_freshness ?? undefined;
@@ -301,6 +309,7 @@ export default function ChartPage() {
       <ChartToolbar
         ticker={data?.ticker}
         livePrice={livePrice}
+        liveChangePct={liveChangePct}
         streamingActive={streamingActive}
         inputValue={inputValue}
         isLoading={isLoading}

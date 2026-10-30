@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   isResearchChartEligible,
+  liveDailyChangePct,
   resampleToMonthly,
   resampleToWeekly,
 } from "./buildEquityChartData.ts";
@@ -81,4 +82,17 @@ test("research chart fails closed without a verified eligible contract", () => {
   assert.equal(isResearchChartEligible(undefined), false);
   assert.equal(isResearchChartEligible({ research_eligible: false }), false);
   assert.equal(isResearchChartEligible({ research_eligible: true }), true);
+});
+
+test("live day change uses the last daily close before the tick's NY session", () => {
+  const chart = [row("2026-10-28", 100), row("2026-10-29", 104)];
+  // prev_price is the previous trade, so it must not drive the day change.
+  const tick = { symbol: "X", price: 99.84, volume: 1, timestamp: "2026-10-30T18:21:09Z", prev_price: 99.84 };
+  assert.equal(liveDailyChangePct(tick, chart)?.toFixed(2), "-4.00");
+  // An after-hours tick on a session the chart already stores compares with the day before.
+  const sameSession = { ...tick, price: 105.04, timestamp: "2026-10-29T21:30:00Z" };
+  assert.equal(liveDailyChangePct(sameSession, chart)?.toFixed(2), "5.04");
+  assert.equal(liveDailyChangePct({ ...tick, timestamp: "" }, chart), null);
+  assert.equal(liveDailyChangePct(tick, []), null);
+  assert.equal(liveDailyChangePct(null, chart), null);
 });
