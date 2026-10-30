@@ -197,6 +197,11 @@ export default function CryptoPage() {
     [selectedSymbol, selectedInterval],
   );
   const [zoomState, setZoomState] = useState<PersistedZoomState>(() => readZoomState(zoomKey));
+  const [loadedZoomKey, setLoadedZoomKey] = useState(zoomKey);
+  if (loadedZoomKey !== zoomKey) {
+    setLoadedZoomKey(zoomKey);
+    setZoomState(readZoomState(zoomKey));
+  }
 
   useEffect(() => {
     document.title = "Crypto \u2014 Trader Koo";
@@ -256,10 +261,6 @@ export default function CryptoPage() {
 
   const indicators: CryptoIndicators | null =
     indicatorsData?.indicators ?? null;
-
-  useEffect(() => {
-    setZoomState(readZoomState(zoomKey));
-  }, [zoomKey]);
 
   const effectiveBars = useMemo(
     () => mergeClosedBarIntoHistory(historyData?.bars ?? [], wsClosedBar),
