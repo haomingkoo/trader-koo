@@ -431,23 +431,25 @@ def _check_family_edge(
 def _check_rolling_expectancy(
     conn: sqlite3.Connection,
     campaign_id: str | None = None,
+    *,
+    as_of: str | None = None,
+    window_days: int | None = None,
 ) -> tuple[bool, str]:
-    """Reject if last 20 closed trades have negative avg return."""
-    if campaign_id is None:
-        rows = conn.execute(
-            "SELECT pnl_pct FROM paper_trades WHERE status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20"
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT pnl_pct FROM paper_trades WHERE campaign_id=? AND status!='open' AND pnl_pct IS NOT NULL ORDER BY exit_date DESC LIMIT 20",
-            (campaign_id,),
-        ).fetchall()
+    """Reject if the last 20 closed trades (within ``window_days`` of ``as_of`` when given) average below the bar."""
+    where, params = ["status!='open'", "pnl_pct IS NOT NULL"], []
+    if campaign_id is not None:
+        where, params = [*where, "campaign_id=?"], [campaign_id]
+    windowed = as_of is not None and window_days is not None  # lets a losing streak age out of the brake
+    if windowed:
+        where, params = [*where, "exit_date > date(?, ?) AND exit_date <= ?"], [*params, as_of, f"-{int(window_days)} days", as_of]
+    rows = conn.execute(f"SELECT pnl_pct FROM paper_trades WHERE {' AND '.join(where)} ORDER BY exit_date DESC LIMIT 20", params).fetchall()
+    scope = f" closed in the {window_days} days to {as_of}" if windowed else ""
     if len(rows) < ROLLING_EXPECTANCY_MIN_SAMPLE:
-        return True, f"Insufficient history ({len(rows)} trades) for expectancy check"
+        return True, f"Insufficient history ({len(rows)} trades{scope}) for expectancy check"
     avg_pnl = sum(float(r[0]) for r in rows) / len(rows)
     if avg_pnl < ROLLING_EXPECTANCY_MIN:
-        return False, f"Rolling expectancy negative ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
-    return True, f"Rolling expectancy OK ({avg_pnl:.2f}% avg over last {len(rows)} trades)"
+        return False, f"Rolling expectancy negative ({avg_pnl:.2f}% avg over last {len(rows)} trades{scope})"
+    return True, f"Rolling expectancy OK ({avg_pnl:.2f}% avg over last {len(rows)} trades{scope})"
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +465,8 @@ def critic_review(
     market_ctx: dict[str, Any],
     max_open: int = 5,
     campaign_id: str | None = None,
+    as_of: str | None = None,
+    rolling_window_days: int | None = None,
 ) -> dict[str, Any]:
     """Run all critic checks against a proposed trade.
 
@@ -492,7 +496,7 @@ def critic_review(
         ("portfolio_concentration", lambda: _check_portfolio_concentration(conn, ticker, direction, row, max_open=max_open, campaign_id=campaign_id)),
         ("volatility_environment", lambda: _check_volatility_environment(market_ctx)),
         ("caution_flags", lambda: _check_caution_flags(evaluation)),
-        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn, campaign_id)),
+        ("rolling_expectancy", lambda: _check_rolling_expectancy(conn, campaign_id, as_of=as_of, window_days=rolling_window_days)),
         ("family_edge", lambda: _check_family_edge(conn, row, evaluation, campaign_id)),
     ]
 
