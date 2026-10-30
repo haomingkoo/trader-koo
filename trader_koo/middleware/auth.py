@@ -230,6 +230,19 @@ def require_admin(
     return authenticator.authenticate(request, provided_key)
 
 
+def optional_admin(
+    request: Request,
+    provided_key: str | None = Security(_API_KEY_HEADER),
+) -> dict[str, str] | None:
+    """Admin identity when a key is sent, None for anonymous readers.
+
+    A wrong key still fails like ``require_admin`` so it is counted and audited.
+    """
+    if provided_key is None:
+        return None
+    return require_admin(request, provided_key)
+
+
 def route_uses_admin_dependency(route: APIRoute) -> bool:
     """Return whether an APIRoute's resolved dependency tree enforces admin auth."""
     pending = [route.dependant]
