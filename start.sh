@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Entrypoint for Railway deployment.
-# Creates empty DB if needed, starts server immediately, then seeds in background.
+# Railway entrypoint: boot preflight, empty-DB bootstrap when allowed, then uvicorn (see DEPLOYMENT.md).
 set -euo pipefail
 
-# Use the nixpacks venv explicitly — bash (non-login) doesn't source /root/.profile
-PYTHON=/opt/venv/bin/python
-UVICORN=/opt/venv/bin/uvicorn
+# Use the nixpacks venv explicitly — bash (non-login) doesn't source /root/.profile.
+# The overrides exist for tests and local runs.
+PYTHON="${TRADER_KOO_START_PYTHON:-/opt/venv/bin/python}"
+UVICORN="${TRADER_KOO_START_UVICORN:-/opt/venv/bin/uvicorn}"
 
 # Nixpacks exposes some compiled Python dependencies, but the runtime shell can
 # start with LD_LIBRARY_PATH=/usr/lib only. Add the Nix runtime libs NumPy needs.
@@ -21,26 +21,37 @@ if [ "${#RUNTIME_LIB_DIRS[@]}" -gt 0 ]; then
 fi
 
 DB_PATH="${TRADER_KOO_DB_PATH:-/data/trader_koo.db}"
+LOG_DIR="${TRADER_KOO_LOG_DIR:-/data/logs}"
 
-if [ ! -f "$DB_PATH" ]; then
+# Fails closed (non-zero) on a missing volume, a DB outside it, an unreadable
+# DB, or a failed PRAGMA quick_check. Nothing is written before this passes.
+# An active maintenance run skips the live DB checks ("maintenance") so a
+# corrupt or mid-restore DB can still be recovered over Railway SSH.
+if ! BOOT_STATE="$("$PYTHON" -m trader_koo.scripts.start_preflight --db-path "$DB_PATH")"; then
+    echo "[start.sh] Boot preflight failed; refusing to start." >&2
+    exit 1
+fi
+
+if [ "$BOOT_STATE" = "bootstrap" ]; then
     echo "[start.sh] DB not found at $DB_PATH — creating empty DB and starting server..."
     mkdir -p "$(dirname "$DB_PATH")"
-    mkdir -p /data/logs
+    mkdir -p "$LOG_DIR"
 
     # Create empty database with schema (fast, <1 second)
     "$PYTHON" -c "
 import sqlite3
-from pathlib import Path
+import sys
 from trader_koo.scripts.update_market_db import ensure_schema
 
-db_path = Path('$DB_PATH')
-conn = sqlite3.connect(str(db_path))
+conn = sqlite3.connect(sys.argv[1])
 ensure_schema(conn)
 conn.close()
 print('[start.sh] Empty database created with schema')
-"
+" "$DB_PATH"
 
-    # Start background seeding (non-blocking)
+    # The seed is unsupervised: nothing restarts it, it holds no writer lease,
+    # and it can overlap scheduler writes. A crashed seed is not retried on the
+    # next boot because the DB then exists; check the log and rerun by hand.
     echo "[start.sh] Starting background data seed..."
     nohup "$PYTHON" trader_koo/scripts/update_market_db.py \
         --use-sp500 \
@@ -48,25 +59,16 @@ print('[start.sh] Empty database created with schema')
         --sleep-min 0.3 \
         --sleep-max 0.8 \
         --db-path "$DB_PATH" \
-        > /data/logs/seed.log 2>&1 &
+        > "$LOG_DIR/seed.log" 2>&1 &
 
-    echo "[start.sh] Background seed started (PID $!). Check /data/logs/seed.log for progress."
-else
-    # Database exists - check if it has data
-    RECORD_COUNT=$("$PYTHON" -c "
-import sqlite3
-try:
-    conn = sqlite3.connect('$DB_PATH')
-    cursor = conn.execute('SELECT COUNT(*) FROM price_daily')
-    count = cursor.fetchone()[0]
-    conn.close()
-    print(count)
-except:
-    print(0)
-" 2>/dev/null || echo "0")
-
-    echo "[start.sh] DB found at $DB_PATH with $RECORD_COUNT price records — skipping seed."
+    echo "[start.sh] Background seed started (PID $!). Check $LOG_DIR/seed.log for progress."
+elif [ "$BOOT_STATE" = "maintenance" ]; then
+    echo "[start.sh] Maintenance run active; starting maintenance-only server without touching the DB."
+elif [ "$BOOT_STATE" != "ready" ]; then
+    echo "[start.sh] Unexpected preflight result '$BOOT_STATE'; refusing to start." >&2
+    exit 1
 fi
 
 echo "[start.sh] Starting uvicorn server..."
-exec "$UVICORN" trader_koo.backend.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+exec "$UVICORN" trader_koo.backend.main:app --host 0.0.0.0 --port "${PORT:-8000}" \
+    --timeout-graceful-shutdown 90

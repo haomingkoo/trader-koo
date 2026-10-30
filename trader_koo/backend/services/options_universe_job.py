@@ -82,7 +82,7 @@ def run_options_universe_snapshot(
     sched._append_run_log("OPTIONS_IV", "Universe snapshot started")
     started = dt.datetime.now(dt.timezone.utc)
     with sched.RUN_LOG_PATH.open("a", encoding="utf-8") as run_log:
-        result = subprocess.run(
+        result = sched._run_tracked_child(
             cmd,
             stdout=run_log,
             stderr=subprocess.STDOUT,

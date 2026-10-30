@@ -14,7 +14,7 @@ def _sched(monkeypatch, tmp_path):
     monkeypatch.setattr(scheduler, "LOG_DIR", tmp_path)
     ran: list[list[str]] = []
     monkeypatch.setattr(
-        scheduler.subprocess, "run",
+        scheduler, "_run_tracked_child",
         lambda cmd, **kw: ran.append(cmd) or SimpleNamespace(returncode=0),
     )
     return scheduler, job, ran

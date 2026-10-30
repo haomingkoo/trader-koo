@@ -45,7 +45,7 @@ Railway Service (single process)
 |------|---------|
 | `railway.toml` | Current Railway build/deploy config pending IaC migration |
 | `build.sh` | Production dependency installation and frontend build |
-| `start.sh` | Entrypoint — seeds DB on first run, then starts uvicorn |
+| `start.sh` | Entrypoint: boot preflight, opt-in first-run seed, then uvicorn |
 | `pyproject.toml` | Python package definition (allows `pip install -e .`) |
 
 `railway.toml` delegates the build to `build.sh`. Railway has deprecated this
@@ -63,7 +63,11 @@ The torch/torchvision pair must come from the same CPU index — installing them
 
 ### First-run DB seed
 
-`start.sh` checks for `/data/trader_koo.db`. If it doesn't exist, it creates an empty schema, starts `update_market_db.py` in the background (`nohup`, log at `/data/logs/seed.log`) with `--price-lookback-days 365`, and starts the server without waiting. The seed pulls a full year of history for all ~510 S&P 500 + context tickers, takes ~20–30 min, and only happens once. Subsequent deploys skip it.
+`start.sh` first runs `trader_koo/scripts/start_preflight.py`, which never writes database contents (a read-only open of a WAL database can still create a missing `-shm` file). In production (`RAILWAY_ENVIRONMENT` or `RAILWAY_VOLUME_MOUNT_PATH` set) it requires `RAILWAY_VOLUME_MOUNT_PATH` to be a mount point and the DB directory to sit on that device. A missing DB, a missing `price_daily` table, or zero `price_daily` rows stops the boot with a non-zero exit unless `TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP=1`. The opt-in never bypasses the volume check. An existing DB must open read-only and pass `PRAGMA quick_check(1)` in every environment. Local runs without Railway variables may bootstrap freely.
+
+When the maintenance sidecar has an active run (or is unreadable, or its `.required` marker exists without it), the preflight keeps the volume check but skips every live DB check and `start.sh` starts the maintenance-only server with no bootstrap or seed. A corrupt DB, or one moved aside by a crashed `restore-backup`, therefore still boots an instance the operator can Railway-SSH into (`ops/RELEASE_STATES.md`, step 12).
+
+On a permitted bootstrap, `start.sh` creates an empty schema and starts `update_market_db.py` in the background (`nohup`, log at `$TRADER_KOO_LOG_DIR/seed.log`) with `--price-lookback-days 365`. The server starts without waiting. The seed pulls a full year of history for all ~510 S&P 500 + context tickers and takes ~20–30 min. It is unsupervised: nothing restarts it, it holds no writer lease, and it can overlap scheduler writes. If it crashes, the next boot does not retry it because the DB file then exists. Remove `TRADER_KOO_ALLOW_EMPTY_BOOTSTRAP` once the seed finishes.
 
 YOLO patterns are seeded separately via `POST /api/admin/run-yolo-seed` after the first deploy.
 
