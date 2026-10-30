@@ -51,7 +51,7 @@ def load_prices(market: Market, boundary: str) -> tuple[Prices, int, dict]:
     counts["adjusted_close_rows_without_a_high_or_low"] = int((close.notna() & (high.isna() | low.isna())).sum().sum())
     member = pd.DataFrame(False, index=idx, columns=cols)
     pos = {t: i for i, t in enumerate(cols)}
-    arr = member.to_numpy()
+    arr = member.to_numpy(copy=True)  # filled below; pandas 3 views are read-only
     for i in range(last + 1):
         arr[i, [pos[t] for t in market.universe(i)]] = True
     return Prices(open_, high, low, close, pd.DataFrame(arr, index=idx, columns=cols)), last, counts
