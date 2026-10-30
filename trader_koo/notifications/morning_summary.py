@@ -31,6 +31,7 @@ from trader_koo.notifications.formatting import telegram_markdown_safe as _md_sa
 from trader_koo.notifications.green_barrier_text import (
     GREEN_BARRIER_SUMMARY_NOTE, format_green_barrier_line, green_barrier_caption,
 )
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID
 from trader_koo.notifications.telegram import (
     PUBLIC_BASE_URL,
     is_configured,
@@ -254,7 +255,8 @@ def _extract_suggestions(
 
 
 def _fetch_paper_trade_stats(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Fetch paper-trade summary stats from the DB."""
+    """Fetch paper-trade summary stats for the active campaign only."""
+    campaign = PAPER_TRADE_CAMPAIGN_ID
     stats: dict[str, Any] = {
         "open_count": 0,
         "closed_today": 0,
@@ -263,7 +265,7 @@ def _fetch_paper_trade_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     }
     try:
         row = conn.execute(
-            "SELECT COUNT(*) FROM paper_trades WHERE status = 'open'"
+            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id = ? AND status = 'open'", (campaign,)
         ).fetchone()
         stats["open_count"] = int(row[0]) if row else 0
     except Exception:
@@ -272,8 +274,8 @@ def _fetch_paper_trade_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     today_str = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     try:
         row = conn.execute(
-            "SELECT COUNT(*) FROM paper_trades WHERE status != 'open' AND exit_date = ?",
-            (today_str,),
+            "SELECT COUNT(*) FROM paper_trades WHERE campaign_id = ? AND status != 'open' AND exit_date = ?",
+            (campaign, today_str),
         ).fetchone()
         stats["closed_today"] = int(row[0]) if row else 0
     except Exception:
@@ -281,7 +283,8 @@ def _fetch_paper_trade_stats(conn: sqlite3.Connection) -> dict[str, Any]:
 
     try:
         closed = conn.execute(
-            "SELECT pnl_pct, position_size_pct FROM paper_trades WHERE status != 'open' AND pnl_pct IS NOT NULL"
+            "SELECT pnl_pct, position_size_pct FROM paper_trades WHERE campaign_id = ? AND status != 'open' AND pnl_pct IS NOT NULL",
+            (campaign,),
         ).fetchall()
         if closed:
             total = len(closed)
@@ -300,7 +303,8 @@ def _fetch_paper_trade_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             unrealized = 0.0
             try:
                 open_rows = conn.execute(
-                    "SELECT unrealized_pnl_pct, position_size_pct FROM paper_trades WHERE status = 'open'"
+                    "SELECT unrealized_pnl_pct, position_size_pct FROM paper_trades WHERE campaign_id = ? AND status = 'open'",
+                    (campaign,),
                 ).fetchall()
                 for orow in open_rows:
                     u_pnl = float(orow[0] or 0)
@@ -488,11 +492,11 @@ def _fetch_open_positions(
             SELECT ticker, direction, entry_price,
                    unrealized_pnl_pct, position_size_pct, entry_date
             FROM paper_trades
-            WHERE status = 'open'
+            WHERE campaign_id = ? AND status = 'open'
             ORDER BY entry_date DESC
             LIMIT ?
             """,
-            (limit,),
+            (PAPER_TRADE_CAMPAIGN_ID, limit),
         ).fetchall()
         for row in rows:
             pnl = float(row["unrealized_pnl_pct"] or 0)

@@ -75,7 +75,8 @@ def db_path(tmp_path: Path) -> Path:
             status TEXT DEFAULT 'open',
             pnl_pct REAL,
             unrealized_pnl_pct REAL,
-            position_size_pct REAL DEFAULT 8.0
+            position_size_pct REAL DEFAULT 8.0,
+            campaign_id TEXT NOT NULL DEFAULT 'paper-v2'
         );
 
         CREATE TABLE hyperliquid_counter_signals (
@@ -384,6 +385,21 @@ class TestFetchPaperTradeStats:
         assert stats["open_count"] == 2
         assert isinstance(stats["win_rate_pct"], float)
         assert isinstance(stats["portfolio_value"], float)
+
+    def test_ignores_trades_from_other_campaigns(self, populated_conn: sqlite3.Connection) -> None:
+        populated_conn.executemany(
+            "INSERT INTO paper_trades (ticker, direction, entry_price, entry_date, exit_date, status, pnl_pct, unrealized_pnl_pct, position_size_pct, campaign_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paper-v1')",
+            [
+                ("KO", "long", 60.00, "2026-03-01", "2026-03-10", "closed", -4.0, None, 8.0),
+                ("PEP", "long", 170.00, "2026-03-02", None, "open", None, 2.0, 8.0),
+            ],
+        )
+        stats = _fetch_paper_trade_stats(populated_conn)
+        positions = _fetch_open_positions(populated_conn)
+
+        assert stats["open_count"] == 2
+        assert stats["win_rate_pct"] == 100.0
+        assert {p["ticker"] for p in positions} == {"AAPL", "NVDA"}
 
 
 # ---------------------------------------------------------------------------
