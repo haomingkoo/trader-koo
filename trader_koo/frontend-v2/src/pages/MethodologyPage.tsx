@@ -455,22 +455,18 @@ export default function MethodologyPage() {
   const pipelineTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoPlayedRef = useRef(false);
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const res = await fetch("/api/methodology-stats");
-      if (res.ok) {
-        const data: MethodologyStats = await res.json();
-        if (data.ok) setStats(data);
-      }
-    } catch {
-      /* non-critical -- page works without live stats */
-    }
-  }, []);
-
   useEffect(() => {
     document.title = "Methodology \u2014 Trader Koo";
-    fetchStats();
-  }, [fetchStats]);
+    fetch("/api/methodology-stats")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data: MethodologyStats = await res.json();
+        if (data.ok) setStats(data);
+      })
+      .catch(() => {
+        /* non-critical -- page works without live stats */
+      });
+  }, []);
 
   /* ---- Pipeline animation (WMSS pattern: sequential with 600ms delays) ---- */
   const playPipeline = useCallback(() => {
