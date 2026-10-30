@@ -5,62 +5,147 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback_drill:
+        description: Redeploy the running main release, then fail on purpose so the rollback runs
+        type: boolean
+        default: false
 
 concurrency:
   group: production-dark
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   deployments: write
 
 jobs:
   dark-deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Only a CI run for a push to this repository's main may deploy; a fork
+    # pull request can also complete the CI workflow. A dispatch is accepted
+    # only as a rollback drill on main.
+    if: >-
+      ${{
+        (
+          github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.head_repository.full_name == github.repository
+        )
+        || (
+          github.event_name == 'workflow_dispatch'
+          && github.ref == 'refs/heads/main'
+          && inputs.rollback_drill
+        )
+      }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Install 25 + pipeline wait 15 + upload 25 + record 25 + rollback 30 +
+    # 15 for the other steps. A job timeout skips cleanup, so the rollback
+    # must fit inside it.
+    timeout-minutes: 135
     environment:
       name: production-dark
       url: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
+    defaults:
+      run:
+        shell: bash
+    # Secrets are set per step so install steps run with none in scope.
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
       RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
       RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
       BASE_URL: ${{ vars.TRADER_KOO_PRODUCTION_URL }}
-      ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
-      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-      DEPLOYMENT_POLL_ATTEMPTS: "90"
-      ROLLBACK_POLL_ATTEMPTS: "120"
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      # The job if admits a dispatch only as a drill.
+      ROLLBACK_DRILL: ${{ github.event_name == 'workflow_dispatch' }}
+      # 180 polls x 5 s = 900 s: the 600 s Railway health check plus margin.
+      # Each poll's CLI call adds about 2 s, which the step timeouts cover.
+      DEPLOYMENT_POLL_ATTEMPTS: "180"
+      ROLLBACK_POLL_ATTEMPTS: "180"
+      ROLLBACK_NEW_DEPLOYMENT_GRACE_POLLS: "12"
       DEPLOYMENT_POLL_INTERVAL_SEC: "5"
+      # Wait up to 15 minutes for a running pipeline before refusing.
+      PIPELINE_WAIT_ATTEMPTS: "30"
+      PIPELINE_WAIT_INTERVAL_SEC: "30"
     steps:
       - name: Check out the exact CI commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a passing CI run for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${RELEASE_SHA}&event=push&status=success&branch=main" --jq '.total_count')
+          if [ "$passed" -lt 1 ]; then
+            echo "No successful CI push run on main for ${RELEASE_SHA}; refusing to deploy it."
+            exit 1
+          fi
+
+      - name: Refuse a release that is not the main head
+        run: |
+          # A re-run of an old workflow must not push an older commit.
+          main_head=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$main_head" != "$RELEASE_SHA" ]; then
+            echo "Release ${RELEASE_SHA} is not the current main head (${main_head:-unknown}); refusing to deploy it."
+            exit 1
+          fi
+
+      - name: Refuse a release that does not descend from production
+        id: production
+        run: |
+          curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/previous-release.json
+          previous_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
+          if [[ ! $previous_sha =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Production /api/release returned no full commit SHA; refusing to deploy over it."
+            exit 1
+          fi
+          echo "sha=$previous_sha" >> "$GITHUB_OUTPUT"
+          if ! git cat-file -e "${previous_sha}^{commit}" 2>/dev/null; then
+            echo "Production SHA ${previous_sha} is not in the repository history; refusing to deploy over it."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$previous_sha" "$RELEASE_SHA"; then
+            echo "Production SHA ${previous_sha} is not an ancestor of ${RELEASE_SHA}; refusing to deploy."
+            exit 1
+          fi
+          # The drill tests rollback mechanics only; it must not ship code.
+          if [ "$ROLLBACK_DRILL" = "true" ] && [ "$previous_sha" != "$RELEASE_SHA" ]; then
+            echo "Production runs ${previous_sha}, not main ${RELEASE_SHA}; release main normally before a rollback drill."
+            exit 1
+          fi
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: requirements-dev.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: trader_koo/frontend-v2/package-lock.json
 
       - name: Install release tooling
+        timeout-minutes: 25
         run: |
           make backend-install
-          npm ci --prefix trader_koo/frontend-v2
+          npm ci --ignore-scripts --prefix trader_koo/frontend-v2
           npx --prefix trader_koo/frontend-v2 playwright install --with-deps chromium
           npm install --global @railway/cli@5.27.0
 
       - name: Verify exact Railway project-token scope
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           curl --fail --silent --show-error \
             --request POST \
@@ -78,13 +163,46 @@ jobs:
             > /dev/null
 
       - name: Refuse a Railway GitHub autodeploy bypass
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           railway environment config --environment "$RAILWAY_ENVIRONMENT" --json \
             | jq -e --arg service "$RAILWAY_SERVICE" \
             '.services[$service].source.repo == null' \
             > /dev/null
 
+      - name: Refuse a restart during the nightly pipeline
+        run: |
+          # daily_update runs at 22:00 UTC Mon-Fri (backend/services/scheduler.py)
+          # and took about 35 minutes. This runs before the backup so the
+          # backup is not a mid-pipeline snapshot; the restart lands 10-30
+          # minutes later, so 21:15-23:15 UTC on weekdays is closed; after
+          # that pipeline_active covers an overrun.
+          for attempt in $(seq 1 "$PIPELINE_WAIT_ATTEMPTS"); do
+            now=$(date -u '+%u %H%M')
+            weekday=${now% *}
+            hhmm=$((10#${now#* }))
+            if [ "$weekday" -le 5 ] && [ "$hhmm" -ge 2115 ] && [ "$hhmm" -lt 2315 ]; then
+              echo "Refusing to restart production inside the weekday nightly window (21:15-23:15 UTC, now ${now})."
+              exit 1
+            fi
+            curl --fail --silent --show-error "${BASE_URL}/api/status" > /tmp/pipeline-status.json
+            active=$(jq -r '.pipeline_active | if type == "boolean" then tostring else error("pipeline_active is not a boolean") end' /tmp/pipeline-status.json)
+            stage=$(jq -r '.pipeline_stage // "unknown"' /tmp/pipeline-status.json)
+            echo "Pipeline check ${attempt}/${PIPELINE_WAIT_ATTEMPTS}: active=${active} stage=${stage}"
+            if [ "$active" = "false" ]; then
+              exit 0
+            fi
+            if [ "$attempt" -lt "$PIPELINE_WAIT_ATTEMPTS" ]; then
+              sleep "$PIPELINE_WAIT_INTERVAL_SEC"
+            fi
+          done
+          echo "The pipeline is still active after ${PIPELINE_WAIT_ATTEMPTS} checks; refusing to restart production."
+          exit 1
+
       - name: Create and download a fresh consistent production backup
+        env:
+          ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
         run: |
           curl --fail --silent --show-error \
             --request POST \
@@ -113,14 +231,14 @@ jobs:
 
       - name: Record previous verified deployment
         id: previous
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           umask 077
           railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-deployments.json
           railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/previous-variables.json
           paper_trade_enabled=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/previous-variables.json)
           deployment_id=$(jq -r '[.[] | select(.status == "SUCCESS")][0].id // empty' /tmp/previous-deployments.json)
-          curl --fail --silent --show-error "${BASE_URL}/api/release" > /tmp/previous-release.json
-          release_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
           curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
           jq -e '.ok == true' /tmp/previous-paper-summary.json > /dev/null
           campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
@@ -138,15 +256,17 @@ jobs:
             test "$observed_write_state" = "$expected_write_state"
           fi
           test -n "$deployment_id"
-          test -n "$release_sha"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
-          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
           echo "campaign_status=$campaign_status" >> "$GITHUB_OUTPUT"
           echo "campaign_write_state=$expected_write_state" >> "$GITHUB_OUTPUT"
           echo "paper_trade_enabled=$paper_trade_enabled" >> "$GITHUB_OUTPUT"
 
       - name: Bind release identity without starting a second deployment
+        id: bind
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
+          echo "started=true" >> "$GITHUB_OUTPUT"
           railway variable set \
           "TRADER_KOO_GIT_SHA=${RELEASE_SHA}" \
           "TRADER_KOO_PAPER_TRADE_ENABLED=${{ steps.previous.outputs.paper_trade_enabled }}" \
@@ -158,50 +278,74 @@ jobs:
           test "$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/bound-variables.json)" = "${{ steps.previous.outputs.paper_trade_enabled }}"
 
       - name: Upload dark release and wait for Railway health gate
-        run: >-
-          railway up --ci
-          --project "$RAILWAY_PROJECT_ID"
-          --service "$RAILWAY_SERVICE"
-          --environment "$RAILWAY_ENVIRONMENT"
-          --message "dark release ${RELEASE_SHA}"
+        id: upload
+        timeout-minutes: 25
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          NO_COLOR: "1"
+        run: |
+          # `railway up --ci` can exit 0 once build logs end, before the health
+          # check finishes, so the next step owns the wait.
+          set +e
+          railway up --ci \
+            --project "$RAILWAY_PROJECT_ID" \
+            --service "$RAILWAY_SERVICE" \
+            --environment "$RAILWAY_ENVIRONMENT" \
+            --message "dark release ${RELEASE_SHA}" \
+            2>&1 | tee /tmp/railway-up.log
+          up_status=${PIPESTATUS[0]}
+          set -e
+          deployment_id=$(grep -oE '[?&]id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' /tmp/railway-up.log | head -n 1 | cut -d= -f2 || true)
+          if [ -n "$deployment_id" ]; then
+            echo "Railway deployment id: ${deployment_id}"
+            echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$up_status"
 
       - name: Record dark deployment
         id: deployed
+        timeout-minutes: 25
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          UPLOAD_DEPLOYMENT_ID: ${{ steps.upload.outputs.id }}
         run: |
-          deployment_id=""
+          if [ -z "$UPLOAD_DEPLOYMENT_ID" ]; then
+            echo "railway up printed no deployment id; refusing to guess which deployment is the release."
+            exit 1
+          fi
+          deployment_id="$UPLOAD_DEPLOYMENT_ID"
+          if jq -e --arg id "$deployment_id" 'map(.id) | index($id)' /tmp/previous-deployments.json > /dev/null; then
+            echo "Deployment ${deployment_id} existed before the upload."
+            exit 1
+          fi
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
           for attempt in $(seq 1 "$DEPLOYMENT_POLL_ATTEMPTS"); do
             railway deployment list --json --limit 20 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/current-deployments.json
-            if [ -z "$deployment_id" ]; then
-              deployment_id=$(jq -r \
-                --arg message "dark release ${RELEASE_SHA}" \
-                --slurpfile previous /tmp/previous-deployments.json '
-                  [.[]
-                    | select(.meta.cliMessage == $message)
-                    | select(.id as $id | ($previous[0] | map(.id) | index($id) | not))
-                  ] as $matches
-                  | if ($matches | length) == 1 then $matches[0].id
-                    elif ($matches | length) > 1 then "AMBIGUOUS"
-                    else ""
-                    end
-                ' /tmp/current-deployments.json)
-              if [ "$deployment_id" = "AMBIGUOUS" ]; then
+            summary=$(jq -c --arg id "$deployment_id" \
+              '.[] | select(.id == $id) | {id, status, createdAt, cliMessage: .meta.cliMessage}' \
+              /tmp/current-deployments.json)
+            echo "Deployment poll ${attempt}/${DEPLOYMENT_POLL_ATTEMPTS}: ${summary:-not listed yet}"
+            status=""
+            if [ -n "$summary" ]; then
+              if ! jq -e --arg message "dark release ${RELEASE_SHA}" '.cliMessage == $message' <<< "$summary" > /dev/null; then
+                echo "Deployment ${deployment_id} is not the release for ${RELEASE_SHA}."
                 exit 1
               fi
+              status=$(jq -r '.status' <<< "$summary")
             fi
-            status=$(jq -r --arg id "$deployment_id" '.[] | select(.id == $id) | .status' /tmp/current-deployments.json)
-            if [ "$status" = "SUCCESS" ]; then
-              echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ] || [ "$status" = "REMOVED" ]; then
-              exit 1
-            fi
+            case "$status" in
+              SUCCESS) exit 0 ;;
+              FAILED|CRASHED|REMOVED|REMOVING|SKIPPED) exit 1 ;;
+            esac
             sleep "$DEPLOYMENT_POLL_INTERVAL_SEC"
           done
+          echo "Deployment ${deployment_id} did not reach SUCCESS within ${DEPLOYMENT_POLL_ATTEMPTS} polls."
           exit 1
 
       - name: Verify deployed Railway write gate
         id: deployed_config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           umask 077
           railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/deployed-variables.json
@@ -211,6 +355,8 @@ jobs:
 
       - name: Verify API contracts and exact commit
         id: verified
+        env:
+          ADMIN_API_KEY: ${{ secrets.TRADER_KOO_API_KEY }}
         run: |
           umask 077
           python -m trader_koo.scripts.verify_deployment \
@@ -230,81 +376,38 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: ${{ env.BASE_URL }}
           PLAYWRIGHT_EXPECTED_SHA: ${{ env.RELEASE_SHA }}
-          PLAYWRIGHT_ADMIN_API_KEY: ${{ env.ADMIN_API_KEY }}
         run: npx playwright test --config=playwright.production.config.ts
+
+      - name: Fail on purpose to exercise the rollback drill
+        if: ${{ env.ROLLBACK_DRILL == 'true' }}
+        run: |
+          echo "::notice::Rollback drill: every release check passed; failing now so the rollback runs."
+          exit 1
 
       - name: Roll back code and variables after any failed release check
         id: rollback
-        if: ${{ failure() && steps.previous.outputs.id != '' }}
-        run: |
-          jq -n \
-            --rawfile query ops/railway-rollback.graphql \
-            --arg id "${{ steps.previous.outputs.id }}" \
-            '{query: $query, variables: {id: $id}}' \
-            > /tmp/rollback-request.json
-          curl --fail --silent --show-error \
-            --request POST \
-            --url https://backboard.railway.com/graphql/v2 \
-            --header "Project-Access-Token: ${RAILWAY_TOKEN}" \
-            --header "Content-Type: application/json" \
-            --data-binary @/tmp/rollback-request.json \
-            --output /tmp/rollback.json
-          jq -e '.errors == null' /tmp/rollback.json > /dev/null
-          rollback_id=$(jq -r '.data.deploymentRollback.id // empty' /tmp/rollback.json)
-          test -n "$rollback_id"
-          echo "id=$rollback_id" >> "$GITHUB_OUTPUT"
-          for attempt in $(seq 1 "$ROLLBACK_POLL_ATTEMPTS"); do
-            railway deployment list --json --limit 50 --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-deployments.json
-            status=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .status' /tmp/rollback-deployments.json)
-            if [ "$status" = "SUCCESS" ]; then
-              rollback_sha=$(jq -r --arg id "$rollback_id" '.[] | select(.id == $id) | .meta.commitHash // empty' /tmp/rollback-deployments.json)
-              test "$rollback_sha" = "${{ steps.previous.outputs.sha }}"
-              curl --fail --silent --show-error "${BASE_URL}/api/health" > /tmp/rollback-health.json
-              jq -e '.ok == true' /tmp/rollback-health.json > /dev/null
-              release_status=$(curl --silent --show-error --output /tmp/rollback-release.json --write-out '%{http_code}' "${BASE_URL}/api/release")
-              if [ "$release_status" = "200" ]; then
-                jq -e --arg sha "${{ steps.previous.outputs.sha }}" '.git_sha == $sha' /tmp/rollback-release.json > /dev/null
-              else
-                test "$release_status" = "404"
-              fi
-              curl --fail --silent --show-error \
-                "${BASE_URL}/api/paper-trades/summary" \
-                > /tmp/rollback-paper-summary.json
-              jq -e '.ok == true' /tmp/rollback-paper-summary.json > /dev/null
-              observed_status=$(jq -r '.campaign_health.status // "absent"' /tmp/rollback-paper-summary.json)
-              expected_status="${{ steps.previous.outputs.campaign_status }}"
-              if [ "$expected_status" = "absent" ]; then
-                test "$observed_status" = "draft"
-              else
-                test "$observed_status" = "$expected_status"
-              fi
-              observed_write_state=$(jq -er '.campaign_health.write_state | select(. == "enabled" or . == "paused")' /tmp/rollback-paper-summary.json)
-              test "$observed_write_state" = "${{ steps.previous.outputs.campaign_write_state }}"
-              umask 077
-              railway variable list --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" > /tmp/rollback-variables.json
-              observed_gate=$(jq -er '.TRADER_KOO_PAPER_TRADE_ENABLED | select(. == "0" or . == "1")' /tmp/rollback-variables.json)
-              test "$observed_gate" = "${{ steps.previous.outputs.paper_trade_enabled }}"
-              echo "observed_campaign_status=$observed_status" >> "$GITHUB_OUTPUT"
-              echo "observed_write_state=$observed_write_state" >> "$GITHUB_OUTPUT"
-              echo "paper_trade_enabled=$observed_gate" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if [ "$status" = "FAILED" ] || [ "$status" = "CRASHED" ] || [ "$status" = "REMOVED" ]; then
-              exit 1
-            fi
-            sleep "$DEPLOYMENT_POLL_INTERVAL_SEC"
-          done
-          exit 1
+        timeout-minutes: 30
+        # Nothing to undo, and no restart to cause, until Railway was touched.
+        if: ${{ (failure() || cancelled()) && steps.bind.outputs.started == 'true' }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          PREVIOUS_DEPLOYMENT_ID: ${{ steps.previous.outputs.id }}
+          PREVIOUS_SHA: ${{ steps.production.outputs.sha }}
+          EXPECTED_CAMPAIGN_STATUS: ${{ steps.previous.outputs.campaign_status }}
+          EXPECTED_CAMPAIGN_WRITE_STATE: ${{ steps.previous.outputs.campaign_write_state }}
+          EXPECTED_PAPER_TRADE_ENABLED: ${{ steps.previous.outputs.paper_trade_enabled }}
+        run: bash ops/dark_deploy_rollback.sh
 
       - name: Write deployment manifest
         if: ${{ always() }}
         run: |
           mkdir -p release-evidence
           jq -n \
-            --arg schema "dark-deploy-manifest-v2" \
+            --arg schema "dark-deploy-manifest-v3" \
             --arg git_sha "$RELEASE_SHA" \
+            --argjson rollback_drill "$ROLLBACK_DRILL" \
             --arg previous_deployment_id "${{ steps.previous.outputs.id }}" \
-            --arg previous_git_sha "${{ steps.previous.outputs.sha }}" \
+            --arg previous_git_sha "${{ steps.production.outputs.sha }}" \
             --arg expected_campaign_status "${{ steps.previous.outputs.campaign_status }}" \
             --arg expected_campaign_write_state "${{ steps.previous.outputs.campaign_write_state }}" \
             --arg previous_paper_trade_enabled "${{ steps.previous.outputs.paper_trade_enabled }}" \
@@ -317,17 +420,17 @@ jobs:
             --arg dark_deployment_id "${{ steps.deployed.outputs.id }}" \
             --arg rollback_deployment_id "${{ steps.rollback.outputs.id }}" \
             --arg job_status "${{ job.status }}" \
-            '{schema: $schema, git_sha: $git_sha, previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, expected_campaign_write_state: $expected_campaign_write_state, previous_paper_trade_enabled: $previous_paper_trade_enabled, deployed_paper_trade_enabled: $deployed_paper_trade_enabled, deployed_campaign_status: $deployed_campaign_status, deployed_campaign_write_state: $deployed_campaign_write_state, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, rollback_campaign_status: $rollback_campaign_status, rollback_campaign_write_state: $rollback_campaign_write_state, rollback_paper_trade_enabled: $rollback_paper_trade_enabled, verification_status: $job_status, campaign_activation_invoked: false}' \
+            '{schema: $schema, git_sha: $git_sha, rollback_drill: $rollback_drill,previous_deployment_id: $previous_deployment_id, previous_git_sha: $previous_git_sha, expected_campaign_status: $expected_campaign_status, expected_campaign_write_state: $expected_campaign_write_state, previous_paper_trade_enabled: $previous_paper_trade_enabled, deployed_paper_trade_enabled: $deployed_paper_trade_enabled, deployed_campaign_status: $deployed_campaign_status, deployed_campaign_write_state: $deployed_campaign_write_state, dark_deployment_id: $dark_deployment_id, rollback_deployment_id: $rollback_deployment_id, rollback_campaign_status: $rollback_campaign_status, rollback_campaign_write_state: $rollback_campaign_write_state, rollback_paper_trade_enabled: $rollback_paper_trade_enabled, verification_status: $job_status, campaign_activation_invoked: false}' \
             > release-evidence/deployment-manifest.json
 
       - name: Upload deployment evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dark-deploy-evidence-${{ github.event.workflow_run.head_sha }}
+          name: dark-deploy-evidence-${{ env.RELEASE_SHA }}
           path: release-evidence/*.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
       # Deliberately absent: campaign activate/reset endpoints. Activation is a
       # separate authenticated human action after production verification.
