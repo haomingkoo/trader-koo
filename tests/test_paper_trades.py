@@ -174,11 +174,13 @@ def conn(tmp_path: Path):
     ensure_price_series_revision_schema(db)
     for ticker, close in (("AAPL", 150.0), ("MSFT", 300.0)):
         _seed_price(db, ticker, close)
-    # The critic fails closed when no VIX observation exists, so the business
-    # fixture supplies one; regime behaviour itself is covered in test_critic.
+    # The critic fails closed without a VIX observation or SPY history (no
+    # regime), so the business fixture supplies both; regime behaviour itself
+    # is covered in test_critic.
     db.execute(
         "INSERT INTO price_daily (ticker,date,open,high,low,close,volume) "
-        "VALUES ('^VIX','2026-03-13',14,14.5,13.5,14.0,0)"
+        "VALUES ('^VIX','2026-03-13',14,14.5,13.5,14.0,0),"
+        "('SPY','2026-03-10',495,497,494,496,1000000),('SPY','2026-03-11',496,499,495,498,1000000)"
     )
     db.commit()
     return db
@@ -708,6 +710,7 @@ class TestCreatePaperTrades:
         assert "ML did not filter" in trade[2]
 
     def test_stores_bot_version_and_entry_context(self, conn):
+        conn.execute("DELETE FROM price_daily WHERE ticker='SPY'")  # this test supplies its own SPY history
         for idx in range(25):
             date = (dt.date(2026, 2, 18) + dt.timedelta(days=idx)).isoformat()
             _seed_price(conn, "^VIX", 16.0 + (idx % 5), date=date)
