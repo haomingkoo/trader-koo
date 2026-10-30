@@ -386,16 +386,15 @@ def daily_report_history(
                        ORDER BY published_ts DESC,run_id DESC"""
                 )
             ]
-            from trader_koo.report.runs import verified_report_run_ids
-
-            verified = verified_report_run_ids(registry_conn, candidates)
-            run_ids = [run_id for run_id in candidates if run_id in verified][
-                : max(1, int(limit))
-            ]
-            for run_id in run_ids:
-                resolved = resolve_published_report(
-                    registry_conn, report_dir=report_dir, run_id=run_id
-                )
+            # Verify newest first and stop at the limit; checking every run was
+            # one full artifact verification per published report per request.
+            for run_id in candidates:
+                if len(files) >= max(1, int(limit)):
+                    break
+                try:
+                    resolved = resolve_published_report(registry_conn, report_dir=report_dir, run_id=run_id)
+                except ValueError:
+                    continue
                 if resolved is None:
                     raise ValueError(f"published report {run_id} cannot be resolved")
                 files.append(resolved[0])

@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -678,7 +679,36 @@ class _VerifiedPublication:
     row: dict[str, Any]
 
 
-def _verify_artifacts(
+# Reads re-verified the whole ~10 MB artifact several times per request. A
+# canonical run's verification is reused while its registry row and both files'
+# (inode, size, mtime) are unchanged; any rewrite or registry edit re-verifies.
+_verified_cache: dict[tuple[Any, ...], _VerifiedPublication] = {}
+_verified_cache_lock = threading.Lock()
+
+
+def _file_identity(path: Path) -> tuple[int, int, int] | None:
+    st = os.stat(path) if path.is_file() else None
+    return (st.st_ino, st.st_size, st.st_mtime_ns) if st else None
+
+
+def _verify_artifacts(conn: sqlite3.Connection, row: dict[str, Any], report_dir: Path) -> _VerifiedPublication:
+    files = [_file_identity(Path(str(row.get(k) or ""))) for k in ("artifact_path", "markdown_path")]
+    key = (str(report_dir.resolve()), tuple(sorted(row.items())), *files)
+    cacheable = None not in files and row.get("superseded_by_run_id") is None
+    cacheable = cacheable and row.get("is_generation_canonical") == 1
+    with _verified_cache_lock:
+        if cacheable and key in _verified_cache:
+            return _verified_cache[key]
+    verified = _verify_artifacts_uncached(conn, row, report_dir)
+    with _verified_cache_lock:
+        if cacheable:  # two entries: each holds a parsed report
+            while len(_verified_cache) >= 2:
+                _verified_cache.pop(next(iter(_verified_cache)))
+            _verified_cache[key] = verified
+    return verified
+
+
+def _verify_artifacts_uncached(
     conn: sqlite3.Connection,
     row: dict[str, Any],
     report_dir: Path,
@@ -877,10 +907,7 @@ def resolve_published_report(
     return verified.artifact, linked
 
 
-def verified_report_run_ids(
-    conn: sqlite3.Connection,
-    run_ids: list[str] | set[str] | tuple[str, ...],
-) -> set[str]:
+def verified_report_run_ids(conn: sqlite3.Connection, run_ids: list[str] | set[str] | tuple[str, ...]) -> set[str]:
     """Return only run IDs whose exact historical artifacts still verify."""
     verified: set[str] = set()
     for run_id in sorted({str(value) for value in run_ids if str(value).strip()}):
@@ -903,11 +930,7 @@ def verified_report_run_ids(
     return verified
 
 
-def _resolve_current_publication(
-    conn: sqlite3.Connection,
-    *,
-    report_dir: Path,
-) -> _VerifiedPublication | None:
+def _resolve_current_publication(conn: sqlite3.Connection, *, report_dir: Path) -> _VerifiedPublication | None:
     columns = [str(item[1]) for item in conn.execute("PRAGMA table_info(report_runs)")]
     if "publication_verified" not in columns:
         return None
@@ -918,11 +941,7 @@ def _resolve_current_publication(
     ).fetchone()
     if row is None:
         return None
-    return _verify_artifacts(
-        conn,
-        dict(zip(columns, row, strict=True)),
-        report_dir,
-    )
+    return _verify_artifacts(conn, dict(zip(columns, row, strict=True)), report_dir)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -931,13 +950,14 @@ def _atomic_write(path: Path, data: bytes) -> None:
     os.replace(temp, path)
 
 
+_confirmed_copies: dict[Path, tuple[Any, int]] = {}  # path -> identity, hash(data) known equal
+
+
 def _atomic_write_if_changed(path: Path, data: bytes) -> None:
-    try:
-        if path.read_bytes() == data:
-            return
-    except OSError:
-        pass
-    _atomic_write(path, data)
+    if _confirmed_copies.get(path) != (_file_identity(path), hash(data)):
+        if not path.is_file() or path.read_bytes() != data:
+            _atomic_write(path, data)
+        _confirmed_copies[path] = (_file_identity(path), hash(data))
 
 
 @contextmanager
@@ -951,11 +971,7 @@ def _publication_lock(report_dir: Path):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def _reconcile_report_publication_locked(
-    conn: sqlite3.Connection,
-    *,
-    report_dir: Path,
-) -> dict[str, Any] | None:
+def _reconcile_report_publication_locked(conn: sqlite3.Connection, *, report_dir: Path) -> dict[str, Any] | None:
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_runs'").fetchone() is None:
         return None
     verified = _resolve_current_publication(conn, report_dir=report_dir)
@@ -1024,12 +1040,8 @@ def publish_report_run(conn: sqlite3.Connection, *, run_id: str, report_dir: Pat
 
 
 def _record_admission_attempt(
-    conn: sqlite3.Connection,
-    *,
-    run_id: str,
-    status: str,
-    error: Exception | None = None,
-    error_code: str | None = None,
+    conn: sqlite3.Connection, *, run_id: str, status: str,
+    error: Exception | None = None, error_code: str | None = None,
 ) -> None:
     if status == "failed" and error_code not in ADMISSION_ERROR_CODES:
         raise ValueError("failed admission attempt requires a recognized error code")
@@ -1037,26 +1049,12 @@ def _record_admission_attempt(
         """INSERT INTO report_admission_attempts
            (run_id,status,error_code,error_message,attempted_ts)
            VALUES (?,?,?,?,?)""",
-        (
-            run_id,
-            status,
-            error_code if error else None,
-            (
-                error.code
-                if isinstance(error, PriceContractError)
-                else type(error).__name__
-            ) if error else None,
-            _utc_now(),
-        ),
+        (run_id, status, error_code if error else None,
+         (error.code if isinstance(error, PriceContractError) else type(error).__name__) if error else None, _utc_now()),
     )
 
 
-def admit_published_report(
-    conn: sqlite3.Connection,
-    *,
-    run_id: str,
-    report_dir: Path,
-) -> dict[str, int]:
+def admit_published_report(conn: sqlite3.Connection, *, run_id: str, report_dir: Path) -> dict[str, int]:
     """Admit only the current verified artifact's immutable accepted decisions."""
     if conn.in_transaction:
         raise RuntimeError("report admission requires a clean transaction boundary")
