@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { EquityTick } from "../api/types";
-import { EquityWsContext } from "./equityWsContext";
+import { EquityPriceStoreContext, EquityWsContext } from "./equityWsContext";
 
 export function EquityWsProvider({ children }: { children: ReactNode }) {
   const [prices, setPrices] = useState<Record<string, EquityTick>>({});
@@ -10,6 +10,19 @@ export function EquityWsProvider({ children }: { children: ReactNode }) {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoff = useRef(1000);
   const reconnectRef = useRef<() => void>(() => {});
+  const latestRef = useRef<Record<string, EquityTick>>({});
+  const storeListenersRef = useRef<Set<() => void>>(new Set());
+
+  const store = useMemo(() => ({
+    getPrice: (symbol: string) => latestRef.current[symbol],
+    subscribe: (onChange: () => void) => {
+      storeListenersRef.current.add(onChange);
+      return () => {
+        storeListenersRef.current.delete(onChange);
+      };
+    },
+    connected,
+  }), [connected]);
 
   const connect = useCallback(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -23,7 +36,9 @@ export function EquityWsProvider({ children }: { children: ReactNode }) {
     ws.onmessage = (event) => {
       try {
         const tick = JSON.parse(event.data) as EquityTick;
-        setPrices((prev) => ({ ...prev, [tick.symbol]: tick }));
+        latestRef.current = { ...latestRef.current, [tick.symbol]: tick };
+        setPrices(latestRef.current);
+        for (const fn of storeListenersRef.current) fn();
       } catch {
         // Ignore malformed messages.
       }
@@ -57,8 +72,10 @@ export function EquityWsProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({ prices, connected }), [prices, connected]);
 
   return (
-    <EquityWsContext.Provider value={value}>
-      {children}
-    </EquityWsContext.Provider>
+    <EquityPriceStoreContext.Provider value={store}>
+      <EquityWsContext.Provider value={value}>
+        {children}
+      </EquityWsContext.Provider>
+    </EquityPriceStoreContext.Provider>
   );
 }

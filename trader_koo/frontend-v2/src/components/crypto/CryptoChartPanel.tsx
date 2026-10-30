@@ -29,6 +29,15 @@ export default function CryptoChartPanel({
   onRetry,
 }: CryptoChartPanelProps) {
   const isMobile = useIsMobile();
+  // Stable identities keep the memoized Plotly wrapper from redrawing on every parent render.
+  const plotConfig = useMemo(
+    () => ({ responsive: true, displayModeBar: !isMobile, scrollZoom: !isMobile }),
+    [isMobile],
+  );
+  const plotStyle = useMemo(
+    () => ({ width: "100%", height: isMobile ? 500 : 700 }),
+    [isMobile],
+  );
 
   if (historyLoading) {
     return <Spinner className="mt-8" />;
@@ -40,13 +49,9 @@ export default function CryptoChartPanel({
         <PlotlyWrapper
           data={chartData}
           layout={chartLayout}
-          config={{
-            responsive: true,
-            displayModeBar: !isMobile,
-            scrollZoom: !isMobile,
-          }}
+          config={plotConfig}
           onRelayout={onRelayout}
-          style={{ width: "100%", height: isMobile ? 500 : 700 }}
+          style={plotStyle}
         />
       </div>
     );

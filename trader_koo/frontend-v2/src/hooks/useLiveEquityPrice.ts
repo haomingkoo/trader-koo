@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/client";
 import type { EquityTick } from "../api/types";
-import { useEquityWs } from "./useEquityWs";
+import { useEquityPrice, useEquityWsConnected } from "./useEquityWs";
 
 interface LivePriceResponse {
   ok: boolean;
@@ -13,11 +13,12 @@ interface LivePriceResponse {
 }
 
 export function useLiveEquityPrice(ticker: string) {
-  const { prices, connected: socketConnected } = useEquityWs();
   const symbol = useMemo(() => ticker.trim().toUpperCase(), [ticker]);
+  const wsPrice = useEquityPrice(symbol);
+  const socketConnected = useEquityWsConnected();
   const [apiPrice, setApiPrice] = useState<EquityTick | null>(null);
   const [subscriptionReady, setSubscriptionReady] = useState(false);
-  const livePrice = prices[symbol] ?? apiPrice;
+  const livePrice = wsPrice ?? apiPrice;
 
   // The price route subscribes server-side; the feed evicts stale symbols itself
   useEffect(() => {

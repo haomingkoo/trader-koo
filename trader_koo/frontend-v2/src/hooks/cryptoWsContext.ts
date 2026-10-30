@@ -3,11 +3,16 @@ import type { CryptoPrice } from "../api/types";
 
 export type CryptoWsListener = (data: unknown) => void;
 
-export interface CryptoWsContextValue {
-  prices: Record<string, CryptoPrice>;
+export interface CryptoWsApiValue {
   connected: boolean;
   send: (msg: unknown) => void;
   addListener: (fn: CryptoWsListener) => () => void;
 }
 
-export const CryptoWsContext = createContext<CryptoWsContextValue | null>(null);
+export interface CryptoWsContextValue extends CryptoWsApiValue {
+  prices: Record<string, CryptoPrice>;
+}
+
+// Prices live in their own context so a tick only re-renders components that read prices.
+export const CryptoWsApiContext = createContext<CryptoWsApiValue | null>(null);
+export const CryptoPricesContext = createContext<Record<string, CryptoPrice> | null>(null);
