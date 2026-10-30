@@ -558,7 +558,7 @@ export function PaperTradePortfolioHero({
 
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-5">
-      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-5">
         <div>
           <div className="label-sm tracking-widest">
             Portfolio Value
@@ -571,7 +571,8 @@ export function PaperTradePortfolioHero({
             {totalReturn.toFixed(2)}% total return
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
+        {/* Columns never go narrower than a full cash balance, so values cannot overlap. */}
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-4">
           <Stat label="Cash" value={fmtDollars(overall.cash ?? 0)} />
           <Stat label="Realized P&L" value={fmtDollars(realizedPnl, true)} tone={pnlColor(realizedPnl)} />
           <Stat label="Unrealized P&L" value={fmtDollars(unrealizedPnl, true)} tone={pnlColor(unrealizedPnl)} />
@@ -605,11 +606,11 @@ function Stat({
   tone?: string;
 }) {
   return (
-    <div>
+    <div className="min-w-0">
       <div className="label-xs tracking-widest">
         {label}
       </div>
-      <div className={`mt-0.5 text-lg font-semibold ${tone}`}>{value}</div>
+      <div className={`mt-0.5 text-lg font-semibold tabular-nums [overflow-wrap:anywhere] ${tone}`}>{value}</div>
     </div>
   );
 }
