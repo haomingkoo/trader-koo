@@ -123,6 +123,7 @@ jobs:
           release_sha=$(jq -r '.git_sha // empty' /tmp/previous-release.json)
           curl --fail --silent --show-error "${BASE_URL}/api/paper-trades/summary" > /tmp/previous-paper-summary.json
           jq -e '.ok == true' /tmp/previous-paper-summary.json > /dev/null
+          campaign_id=$(jq -er '.campaign_health.campaign_id | select(test("^[a-z0-9-]{1,80}$"))' /tmp/previous-paper-summary.json)
           campaign_status=$(jq -r '.campaign_health.status // "absent"' /tmp/previous-paper-summary.json)
           observed_write_state=$(jq -r '.campaign_health.write_state // "absent"' /tmp/previous-paper-summary.json)
           case "$campaign_status" in active|draft|frozen|absent) ;; *) exit 1 ;; esac
@@ -141,6 +142,7 @@ jobs:
           test -n "$release_sha"
           echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "campaign_id=$campaign_id" >> "$GITHUB_OUTPUT"
           echo "campaign_status=$campaign_status" >> "$GITHUB_OUTPUT"
           echo "campaign_write_state=$expected_write_state" >> "$GITHUB_OUTPUT"
           echo "paper_trade_enabled=$paper_trade_enabled" >> "$GITHUB_OUTPUT"
@@ -217,6 +219,7 @@ jobs:
           --base-url "$BASE_URL" \
           --expected-sha "$RELEASE_SHA" \
           --api-key "$ADMIN_API_KEY" \
+          --expected-campaign-id "${{ steps.previous.outputs.campaign_id }}" \
           --expected-campaign-status "${{ steps.previous.outputs.campaign_status }}" \
           --expected-campaign-write-state "${{ steps.previous.outputs.campaign_write_state }}" \
           > release-evidence/deployment-verification.json
@@ -268,7 +271,7 @@ jobs:
                 test "$release_status" = "404"
               fi
               curl --fail --silent --show-error \
-                "${BASE_URL}/api/paper-trades/summary" \
+                "${BASE_URL}/api/paper-trades/summary?campaign_id=${{ steps.previous.outputs.campaign_id }}" \
                 > /tmp/rollback-paper-summary.json
               jq -e '.ok == true' /tmp/rollback-paper-summary.json > /dev/null
               observed_status=$(jq -r '.campaign_health.status // "absent"' /tmp/rollback-paper-summary.json)

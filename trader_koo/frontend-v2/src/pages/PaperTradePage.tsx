@@ -27,7 +27,8 @@ export default function PaperTradePage() {
 
   const [statusFilter, setStatusFilter] = useState("all");
   const [dirFilter, setDirFilter] = useState("all");
-  const [campaignId, setCampaignId] = useState("paper-v2");
+  // Unset until the reader picks one: the API then serves the running campaign.
+  const [campaignId, setCampaignId] = useState<string | undefined>(undefined);
 
   const { data: summary, isLoading: summaryLoading } =
     usePaperTradeSummary(campaignId);
@@ -69,13 +70,13 @@ export default function PaperTradePage() {
         Campaign ledger
         <select
           data-testid="paper-campaign-selector"
-          value={campaignId}
+          value={campaignId ?? summary?.campaign_health?.campaign_id ?? ""}
           onChange={(event) => setCampaignId(event.target.value)}
           className="rounded border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[var(--text)]"
         >
           {(summary?.campaign_health?.campaigns ?? [{
-            campaign_id: campaignId,
-            label: campaignId,
+            campaign_id: campaignId ?? "",
+            label: campaignId ?? "running campaign",
             policy_version: "",
             status: "selected",
             starting_capital: 0,

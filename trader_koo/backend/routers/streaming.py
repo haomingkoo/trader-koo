@@ -11,7 +11,9 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+
+from trader_koo.middleware.auth import require_admin
 
 from trader_koo.streaming.service import (
     get_equity_price,
@@ -43,24 +45,35 @@ def streaming_prices() -> dict[str, Any]:
 
 @router.get("/api/streaming/price/{symbol}")
 def streaming_price(symbol: str) -> dict[str, Any]:
-    """Price for a specific symbol. Auto-subscribes if not already streaming."""
+    """Price for a specific symbol. Auto-subscribes if not already streaming.
+
+    This is the public way to start a stream. The feed evicts the least
+    recently requested symbol when full, so viewers never need to unsubscribe.
+    """
     sym = symbol.upper()
-    # Auto-subscribe on first request
-    subscribe_symbol(sym)
+    subscribed = subscribe_symbol(sym)
     price = get_equity_price(sym)
     if price is None:
         return {
             "ok": True,
             "symbol": sym,
+            "subscribed": subscribed,
             "price": None,
-            "detail": "Subscribed — price will be available shortly",
+            "detail": (
+                "Subscribed, price will be available shortly"
+                if subscribed
+                else "Live stream unavailable for this symbol"
+            ),
         }
-    return {"ok": True, "symbol": sym, **price}
+    return {"ok": True, "symbol": sym, "subscribed": subscribed, **price}
 
 
-@router.post("/api/streaming/subscribe/{symbol}")
+@router.post(
+    "/api/streaming/subscribe/{symbol}",
+    dependencies=[Depends(require_admin)],
+)
 def subscribe(symbol: str) -> dict[str, Any]:
-    """Subscribe to real-time data for a symbol."""
+    """Subscribe to real-time data for a symbol. Requires the admin key."""
     sym = symbol.upper()
     success = subscribe_symbol(sym)
     info = get_subscription_info()
@@ -82,9 +95,12 @@ def subscribe(symbol: str) -> dict[str, Any]:
     }
 
 
-@router.post("/api/streaming/unsubscribe/{symbol}")
+@router.post(
+    "/api/streaming/unsubscribe/{symbol}",
+    dependencies=[Depends(require_admin)],
+)
 def unsubscribe(symbol: str) -> dict[str, Any]:
-    """Unsubscribe from a symbol."""
+    """Unsubscribe from a symbol. Requires the admin key."""
     sym = symbol.upper()
     success = unsubscribe_symbol(sym)
     info = get_subscription_info()

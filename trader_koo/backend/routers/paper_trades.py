@@ -4,11 +4,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from trader_koo.backend.services.database import get_conn
+from trader_koo.middleware.auth import optional_admin, require_admin
 from trader_koo.paper_trades import (
+    PAPER_TRADE_CAMPAIGN_ID,
     ensure_paper_trade_schema,
     list_paper_trades,
     paper_trade_summary,
@@ -35,8 +37,22 @@ class ExperimentAnalysisRequest(BaseModel):
 router = APIRouter()
 
 
+def _hide_notes(
+    trades: list[dict[str, Any]],
+    admin: dict[str, str] | None,
+    response: Response,
+) -> None:
+    """Trade notes are private: only admin-key requests see them."""
+    if admin is None:
+        for trade in trades:
+            trade.pop("notes", None)
+    else:
+        response.headers["Cache-Control"] = "private, no-store"
+
+
 @router.get("/api/paper-trades")
 def api_paper_trades(
+    response: Response,
     status: str = Query(default="all", pattern="^(all|open|closed|stopped_out|target_hit|expired)$"),
     ticker: str | None = Query(default=None),
     direction: str | None = Query(default=None, pattern="^(long|short)$"),
@@ -44,7 +60,8 @@ def api_paper_trades(
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
-    campaign_id: str = Query(default="paper-v2", min_length=1, max_length=80),
+    campaign_id: str = Query(default=PAPER_TRADE_CAMPAIGN_ID, min_length=1, max_length=80),
+    admin: dict[str, str] | None = Depends(optional_admin),
 ) -> dict[str, Any]:
     """List paper trades with optional filters."""
     conn = get_conn()
@@ -60,6 +77,7 @@ def api_paper_trades(
             limit=limit,
             campaign_id=campaign_id,
         )
+        _hide_notes(trades, admin, response)
         return {"ok": True, "count": len(trades), "trades": trades}
     finally:
         conn.close()
@@ -67,13 +85,16 @@ def api_paper_trades(
 
 @router.get("/api/paper-trades/summary")
 def api_paper_trade_summary(
+    response: Response,
     window_days: int = Query(default=180, ge=7, le=730),
-    campaign_id: str = Query(default="paper-v2", min_length=1, max_length=80),
+    campaign_id: str = Query(default=PAPER_TRADE_CAMPAIGN_ID, min_length=1, max_length=80),
+    admin: dict[str, str] | None = Depends(optional_admin),
 ) -> dict[str, Any]:
     """Paper trading performance summary with metrics and equity curve."""
     conn = get_conn()
     try:
         summary = paper_trade_summary(conn, window_days=window_days, campaign_id=campaign_id)
+        _hide_notes(summary.get("recent_trades") or [], admin, response)
         return {"ok": True, **summary}
     finally:
         conn.close()
@@ -134,7 +155,7 @@ def api_experiment_analysis(
 
 @router.get("/api/paper-trades/decisions")
 def api_paper_candidate_decisions(
-    campaign_id: str = Query(default="paper-v2", min_length=1, max_length=80),
+    campaign_id: str = Query(default=PAPER_TRADE_CAMPAIGN_ID, min_length=1, max_length=80),
     report_run_id: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=500, ge=1, le=2000),
 ) -> dict[str, Any]:
@@ -191,7 +212,11 @@ def api_paper_candidate_decisions(
 
 
 @router.get("/api/paper-trades/{trade_id}")
-def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
+def api_paper_trade_detail(
+    trade_id: int,
+    response: Response,
+    admin: dict[str, str] | None = Depends(optional_admin),
+) -> dict[str, Any]:
     """Get a single paper trade by ID."""
     conn = get_conn()
     try:
@@ -208,6 +233,7 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
         ).fetchone()
         if annotation:
             trade["notes"] = annotation[0]
+        _hide_notes([trade], admin, response)
         for key in ("decision_reasons", "risk_flags", "entry_evidence", "entry_risks"):
             raw = trade.get(key)
             if raw is None:
@@ -275,9 +301,12 @@ def api_paper_trade_detail(trade_id: int) -> dict[str, Any]:
         conn.close()
 
 
-@router.patch("/api/paper-trades/{trade_id}/notes")
+@router.patch(
+    "/api/paper-trades/{trade_id}/notes",
+    dependencies=[Depends(require_admin)],
+)
 def api_update_trade_notes(trade_id: int, body: NotesUpdate) -> dict[str, Any]:
-    """Update the notes field on a paper trade."""
+    """Update the notes field on a paper trade. Requires the admin key."""
     try:
         require_paper_trade_writes()
     except ValueError as exc:

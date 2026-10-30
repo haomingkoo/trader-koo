@@ -62,6 +62,12 @@ def _trusted_proxy_networks() -> tuple[ipaddress._BaseNetwork, ...]:
     return _parse_trusted_proxy_networks(os.getenv("TRADER_KOO_TRUSTED_PROXY_CIDRS", ""))
 
 
+def _is_trusted_proxy(ip: ipaddress._BaseAddress) -> bool:
+    if ip.is_loopback or ip.is_private or ip.is_link_local:
+        return True
+    return any(ip in network for network in _trusted_proxy_networks())
+
+
 def _trust_forwarded_headers(request: Request) -> bool:
     mode = _proxy_header_trust_mode()
     if mode == "always":
@@ -70,29 +76,29 @@ def _trust_forwarded_headers(request: Request) -> bool:
         return False
 
     peer = _parse_ip(_direct_client_host(request))
-    if peer is None:
-        return False
-    if peer.is_loopback or peer.is_private or peer.is_link_local:
-        return True
-    return any(peer in network for network in _trusted_proxy_networks())
+    return peer is not None and _is_trusted_proxy(peer)
 
 
 def _forwarded_client_ip(request: Request) -> str | None:
+    """Return the rightmost forwarded hop that is not a trusted proxy (see SECURITY.md)."""
     if not _trust_forwarded_headers(request):
         return None
 
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        for candidate in (part.strip() for part in xff.split(",")):
-            parsed = _parse_ip(candidate)
-            if parsed is not None:
-                return str(parsed)
-
+    hops = [
+        parsed
+        for parsed in (_parse_ip(part) for part in request.headers.get("x-forwarded-for", "").split(","))
+        if parsed is not None
+    ]
     real_ip = _parse_ip(request.headers.get("x-real-ip", ""))
-    if real_ip is not None:
-        return str(real_ip)
+    if real_ip is not None and (not hops or hops[-1] != real_ip):
+        hops.append(real_ip)
+    if not hops:
+        return None
 
-    return None
+    for hop in reversed(hops):
+        if not _is_trusted_proxy(hop):
+            return str(hop)
+    return str(hops[0])
 
 
 def client_ip(request: Request) -> str:

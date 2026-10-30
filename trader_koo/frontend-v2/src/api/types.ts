@@ -113,8 +113,6 @@ export interface PipelineStatus {
     contract: string;
     contract_version: string;
     version: string;
-    auth_header: string;
-    admin_auth_configured: boolean;
     runtime_started_ts: string;
     base_url?: string;
     app_url?: string;
@@ -122,14 +120,6 @@ export interface PipelineStatus {
     git_sha?: string;
     deployed_ts?: string;
     deployment_id?: string;
-    actions: Array<{
-      id: string;
-      label: string;
-      description: string;
-      method: string;
-      path: string;
-      confirm_text?: string;
-    }>;
   };
 }
 
@@ -954,7 +944,6 @@ export interface PaperTrade {
   ml_predicted_win_prob?: number | null;
   ml_confidence?: number | null;
   ml_signal?: string | null;
-  notes?: string | null;
   quantity?: number | null;
   entry_notional?: number | null;
   entry_commission?: number | null;

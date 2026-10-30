@@ -379,10 +379,10 @@ def _logical_orphan_diagnostics(
 
 def _data_diagnostics(
     conn: sqlite3.Connection,
-    contract: dict[str, Any],
+    contract: dict[str, Any], page_scan: bool = True,
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
-    integrity = [str(row[0]) for row in conn.execute("PRAGMA integrity_check")]
+    integrity = [str(row[0]) for row in conn.execute("PRAGMA integrity_check")] if page_scan else ["ok"]
     if integrity != ["ok"]:
         diagnostics.append({"code": "sqlite_integrity", "result": integrity})
     foreign_keys = [list(row) for row in conn.execute("PRAGMA foreign_key_check")]
@@ -536,7 +536,7 @@ def _verify_paper_schema_v5(
     conn: sqlite3.Connection,
     *,
     contract_path: Path = DEFAULT_CONTRACT_PATH,
-    require_active_transaction: bool,
+    require_active_transaction: bool, page_scan: bool = True,
 ) -> dict[str, Any]:
     """Shared exact verifier; callers choose the transaction ownership contract."""
     if not require_active_transaction and conn.in_transaction:
@@ -564,7 +564,7 @@ def _verify_paper_schema_v5(
         diagnostics = list(object_diagnostics)
         diagnostics.extend(_identity_diagnostics(conn, contract))
         if not object_diagnostics:
-            diagnostics.extend(_data_diagnostics(conn, contract))
+            diagnostics.extend(_data_diagnostics(conn, contract, page_scan))
             diagnostics.extend(_legacy_read_diagnostics(conn))
     finally:
         target.close()
@@ -608,9 +608,9 @@ def verify_paper_schema_v5(
 def _verify_paper_schema_v5_in_transaction(
     conn: sqlite3.Connection,
     *,
-    contract_path: Path = DEFAULT_CONTRACT_PATH,
+    contract_path: Path = DEFAULT_CONTRACT_PATH, page_scan: bool = True,
 ) -> dict[str, Any]:
-    """Verify exact v5 semantics inside a caller-owned write transaction."""
+    """Verify exact v5 semantics inside a caller-owned write transaction; page_scan=False skips integrity_check."""
     return _verify_paper_schema_v5(
-        conn, contract_path=contract_path, require_active_transaction=True,
+        conn, contract_path=contract_path, require_active_transaction=True, page_scan=page_scan,
     )

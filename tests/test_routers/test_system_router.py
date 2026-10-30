@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID
+
 
 class TestHealthEndpoint:
     def test_health_returns_200(self, test_app):
@@ -38,13 +40,11 @@ class TestConfigEndpoint:
 
         assert response.status_code == 200
 
-    def test_config_has_auth_block(self, test_app):
+    def test_config_omits_auth_block(self, test_app):
         response = test_app.get("/api/config")
         data = response.json()
 
-        assert "auth" in data
-        assert "admin_api_key_required" in data["auth"]
-        assert "admin_api_key_header" in data["auth"]
+        assert "auth" not in data
 
     def test_config_does_not_expose_secrets(self, test_app):
         response = test_app.get("/api/config")
@@ -85,7 +85,7 @@ class TestMethodologyStatsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["ok"] is True
-        assert data["paper_campaign_id"] == "paper-v2"
+        assert data["paper_campaign_id"] == PAPER_TRADE_CAMPAIGN_ID
         assert data["paper_trades_total"] == 0
         assert "legacy_paper_trades_total" in data
         assert data["paper_campaign_write_state"] in {"enabled", "paused"}

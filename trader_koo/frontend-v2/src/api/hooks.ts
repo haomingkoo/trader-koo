@@ -66,12 +66,12 @@ export function useChartCommentary(ticker: string, enabled: boolean = true) {
   });
 }
 
-export function usePaperTradeSummary(campaignId: string = "paper-v2") {
+// Without a campaign id the API answers for the campaign the backend is running.
+export function usePaperTradeSummary(campaignId?: string) {
+  const query = campaignId ? `?campaign_id=${encodeURIComponent(campaignId)}` : "";
   return useQuery({
-    queryKey: ["paper-trades-summary", campaignId],
-    queryFn: () => apiFetch<PaperTradeSummary>(
-      `/api/paper-trades/summary?campaign_id=${encodeURIComponent(campaignId)}`,
-    ),
+    queryKey: ["paper-trades-summary", campaignId ?? "running"],
+    queryFn: () => apiFetch<PaperTradeSummary>(`/api/paper-trades/summary${query}`),
     staleTime: 2 * 60 * 1000,
   });
 }
@@ -95,15 +95,16 @@ export function useExperimentResults() {
 export function usePaperTrades(
   status: string = "all",
   direction: string = "all",
-  campaignId: string = "paper-v2",
+  campaignId?: string,
 ) {
   // Backend rejects direction=all — only send direction if it's long or short
   const dirParam = direction === "long" || direction === "short" ? `&direction=${direction}` : "";
+  const campaignParam = campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : "";
   return useQuery({
-    queryKey: ["paper-trades", status, direction, campaignId],
+    queryKey: ["paper-trades", status, direction, campaignId ?? "running"],
     queryFn: () =>
       apiFetch<PaperTradeList>(
-        `/api/paper-trades?status=${status}${dirParam}&campaign_id=${encodeURIComponent(campaignId)}&limit=500`,
+        `/api/paper-trades?status=${status}${dirParam}${campaignParam}&limit=500`,
       ),
     staleTime: 2 * 60 * 1000,
   });
@@ -263,25 +264,6 @@ export function useFearGreed() {
     queryKey: ["market-sentiment"],
     queryFn: () => apiFetch<FearGreedPayload>("/api/market-sentiment"),
     staleTime: 5 * 60 * 1000,
-  });
-}
-
-export function useUpdateTradeNotes() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ tradeId, notes }: { tradeId: number; notes: string }) => {
-      return apiFetch<{ ok: boolean; trade_id: number; notes: string }>(
-        `/api/paper-trades/${tradeId}/notes`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ notes }),
-        },
-      );
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["paper-trades"] });
-      void queryClient.invalidateQueries({ queryKey: ["paper-trades-summary"] });
-    },
   });
 }
 

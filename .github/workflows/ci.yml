@@ -114,6 +114,20 @@ jobs:
       - name: Install backend dependencies
         run: make backend-install
 
+      # Audits exactly what CI installed. The freeze runs before pip-audit is
+      # installed so the auditor's own dependencies are not in scope.
+      # Ignored advisories (each needs a reason and an owner follow-up):
+      # - PYSEC-2026-2431 (CVE-2026-33752, curl_cffi redirect SSRF): yfinance
+      #   1.2.0 caps curl_cffi below 0.14 and the fix is 0.15. yfinance only
+      #   requests fixed Yahoo URLs. Remove once yfinance is upgraded.
+      - name: Audit Python dependencies for known vulnerabilities
+        run: |
+          python -m pip freeze --exclude-editable > "$RUNNER_TEMP/installed-requirements.txt"
+          python -m pip install pip-audit==2.10.1
+          python -m pip_audit --no-deps --disable-pip \
+            --ignore-vuln PYSEC-2026-2431 \
+            -r "$RUNNER_TEMP/installed-requirements.txt"
+
       - name: Run auth, audit, redaction, and property contracts
         run: >-
           python -m pytest -q

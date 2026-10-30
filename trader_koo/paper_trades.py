@@ -36,7 +36,7 @@ PAPER_TRADE_EXPIRY_DAYS = int(os.getenv("TRADER_KOO_PAPER_TRADE_EXPIRY_DAYS", "1
 PAPER_TRADE_STOP_ATR_MULT = float(os.getenv("TRADER_KOO_PAPER_TRADE_STOP_ATR_MULT", "1.5"))
 PAPER_TRADE_DEFAULT_STOP_PCT = float(os.getenv("TRADER_KOO_PAPER_TRADE_DEFAULT_STOP_PCT", "3.0"))
 PAPER_TRADE_MIN_REWARD_R = float(os.getenv("TRADER_KOO_PAPER_TRADE_MIN_REWARD_R", "2.0"))
-PAPER_TRADE_CAMPAIGN_ID = os.getenv("TRADER_KOO_PAPER_TRADE_CAMPAIGN_ID", "paper-v2")
+PAPER_TRADE_CAMPAIGN_ID = os.getenv("TRADER_KOO_PAPER_TRADE_CAMPAIGN_ID", "paper-v3")
 PAPER_TRADE_ZERO_ADMISSION_STREAK = int(
     os.getenv("TRADER_KOO_PAPER_TRADE_ZERO_ADMISSION_STREAK", "3")
 )
@@ -75,7 +75,7 @@ _QUALIFYING_ACTIONABILITY = frozenset({"higher-probability", "conditional"})
 _QUALIFYING_DIRECTIONS = frozenset({"long", "short"})
 
 _TIER_RANK = {"A": 1, "B": 2, "C": 3, "D": 4, "F": 5}
-_PAPER_DECISION_VERSION = "paper-campaign-v2.0"
+_PAPER_DECISION_VERSION = "paper-campaign-v3.0"
 _DEBATE_CAUTION_AGREEMENT = 60.0
 _HIGH_VOL_ATR_PCT = 6.0
 
@@ -158,6 +158,23 @@ def create_paper_trades_from_report(
     )
 
 
+def register_runtime_campaign(conn: sqlite3.Connection) -> bool:
+    """Register the declared runtime campaign as a draft at startup, only while writes are enabled.
+
+    Closes the window between a policy deploy and the first report run in which the
+    running campaign has no row. Never activates anything; returns True when a row was added.
+    """
+    from trader_koo.paper_trade.registry import register_declared_campaign
+
+    try:
+        require_paper_trade_writes()
+    except PaperTradeWritesDisabled:
+        return False
+    inserted = register_declared_campaign(conn, _build_config())
+    conn.commit()
+    return inserted
+
+
 def mark_to_market(conn: sqlite3.Connection) -> dict[str, Any]:
     require_paper_trade_writes()
     return _mark_to_market_impl(conn, config=_build_config())
@@ -230,7 +247,7 @@ def list_paper_trades(
     from_date: str | None = None,
     to_date: str | None = None,
     limit: int = 100,
-    campaign_id: str = "paper-v2",
+    campaign_id: str = PAPER_TRADE_CAMPAIGN_ID,
 ) -> list[dict[str, Any]]:
     return _list_paper_trades_impl(
         conn,

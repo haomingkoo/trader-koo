@@ -327,6 +327,27 @@ class TestEndpointSecretExposure:
         assert "stage_line" not in sanitized["pipeline"]
         assert "last_completed_line" not in sanitized["pipeline"]
 
+    def test_public_status_payload_hides_admin_surface(self):
+        """Public status must not advertise the admin header or action paths."""
+        from trader_koo.backend.routers.system import _sanitize_status_payload
+
+        payload = {
+            "service_meta": {
+                "version": "0.2.0",
+                "auth_header": "X-API-Key",
+                "admin_auth_configured": True,
+                "actions": [{"id": "run", "method": "POST", "path": "/api/admin/trigger-update"}],
+            },
+        }
+
+        public = _sanitize_status_payload(payload, expose_internal=False)
+        internal = _sanitize_status_payload(payload, expose_internal=True)
+
+        for key in ("auth_header", "admin_auth_configured", "actions"):
+            assert key not in public["service_meta"]
+            assert key in internal["service_meta"]
+        assert public["service_meta"]["version"] == "0.2.0"
+
     def test_internal_status_payload_keeps_operational_details(self):
         """Internal status payload can retain debug detail when explicitly enabled."""
         from trader_koo.backend.routers.system import _sanitize_status_payload
