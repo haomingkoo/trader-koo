@@ -28,6 +28,9 @@ from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
 from trader_koo.notifications.formatting import telegram_markdown_safe as _md_safe
+from trader_koo.notifications.green_barrier_text import (
+    GREEN_BARRIER_SUMMARY_NOTE, format_green_barrier_line, green_barrier_caption,
+)
 from trader_koo.notifications.telegram import (
     PUBLIC_BASE_URL,
     is_configured,
@@ -816,14 +819,9 @@ def generate_morning_summary(
 
     if green_barrier_hits:
         lines.append("🟢 *Green Barrier Current Conditions*")
-        lines.append("_Williams %R(14) at or below the configured threshold. Repeated daily while active._")
+        lines.append(f"_{GREEN_BARRIER_SUMMARY_NOTE}_")
         for hit in green_barrier_hits[:8]:
-            ticker = _md_safe(str(hit.get("ticker") or "?"))
-            timeframe = _md_safe(str(hit.get("timeframe") or "?"))
-            value = hit.get("value")
-            value_text = f"{float(value):.1f}" if isinstance(value, (int, float)) else "N/A"
-            asof = _md_safe(str(hit.get("asof") or "unknown"))
-            lines.append(f"  🟢 {ticker} {timeframe.title()} %R {value_text} ({asof})")
+            lines.append(format_green_barrier_line(hit))
         lines.append("_Selected charts may follow. Research context only; not a buy signal._")
         lines.append("")
     stale_skipped = int(green_barrier_coverage.get("stale_skipped_count") or 0)
@@ -990,10 +988,8 @@ def send_morning_summary(
                         )
                         photo_ok = send_photo(
                             png,
-                            caption=(
-                                f"🟢 *{ticker} {timeframe.title()} Green Barrier Current Condition*\n"
-                                f"Williams %R(14): *{value:.1f}* | Threshold: *{threshold:g}*\n"
-                                "Research context only — not a buy signal."
+                            caption=green_barrier_caption(
+                                hit, ticker=ticker, timeframe=timeframe, value=value, threshold=threshold
                             ),
                             filename=f"green-barrier-{ticker}-{timeframe}.png",
                             reply_markup={

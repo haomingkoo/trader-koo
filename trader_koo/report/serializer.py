@@ -174,15 +174,14 @@ def to_markdown(report: dict[str, Any]) -> str:
         lines.append("## Green Barrier Current Conditions")
         lines.append("Williams %R(14) readings at or below the configured near-barrier threshold. Repeated daily while active. Research context only.")
         lines.append("")
-        lines.append("| ticker | timeframe | Williams %R | threshold | distance to -100 | as of | close |")
-        lines.append("|---|---|---:|---:|---:|---|---:|")
-        for row in green_barrier_hits:
-            if not isinstance(row, dict):
-                continue
+        lines.append("| ticker | timeframe | Williams %R | threshold | distance to -100 | as of | close | now (bar forming) | now as of |")
+        lines.append("|---|---|---:|---:|---:|---|---:|---:|---|")
+        for row in (item for item in green_barrier_hits if isinstance(item, dict)):
             lines.append(
                 f"| {row.get('ticker', '-')} | {row.get('timeframe', '-')} | {row.get('value', '-')} | "
-                f"{row.get('threshold', '-')} | {row.get('distance_to_barrier', '-')} | "
-                f"{row.get('asof', '-')} | {row.get('close', '-')} |"
+                f"{row.get('threshold', '-')} | {row.get('distance_to_barrier', '-')} | {row.get('asof', '-')} | "
+                f"{row.get('close', '-')} | {'-' if row.get('in_progress_value') is None else row['in_progress_value']} | "
+                f"{row.get('in_progress_asof') or '-'} |"
             )
     green_barrier_coverage = signals.get("green_barrier_coverage", {})
     if isinstance(green_barrier_coverage, dict) and green_barrier_coverage:
