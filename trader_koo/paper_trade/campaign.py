@@ -400,9 +400,9 @@ def transition_campaign(conn: sqlite3.Connection, *, campaign_id: str, action: s
         raise ValueError("actor, reason, and idempotency_key are required")
     schema_pin = None
     if action == "activate":
-        from trader_koo.paper_trade.schema import _paper_schema_path_pin
+        from trader_koo.paper_trade.schema import _verified_paper_schema_path_pin
 
-        schema_pin = _paper_schema_path_pin(conn)
+        schema_pin = _verified_paper_schema_path_pin(conn)
     conn.execute("BEGIN IMMEDIATE")
     try:
         if schema_pin is not None:
