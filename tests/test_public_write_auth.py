@@ -11,6 +11,7 @@ from trader_koo.backend.routers import paper_trades as paper_trades_module
 from trader_koo.backend.routers import streaming as streaming_module
 from trader_koo.backend.services.database import get_conn
 from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.streaming.finnhub_ws import MAX_SUBSCRIPTIONS, FinnhubWSClient
 from tests.test_routers.test_paper_trades_router import _publish_report_fixture
@@ -41,7 +42,8 @@ def notes_client(tmp_path, monkeypatch):
            (id, report_date, ticker, direction, entry_price, entry_date, status,
             current_price, generated_ts, report_run_id, campaign_id)
            VALUES (7, '2026-08-21', 'REJECT', 'long', 100, '2026-08-21', 'open', 101,
-                   '2026-08-21T12:00:00Z', 'notes-run', 'paper-v2')"""
+                   '2026-08-21T12:00:00Z', 'notes-run', ?)""",
+        (PAPER_TRADE_CAMPAIGN_ID,),
     )
     conn.commit()
     conn.close()

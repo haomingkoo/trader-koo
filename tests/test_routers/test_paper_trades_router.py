@@ -22,6 +22,8 @@ from trader_koo.paper_trade.campaign import (
 )
 from trader_koo.paper_trade.config import config_snapshot
 from trader_koo.paper_trades import _build_config
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID as CAMPAIGN, _PAPER_DECISION_VERSION as DECISION_VERSION
+from trader_koo.paper_trade.registry import register_declared_campaign
 from trader_koo.report.runs import complete_report_run, publish_report_run
 
 
@@ -133,8 +135,8 @@ class TestPaperTradeSummaryEndpoint:
         assert evidence["consumed_window"]["reusable_for_policy_selection"] is False
         assert evidence["causal_validity"]["valid"] is False
         assert evidence["return_basis"] == "split_adjusted_price_return_only_dividends_omitted"
-        assert data["campaign_health"]["campaign_id"] == "paper-v2"
-        assert data["campaign_health"]["policy_version"] == "paper-campaign-v2.0"
+        assert data["campaign_health"]["campaign_id"] == CAMPAIGN
+        assert data["campaign_health"]["policy_version"] == DECISION_VERSION
         assert data["campaign_health"]["campaigns"][0]["campaign_id"] == "paper-v1"
         assert data["campaign_health"]["latest_report"]["report_run_id"] == "api-report-run-1"
         assert data["campaign_health"]["latest_report"]["ranked"] == 1
@@ -327,6 +329,8 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     db_path = tmp_path / "campaign-admin.db"
     conn = sqlite3.connect(db_path)
     ensure_paper_trade_schema(conn)
+    register_declared_campaign(conn, _build_config())
+    conn.commit()
     conn.close()
 
     def open_db():
@@ -339,7 +343,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     )
     app.include_router(admin_router)
     unauthenticated = TestClient(app).post(
-        "/api/admin/paper-campaigns/paper-v2/transition",
+        f"/api/admin/paper-campaigns/{CAMPAIGN}/transition",
         json={
             "action": "activate", "reason": "paper validation approved",
             "idempotency_key": "admin-activation-001",
@@ -353,7 +357,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     )
     authenticated_app.include_router(admin_router)
     response = TestClient(authenticated_app).post(
-        "/api/admin/paper-campaigns/paper-v2/transition",
+        f"/api/admin/paper-campaigns/{CAMPAIGN}/transition",
         headers={"X-API-Key": "x" * 32},
         json={
             "action": "activate", "reason": "paper validation approved",
@@ -364,7 +368,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     approval_conn = sqlite3.connect(db_path)
     config = _build_config()
     record_experiment_preregistration(
-        approval_conn, preregistration_id="admin-prereg", campaign_id="paper-v2",
+        approval_conn, preregistration_id="admin-prereg", campaign_id=CAMPAIGN,
         policy_version=config.decision_version,
         policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
         gates={
@@ -374,7 +378,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     )
     experiment = record_promotion_experiment(
         approval_conn, experiment_id="admin-exp", preregistration_id="admin-prereg",
-        campaign_id="paper-v2",
+        campaign_id=CAMPAIGN,
         policy_version=config.decision_version,
         policy_hash=canonical_hash(config_snapshot(config)), dataset_hash="d" * 64,
         metrics={
@@ -393,7 +397,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     approval_conn.commit()
     approval_conn.close()
     approval_response = TestClient(authenticated_app).post(
-        "/api/admin/paper-campaigns/paper-v2/approvals",
+        f"/api/admin/paper-campaigns/{CAMPAIGN}/approvals",
         headers={"X-API-Key": "x" * 32},
         json={
             "approval_id": "admin-approval", "experiment_id": "admin-exp",
@@ -404,7 +408,7 @@ def test_campaign_transition_route_requires_identity_and_audits_actor(
     )
     assert approval_response.status_code == 200
     response = TestClient(authenticated_app).post(
-        "/api/admin/paper-campaigns/paper-v2/transition",
+        f"/api/admin/paper-campaigns/{CAMPAIGN}/transition",
         headers={"X-API-Key": "x" * 32},
         json={
             "action": "activate", "reason": "paper validation approved",

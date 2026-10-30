@@ -19,9 +19,9 @@ test("paper campaign renders a real sealed decision through API and UI", async (
   await page.goto("/paper-trades");
 
   const panel = page.getByTestId("paper-campaign-health");
-  await expect(panel).toContainText("paper-v2");
+  await expect(panel).toContainText("paper-v3");
   await expect(panel).toContainText("draft");
-  await expect(panel).toContainText("paper-campaign-v2.0");
+  await expect(panel).toContainText("paper-campaign-v3.0");
   await expect(panel).toContainText("eligibility.tier/tier_below_minimum (1)");
   await expect(panel.getByText("unhealthy")).toBeVisible();
 

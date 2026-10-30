@@ -48,7 +48,7 @@ from trader_koo.security.error_middleware import ErrorSanitizationMiddleware
 from trader_koo.audit import AuditLogger, ensure_audit_schema
 from trader_koo.audit.middleware import AuditMiddleware, log_auth_attempt
 from trader_koo.email_subscribers import ensure_subscriber_schema
-from trader_koo.paper_trades import ensure_paper_trade_schema
+from trader_koo.paper_trades import ensure_paper_trade_schema, register_runtime_campaign
 from trader_koo.ratelimit.integration import initialize_rate_limiting
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ async def lifespan(_app: FastAPI):
             ensure_audit_schema(conn)
             LOG.info("Audit logging schema initialized")
             ensure_paper_trade_schema(conn)
-            LOG.info("Paper trade schema initialized")
+            LOG.info("Paper trade schema initialized; runtime campaign newly registered as draft: %s", register_runtime_campaign(conn))
             try:
                 from trader_koo.report.calibration_pulse import ensure_calibration_schema
                 ensure_calibration_schema(conn)

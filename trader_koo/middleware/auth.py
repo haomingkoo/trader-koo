@@ -254,11 +254,24 @@ def route_uses_admin_dependency(route: APIRoute) -> bool:
     return False
 
 
+def resolved_routes(app: Any) -> list[Any]:
+    """Every served route with its full path and dependency tree.
+
+    FastAPI 0.16x keeps included routers nested in ``app.routes``; its public
+    ``iter_route_contexts`` resolves them. Older versions flatten the routes.
+    """
+    try:
+        from fastapi.routing import iter_route_contexts
+    except ImportError:
+        return list(app.routes)
+    return [ctx for ctx in iter_route_contexts(app.routes) if isinstance(ctx.original_route, APIRoute)]
+
+
 def admin_route_inventory(app: Any) -> list[dict[str, Any]]:
     """Describe the runtime admin surface from FastAPI's resolved routes."""
     rows: list[dict[str, Any]] = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute) or not (
+    for route in resolved_routes(app):
+        if not isinstance(getattr(route, "original_route", route), APIRoute) or not (
             route.path == "/api/admin" or route.path.startswith("/api/admin/")
         ):
             continue

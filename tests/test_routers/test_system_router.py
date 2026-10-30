@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID
+
 
 class TestHealthEndpoint:
     def test_health_returns_200(self, test_app):
@@ -85,7 +87,7 @@ class TestMethodologyStatsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["ok"] is True
-        assert data["paper_campaign_id"] == "paper-v2"
+        assert data["paper_campaign_id"] == PAPER_TRADE_CAMPAIGN_ID
         assert data["paper_trades_total"] == 0
         assert "legacy_paper_trades_total" in data
         assert data["paper_campaign_write_state"] in {"enabled", "paused"}
