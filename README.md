@@ -1,5 +1,13 @@
 # Trader Koo
 
+<p align="center">
+  <a href="https://kooexperience.com/projects/trader-koo.html"><img src="https://kooexperience.com/assets/video/trader-poster.webp" width="800" alt="Trader Koo launch video poster: source freshness stamps, YOLOv8 pattern boxes on the SPY chart and ranked setups, paper trading only"></a>
+  <br>
+  <a href="https://kooexperience.com/assets/video/trader.mp4">▶ Launch video</a> · <a href="https://trader.kooexperience.com/">Live app</a> · <a href="https://kooexperience.com/projects/trader-koo.html">Case study</a>
+  <br>
+  <sub>Music: Sascha Ende, ende.app (CC BY 4.0)</sub>
+</p>
+
 Evidence-first market research dashboard with daily reports, chart setups,
 VIX/options/crypto views, actionable Telegram alerts, and a paper-trading audit
 trail.
