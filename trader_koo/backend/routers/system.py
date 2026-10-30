@@ -21,6 +21,7 @@ from trader_koo.backend.services.pipeline import (
     pipeline_status_snapshot,
     post_ingest_resume_candidate,
     set_cached_status,
+    STATUS_REFRESH_LOCK,
 )
 from trader_koo.backend.services.report_loader import is_report_fresh
 from trader_koo.report.runs import resolve_published_report
@@ -393,13 +394,15 @@ def macro_live() -> dict[str, Any]:
 @router.get("/api/status")
 def status() -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
-
-    cached = get_cached_status(now)
-    if cached is not None:
+    if (cached := get_cached_status(now)) is not None:
         return cached
+    with STATUS_REFRESH_LOCK:
+        cached = get_cached_status(now)
+        return cached if cached is not None else _compute_status(now)
 
-    rss_now = _current_rss_mb()
-    rss_max = _max_rss_mb()
+
+def _compute_status(now: dt.datetime) -> dict[str, Any]:
+    rss_now, rss_max = _current_rss_mb(), _max_rss_mb()
     base: dict[str, Any] = {
         "service": "trader_koo-api",
         "now_utc": now.replace(microsecond=0).isoformat(),
