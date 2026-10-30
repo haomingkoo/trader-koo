@@ -43,6 +43,7 @@ if str(ROOT_DIR) not in sys.path:
 from trader_koo.config import validate_config, ConfigError
 from trader_koo.middleware.cors import RestrictiveCORSMiddleware
 from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
+from trader_koo.middleware.security_headers import SecurityHeadersMiddleware
 from trader_koo.security.logging_filter import install_secret_redaction_filter
 from trader_koo.security.error_middleware import ErrorSanitizationMiddleware
 from trader_koo.audit import AuditLogger, ensure_audit_schema
@@ -504,21 +505,19 @@ async def lifespan(_app: FastAPI):
 # App creation
 # ---------------------------------------------------------------------------
 
+_DOCS_ENABLED = os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1"  # read before routes register
 app = FastAPI(
     title="trader_koo API",
     version="0.2.0",
-    docs_url=None,
-    redoc_url=None,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
     lifespan=lifespan,
 )
 app.state.admin_authenticator = AdminAuthenticator(
     AdminAuthConfig.from_env(),
     audit_recorder=_record_admin_auth_attempt,
 )
-if os.getenv("TRADER_KOO_DOCS_ENABLED", "0") == "1":
-    app.docs_url = "/docs"
-    app.redoc_url = "/redoc"
-    app.openapi_url = "/openapi.json"
 
 # ---------------------------------------------------------------------------
 # CORS middleware
@@ -558,6 +557,7 @@ from trader_koo.ratelimit.middleware import RateLimitMiddleware
 
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(MaintenanceInterlockMiddleware, db_path=DB_PATH)
+app.add_middleware(SecurityHeadersMiddleware)  # outermost: also covers 429 and 503
 
 
 # ---------------------------------------------------------------------------

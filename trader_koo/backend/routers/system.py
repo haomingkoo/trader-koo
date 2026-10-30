@@ -270,7 +270,9 @@ def _sanitize_status_payload(payload: dict[str, Any], *, expose_internal: bool) 
         return sanitized
 
     service_meta = dict(sanitized.get("service_meta") or {})
-    for key in ("git_sha", "deployed_ts", "deployment_id"):
+    # Admin header name and action paths are an attack map; keep them private.
+    for key in ("git_sha", "deployed_ts", "deployment_id",
+                "auth_header", "admin_auth_configured", "actions"):
         service_meta.pop(key, None)
     sanitized["service_meta"] = service_meta
 
@@ -324,12 +326,7 @@ def release() -> dict[str, Any]:
 @router.get("/api/config", include_in_schema=False)
 def config() -> dict[str, Any]:
     """Public client config -- never expose secrets (Requirement 6.6)."""
-    response = {
-        "auth": {
-            "admin_api_key_required": bool(API_KEY),
-            "admin_api_key_header": "X-API-Key",
-        },
-    }
+    response: dict[str, Any] = {}
     return sanitize_public_response(response)
 
 

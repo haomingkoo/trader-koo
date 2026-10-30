@@ -18,6 +18,12 @@ const queryClient = new QueryClient({
   },
 });
 
+try {
+  localStorage.removeItem("trader_koo_admin_key");
+} catch {
+  /* storage blocked */
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
