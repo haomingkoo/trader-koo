@@ -130,7 +130,7 @@ def _check_regime_alignment(
             return False, "Regime unknown and VIX unavailable. Blocking without regime data."
         if vix > REGIME_VIX_UNKNOWN_BLOCK:
             return False, f"Regime unknown but VIX={vix:.1f} elevated. Blocking without regime data."
-        return True, "Regime unknown, low-vol environment — allowing"
+        return False, f"Regime unknown (VIX={vix:.1f}). Blocking without regime data."
 
     is_bull = "bull" in regime
     is_bear = "bear" in regime
@@ -232,8 +232,9 @@ def _check_portfolio_concentration(
                 "SELECT ticker,direction,setup_family FROM paper_trades WHERE status='open' AND campaign_id=?",
                 (campaign_id,),
             ).fetchall()
-    except Exception:
-        return True, "Could not check portfolio — allowing"
+    except sqlite3.Error as exc:
+        LOG.error("Critic could not read open paper trades: %s", exc)
+        return False, f"Could not check portfolio ({exc}) — blocking"
 
     open_count = len(open_trades)
 
@@ -495,20 +496,14 @@ def critic_review(
         ("family_edge", lambda: _check_family_edge(conn, row, evaluation, campaign_id)),
     ]
 
-    # Checks that depend on external data availability — fail open on error
-    data_dependent_checks = {"regime_alignment", "volatility_environment", "rolling_expectancy", "family_edge"}
-
+    # A check that cannot run is missing evidence, so it rejects the trade.
     for name, fn in name_fn_pairs:
         try:
             passed, reason = fn()
             checks.append((name, passed, reason))
         except Exception as exc:
-            if name in data_dependent_checks:
-                LOG.warning("Critic check '%s' failed open (data unavailable): %s", name, exc)
-                checks.append((name, True, f"Check error — data unavailable (allowing): {exc}"))
-            else:
-                LOG.error("Critic check '%s' failed closed (rejecting): %s", name, exc)
-                checks.append((name, False, f"Check error (rejecting): {exc}"))
+            LOG.error("Critic check '%s' failed closed (rejecting): %s", name, exc)
+            checks.append((name, False, f"Check error (rejecting): {exc}"))
 
     passed_count = sum(1 for _, p, _ in checks if p)
     total = len(checks)

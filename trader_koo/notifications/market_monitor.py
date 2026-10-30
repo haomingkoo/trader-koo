@@ -519,6 +519,7 @@ def send_spike_alerts(db_path: Path) -> int:
         new_prob: float,
         *,
         legacy_key: str | None = None,
+        relative_pct: float | None = None,  # prices: the move is in percent of the last alerted value
     ) -> bool:
         """Only alert if direction changed or prob moved 5+ pts since last alert."""
         keys = (key, legacy_key) if legacy_key and legacy_key != key else (key, key)
@@ -532,14 +533,12 @@ def send_spike_alerts(db_path: Path) -> int:
             """,
             (*keys, key),
         ).fetchone()
-        if row is None:
-            return True  # never alerted
-        old_dir, old_prob = row
-        if old_dir != direction:
-            return True  # direction reversed
-        if abs(new_prob - (old_prob or 0)) >= 5.0:
-            return True  # moved another 5+ pts
-        return False  # same direction, small move — skip
+        if row is None or row[0] != direction:
+            return True  # never alerted, or direction reversed
+        old_prob = row[1]
+        if relative_pct is not None:
+            return not old_prob or abs(new_prob / old_prob - 1.0) * 100.0 >= relative_pct
+        return abs(new_prob - (old_prob or 0)) >= 5.0  # moved another 5+ pts; else same direction, small move
 
     def _mark_alerted(
         key: str,
@@ -617,7 +616,7 @@ def send_spike_alerts(db_path: Path) -> int:
             new_price = spike.get("new_price", 0)
             key = f"crypto:{sym}"
 
-            if not _should_alert(key, direction, new_price):
+            if not _should_alert(key, direction, new_price, relative_pct=_CRYPTO_PRICE_THRESHOLD_PCT):
                 continue
 
             arrow = "\U0001F4C8" if direction == "up" else "\U0001F4C9"
