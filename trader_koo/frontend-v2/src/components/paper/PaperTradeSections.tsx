@@ -332,21 +332,6 @@ const pnlColor = (value: number | null | undefined): string => {
   return "";
 };
 
-/* ── Trade Notes (read-only; edits need the admin key via the API) ── */
-function TradeNotes({ trade }: { trade: PaperTrade }) {
-  if (!trade.notes) {
-    return <span className="mt-1 block text-[10px] text-[var(--muted)]">{"\u2014"}</span>;
-  }
-  return (
-    <span
-      className="mt-1 block max-w-full truncate text-[10px] text-[var(--muted)]"
-      title={trade.notes}
-    >
-      {trade.notes}
-    </span>
-  );
-}
-
 export function PaperCampaignHealthPanel({
   health,
 }: {
@@ -746,7 +731,6 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
               <th className="px-3 py-2 font-semibold">Tier</th>
               <th className="px-3 py-2 font-semibold">Entry Date</th>
               <th className="px-3 py-2 font-semibold">Why</th>
-              <th className="px-3 py-2 font-semibold">Notes</th>
             </tr>
           </thead>
           <tbody>
@@ -789,9 +773,6 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
                   <td className="px-3 py-2 text-[var(--muted)]">{t.entry_date ?? "\u2014"}</td>
                   <td className="px-3 py-2 min-w-[260px] max-w-[360px]">
                     <TradeRationale trade={t} />
-                  </td>
-                  <td className="px-3 py-2 min-w-[120px] max-w-[200px]">
-                    <TradeNotes trade={t} />
                   </td>
                 </tr>
               );
@@ -1344,7 +1325,6 @@ const CSV_COLUMNS = [
   "entry_reason",
   "entry_evidence",
   "entry_risks",
-  "notes",
 ] as const;
 
 function escapeCsvField(value: unknown): string {
@@ -1541,14 +1521,6 @@ const tradeColumns = [
     render: (_value: unknown, row: unknown) => {
       const trade = row as PaperTrade;
       return <TradeRationale trade={trade} />;
-    },
-  },
-  {
-    key: "notes" as const,
-    label: "Notes",
-    render: (_value: unknown, row: unknown) => {
-      const trade = row as PaperTrade;
-      return <TradeNotes trade={trade} />;
     },
   },
 ];

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from trader_koo.backend.routers import paper_trades as paper_trades_module
 from trader_koo.backend.routers import streaming as streaming_module
+from trader_koo.backend.services.database import get_conn
 from trader_koo.middleware.auth import AdminAuthConfig, AdminAuthenticator
 from trader_koo.paper_trade.schema import ensure_paper_trade_schema
 from trader_koo.streaming.finnhub_ws import MAX_SUBSCRIPTIONS, FinnhubWSClient
@@ -44,7 +45,7 @@ def notes_client(tmp_path, monkeypatch):
     )
     conn.commit()
     conn.close()
-    monkeypatch.setattr(paper_trades_module, "get_conn", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(paper_trades_module, "get_conn", lambda: get_conn(db_path))
 
     def stored_notes():
         with sqlite3.connect(db_path) as check:
@@ -152,3 +153,50 @@ def test_always_on_symbols_are_never_evicted():
     client._subscribed.update(always_on)
     assert client.subscribe("NVDA") is False
     assert set(client.get_subscribed_symbols()) == set(always_on)
+
+
+def _public_trade_payloads(client, headers=None):
+    """Every public response that carries paper-trade rows."""
+    listing = client.get("/api/paper-trades", headers=headers)
+    summary = client.get("/api/paper-trades/summary", headers=headers)
+    detail = client.get("/api/paper-trades/7", headers=headers)
+    for response in (listing, summary, detail):
+        assert response.status_code == 200, response.text
+    if headers:
+        for response in (listing, summary, detail):
+            assert response.headers["cache-control"] == "private, no-store"
+    return {
+        "list": listing.json()["trades"],
+        "summary": summary.json()["recent_trades"],
+        "detail": [detail.json()["trade"]],
+    }
+
+
+def test_trade_notes_are_hidden_from_anonymous_readers(notes_client):
+    client, _ = notes_client
+    assert client.patch(
+        "/api/paper-trades/7/notes", json={"notes": "private thesis"}, headers=ADMIN,
+    ).status_code == 200
+
+    payloads = _public_trade_payloads(client)
+    for name, trades in payloads.items():
+        assert [t["id"] for t in trades] == [7], name
+        assert "notes" not in trades[0], name
+        assert "private thesis" not in str(trades), name
+
+
+def test_trade_notes_are_returned_with_admin_key(notes_client):
+    client, _ = notes_client
+    assert client.patch(
+        "/api/paper-trades/7/notes", json={"notes": "private thesis"}, headers=ADMIN,
+    ).status_code == 200
+
+    payloads = _public_trade_payloads(client, headers=ADMIN)
+    for name, trades in payloads.items():
+        assert trades[0]["notes"] == "private thesis", name
+
+
+def test_wrong_key_on_trade_reads_is_rejected(notes_client):
+    client, _ = notes_client
+    response = client.get("/api/paper-trades", headers={"X-API-Key": "wrong"})
+    assert response.status_code == 401

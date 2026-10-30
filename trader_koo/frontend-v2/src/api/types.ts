@@ -954,7 +954,6 @@ export interface PaperTrade {
   ml_predicted_win_prob?: number | null;
   ml_confidence?: number | null;
   ml_signal?: string | null;
-  notes?: string | null;
   quantity?: number | null;
   entry_notional?: number | null;
   entry_commission?: number | null;
