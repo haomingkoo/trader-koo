@@ -77,3 +77,13 @@ by t against the observation 12 months earlier, both from the same vintage.
 A rule that has no value on a day (data not yet started) holds exposure 1 that
 day, and the count of such days is reported. For H1 that is before 2009-09-18,
 outside the window.
+
+## Amendment 1 (2026-10-30 SGT, before any v7 result was read)
+
+The cash rate is changed from ^IRX to FRED DTB3 (3-month Treasury bill,
+secondary market, percent, loaded like T10Y2Y: current file, each value known
+from the next calendar day). Reason: the stored ^IRX closes mix units. Yearly
+means are 192 in 2018 and 204 in 2019 (basis points), 0.03 in 2021 and 4.8 in
+2023 (percent), with no single switch date, so no rescaling is safe. The
+problem was found by a sanity check on the cash series, before any rule
+result was computed. Nothing else changes.

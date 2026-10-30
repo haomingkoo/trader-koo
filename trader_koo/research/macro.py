@@ -27,10 +27,11 @@ FRED_SERIES = {
     "CPIAUCSL": "CPI all urban consumers, monthly, seasonally adjusted",
     "DTWEXBGS": "Nominal broad U.S. dollar index, daily",
     "T10Y2Y": "10-year minus 2-year Treasury constant maturity, daily",
+    "DTB3": "3-month Treasury bill secondary market rate, daily, percent",
 }
 # Market series FRED never revises and ALFRED refuses in full (too many vintages): the current file is
 # loaded and each value is taken as known from the next calendar day, when FRED posts it.
-FRED_LATEST_SERIES = {"T10Y2Y"}
+FRED_LATEST_SERIES = {"T10Y2Y", "DTB3"}
 CBOE_SERIES = ("VIX3M", "VIX9D", "SKEW", "VVIX")
 FRED_URL = "https://api.stlouisfed.org/fred/series/observations"
 CBOE_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/{name}_History.csv"
