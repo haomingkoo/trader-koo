@@ -221,10 +221,10 @@ def earnings_calendar(
 
 @router.get("/api/vix-metrics")
 def vix_metrics() -> dict[str, Any]:
-    """Enhanced VIX metrics for the VIX dashboard."""
+    """VIX metrics from stored daily closes; ``as_of`` is the close date used."""
     conn = get_conn()
     try:
-        return {"ok": True, "source": "live", **compute_vix_metrics(conn)}
+        return {"ok": True, "source": "daily_close", **compute_vix_metrics(conn)}
     except Exception as exc:
         LOG.error("Failed to compute VIX metrics: %s", exc)
         return {"ok": False, "error": "VIX metrics computation failed"}

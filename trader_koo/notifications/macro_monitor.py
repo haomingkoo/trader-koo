@@ -169,37 +169,32 @@ def _fetch_quote(ticker: str, api_key: str) -> float | None:
 
 
 def _get_prev_close(db_path: Path, ticker: str) -> float | None:
-    """Retrieve yesterday's close from price_daily table.
+    """Retrieve the latest verified close from price_daily."""
+    row = _get_prev_close_row(db_path, ticker)
+    return row[0] if row else None
 
-    Falls back to the latest available row if today's row is missing.
-    """
+
+def _get_prev_close_row(db_path: Path, ticker: str) -> tuple[float, str] | None:
+    """Latest verified ``(close, date)`` from price_daily, or None."""
     if not db_path.exists():
         return None
 
     try:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
         from trader_koo.db.price_contract import research_price_contract
 
-        conn.execute("BEGIN")
-        if not research_price_contract(conn, [ticker])["eligible"]:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("BEGIN")
+            if not research_price_contract(conn, [ticker])["eligible"]:
+                return None
+            row = conn.execute(
+                "SELECT close, date FROM price_daily WHERE ticker = ? ORDER BY date DESC LIMIT 1",
+                (ticker,),
+            ).fetchone()
+        finally:
             conn.rollback()
             conn.close()
-            return None
-        row = conn.execute(
-            """
-            SELECT close FROM price_daily
-            WHERE ticker = ?
-            ORDER BY date DESC
-            LIMIT 1
-            """,
-            (ticker,),
-        ).fetchone()
-        conn.rollback()
-        conn.close()
-        if row is None:
-            return None
-        return float(row["close"])
+        return (float(row[0]), str(row[1])) if row else None
     except Exception as exc:
         LOG.warning("Failed to get prev close for %s: %s", ticker, exc)
         return None
@@ -533,7 +528,8 @@ def _load_macro_live(db_path: Path) -> dict[str, Any]:
     instruments: list[dict[str, Any]] = []
 
     for ticker, config in MACRO_WATCH.items():
-        prev_close = _get_prev_close(db_path, ticker)
+        prev_row = _get_prev_close_row(db_path, ticker)
+        prev_close, prev_close_date = prev_row if prev_row else (None, None)
         current: float | None = None
         change_pct: float | None = None
 
@@ -549,6 +545,10 @@ def _load_macro_live(db_path: Path) -> dict[str, Any]:
             "emoji": config["emoji"],
             "current": round(current, 4) if current is not None else None,
             "prev_close": round(prev_close, 4) if prev_close is not None else None,
+            # Finnhub serves no index quotes (^VIX, yields) on this plan, so
+            # those rows carry only the dated daily close.
+            "prev_close_date": prev_close_date,
+            "quote_source": "live" if current is not None else None,
             "change_pct": change_pct,
             "threshold_pct": config["spike_threshold_pct"],
             "exceeded": (
