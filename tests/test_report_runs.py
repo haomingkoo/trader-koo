@@ -1870,3 +1870,56 @@ def test_code_version_supports_railway_and_fails_closed_when_unknown(
     monkeypatch.setattr(runs.subprocess, "run", unavailable)
     with pytest.raises(RuntimeError, match="exact deployed code version"):
         runs.current_code_version()
+
+
+def test_repeat_resolves_reuse_one_verification(tmp_path: Path, monkeypatch):
+    import trader_koo.report.runs as runs
+
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report_dir = tmp_path / "reports"
+    run_id = _complete_and_publish(conn, report_dir, _report("CACHED"))
+    parses = []
+    real_load = runs._load_artifact_bytes
+    monkeypatch.setattr(runs, "_load_artifact_bytes", lambda data: parses.append(1) or real_load(data))
+    for _ in range(3):
+        reconcile_report_publication(conn, report_dir=report_dir)
+        path, payload = resolve_published_report(conn, report_dir=report_dir, require_current=True)
+        assert payload["report_run"]["run_id"] == run_id
+    assert len(parses) <= 1
+
+
+def test_cached_verification_still_rejects_same_size_rewrite(tmp_path: Path):
+    import os
+
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report_dir = tmp_path / "reports"
+    run_id = _complete_and_publish(conn, report_dir, _report("REWRITE"))
+    resolve_published_report(conn, report_dir=report_dir, run_id=run_id)
+    artifact = Path(conn.execute(
+        "SELECT artifact_path FROM report_runs WHERE run_id=?", (run_id,)
+    ).fetchone()[0])
+    data = artifact.read_bytes()
+    stat = artifact.stat()
+    artifact.write_bytes(data.replace(b"REWRITE", b"REWRITX"))
+    os.utime(artifact, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
+    with pytest.raises(ValueError, match="JSON artifact hash mismatch"):
+        resolve_published_report(conn, report_dir=report_dir, run_id=run_id)
+
+
+def test_history_verifies_only_the_runs_it_returns(tmp_path: Path, monkeypatch):
+    import trader_koo.report.runs as runs
+    from trader_koo.backend.services.report_loader import daily_report_history
+
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report_dir = tmp_path / "reports"
+    for minute in ("01", "02", "03"):
+        report = _report(f"H{minute}")
+        report["generated_ts"] = f"2026-08-22T12:{minute}:00Z"
+        _complete_and_publish(conn, report_dir, report)
+    checks = []
+    real = runs._verify_artifacts_uncached
+    monkeypatch.setattr(runs, "_verify_artifacts_uncached", lambda *a: checks.append(1) or real(*a))
+    runs._verified_cache.clear()
+    history = daily_report_history(report_dir, limit=1, registry_conn=conn)
+    assert [row["file"] for row in history] == [sorted(report_dir.glob("daily_report_*_*.json"))[-1].name]
+    assert len(checks) == 1
