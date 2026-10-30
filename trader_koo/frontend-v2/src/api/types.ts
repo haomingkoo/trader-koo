@@ -446,11 +446,12 @@ export interface DailyReportPayload {
 }
 
 /* ── HMM Regime ── */
+/** The chart's /regime endpoint sends only date + probabilities per day. */
 export interface HmmRegimeDay {
   date: string;
-  state: number;
-  label: string;
-  color: string;
+  state?: number;
+  label?: string;
+  color?: string;
   prob_low: number;
   prob_normal: number;
   prob_high: number;
@@ -699,12 +700,17 @@ export interface PriceDataSource {
   };
 }
 
-/** Slow-path payload from /api/dashboard/{ticker}/commentary (LLM + HMM). */
+/** Slow-path payload from /api/dashboard/{ticker}/commentary. */
 export interface DashboardCommentaryPayload {
   ticker: string;
   chart_commentary: ChartCommentary;
-  hmm_regime: HmmRegime | null;
   report_generated_ts: string | null;
+}
+
+/** HMM regime from /api/dashboard/{ticker}/regime (last ~2y of days). */
+export interface DashboardRegimePayload {
+  ticker: string;
+  hmm_regime: HmmRegime | null;
 }
 
 /* ── Opportunities ── */

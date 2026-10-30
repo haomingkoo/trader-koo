@@ -10,6 +10,7 @@ import type {
   DailyReportPayload,
   DashboardQuickPayload,
   DashboardCommentaryPayload,
+  DashboardRegimePayload,
   PaperTradeSummary,
   PaperTradeList,
   NextOpenBaselinePayload,
@@ -53,7 +54,7 @@ export function useChartQuick(ticker: string, enabled: boolean = true) {
   });
 }
 
-/** Slow path: chart commentary, debate engine, HMM regime. */
+/** Slow path: chart commentary and debate engine. */
 export function useChartCommentary(ticker: string, enabled: boolean = true) {
   return useQuery({
     queryKey: ["chart-commentary", ticker],
@@ -61,6 +62,17 @@ export function useChartCommentary(ticker: string, enabled: boolean = true) {
       apiFetch<DashboardCommentaryPayload>(
         `/api/dashboard/${ticker}/commentary?months=0`,
       ),
+    staleTime: 2 * 60 * 1000,
+    enabled: enabled && ticker.length > 0,
+  });
+}
+
+/** HMM regime, fetched apart so the commentary never waits on a model fit. */
+export function useChartRegime(ticker: string, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["chart-regime", ticker],
+    queryFn: () =>
+      apiFetch<DashboardRegimePayload>(`/api/dashboard/${ticker}/regime`),
     staleTime: 2 * 60 * 1000,
     enabled: enabled && ticker.length > 0,
   });
