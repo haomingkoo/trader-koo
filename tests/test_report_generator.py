@@ -656,3 +656,28 @@ def test_setup_rows_carry_the_market_context_fields_the_scorer_reads(
     assert {r["ticker"] for r in rows} >= {"UPP", "DWN"}
     for row in rows:
         assert {k: row.get(k) for k in CONTEXT_FIELDS} == CONTEXT_FIELDS
+
+
+def test_ensemble_adjustment_is_applied_after_the_last_rescore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trader_koo.report import generator
+
+    events: list[tuple[str, str]] = []
+    score, adjust = generator._score_setup_from_confluence, generator._apply_ensemble_adjustment
+
+    def spy_score(row):
+        events.append((row["ticker"], "rescore"))
+        return score(row)
+
+    def spy_adjust(row):
+        events.append((row["ticker"], "ensemble"))
+        return adjust(row)
+
+    monkeypatch.setattr(generator, "_score_setup_from_confluence", spy_score)
+    monkeypatch.setattr(generator, "_apply_ensemble_adjustment", spy_adjust)
+    rows = _signals_with_stale_ticker(tmp_path, monkeypatch)["setup_quality_all"]
+    assert rows
+    for row in rows:
+        mine = [e for t, e in events if t == row["ticker"]]
+        assert "rescore" in mine and mine[-1] == "ensemble", mine
