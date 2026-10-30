@@ -1121,6 +1121,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                         row["candle_bias"] = candle.get("bias") or "neutral"
                         row["candle_confidence"] = candle.get("confidence")
                     row.update(_score_setup_from_confluence(row))
+                    _apply_ensemble_adjustment(row)  # the re-score above resets score and tier
                     readout = _describe_setup(row)
                     row.update(readout)
 
