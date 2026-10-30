@@ -1090,7 +1090,7 @@ def _apply_debate_guardrails(setup_rows: list[dict[str, Any]]) -> None:
 
         if state == "watch":
             row["actionability"] = "watch-only"
-            row["setup_tier"] = _cap_tier(row.get("setup_tier"), "C")
+            row["setup_tier"], row["debate_tier_cap"] = _cap_tier(row.get("setup_tier"), "C"), "C"
             row["action"] = (
                 "Watch-only. Multi-angle evidence is mixed; wait for clearer confirmation "
                 "from trend, levels, and participation."
@@ -1098,7 +1098,7 @@ def _apply_debate_guardrails(setup_rows: list[dict[str, Any]]) -> None:
         elif state == "conditional":
             if current_actionability in {"higher-probability", "setup_ready", "ready"}:
                 row["actionability"] = "conditional"
-            row["setup_tier"] = _cap_tier(row.get("setup_tier"), "B")
+            row["setup_tier"], row["debate_tier_cap"] = _cap_tier(row.get("setup_tier"), "B"), "B"
             if current_actionability in {"higher-probability", "setup_ready", "ready"}:
                 row["action"] = (
                     "Conditional setup. Debate disagreement requires confirmation before acting."
@@ -2180,7 +2180,7 @@ def _setup_eval_score_adjustment(
     stat: dict[str, Any] | None,
     *,
     min_sample: int,
-    hit_threshold_pct: float,
+    hit_threshold_pct: float | None,
 ) -> float:
     if not stat:
         return 0.0
@@ -2192,7 +2192,7 @@ def _setup_eval_score_adjustment(
 
     # Confidence grows with sample size but is bounded so old data cannot dominate.
     sample_scale = _clamp(calls / float(max(1, int(min_sample) * 4)), 0.35, 1.0)
-    hit_component = _clamp((hit_rate - float(hit_threshold_pct)) * 0.28, -8.0, 8.0)
+    hit_component = 0.0 if hit_threshold_pct is None else _clamp((hit_rate - float(hit_threshold_pct)) * 0.28, -8.0, 8.0)
     return_component = _clamp(avg_signed_return * 1.6, -6.0, 6.0)
     adjustment = (hit_component + return_component) * sample_scale
     return round(_clamp(adjustment, -10.0, 10.0), 1)
@@ -2243,7 +2243,7 @@ def _apply_setup_eval_fields(
     *,
     reliability_lookup: dict[tuple[str, str], dict[str, Any]],
     min_sample: int,
-    hit_threshold_pct: float,
+    hit_threshold_pct: float | None = None,
     baseline_hit_rate_pct: float | None = None,
     calibration_state: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -2309,25 +2309,22 @@ def _apply_setup_eval_fields(
             adjustment = _setup_eval_score_adjustment(
                 stat,
                 min_sample=min_sample,
-                hit_threshold_pct=hit_threshold_pct,
+                hit_threshold_pct=baseline_hit_rate_pct if hit_threshold_pct is None else hit_threshold_pct,
             )
 
         adjusted_score = round(_clamp(raw_score + adjustment, 0.0, 100.0), 1)
         row["setup_score_raw"] = round(raw_score, 1)
         row["setup_score_adjustment"] = adjustment
         row["setup_score_adjusted"] = adjusted_score
-        if adjustment >= 2.0:
-            row["reliability_signal"] = "tailwind"
-        elif adjustment <= -2.0:
-            row["reliability_signal"] = "headwind"
-        else:
-            row["reliability_signal"] = "neutral"
+        row["reliability_signal"] = "tailwind" if adjustment >= 2.0 else "headwind" if adjustment <= -2.0 else "neutral"
         if adjustment != 0.0:
             adjusted_calls += 1
             adjustments.append(adjustment)
-            row["score"] = adjusted_score
-            row["confluence_score"] = adjusted_score
-            row["setup_tier"] = _setup_tier(adjusted_score)
+            row["score"] = row["confluence_score"] = adjusted_score
+            # Re-grade, keeping the grades earlier stages removed (agreement, ensemble) and the debate ceiling.
+            dropped = max(0, _tier_rank(_setup_tier(raw_score)) - _tier_rank(row.get("setup_tier")))
+            regraded = "DCBA"[max(0, _tier_rank(_setup_tier(adjusted_score)) - 1 - dropped)]
+            row["setup_tier"] = _cap_tier(regraded, row.get("debate_tier_cap") or "A")
     return {
         "adjusted_calls": int(adjusted_calls),
         "avg_adjustment": _round_or_none((sum(adjustments) / len(adjustments)) if adjustments else 0.0),

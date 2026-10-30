@@ -66,14 +66,21 @@ def _paper_schema_path_pin(conn: sqlite3.Connection) -> dict[str, Any]:
     try:
         current = os.stat(main_path) if main_path else None
     except OSError as exc:
-        raise ValueError(
-            "activation interlock: paper-schema path is unavailable"
-        ) from exc
-    return {
-        "main_path": main_path,
-        "device": current.st_dev if current is not None else None,
-        "inode": current.st_ino if current is not None else None,
-    }
+        raise ValueError("activation interlock: paper-schema path is unavailable") from exc
+    return {"main_path": main_path, "device": current.st_dev if current is not None else None,
+            "inode": current.st_ino if current is not None else None}
+
+
+def _verified_paper_schema_path_pin(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Full verify (page scan included) on a WAL read snapshot before activation locks, then pin.
+
+    Writers keep the lock during the minutes-long integrity_check."""
+    from trader_koo.paper_trade.schema_v5_verifier import PaperSchemaV5VerificationError, verify_paper_schema_v5
+    try:
+        verify_paper_schema_v5(conn)
+    except PaperSchemaV5VerificationError as exc:
+        raise ValueError("activation interlock: exact paper-schema v5 required") from exc
+    return _paper_schema_path_pin(conn)
 
 
 def _require_paper_schema_path_pin(pin: dict[str, Any]) -> None:
@@ -82,25 +89,17 @@ def _require_paper_schema_path_pin(pin: dict[str, Any]) -> None:
         try:
             current = os.stat(pin["main_path"])
         except OSError as exc:
-            raise ValueError(
-                "activation interlock: paper-schema path is unavailable"
-            ) from exc
+            raise ValueError("activation interlock: paper-schema path is unavailable") from exc
         if (current.st_dev, current.st_ino) != (pin["device"], pin["inode"]):
             raise ValueError("activation interlock: paper-schema path changed before write lock")
 
 
-def _verify_contracted_paper_schema_in_transaction(
-    conn: sqlite3.Connection, pin: dict[str, Any],
-) -> dict[str, Any]:
-    """Authorize activation on the caller's locked transaction snapshot."""
-    from trader_koo.paper_trade.schema_v5_verifier import (
-        PaperSchemaV5VerificationError,
-        _verify_paper_schema_v5_in_transaction,
-    )
-
+def _verify_contracted_paper_schema_in_transaction(conn: sqlite3.Connection, pin: dict[str, Any]) -> dict[str, Any]:
+    """Authorize activation on the caller's locked snapshot; the page scan already ran pre-lock."""
+    from trader_koo.paper_trade.schema_v5_verifier import PaperSchemaV5VerificationError, _verify_paper_schema_v5_in_transaction
     _require_paper_schema_path_pin(pin)
     try:
-        verified = _verify_paper_schema_v5_in_transaction(conn)
+        verified = _verify_paper_schema_v5_in_transaction(conn, page_scan=False)
     except PaperSchemaV5VerificationError as exc:
         raise ValueError("activation interlock: exact paper-schema v5 required") from exc
     _require_paper_schema_path_pin(pin)

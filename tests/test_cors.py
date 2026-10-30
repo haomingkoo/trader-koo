@@ -356,8 +356,8 @@ class TestCORSMiddleware:
 
         ip = RestrictiveCORSMiddleware._get_client_ip(mock_request)
 
-        # Should extract first IP
-        assert ip == "1.2.3.4"
+        # The leftmost entry is client-supplied; the rightmost hop is not.
+        assert ip == "5.6.7.8"
 
     def test_client_ip_extraction_from_client(self, mock_request):
         """Test client IP extraction from request.client."""

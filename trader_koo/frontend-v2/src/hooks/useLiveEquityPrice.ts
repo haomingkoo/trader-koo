@@ -5,6 +5,7 @@ import { useEquityWs } from "./useEquityWs";
 
 interface LivePriceResponse {
   ok: boolean;
+  subscribed?: boolean;
   price?: number | null;
   volume?: number | null;
   timestamp?: string | null;
@@ -18,7 +19,7 @@ export function useLiveEquityPrice(ticker: string) {
   const [subscriptionReady, setSubscriptionReady] = useState(false);
   const livePrice = prices[symbol] ?? apiPrice;
 
-  // Subscribe via HTTP API so the backend streams this ticker
+  // The price route subscribes server-side; the feed evicts stale symbols itself
   useEffect(() => {
     let active = true;
 
@@ -40,16 +41,11 @@ export function useLiveEquityPrice(ticker: string) {
       setSubscriptionReady(false);
     }, 0);
 
-    apiFetch<{ ok: boolean }>(`/api/streaming/subscribe/${symbol}`, {
-      method: "POST",
-    })
+    apiFetch<LivePriceResponse>(`/api/streaming/price/${symbol}`)
       .then((response) => {
-        if (!active) return undefined;
-        setSubscriptionReady(Boolean(response.ok));
-        return apiFetch<LivePriceResponse>(`/api/streaming/price/${symbol}`);
-      })
-      .then((response) => {
-        if (!active || !response || response.price == null) return;
+        if (!active) return;
+        setSubscriptionReady(Boolean(response.subscribed));
+        if (response.price == null) return;
         setApiPrice({
           symbol,
           price: response.price,
@@ -65,9 +61,6 @@ export function useLiveEquityPrice(ticker: string) {
     return () => {
       active = false;
       window.clearTimeout(resetTimer);
-      apiFetch(`/api/streaming/unsubscribe/${symbol}`, {
-        method: "POST",
-      }).catch(() => {});
     };
   }, [symbol]);
 

@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { useState, useCallback } from "react";
 import type {
   PaperTrade,
   PaperCampaignHealth,
@@ -14,7 +13,6 @@ import type {
   StrategyEvidenceState,
   NextOpenBaselineState,
 } from "../../api/types";
-import { useUpdateTradeNotes } from "../../api/hooks";
 import { getPlotlyColors } from "../../lib/plotlyTheme";
 import PlotlyWrapper from "../PlotlyWrapper";
 import Badge from "../ui/Badge";
@@ -333,73 +331,6 @@ const pnlColor = (value: number | null | undefined): string => {
   if (value < 0) return "text-[var(--red)]";
   return "";
 };
-
-/* ── Inline Trade Notes ── */
-function TradeNotes({ trade }: { trade: PaperTrade }) {
-  const mutation = useUpdateTradeNotes();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(trade.notes ?? "");
-
-  const save = useCallback(() => {
-    const trimmed = draft.trim();
-    mutation.mutate(
-      { tradeId: trade.id, notes: trimmed },
-      { onSuccess: () => setEditing(false) },
-    );
-  }, [draft, mutation, trade.id]);
-
-  const cancel = useCallback(() => {
-    setDraft(trade.notes ?? "");
-    setEditing(false);
-  }, [trade.notes]);
-
-  if (editing) {
-    return (
-      <div className="mt-1 flex flex-col gap-1">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={2}
-          className="w-full rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
-          placeholder="Add a note..."
-          autoFocus
-        />
-        <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={save}
-            disabled={mutation.isPending}
-            className="rounded bg-[var(--accent)] px-2 py-0.5 text-[10px] font-medium text-[var(--on-fill)] hover:opacity-90 disabled:opacity-50"
-          >
-            {mutation.isPending ? "Saving..." : "Save"}
-          </button>
-          <button
-            type="button"
-            onClick={cancel}
-            className="rounded border border-[var(--line)] px-2 py-0.5 text-[10px] text-[var(--muted)] hover:bg-[var(--panel)]"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const hasNotes = Boolean(trade.notes);
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        setDraft(trade.notes ?? "");
-        setEditing(true);
-      }}
-      className="mt-1 block max-w-full truncate text-left text-[10px] text-[var(--muted)] hover:text-[var(--accent)]"
-      title={hasNotes ? trade.notes! : "Click to add a note"}
-    >
-      {hasNotes ? trade.notes : "+ note"}
-    </button>
-  );
-}
 
 export function PaperCampaignHealthPanel({
   health,
@@ -800,7 +731,6 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
               <th className="px-3 py-2 font-semibold">Tier</th>
               <th className="px-3 py-2 font-semibold">Entry Date</th>
               <th className="px-3 py-2 font-semibold">Why</th>
-              <th className="px-3 py-2 font-semibold">Notes</th>
             </tr>
           </thead>
           <tbody>
@@ -843,9 +773,6 @@ export function PaperTradeOpenPositions({ trades }: { trades: PaperTrade[] }) {
                   <td className="px-3 py-2 text-[var(--muted)]">{t.entry_date ?? "\u2014"}</td>
                   <td className="px-3 py-2 min-w-[260px] max-w-[360px]">
                     <TradeRationale trade={t} />
-                  </td>
-                  <td className="px-3 py-2 min-w-[120px] max-w-[200px]">
-                    <TradeNotes trade={t} />
                   </td>
                 </tr>
               );
@@ -929,6 +856,7 @@ function BenchmarkColumn({
   returnPct,
   metricLabel = "return",
   winRate,
+  winRateLabel = "win rate",
   subtext,
   highlight = false,
 }: {
@@ -936,6 +864,7 @@ function BenchmarkColumn({
   returnPct: number | null | undefined;
   metricLabel?: string;
   winRate?: number | null;
+  winRateLabel?: string;
   subtext?: string;
   highlight?: boolean;
 }) {
@@ -962,7 +891,7 @@ function BenchmarkColumn({
       <div className="mt-0.5 text-[10px] text-[var(--muted)]">{metricLabel}</div>
       {winRate != null && (
         <div className="mt-2 text-sm text-[var(--text)]">
-          {winRate.toFixed(1)}% win rate
+          {winRate.toFixed(1)}% {winRateLabel}
         </div>
       )}
       {subtext && (
@@ -1054,6 +983,7 @@ export function PaperTradeBenchmarkComparison({
             returnPct={unfiltered.return_pct}
             metricLabel="avg setup return"
             winRate={unfiltered.win_rate}
+            winRateLabel="had a positive return"
             subtext={`${unfiltered.trades} ${fixedHoldUnit}, ${fixedHoldDays}`}
           />
         )}
@@ -1398,7 +1328,6 @@ const CSV_COLUMNS = [
   "entry_reason",
   "entry_evidence",
   "entry_risks",
-  "notes",
 ] as const;
 
 function escapeCsvField(value: unknown): string {
@@ -1595,14 +1524,6 @@ const tradeColumns = [
     render: (_value: unknown, row: unknown) => {
       const trade = row as PaperTrade;
       return <TradeRationale trade={trade} />;
-    },
-  },
-  {
-    key: "notes" as const,
-    label: "Notes",
-    render: (_value: unknown, row: unknown) => {
-      const trade = row as PaperTrade;
-      return <TradeNotes trade={trade} />;
     },
   },
 ];
