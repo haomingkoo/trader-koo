@@ -1,14 +1,24 @@
 version: 2
+# Patch and minor groups auto-merge once CI passes (workflows/dependabot-auto-merge.yml); the
+# -major groups wait for a person. Ecosystems run on different days, all at 10:00 UTC, after the
+# 06:00 to 08:00 report window, so each PR merges before the next opens.
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "10:00"
     open-pull-requests-limit: 3
     groups:
       python-dependencies:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
+      python-dependencies-major:
+        patterns:
+          - "*"
+        update-types: ["major"]
     labels:
       - "dependencies"
       - "python"
@@ -17,11 +27,18 @@ updates:
     directory: "/trader_koo"
     schedule:
       interval: "weekly"
+      day: "tuesday"
+      time: "10:00"
     open-pull-requests-limit: 3
     groups:
       railway-runtime-dependencies:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
+      railway-runtime-dependencies-major:
+        patterns:
+          - "*"
+        update-types: ["major"]
     labels:
       - "dependencies"
       - "python"
@@ -31,16 +48,30 @@ updates:
     directory: "/trader_koo/frontend-v2"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 3
+      day: "wednesday"
+      time: "10:00"
+    open-pull-requests-limit: 4
     groups:
       frontend-runtime:
         dependency-type: "production"
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
+      frontend-runtime-major:
+        dependency-type: "production"
+        patterns:
+          - "*"
+        update-types: ["major"]
       frontend-tooling:
         dependency-type: "development"
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
+      frontend-tooling-major:
+        dependency-type: "development"
+        patterns:
+          - "*"
+        update-types: ["major"]
     ignore:
       - dependency-name: "eslint"
         update-types:
@@ -60,11 +91,18 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "thursday"
+      time: "10:00"
     open-pull-requests-limit: 2
     groups:
       github-actions:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
+      github-actions-major:
+        patterns:
+          - "*"
+        update-types: ["major"]
     labels:
       - "dependencies"
       - "ci"
