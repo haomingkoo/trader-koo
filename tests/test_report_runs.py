@@ -1904,3 +1904,22 @@ def test_cached_verification_still_rejects_same_size_rewrite(tmp_path: Path):
     os.utime(artifact, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
     with pytest.raises(ValueError, match="JSON artifact hash mismatch"):
         resolve_published_report(conn, report_dir=report_dir, run_id=run_id)
+
+
+def test_history_verifies_only_the_runs_it_returns(tmp_path: Path, monkeypatch):
+    import trader_koo.report.runs as runs
+    from trader_koo.backend.services.report_loader import daily_report_history
+
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report_dir = tmp_path / "reports"
+    for minute in ("01", "02", "03"):
+        report = _report(f"H{minute}")
+        report["generated_ts"] = f"2026-08-22T12:{minute}:00Z"
+        _complete_and_publish(conn, report_dir, report)
+    checks = []
+    real = runs._verify_artifacts_uncached
+    monkeypatch.setattr(runs, "_verify_artifacts_uncached", lambda *a: checks.append(1) or real(*a))
+    runs._verified_cache.clear()
+    history = daily_report_history(report_dir, limit=1, registry_conn=conn)
+    assert [row["file"] for row in history] == [sorted(report_dir.glob("daily_report_*_*.json"))[-1].name]
+    assert len(checks) == 1
