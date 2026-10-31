@@ -185,3 +185,27 @@ def test_mature_shadow_outcomes_use_exact_next_open_and_tenth_close() -> None:
     assert summary["coverage"]["effective_non_overlapping_block_count"] == 1
     assert summary["human_promotion_review_eligible"] is False
     assert summary["automatic_promotion"] is False
+
+
+def test_shadow_stays_with_its_campaign_after_a_campaign_change() -> None:
+    from dataclasses import replace
+
+    conn = _db()
+    v2 = replace(_build_config(), campaign_id="paper-v2")
+    kwargs = {
+        "report_date": "2026-08-23",
+        "generated_ts": "2026-08-23T01:00:00Z",
+        "setup_rows": [_candidate("AAA", "A")],
+    }
+    assert record_breadth_shadow(conn, report_run_id="run-1", base_config=v2, **kwargs)
+
+    v3 = replace(_build_config(), campaign_id="paper-v3", decision_version="paper-campaign-v3.0")
+    assert record_breadth_shadow(conn, report_run_id="run-2", base_config=v3, **kwargs) is False
+    assert conn.execute(
+        "SELECT COUNT(*) FROM paper_shadow_decision_sets WHERE report_run_id='run-2'"
+    ).fetchone()[0] == 0
+
+    with pytest.raises(ValueError, match="frozen shadow policy P0 changed"):
+        record_breadth_shadow(
+            conn, report_run_id="run-3", base_config=replace(v2, min_score=61.0), **kwargs
+        )

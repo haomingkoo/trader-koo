@@ -140,24 +140,25 @@ def _specification(base: PaperTradeConfig, policy_id: str) -> dict[str, Any]:
     }
 
 
-def _register_policies(conn: sqlite3.Connection, base: PaperTradeConfig) -> None:
-    for policy_id in SHADOW_POLICIES:
+def _register_policies(conn: sqlite3.Connection, base: PaperTradeConfig) -> bool:
+    for policy_id in SHADOW_POLICIES:  # frozen for the first campaign; False under a later one
         spec = _specification(base, policy_id)
         spec_hash = canonical_hash(spec)
         prior = conn.execute(
-            "SELECT start_ts,specification_hash FROM paper_shadow_policies WHERE policy_id=?",
+            "SELECT start_ts,specification_hash,specification_json FROM paper_shadow_policies WHERE policy_id=?",
             (policy_id,),
         ).fetchone()
         if prior:
-            if tuple(map(str, prior)) != (SHADOW_START_TS, spec_hash):
+            if json.loads(str(prior[2]))["policy"]["campaign_id"] != base.campaign_id:
+                return False
+            if tuple(map(str, prior[:2])) != (SHADOW_START_TS, spec_hash):
                 raise ValueError(f"frozen shadow policy {policy_id} changed")
             continue
         conn.execute(
-            """INSERT INTO paper_shadow_policies
-               (policy_id,start_ts,specification_json,specification_hash)
-               VALUES (?,?,?,?)""",
+            "INSERT INTO paper_shadow_policies (policy_id,start_ts,specification_json,specification_hash) VALUES (?,?,?,?)",
             (policy_id, SHADOW_START_TS, canonical_json(spec), spec_hash),
         )
+    return True
 
 
 def _decision(
@@ -219,9 +220,8 @@ def record_breadth_shadow(
     base_config: PaperTradeConfig,
 ) -> bool:
     """Seal P0/P1 decisions. This interface cannot create orders or trades."""
-    if report_date < SHADOW_START_DATE:
+    if report_date < SHADOW_START_DATE or not _register_policies(conn, base_config):
         return False
-    _register_policies(conn, base_config)
     report_sources: dict[str, Any] = {}
     report_row = conn.execute(
         "SELECT source_timestamps_json FROM report_runs WHERE run_id=?",
