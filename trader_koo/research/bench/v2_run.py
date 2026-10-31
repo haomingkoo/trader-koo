@@ -61,16 +61,28 @@ def _sums(w: np.ndarray, r: np.ndarray) -> np.ndarray:
     return (w * np.where(w > 0, r, 0.0)).sum(axis=1)
 
 
-def _benchmarks(p: Prices, member: np.ndarray, rows: np.ndarray, cols: np.ndarray, grid: Grid) -> tuple[float, float]:
-    """Mean SPY and equal-weight-universe open-to-open return over the same holding windows."""
+def benchmark_levels(p: Prices, member: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """SPY adjusted opens and the equal-weight universe's open-to-open index level (1.0 at the first session)."""
     o = p.open.to_numpy()
     spy = o[:, list(p.open.columns).index(BENCHMARK_TICKER)]
     daily = o[1:] / o[:-1] - 1.0
     ok = member[:-1] & np.isfinite(daily)
     ew = np.concatenate([[0.0], np.where(ok.sum(1) > 0, np.where(ok, daily, 0.0).sum(1) / np.maximum(ok.sum(1), 1), 0.0)])
-    cum = np.cumprod(1.0 + ew)
+    return spy, np.cumprod(1.0 + ew)
+
+
+def benchmark_windows(p: Prices, member: np.ndarray, rows: np.ndarray, cols: np.ndarray,
+                      grid: Grid) -> tuple[np.ndarray, np.ndarray]:
+    """Per trade, the SPY and equal-weight-universe open-to-open return over the trade's own holding window."""
+    spy, cum = benchmark_levels(p, member)
     out = np.minimum(grid.exit_row[rows, cols] + grid.spinoff_exit[rows, cols], len(spy) - 1)
-    return float(np.nanmean(spy[out] / spy[rows] - 1.0)), float(np.mean(cum[out] / cum[rows] - 1.0))
+    return spy[out] / spy[rows] - 1.0, cum[out] / cum[rows] - 1.0
+
+
+def _benchmarks(p: Prices, member: np.ndarray, rows: np.ndarray, cols: np.ndarray, grid: Grid) -> tuple[float, float]:
+    """Mean SPY and equal-weight-universe open-to-open return over the same holding windows."""
+    spy, ew = benchmark_windows(p, member, rows, cols, grid)
+    return float(np.nanmean(spy)), float(np.mean(ew))
 
 
 def _placebo(rng, r, valid, cols_used, counts) -> np.ndarray:
