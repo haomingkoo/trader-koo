@@ -543,21 +543,38 @@ def compute_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
     bot commands) within the window reuse one computation. In-memory databases
     are never cached. Only successful scores (non-``None``) are stored.
     """
-    cache_key = _db_cache_key(conn)
-    if cache_key is not None:
-        now = time.time()
-        with _FG_LOCK:
-            entry = _FG_CACHE.get(cache_key)
-            if entry is not None and (now - entry[0]) < _FG_CACHE_TTL_SEC:
-                return entry[1]
+    entry = _latest_entry(conn)
+    if entry is not None and time.time() - entry[0] < _FG_CACHE_TTL_SEC:
+        return entry[1]
+    return refresh_fear_greed_index(conn)
 
+
+def latest_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Serve the last stored result at any age (its ``computed_at`` says when); compute only if none exists.
+
+    The scheduler keeps the result fresh, so web requests never wait on the news and social providers.
+    """
+    entry = _latest_entry(conn)
+    return entry[1] if entry is not None else refresh_fear_greed_index(conn)
+
+
+def refresh_fear_greed_index(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Recompute now, stamp ``computed_at`` and store the result if it has a score."""
     result = _compute_fear_greed_index_uncached(conn)
-
+    result["computed_at"] = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    cache_key = _db_cache_key(conn)
     if cache_key is not None and result.get("score") is not None:
         with _FG_LOCK:
             _FG_CACHE[cache_key] = (time.time(), result)
-
     return result
+
+
+def _latest_entry(conn: sqlite3.Connection) -> tuple[float, dict[str, Any]] | None:
+    cache_key = _db_cache_key(conn)
+    if cache_key is None:
+        return None
+    with _FG_LOCK:
+        return _FG_CACHE.get(cache_key)
 
 
 def _compute_fear_greed_index_uncached(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -567,60 +584,23 @@ def _compute_fear_greed_index_uncached(conn: sqlite3.Connection) -> dict[str, An
     external_news = get_external_news_sentiment()
     social_sentiment = get_social_sentiment()
 
-    # 1. Market Momentum
-    score, detail = _score_market_momentum(conn)
-    components.append({
-        "name": "Market Momentum",
-        "score": score,
-        "signal": _signal_for_score(score) if score is not None else "Unavailable",
-        "detail": detail,
-    })
-    if score is not None:
-        valid_scores.append(score)
-
-    # 2. Market Volatility
-    score, detail = _score_market_volatility(conn)
-    components.append({
-        "name": "Market Volatility",
-        "score": score,
-        "signal": _signal_for_score(score) if score is not None else "Unavailable",
-        "detail": detail,
-    })
-    if score is not None:
-        valid_scores.append(score)
-
-    # 3. Stock Price Breadth
-    score, detail = _score_stock_breadth(conn)
-    components.append({
-        "name": "Stock Price Breadth",
-        "score": score,
-        "signal": _signal_for_score(score) if score is not None else "Unavailable",
-        "detail": detail,
-    })
-    if score is not None:
-        valid_scores.append(score)
-
-    # 4. Stock Price Strength
-    score, detail = _score_stock_strength(conn)
-    components.append({
-        "name": "Stock Price Strength",
-        "score": score,
-        "signal": _signal_for_score(score) if score is not None else "Unavailable",
-        "detail": detail,
-    })
-    if score is not None:
-        valid_scores.append(score)
-
-    # 5. Put/Call Ratio
-    score, detail = _score_put_call_ratio(conn)
-    components.append({
-        "name": "Put/Call Ratio",
-        "score": score,
-        "signal": _signal_for_score(score) if score is not None else "Unavailable",
-        "detail": detail,
-    })
-    if score is not None:
-        valid_scores.append(score)
+    scorers = (
+        ("Market Momentum", _score_market_momentum),
+        ("Market Volatility", _score_market_volatility),
+        ("Stock Price Breadth", _score_stock_breadth),
+        ("Stock Price Strength", _score_stock_strength),
+        ("Put/Call Ratio", _score_put_call_ratio),
+    )
+    for name, scorer in scorers:
+        score, detail = scorer(conn)
+        components.append({
+            "name": name,
+            "score": score,
+            "signal": _signal_for_score(score) if score is not None else "Unavailable",
+            "detail": detail,
+        })
+        if score is not None:
+            valid_scores.append(score)
 
     # Compute overall score using empirically-informed weights.
     # Rationale: VIX is the strongest real-time fear signal; breadth and

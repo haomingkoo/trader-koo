@@ -19,6 +19,7 @@ import os
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +53,7 @@ _VIX_TICKER = "^VIX"
 
 # Alert cooldown: suppress macro alerts for 1 hour
 MACRO_COOLDOWN_SEC = 3600
-MACRO_LIVE_CACHE_TTL_SEC = 45
+MACRO_LIVE_CACHE_TTL_SEC = 120  # outlives the 60 s frontend poll
 
 _macro_live_cache_lock = threading.Lock()
 _macro_live_refresh_lock = threading.Lock()
@@ -527,14 +528,21 @@ def _load_macro_live(db_path: Path) -> dict[str, Any]:
     api_key = _get_finnhub_key()
     instruments: list[dict[str, Any]] = []
 
+    def quote(ticker: str) -> float | None:
+        try:
+            return _fetch_quote(ticker, api_key)
+        except Exception as exc:  # one failed instrument must not drop the others
+            LOG.warning("Macro live quote failed for %s: %s", ticker, exc)
+            return None
+
+    with ThreadPoolExecutor(max_workers=len(MACRO_WATCH)) as pool:
+        quotes = dict(zip(MACRO_WATCH, pool.map(quote, MACRO_WATCH))) if api_key else {}
+
     for ticker, config in MACRO_WATCH.items():
         prev_row = _get_prev_close_row(db_path, ticker)
         prev_close, prev_close_date = prev_row if prev_row else (None, None)
-        current: float | None = None
+        current = quotes.get(ticker)
         change_pct: float | None = None
-
-        if api_key:
-            current = _fetch_quote(ticker, api_key)
 
         if current is not None and prev_close is not None and prev_close > 0:
             change_pct = round(((current - prev_close) / prev_close) * 100, 2)
@@ -551,18 +559,11 @@ def _load_macro_live(db_path: Path) -> dict[str, Any]:
             "quote_source": "live" if current is not None else None,
             "change_pct": change_pct,
             "threshold_pct": config["spike_threshold_pct"],
-            "exceeded": (
-                abs(change_pct) >= config["spike_threshold_pct"]
-                if change_pct is not None
-                else False
-            ),
+            "exceeded": change_pct is not None and abs(change_pct) >= config["spike_threshold_pct"],
         })
 
     # Also compute regime
-    moves = [
-        inst for inst in instruments
-        if inst["current"] is not None and inst["prev_close"] is not None
-    ]
+    moves = [inst for inst in instruments if inst["current"] is not None and inst["prev_close"] is not None]
     regime_input = [
         {
             "ticker": inst["ticker"],
@@ -574,15 +575,12 @@ def _load_macro_live(db_path: Path) -> dict[str, Any]:
     ]
     regime = detect_risk_regime(regime_input)
 
-    result = {
+    return {
         "ok": True,
         "instruments": instruments,
         "regime": regime,
-        "checked_at": dt.datetime.now(dt.timezone.utc).replace(
-            microsecond=0,
-        ).isoformat(),
+        "checked_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
     }
-    return result
 
 
 def get_macro_live(db_path: Path) -> dict[str, Any]:

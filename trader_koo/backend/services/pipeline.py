@@ -46,7 +46,7 @@ LOG = logging.getLogger("trader_koo.services.pipeline")
 # ---------------------------------------------------------------------------
 
 REPORT_DIR = Path(os.getenv("TRADER_KOO_REPORT_DIR", "/data/reports"))
-STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "20")))
+STATUS_CACHE_TTL_SEC = max(0, int(os.getenv("TRADER_KOO_STATUS_CACHE_SEC", "120")))
 PIPELINE_STALE_SEC = max(60, int(os.getenv("TRADER_KOO_PIPELINE_STALE_SEC", "1200")))
 INGEST_RUNNING_STALE_MIN = max(10, int(os.getenv("TRADER_KOO_INGEST_RUNNING_STALE_MIN", "75")))
 _LATEST_RUN_UNSET = object()
@@ -456,6 +456,7 @@ def determine_resume_mode(interrupted: dict[str, Any]) -> str | None:
 # ---------------------------------------------------------------------------
 
 _STATUS_CACHE_LOCK = threading.Lock()
+STATUS_REFRESH_LOCK = threading.Lock()  # one /api/status recompute at a time; misses wait for it
 _STATUS_CACHE_AT: dt.datetime | None = None
 _STATUS_CACHE_PAYLOAD: dict[str, Any] | None = None
 
@@ -464,8 +465,7 @@ def invalidate_status_cache() -> None:
     """Clear the cached ``/api/status`` payload."""
     global _STATUS_CACHE_AT, _STATUS_CACHE_PAYLOAD
     with _STATUS_CACHE_LOCK:
-        _STATUS_CACHE_AT = None
-        _STATUS_CACHE_PAYLOAD = None
+        _STATUS_CACHE_AT = _STATUS_CACHE_PAYLOAD = None
 
 
 def get_cached_status(now: dt.datetime) -> dict[str, Any] | None:
