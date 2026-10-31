@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from trader_koo.notifications.finnhub import fetch_finnhub_quote
+from trader_koo.notifications.finnhub import fetch_finnhub_quote, fetch_finnhub_quote_detail
 
 LOG = logging.getLogger("trader_koo.notifications.macro_monitor")
 
@@ -37,11 +37,11 @@ MACRO_WATCH: dict[str, dict[str, Any]] = {
     "^TYX": {"name": "30Y Yield", "spike_threshold_pct": 2.0, "emoji": "\U0001f4c8"},
     "^IRX": {"name": "3M T-Bill", "spike_threshold_pct": 3.0, "emoji": "\U0001f4c8"},
     # Commodities
-    "GLD": {"name": "Gold", "spike_threshold_pct": 2.0, "emoji": "\U0001f947"},
-    "USO": {"name": "Oil", "spike_threshold_pct": 3.0, "emoji": "\U0001f6e2\ufe0f"},
-    "SLV": {"name": "Silver", "spike_threshold_pct": 3.0, "emoji": "\U0001f4c8"},
+    "GLD": {"name": "Gold ETF (GLD)", "spike_threshold_pct": 2.0, "emoji": "\U0001f947"},
+    "USO": {"name": "Oil ETF (USO)", "spike_threshold_pct": 3.0, "emoji": "\U0001f6e2\ufe0f"},
+    "SLV": {"name": "Silver ETF (SLV)", "spike_threshold_pct": 3.0, "emoji": "\U0001f4c8"},
     # Dollar
-    "UUP": {"name": "USD Index", "spike_threshold_pct": 1.5, "emoji": "\U0001f4b5"},
+    "UUP": {"name": "Dollar ETF (UUP)", "spike_threshold_pct": 1.5, "emoji": "\U0001f4b5"},
     # Volatility
     "^VIX": {"name": "VIX", "spike_threshold_pct": 10.0, "emoji": "\U0001f4ca"},
 }
@@ -171,14 +171,14 @@ def _fetch_quote(ticker: str, api_key: str) -> float | None:
 
 def _get_prev_close(db_path: Path, ticker: str) -> float | None:
     """Retrieve the latest verified close from price_daily."""
-    row = _get_prev_close_row(db_path, ticker)
-    return row[0] if row else None
+    rows = _get_close_rows(db_path, ticker, limit=1)
+    return rows[0][0] if rows else None
 
 
-def _get_prev_close_row(db_path: Path, ticker: str) -> tuple[float, str] | None:
-    """Latest verified ``(close, date)`` from price_daily, or None."""
+def _get_close_rows(db_path: Path, ticker: str, limit: int = 2) -> list[tuple[float, str]]:
+    """Latest verified ``(close, date)`` rows from price_daily, newest first."""
     if not db_path.exists():
-        return None
+        return []
 
     try:
         from trader_koo.db.price_contract import research_price_contract
@@ -187,18 +187,18 @@ def _get_prev_close_row(db_path: Path, ticker: str) -> tuple[float, str] | None:
         try:
             conn.execute("BEGIN")
             if not research_price_contract(conn, [ticker])["eligible"]:
-                return None
-            row = conn.execute(
-                "SELECT close, date FROM price_daily WHERE ticker = ? ORDER BY date DESC LIMIT 1",
-                (ticker,),
-            ).fetchone()
+                return []
+            rows = conn.execute(
+                "SELECT close, date FROM price_daily WHERE ticker = ? ORDER BY date DESC LIMIT ?",
+                (ticker, limit),
+            ).fetchall()
         finally:
             conn.rollback()
             conn.close()
-        return (float(row[0]), str(row[1])) if row else None
+        return [(float(row[0]), str(row[1])) for row in rows]
     except Exception as exc:
         LOG.warning("Failed to get prev close for %s: %s", ticker, exc)
-        return None
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -528,9 +528,9 @@ def _load_macro_live(db_path: Path) -> dict[str, Any]:
     api_key = _get_finnhub_key()
     instruments: list[dict[str, Any]] = []
 
-    def quote(ticker: str) -> float | None:
+    def quote(ticker: str) -> tuple[float, str | None] | None:
         try:
-            return _fetch_quote(ticker, api_key)
+            return fetch_finnhub_quote_detail(ticker, api_key)
         except Exception as exc:  # one failed instrument must not drop the others
             LOG.warning("Macro live quote failed for %s: %s", ticker, exc)
             return None
@@ -539,13 +539,15 @@ def _load_macro_live(db_path: Path) -> dict[str, Any]:
         quotes = dict(zip(MACRO_WATCH, pool.map(quote, MACRO_WATCH))) if api_key else {}
 
     for ticker, config in MACRO_WATCH.items():
-        prev_row = _get_prev_close_row(db_path, ticker)
-        prev_close, prev_close_date = prev_row if prev_row else (None, None)
-        current = quotes.get(ticker)
-        change_pct: float | None = None
-
-        if current is not None and prev_close is not None and prev_close > 0:
-            change_pct = round(((current - prev_close) / prev_close) * 100, 2)
+        closes = _get_close_rows(db_path, ticker)
+        prev_close, prev_close_date = closes[0] if closes else (None, None)
+        price, session = quotes.get(ticker) or (None, None)
+        # A quote from an already-stored (or unknown) session is not live: show the
+        # dated close and its change vs the session before, never +0.00% vs itself.
+        live = session is not None and (prev_close_date is None or session > prev_close_date)
+        current = price if live else None
+        latest, base = (current, prev_close) if live else (prev_close, closes[1][0] if len(closes) > 1 else None)
+        change_pct = round((latest - base) / base * 100, 2) if latest is not None and base else None
 
         instruments.append({
             "ticker": ticker,

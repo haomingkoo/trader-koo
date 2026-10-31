@@ -47,7 +47,12 @@ export function macroQuoteView(instrument: MacroInstrument): QuoteView | null {
     return { price: instrument.current, changePct: instrument.change_pct, mode: "live", asOf: null };
   }
   if (instrument.prev_close != null && instrument.prev_close_date) {
-    return { price: instrument.prev_close, changePct: null, mode: "close", asOf: instrument.prev_close_date };
+    return {
+      price: instrument.prev_close,
+      changePct: instrument.change_pct ?? null,
+      mode: "close",
+      asOf: instrument.prev_close_date,
+    };
   }
   return null;
 }

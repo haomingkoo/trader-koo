@@ -6,9 +6,33 @@ import { tierVariant } from "../ui/badgeUtils";
 import { biasVariant } from "./reportShared";
 import {
   buildSetupQualityView,
+  summarizeSharedSetupFields,
   type DebateData,
   type SetupQualityItem,
 } from "./setupQualityView";
+import { isIndexTicker } from "./reportText";
+
+function IndexBadge({ ticker, className = "" }: { ticker: string; className?: string }) {
+  if (!isIndexTicker(ticker)) return null;
+  return (
+    <Badge variant="muted" className={`text-[9px] px-1.5 py-0 ${className}`} title="An index is a calculation; it cannot be bought or sold.">
+      Index, not tradable
+    </Badge>
+  );
+}
+
+function DecisionNote({ item, className }: { item: SetupQualityItem; className: string }) {
+  return (
+    <div className={className}>
+      <p>{item.decisionNote}</p>
+      {item.planNote && (
+        <p className="mt-1 text-xs text-[var(--muted)]">
+          <span className="font-semibold text-[var(--text)]">Plan:</span> {item.planNote}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function DebateVisualization({ debate }: { debate: DebateData }) {
   const consensus = debate.consensus;
@@ -266,6 +290,7 @@ export default function SetupQualitySection({
   const [showAll, setShowAll] = useState(false);
   const DEFAULT_VISIBLE = 10;
 
+  const shared = useMemo(() => summarizeSharedSetupFields(rows), [rows]);
   const items = useMemo(
     () => buildSetupQualityView(rows, debateMap, {
       tier: filterTier,
@@ -295,7 +320,7 @@ export default function SetupQualitySection({
       label: "Ticker",
       className: "w-[92px]",
       render: ({ row, ticker }) => (
-        <span className="flex items-center gap-1.5">
+        <span className="flex flex-wrap items-center gap-1.5">
           <Link
             to={`/chart?t=${ticker}`}
             className="font-mono font-bold text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
@@ -307,6 +332,7 @@ export default function SetupQualitySection({
               E {row.days_to_earnings != null ? `${row.days_to_earnings}d` : ""}
             </Badge>
           )}
+          <IndexBadge ticker={ticker} />
         </span>
       ),
     },
@@ -402,9 +428,10 @@ export default function SetupQualitySection({
       label: "Decision note",
       className: "w-[42%] min-w-[360px]",
       render: (item) => (
-        <span className="block max-w-[68ch] whitespace-normal text-xs leading-5 text-[var(--text)]">
-          {item.decisionNote}
-        </span>
+        <DecisionNote
+          item={item}
+          className="block max-w-[68ch] whitespace-normal text-xs leading-5 text-[var(--text)]"
+        />
       ),
     },
   ];
@@ -415,6 +442,11 @@ export default function SetupQualitySection({
         <h3 className="text-sm font-semibold text-[var(--muted)]">
           Setup Quality ({items.length} setups)
         </h3>
+        {shared.macroScoreText != null && (
+          <span className="text-xs text-[var(--muted)]">
+            Macro news score <strong className="tabular-nums text-[var(--text)]">{shared.macroScoreText}</strong> for every setup
+          </span>
+        )}
         <div className="flex gap-1">
           {["all", "A", "B", "C"].map((tier) => (
             <button
@@ -433,6 +465,19 @@ export default function SetupQualitySection({
           ))}
         </div>
       </div>
+
+      {shared.sharedPlans.length > 0 && (
+        <div className="mb-3 rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
+          <div className="font-semibold text-[var(--text)]">Plan notes shared by several setups</div>
+          <ul className="mt-1 space-y-1">
+            {shared.sharedPlans.map((plan) => (
+              <li key={plan.text}>
+                <span className="tabular-nums text-[var(--text)]">{plan.count} setups:</span> {plan.text}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {items.length === 0 ? (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-6 text-center text-sm text-[var(--muted)]">
@@ -465,6 +510,7 @@ export default function SetupQualitySection({
                             E {row.days_to_earnings != null ? `${row.days_to_earnings}d` : ""}
                           </Badge>
                         )}
+                        <IndexBadge ticker={ticker} className="whitespace-nowrap" />
                       </span>
                       <div className="mt-1 text-xs text-[var(--muted)]">
                         Score {item.scoreText}
@@ -490,11 +536,9 @@ export default function SetupQualitySection({
                     </div>
                   </div>
 
-                  <p className="mt-3 text-sm text-[var(--text)]">
-                    {item.decisionNote}
-                  </p>
+                  <DecisionNote item={item} className="mt-3 text-sm text-[var(--text)]" />
 
-                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--line)] pt-3 sm:grid-cols-4">
+                  <dl className={`mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--line)] pt-3 ${shared.macroScoreText == null ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
                     <div>
                       <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
                         Probability
@@ -524,14 +568,16 @@ export default function SetupQualitySection({
                         {item.news?.scoreText ?? "Unavailable"}
                       </dd>
                     </div>
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                        Macro
-                      </dt>
-                      <dd className="mt-1 text-xs tabular-nums text-[var(--text)]">
-                        {item.news?.macroText?.replace(/^Macro /, "") ?? "Unavailable"}
-                      </dd>
-                    </div>
+                    {shared.macroScoreText == null && (
+                      <div>
+                        <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                          Macro
+                        </dt>
+                        <dd className="mt-1 text-xs tabular-nums text-[var(--text)]">
+                          {item.news?.macroText?.replace(/^Macro /, "") ?? "Unavailable"}
+                        </dd>
+                      </div>
+                    )}
                   </dl>
 
                   <button
@@ -545,6 +591,10 @@ export default function SetupQualitySection({
 
                   {isExpanded && (
                     <div className="mt-3 space-y-3 border-t border-[var(--line)] pt-3">
+                      <div className="text-xs text-[var(--muted)]">
+                        <strong className="text-[var(--text)]">Plan:</strong>{" "}
+                        {row.action ?? "\u2014"}
+                      </div>
                       <div className="text-xs text-[var(--muted)]">
                         <strong className="text-[var(--text)]">Observation:</strong>{" "}
                         {row.observation ?? "\u2014"}

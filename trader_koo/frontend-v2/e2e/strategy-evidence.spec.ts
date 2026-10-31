@@ -130,7 +130,7 @@ async function expectInadequateEvidence(page: Page) {
     productionEvidence.provenance.input_hash_sha256,
   );
   await expect(panel).toContainText(
-    "This sealed historical snapshot is not live Campaign v2 evidence",
+    "This sealed historical snapshot is not live paper-campaign evidence",
   );
   await expect(panel).toContainText("Invalid / unresolved");
 }

@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { SetupRow } from "../../api/types.ts";
-import { buildSetupQualityView, type DebateData } from "./setupQualityView.ts";
+import {
+  buildSetupQualityView,
+  summarizeSharedSetupFields,
+  type DebateData,
+} from "./setupQualityView.ts";
 
 function setup(overrides: Partial<SetupRow>): SetupRow {
   return {
@@ -63,7 +67,8 @@ test("builds one presentation contract for compact and wide setup views", () => 
     ascending: false,
   });
 
-  assert.equal(item.decisionNote, rows[0].action);
+  assert.equal(item.decisionNote, "Neutral trend and no candle confirmation.");
+  assert.equal(item.planNote, rows[0].action);
   assert.equal(item.probability?.compactText, "55%, n=2116");
   assert.equal(item.options?.label, "elevated iv event risk");
   assert.equal(item.options?.ranksText, "IV 71% / OI 29%");
@@ -95,4 +100,38 @@ test("keeps missing evidence unavailable instead of turning null into zero", () 
   assert.equal(item.news, null);
   assert.equal(item.options, null);
   assert.equal(item.ruleReviewLabel, "View");
+});
+
+// Production 2026-10-31: 22 of 40 setups carried this exact plan sentence and
+// every setup carried macro news score 33.3.
+const BOILERPLATE =
+  "Watch-only. Multi-angle evidence is mixed; wait for clearer confirmation from trend, levels, and participation.";
+
+test("a plan sentence repeated across setups is shown once, not on each card", () => {
+  const rows = [
+    setup({ ticker: "PEG", action: BOILERPLATE, macro_news_score: 33.3, news_sentiment_score: 33.3 }),
+    setup({ ticker: "AIZ", action: BOILERPLATE, macro_news_score: 33.3, news_sentiment_score: 33.3 }),
+    setup({ ticker: "FIS", action: BOILERPLATE, macro_news_score: 33.3, news_sentiment_score: 33.3 }),
+    setup({ ticker: "PANW", action: "Directional conflict: wait.", macro_news_score: 33.3, news_sentiment_score: 33.3 }),
+  ];
+
+  const shared = summarizeSharedSetupFields(rows);
+  assert.deepEqual(shared.sharedPlans, [{ text: BOILERPLATE, count: 3 }]);
+  assert.equal(shared.macroScoreText, "33");
+
+  const items = buildSetupQualityView(rows, new Map(), { tier: "all", sortKey: "ticker", ascending: true });
+  const byTicker = new Map(items.map((item) => [item.ticker, item]));
+  assert.equal(byTicker.get("PEG")?.planNote, null);
+  assert.equal(byTicker.get("PANW")?.planNote, "Directional conflict: wait.");
+  assert.ok(items.every((item) => item.news?.macroText === null));
+});
+
+test("differing macro scores stay on each setup", () => {
+  const rows = [
+    setup({ ticker: "A", macro_news_score: 20, news_sentiment_score: 40 }),
+    setup({ ticker: "B", macro_news_score: 60, news_sentiment_score: 40 }),
+  ];
+  assert.equal(summarizeSharedSetupFields(rows).macroScoreText, null);
+  const items = buildSetupQualityView(rows, new Map(), { tier: "all", sortKey: "ticker", ascending: true });
+  assert.deepEqual(items.map((item) => item.news?.macroText), ["Macro 20", "Macro 60"]);
 });

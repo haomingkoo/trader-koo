@@ -4,26 +4,36 @@ import { macroQuoteView } from "./quoteView";
 
 /** Display order for the macro strip — most important first. */
 const DISPLAY_ORDER = [
-  "^TNX",  // 10Y Yield
-  "^VIX",  // VIX
-  "GLD",   // Gold
-  "USO",   // Oil
-  "UUP",   // Dollar
-  "^TYX",  // 30Y Yield
-  "^IRX",  // 3M T-Bill
-  "SLV",   // Silver
+  "^TNX",
+  "^VIX",
+  "GLD",
+  "USO",
+  "UUP",
+  "^TYX",
+  "^IRX",
+  "SLV",
 ] as const;
 
-/** Short labels for compact display. */
+/**
+ * Compact labels. GLD, USO, SLV and UUP are ETFs, not the spot commodity or
+ * the DXY index, so they are labelled by ticker with the fund in the tooltip.
+ */
 const SHORT_LABELS: Record<string, string> = {
   "^TNX": "10Y",
   "^TYX": "30Y",
   "^IRX": "3M",
-  "GLD": "Gold",
-  "USO": "Oil",
-  "SLV": "Silver",
-  "UUP": "DXY",
+  "GLD": "GLD",
+  "USO": "USO",
+  "SLV": "SLV",
+  "UUP": "UUP",
   "^VIX": "VIX",
+};
+
+const LABEL_TITLES: Record<string, string> = {
+  "GLD": "SPDR Gold Shares ETF (GLD), not spot gold",
+  "USO": "United States Oil Fund ETF (USO), not spot crude",
+  "SLV": "iShares Silver Trust ETF (SLV), not spot silver",
+  "UUP": "Invesco DB US Dollar Index Bullish ETF (UUP), not the DXY index",
 };
 
 function formatMacroPrice(ticker: string, price: number): string {
@@ -105,6 +115,7 @@ export default function MacroStrip() {
         <span key={inst.ticker} className="flex items-center whitespace-nowrap">
           <QuoteChip
             label={SHORT_LABELS[inst.ticker] ?? inst.name}
+            labelTitle={LABEL_TITLES[inst.ticker] ?? inst.name}
             exceeded={inst.exceeded}
             quote={quote}
             formatValue={(price) => formatMacroPrice(inst.ticker, price)}
