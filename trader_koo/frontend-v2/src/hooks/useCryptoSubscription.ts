@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CryptoBar } from "../api/types";
-import { useCryptoWs } from "./useCryptoWs";
+import { useCryptoWsApi } from "./useCryptoWs";
 
 export interface FormingCandleData {
   timestamp: string;
@@ -34,7 +34,7 @@ export function useCryptoSubscription(
   closedBar: CryptoBar | null;
   wsConnected: boolean;
 } {
-  const { connected, send, addListener } = useCryptoWs();
+  const { connected, send, addListener } = useCryptoWsApi();
   const [formingCandle, setFormingCandle] = useState<FormingCandleData | null>(null);
   const [closedBar, setClosedBar] = useState<CryptoBar | null>(null);
   const currentSub = useRef({ symbol, interval });

@@ -14,6 +14,13 @@ export default function ChartPlotPanel({
     () => typeof window !== "undefined" && window.innerWidth < 768,
     [],
   );
+  // Stable identities keep the memoized Plotly wrapper from redrawing on every parent render.
+  const plotConfig = useMemo(
+    () => ({ responsive: true, displayModeBar: isMobile ? false : "hover", scrollZoom: true }),
+    [isMobile],
+  );
+  const plotHeight = (chartLayout?.height as number | undefined) ?? 580;
+  const plotStyle = useMemo(() => ({ width: "100%", height: plotHeight }), [plotHeight]);
 
   if (chartData && chartLayout) {
     return (
@@ -21,12 +28,8 @@ export default function ChartPlotPanel({
         <PlotlyWrapper
           data={chartData}
           layout={chartLayout}
-          config={{
-            responsive: true,
-            displayModeBar: isMobile ? false : "hover",
-            scrollZoom: true,
-          }}
-          style={{ width: "100%", height: (chartLayout.height as number) ?? 580 }}
+          config={plotConfig}
+          style={plotStyle}
         />
       </div>
     );

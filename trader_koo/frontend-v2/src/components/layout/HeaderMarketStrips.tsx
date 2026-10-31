@@ -2,21 +2,9 @@ import { useCryptoWs } from "../../hooks/useCryptoWs";
 import { useEquityWs } from "../../hooks/useEquityWs";
 import { useMarketSummary, useStreamingPrices } from "../../api/hooks";
 import type { CryptoPrice } from "../../api/types";
+import { formatPrice } from "../crypto/CryptoCardPrimitives";
 import { resolveEquityQuote, shortCloseDate } from "./quoteView";
 import type { QuoteView } from "./quoteView";
-
-function formatPrice(price: number): string {
-  if (price >= 1000) {
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
-  }
-  return price.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
 
 function CryptoPriceChip({ label, tick }: { label: string; tick: CryptoPrice | undefined | null }) {
   if (!tick || typeof tick.price !== "number" || typeof tick.change_pct_24h !== "number") {

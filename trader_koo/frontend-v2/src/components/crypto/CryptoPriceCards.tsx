@@ -1,4 +1,5 @@
 import type { CryptoPrice } from "../../api/types";
+import { useCryptoPrices } from "../../hooks/useCryptoWs";
 import GlassCard from "../ui/GlassCard";
 import { formatPrice, formatVolume } from "./CryptoCardPrimitives";
 
@@ -45,5 +46,32 @@ export function CryptoPriceCard({
         </div>
       </GlassCard>
     </button>
+  );
+}
+
+/** Card grid fed by the shared socket, so a tick re-renders only this grid. */
+export function LiveCryptoPriceCards({
+  symbols,
+  snapshotPrices,
+  selectedSymbol,
+  onSelect,
+}: {
+  symbols: readonly string[];
+  snapshotPrices: Record<string, CryptoPrice> | undefined;
+  selectedSymbol: string;
+  onSelect: (symbol: string) => void;
+}) {
+  const livePrices = useCryptoPrices();
+  return (
+    <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+      {symbols.map((sym) => (
+        <CryptoPriceCard
+          key={sym}
+          tick={livePrices[sym] ?? snapshotPrices?.[sym]}
+          selected={selectedSymbol === sym}
+          onSelect={() => onSelect(sym)}
+        />
+      ))}
+    </div>
   );
 }

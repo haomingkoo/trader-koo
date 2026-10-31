@@ -842,19 +842,6 @@ export interface EarningsRow {
   setup_family: string | null;
 }
 
-export interface EarningsGroupSession {
-  session: string;
-  label: string;
-  rows: EarningsRow[];
-}
-
-export interface EarningsGroup {
-  date: string;
-  display_date: string;
-  count: number;
-  sessions: EarningsGroupSession[];
-}
-
 export interface EarningsSummary {
   window_days: number;
   total_events: number;
@@ -884,7 +871,6 @@ export interface EconomicEvent {
 export interface EarningsPayload {
   ok: boolean;
   rows: EarningsRow[];
-  groups: EarningsGroup[];
   summary: EarningsSummary;
   provider_status: Record<string, unknown>;
   count: number;

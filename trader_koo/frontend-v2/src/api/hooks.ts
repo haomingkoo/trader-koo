@@ -1,6 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import {
+  CRYPTO_CORRELATION_STALE_MS,
+  cryptoHistoryRefetchMs,
+  cryptoIndicatorRefetchMs,
+} from "./cryptoPolling";
+import {
   requireSuccessfulTrigger,
   type TriggerUpdateResponse,
 } from "./triggerUpdate";
@@ -198,8 +203,9 @@ export function useCryptoSummary() {
   return useQuery({
     queryKey: ["crypto-summary"],
     queryFn: () => apiFetch<CryptoSummary>("/api/crypto/summary"),
-    refetchInterval: 30_000,
-    staleTime: 15_000,
+    // Prices stream over the socket; this mainly reports backend-to-Binance status.
+    refetchInterval: 120_000,
+    staleTime: 60_000,
   });
 }
 
@@ -210,7 +216,7 @@ export function useCryptoHistory(symbol: string, interval = "1m", limit = 100) {
       apiFetch<CryptoHistoryPayload>(
         `/api/crypto/history/${symbol}?interval=${interval}&limit=${limit}`,
       ),
-    refetchInterval: 60_000,
+    refetchInterval: cryptoHistoryRefetchMs(interval),
     staleTime: 30_000,
   });
 }
@@ -220,7 +226,7 @@ export function useCryptoIndicators(symbol: string, interval: string = "1m") {
     queryKey: ["crypto-indicators", symbol, interval],
     queryFn: () =>
       apiFetch<CryptoIndicatorsPayload>(`/api/crypto/indicators/${symbol}?interval=${interval}`),
-    refetchInterval: 30_000,
+    refetchInterval: cryptoIndicatorRefetchMs(interval),
     staleTime: 15_000,
   });
 }
@@ -243,8 +249,7 @@ export function useCryptoCorrelation(symbol = "BTC-USD", benchmark = "SPY", limi
       apiFetch<CryptoCorrelationPayload>(
         `/api/crypto/correlation/${symbol}?benchmark=${benchmark}&limit=${limit}`,
       ),
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+    staleTime: CRYPTO_CORRELATION_STALE_MS,
   });
 }
 
@@ -268,7 +273,7 @@ export function useCryptoMarketStructure(interval = "1h", limit = 168) {
         `/api/crypto/market-structure?interval=${interval}&limit=${limit}`,
       ),
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    refetchInterval: cryptoIndicatorRefetchMs(interval),
   });
 }
 

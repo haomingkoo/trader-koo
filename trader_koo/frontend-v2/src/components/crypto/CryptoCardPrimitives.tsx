@@ -1,21 +1,4 @@
-export function formatPrice(price: number): string {
-  if (price >= 1000) {
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
-  }
-  if (price >= 1) {
-    return price.toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-  }
-  return price.toLocaleString("en-US", {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 6,
-  });
-}
+export { formatPrice } from "../../lib/crypto/formatPrice";
 
 export function formatVolume(vol: number): string {
   if (vol >= 1_000_000_000) return `${(vol / 1_000_000_000).toFixed(2)}B`;
