@@ -97,8 +97,8 @@ def portfolio_block(key: str, d, c: Cands, sizing, first: int, bench: dict, plac
     if book is not None:
         out.update(trades=_taken_stats(book), stress_trades=_taken_stats(stress), skipped=book.skipped,
                    mean_open=float(book.invested.mean()), exits=_exit_kinds(book))
-        r_all, _ = _signal_r(c, first, _B.cost_bps / BPS)
-        out["all_signals"] = trade_stats(r_all, r_all, np.ones(len(r_all)))
+        r_all, ok = _signal_r(c, first, _B.cost_bps / BPS)
+        out["all_signals"] = trade_stats(r_all, r_all, (c.n2 - c.fill + 1)[ok])
     if placebo_cagrs is not None:
         pc = np.asarray(placebo_cagrs)
         cagr = st["strategy"]["cagr"]

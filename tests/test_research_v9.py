@@ -557,3 +557,5 @@ def test_every_rule_trades_with_loose_thresholds_and_sealed_rows_change_nothing(
     for k in ("H1a", "H1b", "H2", "H3", "H4", "H6", "H7", "H1a_vs_H1b"):
         assert a["summary"][k] == b["summary"][k], k
     assert a["summary"]["variants"] == b["summary"]["variants"]
+    h4 = a["results"]["H4"]
+    assert 1.0 < h4["all_signals"]["median_hold"] <= 5.0  # real holds (stops or day 5), not a placeholder
