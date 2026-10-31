@@ -33,7 +33,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
   return (
     <header className="border-b border-[var(--line)] bg-[var(--chrome)]/95 px-4 pb-2.5 pt-2.5 [padding-top:max(0.625rem,env(safe-area-inset-top))]">
       <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <button
             onClick={onMenuToggle}
             className="rounded p-1 text-[var(--muted)] transition-colors hover:bg-[var(--panel-hover)] hover:text-[var(--text)] md:hidden"
@@ -60,6 +60,12 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
           <span className="text-xs font-medium text-[var(--muted)]">
             Trader Koo
           </span>
+          <div className="order-last w-full lg:order-none lg:ml-4 lg:w-auto">
+            <ClockStrip />
+          </div>
+          <div className="hidden xl:block">
+            <PipelineStatusBadge data={data} />
+          </div>
           <div className="ml-auto flex items-center gap-3">
             <NotificationBell />
             <button
@@ -78,16 +84,15 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
           </div>
         </div>
 
-        <div className="grid gap-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] xl:items-start">
-          <ClockStrip />
-          <div className="flex flex-col gap-2">
-            <EquityPriceStrip />
-            <CryptoPriceStrip />
-            <MacroStrip />
-          </div>
+        <div className="grid gap-2 lg:grid-cols-3 [&>*]:h-full">
+          <EquityPriceStrip />
+          <CryptoPriceStrip />
+          <MacroStrip />
         </div>
 
-        <PipelineStatusBadge data={data} />
+        <div className="xl:hidden">
+          <PipelineStatusBadge data={data} />
+        </div>
       </div>
     </header>
   );
