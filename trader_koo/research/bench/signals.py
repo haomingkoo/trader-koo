@@ -18,7 +18,7 @@ import pandas as pd
 
 from trader_koo.research.settings import get as _settings
 
-from . import hypotheses, quality, spinoffs, v4_signals, v5_signals, v6_signals
+from . import hypotheses, quality, spinoffs, v4_signals, v5_signals, v6_signals, v8_signals
 from .data import AsOfView, Market
 from .diagnostics import Diagnostics
 
@@ -67,6 +67,7 @@ CANDIDATES: dict[str, Callable[[dict], Signal]] = {
     "v5_composite": v5_signals.composite,
     "v6_h1_insider_clusters": v6_signals.insider_clusters,
     "v6_h2_insider_opportunistic": v6_signals.insider_opportunistic,
+    "v8_h3_52_week_high": v8_signals.near_52_week_high,
 }
 # Candidates that rebalance on the last session of each calendar year instead of every N sessions.
 ANNUAL_CANDIDATES = frozenset({"h4_market_cap_leaders"})
