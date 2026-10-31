@@ -91,8 +91,11 @@ const causalReasonText = (reason: string): string => {
 
 export function StrategyEvidenceStatePanel({
   evidence,
+  collapsible = false,
 }: {
   evidence?: StrategyEvidenceState;
+  /** Render closed behind a disclosure; the facts stay in the page. */
+  collapsible?: boolean;
 }) {
   const actionable = evidenceAllowsAction(evidence);
   const readiness = evidence?.readiness_status ?? "evidence_unavailable";
@@ -106,15 +109,12 @@ export function StrategyEvidenceStatePanel({
         ? "Research only / insufficient history"
         : "Research only / evidence unavailable";
 
-  return (
-    <section
-      data-testid="strategy-evidence-state"
-      className={`rounded-xl border p-4 ${
-        actionable
-          ? "border-[var(--green)]/30 bg-[var(--green)]/5"
-          : "border-[var(--amber)]/30 bg-[var(--amber)]/5"
-      }`}
-    >
+  const frameClass = `rounded-xl border p-4 ${
+    actionable
+      ? "border-[var(--green)]/30 bg-[var(--green)]/5"
+      : "border-[var(--amber)]/30 bg-[var(--amber)]/5"
+  }`;
+  const header = (
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold text-[var(--text)]">Historical strategy audit</div>
@@ -127,13 +127,16 @@ export function StrategyEvidenceStatePanel({
           <p className="mt-1 max-w-3xl text-xs text-[var(--muted)]">
             {actionable
               ? "Evidence may be reviewed by a human. No allocation changes are automatic."
-              : "This sealed historical snapshot is not live Campaign v2 evidence. It cannot change admission, ranking, or allocation."}
+              : "This sealed historical snapshot is not live paper-campaign evidence. It cannot change admission, ranking, or allocation."}
           </p>
         </div>
         {evidence?.snapshot_asof && (
           <span className="text-[10px] text-[var(--muted)]">Snapshot {evidence.snapshot_asof}</span>
         )}
       </div>
+  );
+  const body = (
+    <>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2">
@@ -214,6 +217,28 @@ export function StrategyEvidenceStatePanel({
           </a>
         </div>
       )}
+    </>
+  );
+
+  if (collapsible) {
+    return (
+      <details data-testid="strategy-evidence-state" className={`group ${frameClass}`}>
+        <summary className="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
+          {header}
+          <span className="mt-2 inline-block text-[11px] font-semibold text-[var(--accent)]">
+            <span className="group-open:hidden">Show audit details</span>
+            <span className="hidden group-open:inline">Hide audit details</span>
+          </span>
+        </summary>
+        {body}
+      </details>
+    );
+  }
+
+  return (
+    <section data-testid="strategy-evidence-state" className={frameClass}>
+      {header}
+      {body}
     </section>
   );
 }

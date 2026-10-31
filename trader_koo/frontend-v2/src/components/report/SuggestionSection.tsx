@@ -7,6 +7,7 @@ import {
   presentSuggestionReason,
   presentSuggestionRisk,
 } from "./suggestionPresentation";
+import { isIndexTicker } from "./reportText";
 
 function actionVariant(action: string) {
   const value = action.toLowerCase();
@@ -32,10 +33,7 @@ export default function SuggestionSection({
       <section className="rounded-lg border border-[var(--line)] bg-[var(--panel)] p-4">
         <div className="text-sm font-semibold text-[var(--text)]">Suggestions</div>
         <p className="mt-1 text-xs text-[var(--muted)]">
-          No clean suggestions right now. The better choice is to wait.
-        </p>
-        <p className="mt-2 text-[11px] text-[var(--muted)]">
-          Research tool only. Not financial advice.
+          No setup passed the suggestion filters in this report.
         </p>
       </section>
     );
@@ -47,8 +45,7 @@ export default function SuggestionSection({
         <div>
           <h3 className="text-sm font-semibold text-[var(--text)]">Research Watchlist</h3>
           <p className="text-xs text-[var(--muted)]">
-            Research only, not financial advice. Compressed from setup quality, outcome history,
-            news, options, and deterministic rule evidence.
+            Drawn from setup quality, outcome history, news, options and rule checks.
           </p>
         </div>
         <Badge variant="muted">{items.length} shown</Badge>
@@ -68,6 +65,11 @@ export default function SuggestionSection({
                 >
                   {item.ticker}
                 </Link>
+                {isIndexTicker(item.ticker) && (
+                  <Badge variant="muted" className="ml-2 align-middle text-[9px]" title="An index is a calculation; it cannot be bought or sold.">
+                    Index, not tradable
+                  </Badge>
+                )}
                 <div className="mt-1 text-xs text-[var(--muted)]">{item.persona}</div>
               </div>
               <div className="flex flex-col items-end gap-1">

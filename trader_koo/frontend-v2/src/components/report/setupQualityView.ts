@@ -1,6 +1,7 @@
 import type { ChartCommentary, SetupRow } from "../../api/types";
 import type { BadgeVariant } from "../ui/Badge";
 import { formatReportNumber } from "./reportShared.ts";
+import { shortSetupReason } from "./reportText.ts";
 
 export type DebateData = NonNullable<ChartCommentary["debate_v1"]>;
 
@@ -31,8 +32,42 @@ export interface SetupQualityItem {
     macroText: string | null;
     tone: BadgeVariant;
   };
+  /** Short reason taken from the setup's own observation. */
   decisionNote: string;
+  /** The plan sentence, unless several setups share it word for word. */
+  planNote: string | null;
   ruleReviewLabel: string;
+}
+
+/** A plan sentence used by at least this many setups is shown once, not per card. */
+export const SHARED_PLAN_MIN_ROWS = 3;
+
+export interface SharedSetupFields {
+  /** Plan sentences repeated across setups, most common first. */
+  sharedPlans: Array<{ text: string; count: number }>;
+  /** Macro news score when every setup carries the same one, else null. */
+  macroScoreText: string | null;
+}
+
+export function summarizeSharedSetupFields(rows: SetupRow[]): SharedSetupFields {
+  const planCounts = new Map<string, number>();
+  for (const row of rows) {
+    const plan = String(row.action ?? "").trim();
+    if (plan) planCounts.set(plan, (planCounts.get(plan) ?? 0) + 1);
+  }
+  const sharedPlans = [...planCounts]
+    .filter(([, count]) => count >= SHARED_PLAN_MIN_ROWS)
+    .map(([text, count]) => ({ text, count }))
+    .sort((a, b) => b.count - a.count);
+  const macroScores = new Set(rows.map((row) => {
+    const value = numberOrNull(row.macro_news_score);
+    return value == null ? null : value.toFixed(0);
+  }));
+  const [onlyMacro] = macroScores;
+  return {
+    sharedPlans,
+    macroScoreText: rows.length > 1 && macroScores.size === 1 && onlyMacro != null ? onlyMacro : null,
+  };
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -84,6 +119,7 @@ function optionsTone(signal: unknown): BadgeVariant {
 function presentSetup(
   row: SetupRow,
   debateMap: Map<string, DebateData>,
+  shared: SharedSetupFields,
 ): SetupQualityItem {
   const ticker = String(row.ticker ?? "");
   const probability = numberOrNull(row.calibrated_hit_prob);
@@ -95,6 +131,7 @@ function presentSetup(
   const macroScore = numberOrNull(row.macro_news_score);
   const debate = debateMap.get(ticker) ?? normalizeDebate(row.debate_v1);
   const agreement = debate?.consensus?.agreement_score;
+  const plan = String(row.action ?? "").trim() || null;
 
   return {
     row,
@@ -124,10 +161,11 @@ function presentSetup(
       ? null
       : {
           scoreText: newsScore.toFixed(0),
-          macroText: macroScore == null ? null : `Macro ${macroScore.toFixed(0)}`,
+          macroText: macroScore == null || shared.macroScoreText != null ? null : `Macro ${macroScore.toFixed(0)}`,
           tone: newsScore >= 60 ? "green" : newsScore <= 40 ? "red" : "muted",
         },
-    decisionNote: String(row.action ?? row.observation ?? "\u2014"),
+    decisionNote: shortSetupReason(row.observation) ?? String(row.action ?? "\u2014"),
+    planNote: plan && !shared.sharedPlans.some((item) => item.text === plan) ? plan : null,
     ruleReviewLabel: agreement == null ? "View" : `Rules ${agreement.toFixed(0)}%`,
   };
 }
@@ -138,6 +176,7 @@ export function buildSetupQualityView(
   query: SetupQualityQuery,
 ): SetupQualityItem[] {
   const direction = query.ascending ? 1 : -1;
+  const shared = summarizeSharedSetupFields(rows);
   return rows
     .filter(
       (row) => query.tier === "all" ||
@@ -153,5 +192,5 @@ export function buildSetupQualityView(
       }
       return String(aValue ?? "").localeCompare(String(bValue ?? "")) * direction;
     })
-    .map((row) => presentSetup(row, debateMap));
+    .map((row) => presentSetup(row, debateMap, shared));
 }

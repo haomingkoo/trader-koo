@@ -1,3 +1,7 @@
+/** Shared look for a report `<summary>` toggle, with a visible keyboard focus ring. */
+export const DISCLOSURE_SUMMARY =
+  "cursor-pointer select-none rounded text-[11px] font-semibold text-[var(--accent)] hover:text-[var(--blue)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]";
+
 export function formatReportTimestamp(ts: string | null): {
   local: string;
   ny: string;

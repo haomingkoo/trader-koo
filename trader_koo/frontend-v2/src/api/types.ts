@@ -162,14 +162,21 @@ export interface RiskFilters {
 }
 
 export interface KeyChange {
+  slug?: string;
   title: string;
   detail: string;
+  tone?: string;
 }
 
 export interface SetupEvaluationOverall {
+  calls?: number | null;
   hit_rate_pct: number | null;
   avg_signed_return_pct: number | null;
   expectancy_pct: number | null;
+}
+
+export interface SetupEvaluationDirection extends SetupEvaluationOverall {
+  direction: string;
 }
 
 export interface SetupEvalFamily {
@@ -201,6 +208,7 @@ export interface SetupEvaluation {
   error?: string;
   reason?: string;
   overall: SetupEvaluationOverall;
+  by_direction?: SetupEvaluationDirection[];
   by_family: SetupEvalFamily[];
   by_validity_days: SetupEvalValidity[];
   improvement_actions: SetupEvalAction[];

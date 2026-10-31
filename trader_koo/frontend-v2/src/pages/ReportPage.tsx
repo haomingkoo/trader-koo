@@ -9,11 +9,10 @@ import {
   EvidenceSourceStrip,
   KeyChangesSection,
   RiskFiltersPanel,
-  SummaryKpiRow,
   VixRegimeWidget,
 } from "../components/report/ReportOverviewSections";
 import SectorHeatmap from "../components/report/SectorHeatmap";
-import SetupEvaluationPanel from "../components/report/SetupEvaluationPanel";
+import SetupEvaluationPanel, { CalibrationHeadline } from "../components/report/SetupEvaluationPanel";
 import SetupQualitySection from "../components/report/SetupQualitySection";
 import SuggestionSection from "../components/report/SuggestionSection";
 import { StrategyEvidenceStatePanel } from "../components/paper/PaperTradeSections";
@@ -90,12 +89,6 @@ export default function ReportPage() {
 
   return (
     <div className="space-y-6">
-      {/* NFA disclaimer banner */}
-      <div className="rounded-lg border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-2 text-xs text-[var(--amber)]">
-        <strong>Research only. Not financial advice.</strong> Data may be stale, partial, or wrong.
-        Past performance does not guarantee future results.
-      </div>
-
       {reportDetail && (
         <>
           <PipelineStatusInline />
@@ -112,13 +105,6 @@ export default function ReportPage() {
 
       <h2 className="text-xl font-bold tracking-tight">Daily Report</h2>
 
-      <StrategyEvidenceStatePanel evidence={paperSummary?.strategy_evidence} />
-
-      <SummaryKpiRow
-        generatedTs={latest.generated_ts}
-        priceDate={latest.latest_data?.price_date ?? null}
-      />
-
       <EvidenceSourceStrip
         generatedTs={latest.generated_ts}
         reportRun={latest.report_run}
@@ -129,6 +115,8 @@ export default function ReportPage() {
 
       {!reportBlocksMainReport && (
         <>
+          <CalibrationHeadline evaluation={signals.setup_evaluation ?? {}} />
+
           <RiskFiltersPanel
             tradeMode={String(risk.trade_mode ?? "normal")}
             hardBlocks={risk.hard_blocks ?? 0}
@@ -136,7 +124,10 @@ export default function ReportPage() {
             conditions={risk.conditions ?? []}
           />
 
-          <KeyChangesSection changes={signals.tonight_key_changes ?? []} />
+          <KeyChangesSection
+            changes={signals.tonight_key_changes ?? []}
+            sectorRows={signals.sector_heatmap ?? []}
+          />
 
           {((signals.green_barrier_coverage?.stale_skipped_count ?? 0) > 0 ||
             (signals.green_barrier_coverage?.invalid_date_skipped_count ?? 0) > 0 ||
@@ -215,6 +206,8 @@ export default function ReportPage() {
           />
         </>
       )}
+
+      <StrategyEvidenceStatePanel evidence={paperSummary?.strategy_evidence} collapsible />
     </div>
   );
 }

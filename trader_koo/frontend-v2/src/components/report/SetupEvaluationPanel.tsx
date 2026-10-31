@@ -37,6 +37,97 @@ function ImprovementAction({ action }: { action: SetupEvalAction }) {
   );
 }
 
+function signedPct(value: number | null | undefined, decimals = 2): string {
+  if (value == null || !Number.isFinite(value)) return "\u2014";
+  return `${value > 0 ? "+" : ""}${value.toFixed(decimals)}%`;
+}
+
+function expectancyTone(value: number | null | undefined): string {
+  if (value == null || value === 0) return "text-[var(--text)]";
+  return value > 0 ? "text-[var(--green)]" : "text-[var(--red)]";
+}
+
+/**
+ * The calibration headline: whether archived setup calls of this kind made
+ * money afterwards. Shown near the top because it qualifies every setup below.
+ */
+export function CalibrationHeadline({
+  evaluation,
+}: {
+  evaluation: SetupEvaluation | Record<string, never>;
+}) {
+  const eval_ = evaluation as SetupEvaluation;
+  if (!eval_ || !eval_.enabled || eval_.error || !eval_.overall) return null;
+  const overall = eval_.overall;
+  const directions = (eval_.by_direction ?? []).filter((row) => (row.calls ?? 0) > 0);
+
+  return (
+    <GlassCard>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+          Setup track record
+        </div>
+        <a
+          href="#model-calibration"
+          className="rounded text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] hover:text-[var(--blue)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+        >
+          Full calibration
+        </a>
+      </div>
+      <dl className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div>
+          <dt className="text-[10px] text-[var(--muted)]">Expectancy per call</dt>
+          <dd className={`text-lg font-bold tabular-nums ${expectancyTone(overall.expectancy_pct)}`}>
+            {signedPct(overall.expectancy_pct)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[10px] text-[var(--muted)]">
+            Hit rate (return {"\u2265"} {eval_.hit_threshold_pct ?? "\u2014"}%)
+          </dt>
+          <dd className="text-lg font-bold tabular-nums text-[var(--text)]">
+            {overall.hit_rate_pct != null ? `${overall.hit_rate_pct.toFixed(1)}%` : "\u2014"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[10px] text-[var(--muted)]">Scored calls</dt>
+          <dd className="text-lg font-bold tabular-nums text-[var(--text)]">
+            {eval_.scored_calls?.toLocaleString() ?? "\u2014"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[10px] text-[var(--muted)]">Window</dt>
+          <dd className="text-sm font-semibold tabular-nums text-[var(--text)]">
+            {eval_.window_days ?? "\u2014"}d
+            {eval_.latest_scored_asof && (
+              <span className="block text-[10px] font-normal text-[var(--muted)]">
+                to {eval_.latest_scored_asof}
+              </span>
+            )}
+          </dd>
+        </div>
+      </dl>
+      {directions.length > 0 && (
+        <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-[var(--line)] pt-2 text-xs text-[var(--muted)]">
+          {directions.map((row) => (
+            <li key={row.direction}>
+              <span className="font-semibold capitalize text-[var(--text)]">{row.direction}</span>{" "}
+              <span className="tabular-nums">{row.calls} calls</span>, hit{" "}
+              <span className="tabular-nums">{formatReportNumber(row.hit_rate_pct, 1)}%</span>, expectancy{" "}
+              <span className={`font-semibold tabular-nums ${expectancyTone(row.expectancy_pct)}`}>
+                {signedPct(row.expectancy_pct)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 text-[10px] text-[var(--muted)]">
+        Archived report calls scored against later closes. History, not a forecast.
+      </p>
+    </GlassCard>
+  );
+}
+
 export default function SetupEvaluationPanel({
   evaluation,
 }: {
@@ -130,44 +221,20 @@ export default function SetupEvaluationPanel({
   ];
 
   return (
-    <div className="space-y-4">
+    <div id="model-calibration" className="scroll-mt-4 space-y-4">
       <h3 className="text-sm font-semibold text-[var(--muted)]">
         Model Calibration
       </h3>
 
       <p className="text-xs text-[var(--muted)]">
-        Historical calibration built from archived setup calls and the later price
-        outcomes that followed their validity windows. These figures come from
-        stored report snapshots and subsequent closes, not manually keyed values.
+        Archived setup calls scored against the closes after their validity windows.
       </p>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <GlassCard
-          label={`Hit Rate (return ≥ ${eval_.hit_threshold_pct ?? "\u2014"}%)`}
-          value={
-            overall.hit_rate_pct != null
-              ? `${overall.hit_rate_pct.toFixed(1)}%`
-              : "\u2014"
-          }
-        />
-        <GlassCard
-          label="Avg Signed Return"
-          value={
-            overall.avg_signed_return_pct != null
-              ? `${overall.avg_signed_return_pct.toFixed(2)}%`
-              : "\u2014"
-          }
-        />
-        <GlassCard
-          label="Expectancy"
-          value={
-            overall.expectancy_pct != null
-              ? `${overall.expectancy_pct.toFixed(2)}%`
-              : "\u2014"
-          }
-        />
-        <GlassCard label="Scored Calls" value={eval_.scored_calls ?? "\u2014"} />
-      </div>
+      <p className="text-xs text-[var(--muted)]">
+        Headline: hit rate {formatReportNumber(overall.hit_rate_pct, 1)}%, avg signed return{" "}
+        {formatReportNumber(overall.avg_signed_return_pct, 2)}%, expectancy{" "}
+        {formatReportNumber(overall.expectancy_pct, 2)}% over {eval_.scored_calls ?? "\u2014"} scored calls.
+      </p>
 
       <p className="text-xs text-[var(--muted)]">
         Window: {eval_.window_days ?? "\u2014"}d | Min sample:{" "}
@@ -182,6 +249,7 @@ export default function SetupEvaluationPanel({
         <button
           type="button"
           onClick={() => setShowDiagnostics((prev) => !prev)}
+          aria-expanded={showDiagnostics}
           className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:text-[var(--blue)]"
         >
           {showDiagnostics ? "Hide" : "Show"} model diagnostics

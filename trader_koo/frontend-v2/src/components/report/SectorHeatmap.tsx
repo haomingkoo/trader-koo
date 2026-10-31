@@ -1,5 +1,6 @@
 import type { SectorHeatmapRow } from "../../api/types";
 import GlassCard from "../ui/GlassCard";
+import { isUnknownSector, sectorsUnclassified } from "./reportText";
 
 /**
  * Map avg_pct_change to a CSS background color.
@@ -46,6 +47,18 @@ export default function SectorHeatmap({ rows }: Props) {
     );
   }
 
+  if (sectorsUnclassified(rows)) {
+    const tickers = rows.reduce((sum, row) => sum + (row.tickers ?? 0), 0);
+    return (
+      <GlassCard label="Sector Heatmap">
+        <p className="mt-1 text-xs text-[var(--muted)]" data-testid="sector-heatmap-unavailable">
+          Unavailable. None of the {tickers} tickers in this report has a sector
+          classification, so a sector view would be one bucket holding everything.
+        </p>
+      </GlassCard>
+    );
+  }
+
   return (
     <GlassCard>
       <div className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
@@ -60,9 +73,7 @@ export default function SectorHeatmap({ rows }: Props) {
           >
             {/* Sector name */}
             <div className="text-xs font-semibold text-[var(--text)]">
-              {String(row.sector).trim().toLowerCase() === "unknown"
-                ? "Unclassified sector"
-                : row.sector}
+              {isUnknownSector(row.sector) ? "Unclassified sector" : row.sector}
             </div>
 
             {/* Avg change - prominent */}
