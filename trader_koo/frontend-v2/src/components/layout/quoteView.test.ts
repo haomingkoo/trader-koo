@@ -59,6 +59,11 @@ test("macro instruments without a live quote show their dated close", () => {
     macroQuoteView({ ...base, current: null, prev_close: 18.2, prev_close_date: "2026-10-29", change_pct: null }),
     { price: 18.2, changePct: null, mode: "close", asOf: "2026-10-29" },
   );
+  // A dated close carries its own day change against the session before it.
+  assert.deepEqual(
+    macroQuoteView({ ...base, current: null, prev_close: 19.42, prev_close_date: "2026-10-30", change_pct: 12.91 }),
+    { price: 19.42, changePct: 12.91, mode: "close", asOf: "2026-10-30" },
+  );
   assert.deepEqual(
     macroQuoteView({ ...base, current: 19.1, prev_close: 18.2, change_pct: 4.95 }),
     { price: 19.1, changePct: 4.95, mode: "live", asOf: null },

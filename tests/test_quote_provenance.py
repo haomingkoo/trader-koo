@@ -78,7 +78,7 @@ def test_macro_live_labels_close_fallback_with_its_date(tmp_path: Path) -> None:
     # The live provider has no index quote on this plan.
     with (
         patch.object(macro_monitor, "_get_finnhub_key", return_value="KEY"),
-        patch.object(macro_monitor, "_fetch_quote", return_value=None),
+        patch.object(macro_monitor, "fetch_finnhub_quote_detail", return_value=None),
     ):
         payload = macro_monitor._load_macro_live(db_path)
 
@@ -93,15 +93,92 @@ def test_macro_live_marks_streamed_quotes_live(tmp_path: Path) -> None:
     db_path = tmp_path / "macro.db"
     conn = sqlite3.connect(db_path)
     ensure_schema(conn)
-    _seed(conn, "GLD", [300.0, 310.0])
+    dates = _seed(conn, "GLD", [300.0, 310.0])
     conn.close()
+    next_session = (dt.date.fromisoformat(dates[-1]) + dt.timedelta(days=1)).isoformat()
 
     with (
         patch.object(macro_monitor, "_get_finnhub_key", return_value="KEY"),
-        patch.object(macro_monitor, "_fetch_quote", return_value=303.8),
+        patch.object(
+            macro_monitor,
+            "fetch_finnhub_quote_detail",
+            return_value=(303.8, next_session),
+        ),
     ):
         payload = macro_monitor._load_macro_live(db_path)
 
     gld = next(i for i in payload["instruments"] if i["ticker"] == "GLD")
     assert gld["quote_source"] == "live"
     assert gld["change_pct"] == -2.0
+
+
+def test_macro_quote_from_the_stored_session_shows_that_close_and_its_real_change(
+    tmp_path: Path,
+) -> None:
+    # Production on Saturday 2026-10-31: Finnhub still served Friday's close,
+    # which the nightly ingest had already stored, so the strip compared the
+    # close with itself and showed GLD 355.78 +0.00%.
+    db_path = tmp_path / "macro.db"
+    conn = sqlite3.connect(db_path)
+    ensure_schema(conn)
+    dates = _seed(conn, "GLD", [300.0, 310.0])
+    conn.close()
+
+    with (
+        patch.object(macro_monitor, "_get_finnhub_key", return_value="KEY"),
+        patch.object(
+            macro_monitor,
+            "fetch_finnhub_quote_detail",
+            return_value=(310.0, dates[-1]),
+        ),
+    ):
+        payload = macro_monitor._load_macro_live(db_path)
+
+    gld = next(i for i in payload["instruments"] if i["ticker"] == "GLD")
+    assert gld["quote_source"] is None
+    assert gld["current"] is None
+    assert gld["prev_close"] == 310.0
+    assert gld["prev_close_date"] == dates[-1]
+    assert gld["change_pct"] == 3.33
+
+
+def test_macro_quote_without_a_timestamp_is_not_shown_as_live(tmp_path: Path) -> None:
+    db_path = tmp_path / "macro.db"
+    conn = sqlite3.connect(db_path)
+    ensure_schema(conn)
+    dates = _seed(conn, "GLD", [300.0, 310.0])
+    conn.close()
+
+    with (
+        patch.object(macro_monitor, "_get_finnhub_key", return_value="KEY"),
+        patch.object(macro_monitor, "fetch_finnhub_quote_detail", return_value=(305.0, None)),
+    ):
+        payload = macro_monitor._load_macro_live(db_path)
+
+    gld = next(i for i in payload["instruments"] if i["ticker"] == "GLD")
+    assert gld["quote_source"] is None
+    assert gld["prev_close_date"] == dates[-1]
+
+
+def test_macro_instruments_are_named_as_the_etfs_they_are() -> None:
+    names = {ticker: cfg["name"] for ticker, cfg in macro_monitor.MACRO_WATCH.items()}
+    assert names["GLD"] == "Gold ETF (GLD)"
+    assert names["USO"] == "Oil ETF (USO)"
+    assert names["SLV"] == "Silver ETF (SLV)"
+    assert names["UUP"] == "Dollar ETF (UUP)"
+
+
+def test_finnhub_quote_detail_reports_the_new_york_session_of_the_quote() -> None:
+    from trader_koo.notifications import finnhub
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            # GLD as served on Saturday 2026-10-31: Friday's 16:00 ET close.
+            return {"c": 355.78, "t": 1793390400}
+
+    with patch.object(finnhub.httpx.Client, "get", return_value=_Response()):
+        assert finnhub.fetch_finnhub_quote_detail("GLD", "YOUR_KEY") == (355.78, "2026-10-30")
+        assert finnhub.fetch_finnhub_quote("GLD", "YOUR_KEY") == 355.78

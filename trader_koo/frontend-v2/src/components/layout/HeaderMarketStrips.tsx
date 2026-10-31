@@ -26,8 +26,9 @@ function CryptoPriceChip({ label, tick }: { label: string; tick: CryptoPrice | u
   );
 }
 
-export function QuoteChip({ label, quote, formatValue, exceeded = false }: {
+export function QuoteChip({ label, labelTitle, quote, formatValue, exceeded = false }: {
   label: string;
+  labelTitle?: string;
   quote: QuoteView;
   formatValue: (price: number) => string;
   exceeded?: boolean;
@@ -38,7 +39,7 @@ export function QuoteChip({ label, quote, formatValue, exceeded = false }: {
     : change > 0 ? "text-[var(--green)]" : "text-[var(--red)]";
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text)] opacity-70">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text)] opacity-70" title={labelTitle}>
         {label}
       </span>
       <span className="tabular-nums text-[var(--text)]">{formatValue(quote.price)}</span>
@@ -49,7 +50,7 @@ export function QuoteChip({ label, quote, formatValue, exceeded = false }: {
         </span>
       )}
       {quote.mode === "close" && quote.asOf && (
-        <span className="text-[10px] text-[var(--muted)]" title={`Last close on ${quote.asOf}; no live quote`}>
+        <span className="text-[10px] text-[var(--muted)]" title={`Close on ${quote.asOf}${change != null ? ", change vs the session before" : ""}; no live quote`}>
           {shortCloseDate(quote.asOf)} close
         </span>
       )}

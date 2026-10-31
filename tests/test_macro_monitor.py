@@ -144,17 +144,17 @@ def test_macro_live_cache_outlives_the_frontend_poll() -> None:
 def test_macro_live_fetches_quotes_concurrently_and_isolates_failures(tmp_path) -> None:
     import time
 
-    def slow_quote(ticker: str, api_key: str) -> float:
+    def slow_quote(ticker: str, api_key: str) -> tuple[float, str]:
         time.sleep(0.2)
         if ticker == "USO":
             raise RuntimeError("provider down")
-        return 101.0
+        return 101.0, "2026-11-02"  # a session after the stored close
 
     started = time.monotonic()
     with (
         patch.object(macro_monitor, "_get_finnhub_key", return_value="YOUR_KEY"),
-        patch.object(macro_monitor, "_get_prev_close_row", return_value=(100.0, "2026-10-30")),
-        patch.object(macro_monitor, "_fetch_quote", side_effect=slow_quote),
+        patch.object(macro_monitor, "_get_close_rows", return_value=[(100.0, "2026-10-30")]),
+        patch.object(macro_monitor, "fetch_finnhub_quote_detail", side_effect=slow_quote),
     ):
         result = macro_monitor._load_macro_live(tmp_path / "macro.db")
     elapsed = time.monotonic() - started

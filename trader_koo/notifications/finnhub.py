@@ -1,7 +1,9 @@
 """Shared Finnhub REST quote fetcher used across notification subsystems."""
 from __future__ import annotations
 
+import datetime as dt
 import logging
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -10,6 +12,7 @@ LOG = logging.getLogger("trader_koo.notifications.finnhub")
 # Finnhub REST API
 FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
 FINNHUB_REQUEST_TIMEOUT_SEC = 10
+NEW_YORK = ZoneInfo("America/New_York")
 
 
 def fetch_finnhub_quote(ticker: str, api_key: str) -> float | None:
@@ -18,6 +21,16 @@ def fetch_finnhub_quote(ticker: str, api_key: str) -> float | None:
     Returns the current price (``c`` field) or ``None`` on failure.
     This is a synchronous call; async callers should wrap it in
     ``loop.run_in_executor``.
+    """
+    detail = fetch_finnhub_quote_detail(ticker, api_key)
+    return detail[0] if detail else None
+
+
+def fetch_finnhub_quote_detail(ticker: str, api_key: str) -> tuple[float, str | None] | None:
+    """Return ``(price, New York session date of the quote)``, or ``None``.
+
+    Outside market hours Finnhub serves the last session's close, so callers
+    need the session to tell a live price from a close they already stored.
     """
     if not api_key:
         LOG.warning(
@@ -42,7 +55,11 @@ def fetch_finnhub_quote(ticker: str, api_key: str) -> float | None:
         if price is None or price == 0:
             LOG.debug("Finnhub returned no price for %s: %s", ticker, data)
             return None
-        return float(price)
+        quote_ts = data.get("t")
+        session = (
+            dt.datetime.fromtimestamp(int(quote_ts), NEW_YORK).date().isoformat() if quote_ts else None
+        )
+        return float(price), session
     except httpx.HTTPError as exc:
         LOG.warning("Finnhub HTTP error for %s: %s", ticker, exc)
         return None
