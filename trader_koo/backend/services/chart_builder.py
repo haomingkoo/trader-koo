@@ -41,6 +41,7 @@ from trader_koo.structure.levels import (
 from trader_koo.structure.patterns import PatternConfig, detect_patterns
 from trader_koo.structure.trendlines import TrendlineConfig, detect_trendlines
 
+from trader_koo.backend.services.chart_compact import compact_chart_rows
 from trader_koo.backend.services.database import (
     get_latest_fundamentals,
     get_latest_options_summary,
@@ -956,7 +957,7 @@ def _build_dashboard_quick_payload(
         "asof": chart_rows["date"].iloc[-1],
         "fundamentals": fund,
         "options_summary": get_latest_options_summary(conn, ticker),
-        "chart": _serialize_df(chart_rows),
+        "chart": compact_chart_rows(chart_rows),
         "levels": _serialize_df(levels),
         "gaps": _serialize_df(gaps),
         "trendlines": _serialize_df(trendlines),
@@ -992,13 +993,11 @@ def _build_commentary_payload(
     report_dir: Path,
     report_generated_ts: str | None = None,
 ) -> dict[str, Any]:
-    """Build the slow-path commentary payload (LLM narrative + HMM regime).
+    """Build the slow-path commentary payload (report setup + chart narrative).
 
-    Designed to be called after the quick endpoint has already returned
-    chart data to the frontend.
-
-    Fast path: if report snapshot + cached HMM both exist, skip the
-    expensive feature engineering entirely (~200ms saved per call).
+    Called after the quick endpoint; the prepared-feature cache is shared, so
+    the feature pipeline is normally a cache hit. The HMM regime is served by
+    ``chart_regime.build_regime_payload`` so this panel never waits on a fit.
     """
     ticker = ticker.upper().strip()
     price_contract = get_data_sources(conn, ticker)
@@ -1006,48 +1005,18 @@ def _build_commentary_payload(
         return {
             "ticker": ticker,
             "chart_commentary": None,
-            "hmm_regime": None,
             "report_generated_ts": report_generated_ts,
             "price_contract": price_contract,
             "excluded_reason": "price_basis_not_research_eligible",
         }
 
-    # Try the fast path first: report snapshot + cached HMM
     setup_override = latest_report_setup_for_ticker(
         report_dir,
         ticker,
         generated_ts=report_generated_ts,
     )
-    hmm_regime = latest_report_hmm_for_ticker(report_dir, ticker, generated_ts=report_generated_ts)
-
-    if isinstance(setup_override, dict) and setup_override and hmm_regime is not None:
-        # Fast path — both cached, skip _prepare_model_and_features
-        LOG.debug("Commentary fast path for %s (report snapshot + cached HMM)", ticker)
-        yolo_pats = get_yolo_patterns(conn, ticker)
-        yolo_aud = get_yolo_audit(conn, ticker, limit=14)
-        fund = get_latest_fundamentals(conn, ticker) or {}
-        prices = get_price_df(conn, ticker)
-        model = prices.copy() if not prices.empty else prices
-        chart_commentary = _build_chart_commentary_payload(
-            ticker=ticker,
-            fund=fund,
-            model=model,
-            levels=pd.DataFrame(),
-            candle_patterns=pd.DataFrame(),
-            yolo_patterns=yolo_pats,
-            yolo_audit=yolo_aud,
-            setup_override=setup_override,
-        )
-        return {
-            "ticker": ticker,
-            "chart_commentary": chart_commentary,
-            "hmm_regime": hmm_regime,
-            "report_generated_ts": report_generated_ts,
-        }
-
-    # Slow path — no cache, compute everything
     (
-        prices,
+        _prices,
         model,
         _chart_rows,
         levels,
@@ -1058,29 +1027,19 @@ def _build_commentary_payload(
         fund,
     ) = _prepare_model_and_features(conn, ticker, months)
 
-    yolo_pats = get_yolo_patterns(conn, ticker)
-    yolo_aud = get_yolo_audit(conn, ticker, limit=14)
     chart_commentary = _build_chart_commentary_payload(
         ticker=ticker,
         fund=fund,
         model=model,
         levels=levels,
         candle_patterns=candle_patterns,
-        yolo_patterns=yolo_pats,
-        yolo_audit=yolo_aud,
+        yolo_patterns=get_yolo_patterns(conn, ticker),
+        yolo_audit=get_yolo_audit(conn, ticker, limit=14),
         setup_override=setup_override,
     )
-
-    if hmm_regime is None:
-        try:
-            hmm_regime = hmm_predict_regimes(prices, ticker=ticker)
-        except Exception as exc:
-            LOG.warning("HMM regime detection failed for %s: %s", ticker, exc)
-
     return {
         "ticker": ticker,
         "chart_commentary": chart_commentary,
-        "hmm_regime": hmm_regime,
         "report_generated_ts": report_generated_ts,
     }
 

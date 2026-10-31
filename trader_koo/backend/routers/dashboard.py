@@ -13,6 +13,7 @@ from trader_koo.backend.services.chart_builder import (
     build_dashboard_payload,
     build_dashboard_quick_payload,
 )
+from trader_koo.backend.services.chart_regime import build_regime_payload
 from trader_koo.backend.services.database import get_conn, get_yolo_patterns
 
 LOG = logging.getLogger("trader_koo.routers.dashboard")
@@ -99,6 +100,24 @@ def dashboard_commentary(
     finally:
         conn.close()
     return payload
+
+
+@router.get("/api/dashboard/{ticker}/regime")
+def dashboard_regime(
+    ticker: str = FastPath(pattern=r"^[A-Z0-9._\^-]{1,20}$"),
+    report_generated_ts: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """HMM volatility regime for the chart, fetched apart from the commentary."""
+    conn = get_conn()
+    try:
+        return build_regime_payload(
+            conn,
+            ticker=ticker,
+            report_dir=REPORT_DIR,
+            report_generated_ts=report_generated_ts,
+        )
+    finally:
+        conn.close()
 
 
 @router.get("/api/dashboard/{ticker}")

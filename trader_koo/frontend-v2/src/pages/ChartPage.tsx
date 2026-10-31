@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useChartQuick, useChartCommentary } from "../api/hooks";
+import { useChartQuick, useChartCommentary, useChartRegime } from "../api/hooks";
 import { useChartStore } from "../stores/chartStore";
 import { useLiveEquityPrice } from "../hooks/useLiveEquityPrice";
 import type { DashboardPayload, LiveCandle } from "../api/types";
@@ -24,6 +24,7 @@ import {
   resampleToMonthly,
   resampleToWeekly,
   isResearchChartEligible,
+  liveDailyChangePct,
   type ChartOverlayKey,
   type ChartOverlayState,
 } from "../lib/chart/buildEquityChartData";
@@ -90,17 +91,23 @@ export default function ChartPage() {
   const [compactChart, setCompactChart] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768,
   );
-  const { livePrice, streamingActive } = useLiveEquityPrice(ticker);
+  // A ?ticker= link must not first fetch the persisted ticker (SPY by default).
+  const [urlTickerApplied, setUrlTickerApplied] = useState(
+    () => !(searchParams.get("t") || searchParams.get("ticker"))?.trim(),
+  );
+  const activeTicker = urlTickerApplied ? ticker : "";
+  const { livePrice, streamingActive } = useLiveEquityPrice(activeTicker);
 
   useEffect(() => {
     document.title = "Chart \u2014 Trader Koo";
   }, []);
 
-  // Pick up ticker from URL query param ?t=AAPL (initial mount only)
+  // Pick up ticker from URL query param ?t=AAPL (initial mount only). The
+  // flag is set when the deferred update runs, so StrictMode's effect replay
+  // reschedules it instead of dropping the URL ticker.
   const urlConsumed = useRef(false);
   useEffect(() => {
     if (urlConsumed.current) return undefined;
-    urlConsumed.current = true;
     const urlTicker = searchParams.get("t") || searchParams.get("ticker");
     const urlTimeframe = searchParams.get("timeframe");
     if (
@@ -114,12 +121,15 @@ export default function ChartPage() {
       const clean = urlTicker.trim().toUpperCase();
       if (clean) {
         const timer = window.setTimeout(() => {
+          urlConsumed.current = true;
           setTicker(clean);
           setInputValue(clean);
+          setUrlTickerApplied(true);
         }, 0);
         return () => window.clearTimeout(timer);
       }
     }
+    urlConsumed.current = true;
     return undefined;
   }, [searchParams, setTicker, setTimeframe]);
 
@@ -137,13 +147,19 @@ export default function ChartPage() {
     isLoading: quickLoading,
     error: quickError,
     refetch: refetchQuick,
-  } = useChartQuick(ticker);
+  } = useChartQuick(activeTicker);
 
   const {
     data: commentaryData,
     isLoading: commentaryLoading,
     refetch: refetchCommentary,
-  } = useChartCommentary(ticker, !!quickData);
+  } = useChartCommentary(activeTicker, !!quickData);
+
+  const { data: regimeData, refetch: refetchRegime } = useChartRegime(
+    activeTicker,
+    !!quickData,
+  );
+  const hmmRegime = regimeData?.hmm_regime ?? null;
 
   // Merge quick + commentary into a DashboardPayload-compatible shape
   const data = useMemo((): DashboardPayload | undefined => {
@@ -152,9 +168,9 @@ export default function ChartPage() {
       ...quickData,
       report_generated_ts: commentaryData?.report_generated_ts ?? null,
       chart_commentary: commentaryData?.chart_commentary ?? ({} as DashboardPayload["chart_commentary"]),
-      hmm_regime: commentaryData?.hmm_regime ?? null,
+      hmm_regime: hmmRegime,
     };
-  }, [quickData, commentaryData]);
+  }, [quickData, commentaryData, hmmRegime]);
 
   const isLoading = quickLoading;
   const error = quickError;
@@ -162,7 +178,8 @@ export default function ChartPage() {
   const handleRefresh = useCallback(() => {
     void refetchQuick();
     void refetchCommentary();
-  }, [refetchQuick, refetchCommentary]);
+    void refetchRegime();
+  }, [refetchQuick, refetchCommentary, refetchRegime]);
 
   const handleLoad = useCallback(() => {
     const clean = inputValue.trim().toUpperCase();
@@ -186,6 +203,13 @@ export default function ChartPage() {
     discount_pct: null,
   };
   const currentPrice = livePrice?.price ?? fundamentals.price;
+  const liveChangePct = useMemo(
+    () =>
+      livePrice && livePrice.symbol === quickData?.ticker
+        ? liveDailyChangePct(livePrice, quickData.chart ?? [])
+        : null,
+    [livePrice, quickData],
+  );
   const options = data?.options_summary ?? { put_call_oi_ratio: null };
   const commentary = commentaryData?.chart_commentary ?? null;
   const freshness = quickData?.data_freshness ?? undefined;
@@ -285,6 +309,7 @@ export default function ChartPage() {
       <ChartToolbar
         ticker={data?.ticker}
         livePrice={livePrice}
+        liveChangePct={liveChangePct}
         streamingActive={streamingActive}
         inputValue={inputValue}
         isLoading={isLoading}
@@ -395,14 +420,14 @@ export default function ChartPage() {
             desktopCommentary={
               <ChartCommentarySidebar
                 commentary={commentary}
-                hmmRegime={commentaryData?.hmm_regime ?? null}
+                hmmRegime={hmmRegime}
                 isLoading={commentaryLoading}
               />
             }
             mobileCommentary={
               <ChartCommentarySidebar
                 commentary={commentary}
-                hmmRegime={commentaryData?.hmm_regime ?? null}
+                hmmRegime={hmmRegime}
                 isLoading={commentaryLoading}
               />
             }
