@@ -45,7 +45,20 @@ def build_grid(market: Market, open_: pd.DataFrame, close: pd.DataFrame, exit_em
         trig = np.broadcast_to(rows + max_hold - 1, (n, t))
     else:
         trig = np.minimum(next_true((c < exit_ema.to_numpy())), rows + max_hold - 1)
-    exit_row = (trig + 1).astype(int)
+    return finish_grid(market, open_, close, (trig + 1).astype(int), max_hold)
+
+
+def finish_grid(market: Market, open_: pd.DataFrame, close: pd.DataFrame, exit_row: np.ndarray, max_hold: int,
+                fixed_price: np.ndarray | None = None) -> Grid:
+    """Grid from each cell's exit session: exit open with its fallbacks, spin-off exits, late and unscorable flags.
+
+    ``fixed_price`` (NaN where unused) is an exit price set by the rule itself, such as a stop filled during
+    the session before ``exit_row``; it replaces the exit open but not a spin-off exit.
+    """
+    o, c = open_.to_numpy(), close.to_numpy()
+    n, t = o.shape
+    rows = np.arange(n)[:, None]
+    exit_row = exit_row.copy()
     late = np.broadcast_to(rows + max_hold > n - 1, (n, t)).copy()
     safe = np.minimum(exit_row, n - 1)
     cols = np.broadcast_to(np.arange(t), (n, t))
@@ -55,6 +68,10 @@ def build_grid(market: Market, open_: pd.DataFrame, close: pd.DataFrame, exit_em
     use_next = ~np.isfinite(at_exit) & np.isfinite(o_next[safe, cols])
     use_close = ~np.isfinite(at_exit) & ~use_next & np.isfinite(c_last[safe, cols])
     price = np.where(np.isfinite(at_exit), at_exit, np.where(use_next, o_next[safe, cols], c_last[safe, cols]))
+    if fixed_price is not None:
+        fixed = np.isfinite(fixed_price)
+        use_next, use_close = use_next & ~fixed, use_close & ~fixed
+        price = np.where(fixed, fixed_price, price)
     spin = np.zeros((n, t), dtype=bool)
     for col, qs in market.exits.items():
         for q in qs:
