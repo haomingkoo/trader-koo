@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,7 @@ PROJECT_DIR = PACKAGE_DIR
 SCRIPTS_DIR = PROJECT_DIR / "scripts"
 DB_PATH = env_path("TRADER_KOO_DB_PATH", DEFAULT_DB_PATH)
 REPORT_DIR = env_path("TRADER_KOO_REPORT_DIR", DEFAULT_REPORT_DIR)
+MARKET_SENTIMENT_REFRESH_MINUTES = 10
 
 
 def _resolve_log_dir() -> Path:
@@ -623,6 +625,19 @@ def _run_polymarket_snapshot() -> None:
         LOG.error("Scheduler: Polymarket snapshot failed: %s", exc)
 
 
+def _run_market_sentiment_refresh() -> None:
+    """Recompute /api/market-sentiment off the request path (it makes ~30 provider calls)."""
+    from trader_koo.backend.services.database import get_conn
+    from trader_koo.structure.fear_greed import refresh_fear_greed_index
+
+    try:
+        with closing(get_conn(DB_PATH)) as conn:
+            score = refresh_fear_greed_index(conn).get("score")
+        LOG.info("Scheduler: market sentiment refreshed (score=%s)", score)
+    except Exception as exc:
+        LOG.error("Scheduler: market sentiment refresh failed: %s", exc)
+
+
 def _run_options_iv_snapshot(options_config: "OptionsConfig | None" = None) -> None:
     """Nightly bounded job: archive yfinance option-chain snapshots."""
     config = options_config or get_options_config()
@@ -1008,23 +1023,13 @@ def create_scheduler() -> BackgroundScheduler:
             "misfire_grace_time": 3600,
         },
     )
-    polymarket_snapshot_minutes = env_int(
-        "TRADER_KOO_POLYMARKET_SNAPSHOT_MINUTES", 5, min_value=1, max_value=60
-    )
+    polymarket_snapshot_minutes = env_int("TRADER_KOO_POLYMARKET_SNAPSHOT_MINUTES", 5, min_value=1, max_value=60)
     spike_alert_minutes = env_int("TRADER_KOO_SPIKE_ALERT_MINUTES", 5, min_value=1, max_value=60)
-    macro_alert_minutes = env_int(
-        "TRADER_KOO_MACRO_ALERT_MINUTES", 10, min_value=5, max_value=60
-    )
-    hyperliquid_poll_minutes = env_int(
-        "TRADER_KOO_HYPERLIQUID_POLL_MINUTES", 5, min_value=1, max_value=60
-    )
+    macro_alert_minutes = env_int("TRADER_KOO_MACRO_ALERT_MINUTES", 10, min_value=5, max_value=60)
+    hyperliquid_poll_minutes = env_int("TRADER_KOO_HYPERLIQUID_POLL_MINUTES", 5, min_value=1, max_value=60)
     site_health_minutes = env_int("TRADER_KOO_SITE_HEALTH_MINUTES", 10, min_value=5, max_value=60)
-    crypto_health_minutes = env_int(
-        "TRADER_KOO_CRYPTO_HEALTH_MINUTES", 15, min_value=5, max_value=60
-    )
-    derivatives_minutes = env_int(
-        "TRADER_KOO_DERIVATIVES_SNAPSHOT_MINUTES", 15, min_value=5, max_value=60
-    )
+    crypto_health_minutes = env_int("TRADER_KOO_CRYPTO_HEALTH_MINUTES", 15, min_value=5, max_value=60)
+    derivatives_minutes = env_int("TRADER_KOO_DERIVATIVES_SNAPSHOT_MINUTES", 15, min_value=5, max_value=60)
     options_config = get_options_config()
 
     scheduler.add_job(
@@ -1072,10 +1077,9 @@ def create_scheduler() -> BackgroundScheduler:
         id="polymarket_snapshot",
         replace_existing=True,
     )
-    LOG.info(
-        "Polymarket snapshot job registered: every %dmin (24/7)",
-        polymarket_snapshot_minutes,
-    )
+    LOG.info("Polymarket snapshot job registered: every %dmin (24/7)", polymarket_snapshot_minutes)
+    scheduler.add_job(_run_market_sentiment_refresh, IntervalTrigger(minutes=MARKET_SENTIMENT_REFRESH_MINUTES),
+                      id="market_sentiment_refresh", replace_existing=True)
 
     if options_config.snapshot.enabled:
         scheduler.add_job(
@@ -1090,12 +1094,8 @@ def create_scheduler() -> BackgroundScheduler:
             id="options_iv_snapshot",
             replace_existing=True,
         )
-        LOG.info(
-            "Options IV snapshot job registered: Mon-Fri %02d:%02d UTC digest=%s",
-            options_config.snapshot.hour_utc,
-            options_config.snapshot.minute_utc,
-            options_config.digest.enabled,
-        )
+        LOG.info("Options IV snapshot job registered: Mon-Fri %02d:%02d UTC digest=%s",
+                 options_config.snapshot.hour_utc, options_config.snapshot.minute_utc, options_config.digest.enabled)
     else:
         LOG.info("Options IV snapshot job disabled by TRADER_KOO_OPTIONS_SNAPSHOT_ENABLED")
 
@@ -1139,11 +1139,8 @@ def create_scheduler() -> BackgroundScheduler:
             id="macro_alert",
             replace_existing=True,
         )
-        LOG.info(
-            "Macro alert job registered: every %dmin during US market hours "
-            "(14:00-21:00 UTC, Mon-Fri)",
-            macro_alert_minutes,
-        )
+        LOG.info("Macro alert job registered: every %dmin during US market hours (14:00-21:00 UTC, Mon-Fri)",
+                 macro_alert_minutes)
     else:
         LOG.info("TELEGRAM_BOT_TOKEN not set — macro alert job not registered")
 

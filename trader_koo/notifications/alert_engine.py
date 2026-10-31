@@ -20,9 +20,11 @@ import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
+from trader_koo.collection.options_universe import is_xnys_session
 from trader_koo.config import env_int
 from trader_koo.notifications.telegram import send_price_alert
 
@@ -59,20 +61,16 @@ ALWAYS_WATCH: list[str] = [
 FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote"
 FINNHUB_REQUEST_TIMEOUT_SEC = 10
 
-# US market hours in Eastern Time (ET = UTC-5 / EDT = UTC-4)
+# US market hours in New York time (EST or EDT, whichever applies)
+_MARKET_TZ = ZoneInfo("America/New_York")
 MARKET_OPEN_ET = dt.time(9, 30)
 MARKET_CLOSE_ET = dt.time(16, 0)
 
 
 def _is_us_market_hours(now_utc: dt.datetime) -> bool:
-    """Return True when *now_utc* falls within 9:30-16:00 ET, Mon-Fri.
-
-    Uses a fixed UTC-5 offset (EST).  During daylight saving the
-    window shifts by one hour, which is acceptable — the engine simply
-    starts an hour early / ends an hour late for half the year.
-    """
-    et = now_utc.astimezone(dt.timezone(dt.timedelta(hours=-5)))
-    if et.weekday() >= 5:  # Saturday=5, Sunday=6
+    """True within 9:30-16:00 New York time on an XNYS session (early closes still use 16:00)."""
+    et = now_utc.astimezone(_MARKET_TZ)
+    if not is_xnys_session(et.date()):
         return False
     return MARKET_OPEN_ET <= et.time() <= MARKET_CLOSE_ET
 

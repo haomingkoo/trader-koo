@@ -135,3 +135,35 @@ def test_macro_live_reuses_short_lived_snapshot(tmp_path) -> None:
     assert first == second == snapshot
     assert first is not second
     load.assert_called_once_with(db_path)
+
+
+def test_macro_live_cache_outlives_the_frontend_poll() -> None:
+    assert macro_monitor.MACRO_LIVE_CACHE_TTL_SEC >= 90
+
+
+def test_macro_live_fetches_quotes_concurrently_and_isolates_failures(tmp_path) -> None:
+    import time
+
+    def slow_quote(ticker: str, api_key: str) -> float:
+        time.sleep(0.2)
+        if ticker == "USO":
+            raise RuntimeError("provider down")
+        return 101.0
+
+    started = time.monotonic()
+    with (
+        patch.object(macro_monitor, "_get_finnhub_key", return_value="YOUR_KEY"),
+        patch.object(macro_monitor, "_get_prev_close_row", return_value=(100.0, "2026-10-30")),
+        patch.object(macro_monitor, "_fetch_quote", side_effect=slow_quote),
+    ):
+        result = macro_monitor._load_macro_live(tmp_path / "macro.db")
+    elapsed = time.monotonic() - started
+
+    by_ticker = {inst["ticker"]: inst for inst in result["instruments"]}
+    assert list(by_ticker) == list(macro_monitor.MACRO_WATCH)
+    assert by_ticker["USO"]["current"] is None
+    assert by_ticker["USO"]["change_pct"] is None
+    assert by_ticker["USO"]["quote_source"] is None and by_ticker["GLD"]["quote_source"] == "live"
+    assert all(inst["prev_close_date"] == "2026-10-30" for inst in by_ticker.values())
+    assert all(inst["current"] == 101.0 for t, inst in by_ticker.items() if t != "USO")
+    assert elapsed < 0.2 * len(macro_monitor.MACRO_WATCH) / 2

@@ -18,7 +18,6 @@ from trader_koo.hyperliquid.tracker import (
     fetch_wallet_state,
     generate_counter_signals,
     get_counter_signal_config,
-    poll_all_wallets,
     seed_default_wallets,
 )
 
@@ -255,70 +254,6 @@ def get_counter_signals(limit: int = 50) -> dict[str, Any]:
                 "reasons": reasons if isinstance(reasons, list) else [],
             })
         return {"ok": True, "signals": signals}
-    finally:
-        conn.close()
-
-
-@router.post("/api/hyperliquid/poll")
-def trigger_poll() -> dict[str, Any]:
-    """Manually trigger a poll of all tracked wallets."""
-    conn = get_conn()
-    try:
-        signals = poll_all_wallets(conn)
-        return {
-            "ok": True,
-            "signals_generated": len(signals),
-            "signals": signals,
-        }
-    finally:
-        conn.close()
-
-
-@router.post("/api/hyperliquid/collect/{label}")
-def collect_fill_history(label: str, days: int = 120) -> dict[str, Any]:
-    """Collect fill history from Hyperliquid API for a tracked wallet.
-
-    Seeds the hyperliquid_fills table so the study endpoint has data.
-    Limited to ~10K most recent fills by API constraints.
-    """
-    conn = get_conn()
-    try:
-        ensure_hyperliquid_schema(conn)
-        seed_default_wallets(conn)
-        wallet = conn.execute(
-            "SELECT address FROM hyperliquid_wallets WHERE label = ?", (label,),
-        ).fetchone()
-        if not wallet:
-            return {"ok": False, "error": f"wallet '{label}' not found"}
-        address = wallet[0]
-
-        from trader_koo.hyperliquid.collect_history import (
-            ensure_fills_table,
-            collect_forward,
-            get_latest_fill_time,
-        )
-        import time as _time
-
-        ensure_fills_table(conn)
-        latest = get_latest_fill_time(conn, label)
-        start_ms = latest + 1 if latest else int((_time.time() - days * 86400) * 1000)
-        stored = collect_forward(conn, label, address, start_ms)
-
-        total = conn.execute(
-            "SELECT COUNT(*) FROM hyperliquid_fills WHERE wallet_label = ?", (label,),
-        ).fetchone()[0]
-        date_range = conn.execute(
-            "SELECT MIN(fill_date), MAX(fill_date) FROM hyperliquid_fills WHERE wallet_label = ?",
-            (label,),
-        ).fetchone()
-
-        return {
-            "ok": True,
-            "wallet": label,
-            "new_fills": stored,
-            "total_fills": total,
-            "date_range": {"start": date_range[0], "end": date_range[1]} if date_range[0] else None,
-        }
     finally:
         conn.close()
 

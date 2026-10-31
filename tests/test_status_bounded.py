@@ -323,3 +323,47 @@ def test_persisted_revision_summary_reads_only_price_identities(seeded_conn) -> 
     assert len(price_queries) == 1
     assert "select distinct ticker from price_daily" in price_queries[0]
     assert all(column not in price_queries[0] for column in (" open", " close", " high", " low", " volume"))
+
+
+def test_status_cache_default_outlives_the_frontend_poll() -> None:
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "TRADER_KOO_STATUS_CACHE_SEC"}
+    probe = "from trader_koo.backend.services.pipeline import STATUS_CACHE_TTL_SEC as t; print(t)"
+    out = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True, check=True)
+
+    assert out.stdout.strip() == "120"
+
+
+def test_concurrent_status_misses_compute_once() -> None:
+    import threading
+    import time
+
+    from trader_koo.backend.services import pipeline
+
+    invalidate_status_cache()
+    calls: list[int] = []
+
+    def slow_compute(now: dt.datetime) -> dict:
+        calls.append(1)
+        time.sleep(0.2)
+        payload = {"ok": True}
+        pipeline.set_cached_status(dt.datetime.now(dt.timezone.utc), payload)
+        return payload
+
+    results: list[dict] = []
+    with (
+        patch.object(pipeline, "STATUS_CACHE_TTL_SEC", 120),
+        patch.object(system, "_compute_status", side_effect=slow_compute),
+    ):
+        threads = [threading.Thread(target=lambda: results.append(system.status())) for _ in range(5)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    invalidate_status_cache()
+
+    assert len(calls) == 1
+    assert results == [{"ok": True}] * 5

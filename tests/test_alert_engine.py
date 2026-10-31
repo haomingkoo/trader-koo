@@ -25,37 +25,63 @@ from trader_koo.notifications.alert_engine import (
 
 
 class TestIsUsMarketHours:
-    """Verify market-hours gate logic."""
+    """Verify market-hours gate logic in New York time."""
 
-    def test_weekday_within_hours(self) -> None:
-        # Wednesday 2026-03-18 14:30 UTC = 09:30 ET (EST, UTC-5)
-        now = dt.datetime(2026, 3, 18, 14, 30, tzinfo=dt.timezone.utc)
+    def test_weekday_at_open(self) -> None:
+        # Wednesday 2026-03-18 13:30 UTC = 09:30 EDT (UTC-4)
+        now = dt.datetime(2026, 3, 18, 13, 30, tzinfo=dt.timezone.utc)
 
         assert _is_us_market_hours(now) is True
 
     def test_weekday_before_open(self) -> None:
-        # Wednesday 2026-03-18 13:00 UTC = 08:00 ET
+        # Wednesday 2026-03-18 13:00 UTC = 09:00 EDT
         now = dt.datetime(2026, 3, 18, 13, 0, tzinfo=dt.timezone.utc)
 
         assert _is_us_market_hours(now) is False
 
     def test_weekday_after_close(self) -> None:
-        # Wednesday 2026-03-18 21:30 UTC = 16:30 ET
+        # Wednesday 2026-03-18 21:30 UTC = 17:30 EDT
         now = dt.datetime(2026, 3, 18, 21, 30, tzinfo=dt.timezone.utc)
 
         assert _is_us_market_hours(now) is False
 
     def test_weekend_rejected(self) -> None:
-        # Saturday 2026-03-21 15:00 UTC = 10:00 ET
+        # Saturday 2026-03-21 15:00 UTC = 11:00 EDT
         now = dt.datetime(2026, 3, 21, 15, 0, tzinfo=dt.timezone.utc)
 
         assert _is_us_market_hours(now) is False
 
     def test_market_close_boundary(self) -> None:
-        # Wednesday 2026-03-18 21:00 UTC = 16:00 ET (exactly at close)
-        now = dt.datetime(2026, 3, 18, 21, 0, tzinfo=dt.timezone.utc)
+        # Wednesday 2026-03-18 20:00 UTC = 16:00 EDT (exactly at close)
+        now = dt.datetime(2026, 3, 18, 20, 0, tzinfo=dt.timezone.utc)
 
         assert _is_us_market_hours(now) is True
+
+    def test_daylight_saving_first_hour_is_open(self) -> None:
+        # Friday 2026-10-30 13:45 UTC = 09:45 EDT
+        now = dt.datetime(2026, 10, 30, 13, 45, tzinfo=dt.timezone.utc)
+
+        assert _is_us_market_hours(now) is True
+
+    def test_daylight_saving_hour_after_close_is_closed(self) -> None:
+        # Friday 2026-10-30 20:30 UTC = 16:30 EDT
+        now = dt.datetime(2026, 10, 30, 20, 30, tzinfo=dt.timezone.utc)
+
+        assert _is_us_market_hours(now) is False
+
+    def test_winter_open_and_pre_open(self) -> None:
+        # Wednesday 2026-12-02: 14:45 UTC = 09:45 EST, 14:15 UTC = 09:15 EST
+        open_now = dt.datetime(2026, 12, 2, 14, 45, tzinfo=dt.timezone.utc)
+        pre_open = dt.datetime(2026, 12, 2, 14, 15, tzinfo=dt.timezone.utc)
+
+        assert _is_us_market_hours(open_now) is True
+        assert _is_us_market_hours(pre_open) is False
+
+    def test_exchange_holiday_is_closed(self) -> None:
+        # Thursday 2026-11-26 (Thanksgiving) 16:00 UTC = 11:00 EST
+        now = dt.datetime(2026, 11, 26, 16, 0, tzinfo=dt.timezone.utc)
+
+        assert _is_us_market_hours(now) is False
 
 
 # ------------------------------------------------------------------

@@ -21,8 +21,11 @@ from trader_koo.backend.services.pipeline import (
     pipeline_status_snapshot,
     post_ingest_resume_candidate,
     set_cached_status,
+    STATUS_REFRESH_LOCK,
 )
 from trader_koo.backend.services.report_loader import is_report_fresh
+from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
+from trader_koo.polymarket import POLYMARKET_TOP_N
 from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
@@ -46,9 +49,6 @@ CONTROL_CENTER_CONTRACT_VERSION = "2026-03-01"
 APP_VERSION = str(os.getenv("TRADER_KOO_APP_VERSION", "0.2.0") or "0.2.0").strip() or "0.2.0"
 
 API_KEY = os.getenv("TRADER_KOO_API_KEY", "")
-
-
-from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
 
 
 def _first_env(names: list[str]) -> str | None:
@@ -353,7 +353,7 @@ def vix_pattern_markers() -> dict[str, Any]:
 
 
 @router.get("/api/polymarket")
-def polymarket_data(limit: int = 15) -> dict[str, Any]:
+def polymarket_data(limit: int = Query(15, ge=1, le=POLYMARKET_TOP_N)) -> dict[str, Any]:
     """Public endpoint: curated finance-relevant Polymarket events."""
     try:
         from trader_koo.polymarket import fetch_polymarket_events, polymarket_fetch_status
@@ -393,13 +393,15 @@ def macro_live() -> dict[str, Any]:
 @router.get("/api/status")
 def status() -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
-
-    cached = get_cached_status(now)
-    if cached is not None:
+    if (cached := get_cached_status(now)) is not None:
         return cached
+    with STATUS_REFRESH_LOCK:
+        cached = get_cached_status(now)
+        return cached if cached is not None else _compute_status(now)
 
-    rss_now = _current_rss_mb()
-    rss_max = _max_rss_mb()
+
+def _compute_status(now: dt.datetime) -> dict[str, Any]:
+    rss_now, rss_max = _current_rss_mb(), _max_rss_mb()
     base: dict[str, Any] = {
         "service": "trader_koo-api",
         "now_utc": now.replace(microsecond=0).isoformat(),

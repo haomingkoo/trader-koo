@@ -21,7 +21,7 @@ from trader_koo.catalyst_data import build_earnings_calendar_payload, fetch_econ
 from trader_koo.report.market_context import (
     _build_regime_context as _report_build_regime_context,
 )
-from trader_koo.structure.fear_greed import compute_fear_greed_index
+from trader_koo.structure.fear_greed import latest_fear_greed_index
 from trader_koo.structure.vix_metrics import compute_vix_metrics
 
 LOG = logging.getLogger(__name__)
@@ -255,7 +255,7 @@ def fear_greed_index() -> dict[str, Any]:
     """Market sentiment payload with internal composite and optional external news pulse."""
     conn = get_conn()
     try:
-        return {"ok": True, **compute_fear_greed_index(conn)}
+        return {"ok": True, **latest_fear_greed_index(conn)}
     except Exception as exc:
         LOG.error("Failed to compute market sentiment: %s", exc)
         return {"ok": False, "error": "Market sentiment computation failed"}
