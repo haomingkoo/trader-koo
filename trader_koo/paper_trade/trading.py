@@ -1341,12 +1341,9 @@ def _create_paper_trades_from_report_in_transaction(
                 campaign_id=config.campaign_id,
                 as_of=report_date, rolling_window_days=config.rolling_expectancy_window_days,
             )
-            failed_check = None
-            for raw_reason in critic.get("critic_reasons") or []:
-                text = str(raw_reason)
-                if text.startswith("FAIL [") and "]:" in text:
-                    failed_check = text.split("FAIL [", 1)[1].split("]:", 1)[0]
-                    break
+            # Popped so the persisted and hashed critic outcome keeps its shape.
+            checks = critic.pop("checks")
+            failed_check = next((c["name"] for c in checks if not c["passed"]), None)
             critic["failed_check"] = failed_check
             _decision_runtime_context["critic_outcome"] = critic
             if not critic["approved"]:

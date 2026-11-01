@@ -480,14 +480,13 @@ def critic_review(
             "critic_reasons": list[str], # why each check passed or failed
             "rejections": list[str],     # only the failures
             "summary": str,              # one-line verdict
+            "checks": list[dict],        # {name, passed, reason} per check; popped before persisting
         }
     """
     ticker = str(row.get("ticker") or "").upper()
     direction = str(evaluation.get("direction") or "")
 
     checks: list[tuple[str, bool, str]] = []
-
-    # Run all critic checks
     name_fn_pairs = [
         ("conviction_grade", lambda: _check_conviction_grade(row, evaluation)),
         ("debate_strength", lambda: _check_debate_strength(row, evaluation)),
@@ -546,4 +545,5 @@ def critic_review(
         "critic_reasons": all_reasons,
         "rejections": rejections,
         "summary": summary,
+        "checks": [{"name": name, "passed": p, "reason": reason} for name, p, reason in checks],
     }
