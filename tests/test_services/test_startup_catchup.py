@@ -11,12 +11,12 @@ import pytest
 from trader_koo.backend.services.pipeline import (
     STARTUP_CATCHUP_DELAY,
     ensure_pipeline_runs_schema,
-    queue_startup_catchup,
     read_active_pipeline_run,
     reserve_pipeline_run,
     startup_catchup_reason,
     startup_work_queued,
 )
+from trader_koo.backend.services.pipeline_runs import queue_startup_catchup
 from trader_koo.report.utils import expected_price_date
 
 UTC = dt.timezone.utc

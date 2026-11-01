@@ -8,7 +8,9 @@ status-cache machinery, stale-run reconciliation, and DB-based
 
 The ``pipeline_runs`` table persists each pipeline execution so that
 Railway deploy-kills can be detected on restart and the pipeline
-auto-resumed from the last completed stage.
+auto-resumed from the last completed stage. Requesting runs and the
+restart-recovery order live in ``pipeline_runs.py``, which imports this
+module; this module does not import the scheduler.
 """
 from __future__ import annotations
 
@@ -16,15 +18,11 @@ import datetime as dt
 import logging
 import os
 import re
-import secrets
 import sqlite3
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from apscheduler.schedulers.background import BackgroundScheduler
+from typing import Any
 
 from trader_koo.backend.services.database import DB_PATH, table_exists
 from trader_koo.backend.services.market_data import parse_iso_utc, read_latest_ingest_run
@@ -32,10 +30,18 @@ from trader_koo.backend.services.report_loader import (
     _tail_text_file,
     latest_daily_report_json,
 )
-from trader_koo.backend.services.scheduler import (
+from trader_koo.backend.services.run_log import (
+    DONE_MARKER,
+    REPORT_DONE_MARKER,
+    REPORT_START_MARKER,
     RUN_LOG_PATH,
-    _append_run_log,
-    _run_daily_update,
+    START_MARKER,
+    YOLO_DONE_MARKER,
+    YOLO_PROGRESS_MARKERS,
+    YOLO_START_MARKER,
+    append_run_log as _append_run_log,
+    last_marker_index,
+    latest_run_block,
 )
 from trader_koo.report.utils import expected_price_date
 
@@ -532,57 +538,28 @@ def parse_log_line_ts_utc(line: str | None) -> dt.datetime | None:
 
 def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     """Infer active/stage from log marker lines."""
-    def _last_idx(lines: list[str], token: str) -> int:
-        for idx in range(len(lines) - 1, -1, -1):
-            if token in lines[idx]:
-                return idx
-        return -1
-
-    def _last_idx_any(lines: list[str], tokens: list[str]) -> int:
-        for idx in range(len(lines) - 1, -1, -1):
-            line = lines[idx]
-            for token in tokens:
-                if token in line:
-                    return idx
-        return -1
-
-    start_idx = _last_idx(tail, "[START] daily_update.sh")
-    done_idx = _last_idx(tail, "[DONE]  daily_update.sh")
-    report_start_idx = _last_idx(tail, "[REPORT] Generating")
-    report_done_idx = _last_idx(tail, "[REPORT] Done.")
-    yolo_start_idx = _last_idx(tail, "[YOLO]  Starting")
-    yolo_done_idx = _last_idx(tail, "[YOLO]  Daily pattern detection done.")
-    weekly_start_idx = _last_idx(tail, "[WEEKLY] Starting weekly YOLO pass")
-    weekly_report_start_idx = _last_idx(tail, "[WEEKLY] Report regeneration starting")
-    weekly_yolo_done_idx = _last_idx(tail, "[WEEKLY] Weekly YOLO completed OK")
-    weekly_yolo_failed_idx = _last_idx(tail, "[WEEKLY] Weekly YOLO failed")
-    weekly_report_done_idx = _last_idx(tail, "[WEEKLY] Report regeneration completed")
-    weekly_report_failed_idx = _last_idx(tail, "[WEEKLY] Report regeneration failed")
-    yolo_progress_idx = _last_idx_any(
-        tail,
-        [
-            "[daily] Processing",
-            "[weekly] Processing",
-            "[daily ",
-            "[weekly ",
-        ],
+    start_idx = last_marker_index(tail, START_MARKER)
+    done_idx = last_marker_index(tail, DONE_MARKER)
+    report_start_idx = last_marker_index(tail, REPORT_START_MARKER)
+    report_done_idx = last_marker_index(tail, REPORT_DONE_MARKER)
+    yolo_done_idx = last_marker_index(tail, YOLO_DONE_MARKER)
+    weekly_start_idx = last_marker_index(tail, "[WEEKLY] Starting weekly YOLO pass")
+    weekly_report_start_idx = last_marker_index(tail, "[WEEKLY] Report regeneration starting")
+    weekly_yolo_done_idx = last_marker_index(tail, "[WEEKLY] Weekly YOLO completed OK")
+    weekly_yolo_failed_idx = last_marker_index(tail, "[WEEKLY] Weekly YOLO failed")
+    weekly_report_done_idx = last_marker_index(tail, "[WEEKLY] Report regeneration completed")
+    weekly_report_failed_idx = last_marker_index(tail, "[WEEKLY] Report regeneration failed")
+    yolo_progress_idx = last_marker_index(tail, *YOLO_PROGRESS_MARKERS)
+    marker_tokens = (
+        START_MARKER,
+        "[YOLO]",
+        *YOLO_PROGRESS_MARKERS,
+        "[REPORT]",
+        DONE_MARKER,
+        "[WEEKLY]",
+        "run_id=",
     )
-    markers = [
-        ln
-        for ln in tail
-        if (
-            "[START] daily_update.sh" in ln
-            or "[YOLO]" in ln
-            or "[daily] Processing" in ln
-            or "[weekly] Processing" in ln
-            or "[daily " in ln
-            or "[weekly " in ln
-            or "[REPORT]" in ln
-            or "[DONE]  daily_update.sh" in ln
-            or "[WEEKLY]" in ln
-            or "run_id=" in ln
-        )
-    ]
+    markers = [ln for ln in tail if any(token in ln for token in marker_tokens)]
     out: dict[str, Any] = {
         "active": False,
         "stage": "unknown" if start_idx < 0 else "idle",
@@ -619,22 +596,14 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     if done_idx > start_idx:
         return out
 
-    block = tail[start_idx:]
+    block = latest_run_block(tail)
     out["active"] = True
 
-    report_start = _last_idx(block, "[REPORT] Generating")
-    report_done = _last_idx(block, "[REPORT] Done.")
-    yolo_start = _last_idx(block, "[YOLO]  Starting")
-    yolo_done = _last_idx(block, "[YOLO]  Daily pattern detection done.")
-    yolo_progress = _last_idx_any(
-        block,
-        [
-            "[daily] Processing",
-            "[weekly] Processing",
-            "[daily ",
-            "[weekly ",
-        ],
-    )
+    report_start = last_marker_index(block, REPORT_START_MARKER)
+    report_done = last_marker_index(block, REPORT_DONE_MARKER)
+    yolo_start = last_marker_index(block, YOLO_START_MARKER)
+    yolo_done = last_marker_index(block, YOLO_DONE_MARKER)
+    yolo_progress = last_marker_index(block, *YOLO_PROGRESS_MARKERS)
 
     if report_start >= 0 and report_start > report_done:
         out["stage"] = "report"
@@ -655,9 +624,9 @@ def _infer_last_completed_event_from_tail(tail: list[str]) -> dict[str, Any] | N
         ("weekly_report", "failed", "[WEEKLY] Report regeneration failed"),
         ("weekly_yolo", "ok", "[WEEKLY] Weekly YOLO completed OK"),
         ("weekly_yolo", "failed", "[WEEKLY] Weekly YOLO failed"),
-        ("report", "ok", "[REPORT] Done."),
+        ("report", "ok", REPORT_DONE_MARKER),
         ("report", "failed", "[REPORT] Failed to generate report"),
-        ("daily_update", "ok", "[DONE]  daily_update.sh"),
+        ("daily_update", "ok", DONE_MARKER),
         ("ingest", "failed", "[ERROR] ingest failed rc="),
     ]
     best_idx = -1
@@ -1002,99 +971,6 @@ def post_ingest_resume_candidate(
     }
 
 
-def queue_post_ingest_resume(
-    scheduler: BackgroundScheduler,
-    source: str = "startup",
-) -> dict[str, Any]:
-    """Conditionally schedule a post-ingest resume job on *scheduler*.
-
-    Parameters
-    ----------
-    scheduler:
-        APScheduler ``BackgroundScheduler`` instance.
-    source:
-        Tag for the run-log entry.
-    """
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    pipeline = pipeline_status_snapshot(log_lines=120)
-    candidate = post_ingest_resume_candidate(
-        latest_run=pipeline.get("latest_run"),
-        pipeline_active=bool(pipeline.get("active")),
-        now_utc=now_utc,
-    )
-    if candidate is None:
-        return {"scheduled": False}
-    if not candidate.get("eligible", True):
-        LOG.warning(
-            "Post-ingest resume not queued: mode=%s reason=%s run_id=%s retries=%s/%s",
-            candidate.get("mode"),
-            candidate.get("reason"),
-            ((candidate.get("latest_run") or {}).get("run_id") or "-"),
-            candidate.get("resume_attempts"),
-            candidate.get("max_retries"),
-        )
-        return {"scheduled": False, **candidate}
-
-    job_id = f"resume_daily_update_{now_utc.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
-    scheduler.add_job(
-        _run_daily_update,
-        trigger="date",
-        run_date=now_utc,
-        id=job_id,
-        kwargs={"mode": str(candidate.get("mode") or "yolo"), "source": source},
-    )
-    _append_run_log(
-        "RESUME",
-        (
-            f"queued mode={candidate.get('mode')} source={source} "
-            f"reason={candidate.get('reason')} run_id={((candidate.get('latest_run') or {}).get('run_id') or '-')}"
-        ),
-    )
-    LOG.warning(
-        "Queued post-ingest resume mode=%s source=%s reason=%s run_id=%s",
-        candidate.get("mode"),
-        source,
-        candidate.get("reason"),
-        ((candidate.get("latest_run") or {}).get("run_id") or "-"),
-    )
-    return {"scheduled": True, "job_id": job_id, **candidate}
-
-
-def queue_reserved_pipeline_run(
-    scheduler: BackgroundScheduler,
-    *,
-    db_path: Path | None = None,
-) -> dict[str, Any]:
-    """Requeue a durable manual reservation that survived an app restart."""
-    reserved = read_active_pipeline_run(db_path=db_path)
-    if reserved is None or reserved.get("status") != "queued":
-        return {"scheduled": False}
-    run_id = str(reserved["run_id"])
-    mode = str(reserved["mode"])
-    source = str(reserved["source"])
-    job_id = f"resume_reserved_{run_id}"
-    scheduler.add_job(
-        _run_daily_update,
-        trigger="date",
-        run_date=dt.datetime.now(dt.timezone.utc),
-        id=job_id,
-        kwargs={"mode": mode, "source": source, "run_id": run_id},
-    )
-    LOG.warning(
-        "Requeued reserved pipeline run_id=%s mode=%s source=%s",
-        run_id,
-        mode,
-        source,
-    )
-    return {
-        "scheduled": True,
-        "job_id": job_id,
-        "run_id": run_id,
-        "mode": mode,
-        "source": source,
-    }
-
-
 def startup_work_queued(
     *,
     reserved: Mapping[str, Any],
@@ -1173,47 +1049,3 @@ def _latest_price_date(db_path: Path) -> str | None:
         _append_run_log("CATCHUP", "skipped: no price data")
         return None
     return str(row[0])
-
-
-def queue_startup_catchup(
-    scheduler: BackgroundScheduler,
-    *,
-    already_queued: bool = False,
-    db_path: Path | None = None,
-    now_utc: dt.datetime | None = None,
-) -> dict[str, Any]:
-    """Queue one delayed full run when stored prices lag the last due session.
-
-    The scheduler keeps no jobstore, so a container that was down at 22:00 UTC
-    forgets the missed run. This is the only place that notices at boot.
-    Callers pass already_queued=True only when a job was really queued.
-    When the catch-up is needed, leftover queued or running pipeline_runs rows
-    are marked interrupted first. The job reserves its own run and would
-    otherwise log SKIP and do nothing. Skips are written to the run log.
-    """
-    path = db_path or DB_PATH
-    now = now_utc or dt.datetime.now(dt.timezone.utc)
-    latest = _latest_price_date(path)
-    if latest is None:
-        return {"scheduled": False}
-    reason = startup_catchup_reason(
-        latest_price_date=latest,
-        now_utc=now,
-        already_queued=already_queued,
-    )
-    if reason is None:
-        return {"scheduled": False}
-    abandoned = _abandon_stale_pipeline_runs(path)
-    if abandoned:
-        _append_run_log("CATCHUP", f"marked {abandoned} stale pipeline run(s) interrupted")
-    job_id = f"startup_catchup_{now.strftime('%Y%m%dT%H%M%S')}"
-    scheduler.add_job(
-        _run_daily_update,
-        trigger="date",
-        run_date=now + STARTUP_CATCHUP_DELAY,
-        id=job_id,
-        kwargs={"mode": "full", "source": "startup_catchup"},
-    )
-    _append_run_log("CATCHUP", f"queued mode=full source=startup_catchup {reason}")
-    LOG.warning("Queued startup catch-up job_id=%s %s", job_id, reason)
-    return {"scheduled": True, "job_id": job_id, "reason": reason}

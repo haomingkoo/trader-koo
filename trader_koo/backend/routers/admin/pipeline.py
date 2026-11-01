@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import secrets
 import subprocess
 import sys
 import threading
@@ -15,17 +14,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
 from trader_koo.backend.services.market_data import get_yolo_status
 from trader_koo.backend.services.pipeline import (
-    finish_pipeline_run,
     pipeline_status_snapshot,
     post_ingest_resume_candidate,
     reconcile_stale_running_runs,
-    reserve_pipeline_run,
 )
+from trader_koo.backend.services.pipeline_runs import request_run
 from trader_koo.backend.services.report_loader import (
     _tail_text_file,
     daily_report_response,
 )
-from trader_koo.backend.services.scheduler import _run_daily_update
 from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
 from trader_koo.report.market_context import (
     _build_regime_context as _report_build_regime_context,
@@ -78,60 +75,26 @@ def trigger_update(
             status_code=503,
             detail="Scheduler unavailable. Restart the app before triggering updates.",
         )
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    manual_job_id = (
-        f"manual_daily_update_{now_utc.strftime('%Y%m%dT%H%M%S')}"
-        f"_{secrets.token_hex(3)}"
-    )
-    pipeline_run_id = (
-        f"pipe_{now_utc.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
-    )
-    try:
-        active_run = reserve_pipeline_run(
-            run_id=pipeline_run_id,
-            mode=mode_norm,
-            source="admin",
-            db_path=DB_PATH,
-        )
-    except Exception as exc:
-        LOG.error("Failed to persist manual pipeline reservation: %s", exc)
+    run = request_run(scheduler, mode=mode_norm, source="admin", db_path=DB_PATH)
+    if run.status == "unpersisted":
         raise HTTPException(
             status_code=503,
             detail="Unable to persist the pipeline request. No job was queued.",
-        ) from exc
-    if active_run is not None:
+        )
+    if run.status == "active":
         raise HTTPException(
             status_code=409,
             detail=(
                 "daily_update already queued or running "
-                f"(stage={active_run.get('stage') or 'unknown'}, "
+                f"(stage={(run.active_run or {}).get('stage') or 'unknown'}, "
                 f"requested_mode={mode_norm})"
             ),
         )
-    try:
-        scheduler.add_job(
-            _run_daily_update,
-            trigger="date",
-            run_date=now_utc,
-            id=manual_job_id,
-            kwargs={
-                "mode": mode_norm,
-                "source": "admin",
-                "run_id": pipeline_run_id,
-            },
-        )
-    except Exception as exc:
-        finish_pipeline_run(
-            pipeline_run_id,
-            status="failed",
-            error_message="scheduler_enqueue_failed",
-            db_path=DB_PATH,
-        )
-        LOG.error("Failed to enqueue reserved manual pipeline run: %s", exc)
+    if run.status == "rejected":
         raise HTTPException(
             status_code=503,
             detail="Scheduler rejected the pipeline request. No job was queued.",
-        ) from exc
+        )
     mode_message = {
         "full": "full pipeline (ingest + yolo + report)",
         "yolo": "yolo + report (ingest skipped)",
@@ -145,8 +108,8 @@ def trigger_update(
         ),
         "stage": "queued",
         "mode": mode_norm,
-        "job_id": manual_job_id,
-        "run_id": pipeline_run_id,
+        "job_id": run.job_id,
+        "run_id": run.run_id,
         "run_log_path": str(RUN_LOG_PATH),
         "reconciled_stale_runs": reconcile.get("reconciled", 0),
     }
