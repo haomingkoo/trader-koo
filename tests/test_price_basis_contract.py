@@ -563,12 +563,12 @@ def test_report_consumer_fails_closed_for_unresolved_basis() -> None:
     ]
     write_price_daily(conn, "SPY", prices)
 
-    report_generator._report_warnings = []
-    signals = report_generator.fetch_signals(conn)
+    report_warnings: list[str] = []
+    signals = report_generator.fetch_signals(conn, report_warnings)
     assert signals["setup_quality_top"] == []
     assert "hmm_regime_by_ticker" not in signals
     assert signals["price_contract"]["eligible"] is False
-    assert "price_basis_unresolved" in report_generator._report_warnings
+    assert "price_basis_unresolved" in report_warnings
 
 
 def test_yolo_persistence_fails_closed_for_unresolved_basis() -> None:

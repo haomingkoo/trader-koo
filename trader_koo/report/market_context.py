@@ -38,9 +38,6 @@ from trader_koo.report.utils import (
 
 LOG = logging.getLogger(__name__)
 
-# Module-level warning accumulator — set by generator before calling these functions.
-_report_warnings: list[str] = []
-
 REPORT_FEATURE_CFG = FeatureConfig()
 REPORT_LEVEL_CFG = LevelConfig()
 
@@ -229,7 +226,9 @@ def _build_regime_llm_commentary(regime: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
+def _build_regime_context(conn: sqlite3.Connection, report_warnings: list[str] | None = None) -> dict[str, Any]:
+    """Degraded steps append warning codes to the report run's collector; API callers pass none."""
+    report_warnings = [] if report_warnings is None else report_warnings
     regime: dict[str, Any] = {
         "source": "unavailable",
         "context_only": True,
@@ -429,7 +428,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                         )
         except Exception as exc:
             LOG.error("Level computation failed for ticker: %s", exc, exc_info=True)
-            _report_warnings.append("levels_computation_failed")
+            report_warnings.append("levels_computation_failed")
             levels_out = []
         if not levels_out:
             level_source = "rolling_window_fallback"
@@ -512,7 +511,7 @@ def _build_regime_context(conn: sqlite3.Connection) -> dict[str, Any]:
                     )
         except Exception as e:
             LOG.error("VIX trap/reclaim pattern detection failed: %s", e, exc_info=True)
-            _report_warnings.append("vix_trap_reclaim_detection_failed")
+            report_warnings.append("vix_trap_reclaim_detection_failed")
 
         regime["trap_reclaim_patterns"] = trap_reclaim_patterns
 

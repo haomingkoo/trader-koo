@@ -199,7 +199,7 @@ def test_unlinked_report_generation_is_read_only_for_calls_and_trades(
     monkeypatch.setattr(
         generator,
         "fetch_signals",
-        lambda _conn: {
+        lambda _conn, _warnings: {
             "setup_quality_top": [dict(setup)],
             "setup_quality_all": [dict(setup)],
             "setup_quality_lookup": {"AAA": dict(setup)},
@@ -269,7 +269,7 @@ def _fresh_report_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, wit
         "signal_bias": "bullish", "actionability": "higher-probability",
         "score": 90.0, "close": 100.0, "atr_pct_14": 2.0, "debate_agreement_score": 90.0,
     }
-    monkeypatch.setattr(generator, "fetch_signals", lambda _conn: {
+    monkeypatch.setattr(generator, "fetch_signals", lambda _conn, _warnings: {
         "setup_quality_top": [dict(setup)], "setup_quality_all": [dict(setup)],
         "setup_quality_lookup": {"AAA": dict(setup)}, "report_decisions": [],
         "scanned_universe": [], "regime_context": {},
@@ -295,6 +295,28 @@ def test_data_warning_still_blocks_publication(
     assert payload["ok"] is False
     with pytest.raises(ValueError, match="degraded|partial-quality"):
         _assert_publishable_report(payload)
+
+
+def test_each_report_run_starts_with_an_empty_warnings_collector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trader_koo.report import generator
+
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    clean_fetch = generator.fetch_signals
+
+    def degraded_fetch(conn, report_warnings):
+        report_warnings.append("volatility_inputs_failed")
+        return clean_fetch(conn, report_warnings)
+
+    monkeypatch.setattr(generator, "fetch_signals", degraded_fetch)
+    first = fetch_report_payload(**kwargs)
+    monkeypatch.setattr(generator, "fetch_signals", clean_fetch)
+    second = fetch_report_payload(**kwargs)
+
+    assert first["generation_warnings"] == ["volatility_inputs_failed"]
+    assert second["generation_warnings"] == []
+    assert second["ok"] is True
 
 
 def _set_yolo_rows(db_path: Path, rows: list[tuple[str, str, str]]) -> None:
@@ -500,7 +522,7 @@ def test_yolo_coverage_ignores_tickers_excluded_from_research_universe(
     monkeypatch.setattr(
         generator,
         "fetch_signals",
-        lambda conn: {**base_fetch(conn), "price_contract": {"excluded_tickers": ["BBB"]}},
+        lambda conn, warnings: {**base_fetch(conn, warnings), "price_contract": {"excluded_tickers": ["BBB"]}},
     )
 
     payload = fetch_report_payload(**kwargs)
@@ -558,6 +580,7 @@ def _add_bars(conn: sqlite3.Connection, ticker: str, prev: tuple[str, float], la
 def _signals_with_stale_ticker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     stray_future_bar: bool = False, lone_future_bar: bool = False,
+    report_warnings: list[str] | None = None,
 ) -> dict:
     from trader_koo.report import generator
 
@@ -593,7 +616,7 @@ def _signals_with_stale_ticker(
     monkeypatch.setattr(generator, "research_eligible_tickers", lambda _conn: set(tickers))
     monkeypatch.setattr(generator, "research_price_contract", lambda *_a, **_k: {"eligible": True})
     try:
-        return generator._fetch_signals_snapshot(conn)
+        return generator._fetch_signals_snapshot(conn, [] if report_warnings is None else report_warnings)
     finally:
         conn.close()
 
@@ -637,39 +660,33 @@ def test_near_52w_lists_exclude_stale_tickers(tmp_path: Path, monkeypatch: pytes
 def test_breadth_warns_when_latest_session_covers_few_tickers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from trader_koo.report import generator
+    report_warnings: list[str] = []
 
-    monkeypatch.setattr(generator, "_report_warnings", [])
-
-    signals = _signals_with_stale_ticker(tmp_path, monkeypatch, stray_future_bar=True)
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch, stray_future_bar=True, report_warnings=report_warnings)
 
     assert signals["market_breadth"]["total_tickers"] == 1
-    assert "market_breadth_latest_session_thin" in generator._report_warnings
+    assert "market_breadth_latest_session_thin" in report_warnings
 
 
 def test_breadth_does_not_warn_when_latest_session_is_fully_covered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from trader_koo.report import generator
+    report_warnings: list[str] = []
 
-    monkeypatch.setattr(generator, "_report_warnings", [])
+    _signals_with_stale_ticker(tmp_path, monkeypatch, report_warnings=report_warnings)
 
-    _signals_with_stale_ticker(tmp_path, monkeypatch)
-
-    assert "market_breadth_latest_session_thin" not in generator._report_warnings
+    assert "market_breadth_latest_session_thin" not in report_warnings
 
 
 def test_breadth_warns_and_is_empty_when_latest_session_has_no_comparable_bars(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from trader_koo.report import generator
+    report_warnings: list[str] = []
 
-    monkeypatch.setattr(generator, "_report_warnings", [])
-
-    signals = _signals_with_stale_ticker(tmp_path, monkeypatch, lone_future_bar=True)
+    signals = _signals_with_stale_ticker(tmp_path, monkeypatch, lone_future_bar=True, report_warnings=report_warnings)
 
     assert signals["market_breadth"]["total_tickers"] == 0
-    assert "market_breadth_latest_session_thin" in generator._report_warnings
+    assert "market_breadth_latest_session_thin" in report_warnings
 
 
 CONTEXT_FIELDS = {
@@ -695,10 +712,10 @@ def test_setup_rows_carry_the_market_context_fields_the_scorer_reads(
 def test_ensemble_adjustment_is_applied_after_the_last_rescore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from trader_koo.report import generator
+    from trader_koo.report import setup_ranking
 
     events: list[tuple[str, str]] = []
-    score, adjust = generator._score_setup_from_confluence, generator._apply_ensemble_adjustment
+    score, adjust = setup_ranking._score_setup_from_confluence, setup_ranking._apply_ensemble_adjustment
 
     def spy_score(row):
         events.append((row["ticker"], "rescore"))
@@ -708,8 +725,8 @@ def test_ensemble_adjustment_is_applied_after_the_last_rescore(
         events.append((row["ticker"], "ensemble"))
         return adjust(row)
 
-    monkeypatch.setattr(generator, "_score_setup_from_confluence", spy_score)
-    monkeypatch.setattr(generator, "_apply_ensemble_adjustment", spy_adjust)
+    monkeypatch.setattr(setup_ranking, "_score_setup_from_confluence", spy_score)
+    monkeypatch.setattr(setup_ranking, "_apply_ensemble_adjustment", spy_adjust)
     rows = _signals_with_stale_ticker(tmp_path, monkeypatch)["setup_quality_all"]
     assert rows
     for row in rows:

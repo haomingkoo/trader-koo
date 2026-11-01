@@ -374,8 +374,8 @@
    "lines": 136
   },
   "trader_koo/report/generator.py": {
-   "bare_numbers": 117,
-   "lines": 1746
+   "bare_numbers": 54,
+   "lines": 1245
   },
   "trader_koo/report/market_context.py": {
    "bare_numbers": 154,
@@ -392,6 +392,10 @@
   "trader_koo/report/serializer.py": {
    "bare_numbers": 16,
    "lines": 666
+  },
+  "trader_koo/report/setup_ranking.py": {
+   "bare_numbers": 49,
+   "lines": 498
   },
   "trader_koo/report/setup_scoring.py": {
    "bare_numbers": 259,
