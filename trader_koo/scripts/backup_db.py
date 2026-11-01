@@ -23,7 +23,7 @@ from pathlib import Path
 LOG = logging.getLogger("trader_koo.scripts.backup_db")
 
 DEFAULT_BACKUP_DIR = Path("/data/backups")
-MAX_BACKUPS = 7
+MAX_BACKUPS = 3  # each copy is ~220 MB; seven left VACUUM no room on the 5 GB volume
 BACKUP_PREFIX = "trader_koo_backup_"
 BACKUP_SUFFIX = ".db.gz"
 
