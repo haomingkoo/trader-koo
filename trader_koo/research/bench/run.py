@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +17,7 @@ import pandas as pd
 
 from trader_koo.research.settings import get as _settings
 
-from . import ledger, report
+from . import ledger, report, trial
 from .data import BENCHMARK_TICKER, Market
 from .diagnostics import Diagnostics
 from .hypotheses import H4_RULES
@@ -124,7 +123,8 @@ def _window_block(market: Market, first: int, lo: int, hi: int, cand: Result, st
 def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict:
     cfg.validate()
     n = len(market.sessions)
-    boundary = int(np.searchsorted(market.sessions, ledger.pinned_boundary(ledger_path, market.sessions), side="left"))
+    t = trial.start(ledger_path, trial.PIN_IF_MISSING, market.sessions)
+    boundary = int(np.searchsorted(market.sessions, t.boundary, side="left"))
     start = _index_at_or_after(market.sessions, cfg.start, 0)
     default_end = n - 1 if cfg.open_sealed else boundary - 1
     end = default_end if cfg.end is None else int(np.searchsorted(market.sessions, cfg.end, side="right")) - 1
@@ -135,13 +135,10 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
         raise ValueError("empty date range")
     market.diag = Diagnostics()  # this run's substitutions only; load-time ones stay in market.load_diag
     config = cfg.seed_basis()
-    seed = ledger.seed_from_config(config)
-    stamp = datetime.now(timezone.utc).isoformat()
-    base = {"candidate": cfg.candidate, "config": config, "seed": seed,
-            "code_version": ledger.code_version(), "timestamp": stamp}
+    seed = t.configure(cfg.candidate, config)
+    t.stamp()  # stamped before the run, as every bench entry has been
     if cfg.open_sealed:
-        prior = ledger.sealed_openings(ledger_path, cfg.candidate)
-        ledger.append(ledger_path, {**base, "event": "sealed_open", "prior_openings": prior})
+        t.open_sealed()
 
     signal = make_signal(cfg.candidate, cfg.params)
     rules = cfg.rules()
@@ -230,11 +227,9 @@ def run_bench(market: Market, cfg: BenchConfig, ledger_path: str | Path) -> dict
         summary["sealed_excess_vs_spy"] = out["sealed"]["excess_vs_spy"]
     summary = {k: None if v is None else round(float(v), SUMMARY_DIGITS) for k, v in summary.items()}
     out["summary"] = summary
-    ledger.append(ledger_path, {
-        **base, "event": "run", "trial_id": ledger.short_id(base),
-        "params_hash": ledger.sha(cfg.params), "sealed_opened": cfg.open_sealed, "sealed_boundary": market.sessions[boundary],
-        "date_range": [market.sessions[first], market.sessions[end]],
-        "costs_bps": {"per_side": cfg.cost_bps, "stress": cfg.stress_bps},
-        "universe": cfg.universe, "n_sessions": n, "summary": summary,
-    })
+    # The recorded boundary is the first session on or after the pinned date, not the pinned string itself.
+    t.record("run", summary, params=cfg.params, sealed_opened=cfg.open_sealed,
+             sealed_boundary=market.sessions[boundary],
+             date_range=[market.sessions[first], market.sessions[end]],
+             costs_bps={"per_side": cfg.cost_bps, "stress": cfg.stress_bps}, universe=cfg.universe, n_sessions=n)
     return out

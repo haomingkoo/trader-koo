@@ -14,6 +14,7 @@ from .run import BenchConfig, run_bench
 
 EXIT_REFUSED = 3
 SHA_SHOWN = 12  # characters of a settings hash printed in messages
+REPLAYABLE = ("run", "event_study_run", "exposure_run")  # event names as recorded; never renamed
 
 
 def _ledger_path(args) -> Path:
@@ -39,6 +40,42 @@ def _events(args, path: Path) -> int:
     return 0
 
 
+def _settings_match(entry: dict, trial: str) -> bool:
+    recorded = entry.get("settings_sha256")
+    if recorded is None:
+        print(f"note: entry {trial} predates settings hashing; replaying under settings "
+              f"{_settings().sha256[:SHA_SHOWN]}", file=sys.stderr)
+    elif recorded != _settings().sha256:
+        print(f"refused: entry {trial} ran under settings {recorded[:SHA_SHOWN]} but "
+              f"{_settings().path} is {_settings().sha256[:SHA_SHOWN]}", file=sys.stderr)
+        return False
+    return True
+
+
+def _replay_study(args, path: Path, entry: dict) -> int:
+    """Re-run a study entry on the database; its config is derived from the data, so the config must match too."""
+    from . import v2_run, v3_run, v7_run
+    runner = {("event_study_run", "v2"): v2_run.run_v2, ("event_study_run", "v3"): v3_run.run_v3,
+              ("exposure_run", "v7"): v7_run.run_v7}.get((entry["event"], entry.get("family")))
+    if runner is None:
+        print(f"refused: replay of {entry['event']} family {entry.get('family')} is not supported", file=sys.stderr)
+        return 2
+    if not _settings_match(entry, args.trial):
+        return 2
+    try:
+        out = runner(args.db, path)
+    except LookupError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    if out["config"] != entry["config"]:
+        print(f"replay DIFFERS FROM ledger entry {args.trial}: the database gives a different config")
+        return 1
+    rerun = next(e for e in reversed(ledger.read(path)) if e.get("trial_id") == out["trial_id"])
+    same = rerun["summary"] == entry["summary"]
+    print(f"replay {'MATCHES' if same else 'DIFFERS FROM'} ledger entry {args.trial}")
+    return 0 if same else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     b = _settings().bench  # defaults of the run flags come from config/research.toml
     p = argparse.ArgumentParser(prog="trader_koo.research.bench")
@@ -61,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--json", action="store_true", help="print the full report as JSON")
     q = sub.add_parser("replay", help="re-run a ledger entry and compare its summary")
     q.add_argument("--db", required=True)
-    q.add_argument("--trial", required=True, help="trial_id of a ledger run entry")
+    q.add_argument("--trial", required=True, help="trial_id of a run, or of a v2 or v3 event_study_run or v7 exposure_run entry")
     q.add_argument("--open-sealed", action="store_true", help="required to replay a sealed run")
     q.add_argument("--ledger")
     e = sub.add_parser("events", help="run the event studies of hypotheses v2 and/or v3 on the development window")
@@ -83,20 +120,16 @@ def main(argv: list[str] | None = None) -> int:
             review_every=args.review_every, min_hold=args.min_hold)
     else:
         entry = next((e for e in ledger.read(path)
-                      if e.get("event") == "run" and e.get("trial_id") == args.trial), None)
+                      if e.get("event") in REPLAYABLE and e.get("trial_id") == args.trial), None)
         if entry is None:
             print(f"no run entry {args.trial} in {path}", file=sys.stderr)
             return 2
+        if entry["event"] != "run":
+            return _replay_study(args, path, entry)
         if entry["config"]["open_sealed"] and not args.open_sealed:
             print("this entry opened the sealed window; replay needs --open-sealed", file=sys.stderr)
             return 2
-        recorded = entry.get("settings_sha256")
-        if recorded is None:
-            print(f"note: entry {args.trial} predates settings hashing; replaying under settings "
-                  f"{_settings().sha256[:SHA_SHOWN]}", file=sys.stderr)
-        elif recorded != _settings().sha256:
-            print(f"refused: entry {args.trial} ran under settings {recorded[:SHA_SHOWN]} but "
-                  f"{_settings().path} is {_settings().sha256[:SHA_SHOWN]}", file=sys.stderr)
+        if not _settings_match(entry, args.trial):
             return 2
         cfg = BenchConfig(**entry["config"])
     try:
