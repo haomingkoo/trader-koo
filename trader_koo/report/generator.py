@@ -20,13 +20,11 @@ from trader_koo.paper_trades import (
     PAPER_TRADE_ENABLED,
     mark_to_market,
 )
-from trader_koo.report.ensemble_adjustment import apply_ensemble_adjustment as _apply_ensemble_adjustment
 from trader_koo.report.freshness import assess_data_freshness
 from trader_koo.report.market_context import (
     _build_regime_context,
     _fetch_technical_context,
     _fetch_volatility_inputs,
-    _report_warnings as _mc_report_warnings,
 )
 from trader_koo.report.pattern_analysis import (
     _summarize_yolo_lifecycle,
@@ -36,37 +34,24 @@ from trader_koo.report.pattern_analysis import (
 )
 from trader_koo.report.setup_scoring import (
     DEBATE_ENGINE_ENABLED,
-    OPTIONS_RESEARCH_ENABLED,
     SETUP_EVAL_ENABLED,
     SETUP_EVAL_MIN_SAMPLE,
     SETUP_NEWS_ENABLED,
     SETUP_EVAL_TRACK_LIMIT,
     SETUP_EVAL_WINDOW_DAYS,
-    _apply_agreement_tier_adjustment,
-    _apply_debate_guardrails,
-    _apply_debate_payload,
-    _apply_news_research_context,
-    _apply_options_research_context,
-    _apply_setup_eval_fields,
-    _describe_setup,
-    _refresh_setup_eval_surfaces,
     _score_open_setup_call_outcomes,
-    _score_setup_from_confluence,
     _setup_cluster_rows,
     _summarize_setup_call_evaluations,
     _yolo_age_factor,
-    _yolo_pattern_bias,
     _yolo_recency_label,
     annotate_earnings_proximity,
     build_no_trade_conditions,
     build_tonight_key_changes,
     ensure_setup_call_eval_schema,
 )
-from trader_koo.report.suggestions import build_suggestions
+from trader_koo.report.setup_ranking import calibrate_setups, rank_setups, rerank_with_candles, score_setup
 from trader_koo.report.utils import (
-    _clamp,
     _normalize_report_kind,
-    _setup_tier,
     days_since_date,
     hours_since,
     market_calendar_context,
@@ -78,18 +63,13 @@ from trader_koo.report.utils import (
 
 LOG = logging.getLogger(__name__)
 
-# Accumulates warnings from except blocks during report generation so the
-# frontend can surface which sections degraded.  Reset at the start of each
-# fetch_report_payload() call.
-_report_warnings: list[str] = []
-
 # Movers and breadth only use tickers priced on the latest session. If fewer
 # than this share of recently active tickers are covered, flag it in the report.
 MIN_LATEST_SESSION_COVERAGE = 0.8
 RECENT_ACTIVITY_DAYS = 30
 
 
-def _warn_if_latest_session_thin(conn: sqlite3.Connection, covered: int) -> None:
+def _warn_if_latest_session_thin(conn: sqlite3.Connection, covered: int, report_warnings: list[str]) -> None:
     """Warn when the latest session prices far fewer tickers than were recently active."""
     universe = conn.execute(
         "SELECT COUNT(DISTINCT ticker) FROM price_daily "
@@ -98,7 +78,7 @@ def _warn_if_latest_session_thin(conn: sqlite3.Connection, covered: int) -> None
     ).fetchone()[0]
     if universe and covered < universe * MIN_LATEST_SESSION_COVERAGE:
         LOG.warning("Latest session covers %d of %d recently active tickers", covered, universe)
-        _report_warnings.append("market_breadth_latest_session_thin")
+        report_warnings.append("market_breadth_latest_session_thin")
 
 
 def _green_barrier_coverage_requires_warning(coverage: dict[str, Any]) -> bool:
@@ -194,12 +174,11 @@ def _report_stale_price_guard_error(
     return None
 
 
-# Computed by market_context and read by setup_scoring, debate_engine and llm_narrative.
-_SCORER_CONTEXT_FIELDS = ("ma_signal", "ma_major_signal", "ma_reclaim_state", "level_event", "recent_gap_state", "recent_gap_days")
+def _fetch_signals_snapshot(conn: sqlite3.Connection, report_warnings: list[str]) -> dict[str, Any]:
+    """Market signals for the daily report: 52W extremes, top YOLO patterns, candle signals.
 
-
-def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Market signals for the daily report: 52W extremes, top YOLO patterns, candle signals."""
+    Degraded sections append their warning codes to ``report_warnings``.
+    """
     signals: dict[str, Any] = {
         "near_52w_high": [],
         "near_52w_low": [],
@@ -275,7 +254,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
     })
     signals["price_contract"] = price_contract
     if not price_contract["eligible"]:
-        _report_warnings.append("price_basis_unresolved")
+        report_warnings.append("price_basis_unresolved")
         LOG.error(
             "Report signals excluded: price basis is not research eligible (%s)",
             price_contract["reason"],
@@ -295,12 +274,13 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         signals["volatility_context"] = vol_ctx
     except Exception as exc:
         LOG.error("Volatility inputs fetch failed: %s", exc, exc_info=True)
-        _report_warnings.append("volatility_inputs_failed")
+        report_warnings.append("volatility_inputs_failed")
+    regime_warnings: list[str] = []
     try:
-        signals["regime_context"] = _build_regime_context(conn)
+        signals["regime_context"] = _build_regime_context(conn, regime_warnings)
     except Exception as exc:
         LOG.error("Regime context build failed: %s", exc, exc_info=True)
-        _report_warnings.append("regime_context_failed")
+        report_warnings.append("regime_context_failed")
         signals["regime_context"] = {}
     # Cache VIX metrics in nightly report (avoids live recompute on every page load)
     try:
@@ -317,22 +297,18 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         signals["green_barrier_coverage"] = green_barrier["coverage"]
         coverage = green_barrier["coverage"]
         if _green_barrier_coverage_requires_warning(coverage):
-            _report_warnings.append("green_barrier_incomplete_coverage")
+            report_warnings.append("green_barrier_incomplete_coverage")
     except Exception as exc:
         LOG.error("Green Barrier scan failed: %s", exc, exc_info=True)
-        _report_warnings.append("green_barrier_scan_failed")
-    # Drain warnings accumulated by market_context functions.
-    _report_warnings.extend(_mc_report_warnings)
-    _mc_report_warnings.clear()
+        report_warnings.append("green_barrier_scan_failed")
+    # Regime warnings go after the Green Barrier ones, matching earlier reports.
+    report_warnings.extend(regime_warnings)
     try:
         technical_by_ticker = _fetch_technical_context(conn)
     except Exception as exc:
         LOG.error("Technical context fetch failed: %s", exc, exc_info=True)
-        _report_warnings.append("technical_context_failed")
+        report_warnings.append("technical_context_failed")
         technical_by_ticker = {}
-    # Drain any remaining market_context warnings.
-    _report_warnings.extend(_mc_report_warnings)
-    _mc_report_warnings.clear()
 
     # ── 52W high / low proximity ─────────────────────────────────────────────
     try:
@@ -379,7 +355,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         signals["near_52w_low"]  = sorted(near_low,  key=lambda x: x["pct_from_low"])
     except Exception as exc:
         LOG.warning("52-week high/low proximity failed: %s", exc)
-        _report_warnings.append("52w_proximity_failed")
+        report_warnings.append("52w_proximity_failed")
 
     # ── Large moves vs prior close + breadth snapshot ───────────────────────
     try:
@@ -518,10 +494,10 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
             "large_move_count": len(signals["large_moves_today"]),
         }
         movers_all = movers
-        _warn_if_latest_session_thin(conn, len(movers))
+        _warn_if_latest_session_thin(conn, len(movers), report_warnings)
     except Exception as exc:
         LOG.warning("Large moves / market breadth computation failed: %s", exc)
-        _report_warnings.append("market_breadth_failed")
+        report_warnings.append("market_breadth_failed")
 
     # ── Top YOLO patterns from today's run ───────────────────────────────────
     try:
@@ -678,7 +654,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                     yolo_by_ticker[ticker] = candidate
     except Exception as exc:
         LOG.error("YOLO patterns section failed: %s", exc, exc_info=True)
-        _report_warnings.append("yolo_patterns_failed")
+        report_warnings.append("yolo_patterns_failed")
 
     # ── Fundamentals snapshot map (discount/PEG + sector/industry metadata) ─
     try:
@@ -716,7 +692,7 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                 }
     except Exception as exc:
         LOG.error("Fundamentals snapshot fetch failed: %s", exc, exc_info=True)
-        _report_warnings.append("fundamentals_snapshot_failed")
+        report_warnings.append("fundamentals_snapshot_failed")
 
     # ── Sector heatmap + setup quality scoring ───────────────────────────────
     try:
@@ -758,222 +734,21 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
             if near_low:
                 bucket["near_low_count"] += 1
 
-            # Setup quality score: valuation + momentum + AI signal freshness.
-            score = 50.0
-            discount = fund.get("discount_pct")
-            discount_component = 0.0
-            if isinstance(discount, (int, float)):
-                discount_component = _clamp(float(discount) * 0.8, -20.0, 20.0)
-                score += discount_component
-
-            peg = fund.get("peg")
-            peg_component = 0.0
-            if isinstance(peg, (int, float)) and float(peg) > 0:
-                peg_v = float(peg)
-                if peg_v <= 0.8:
-                    peg_component = 15.0
-                elif peg_v <= 1.5:
-                    peg_component = 10.0
-                elif peg_v <= 2.5:
-                    peg_component = 4.0
-                elif peg_v <= 4.0:
-                    peg_component = -4.0
-                else:
-                    peg_component = -8.0
-                score += peg_component
-
-            momentum_component = _clamp(pct_change * 1.5, -12.0, 12.0)
-            score += momentum_component
-
-            proximity_component = 0.0
-            if near_high and pct_change > 0:
-                proximity_component += 5.0
-            if near_low and pct_change < 0:
-                proximity_component -= 5.0
-            score += proximity_component
-
-            yolo = yolo_by_ticker.get(ticker)
-            vol = vol_by_ticker.get(ticker, {})
-            tech = technical_by_ticker.get(ticker, {})
-            yolo_component = 0.0
-            volatility_component = 0.0
-            yolo_pattern = None
-            yolo_confidence = None
-            yolo_age_days = None
-            yolo_timeframe = None
-            yolo_first_seen_asof = None
-            yolo_last_seen_asof = None
-            yolo_snapshots_seen = None
-            yolo_current_streak = None
-            yolo_first_seen_days_ago = None
-            signal_bias = "neutral"
-            atr_pct_14 = vol.get("atr_pct_14")
-            realized_vol_20 = vol.get("realized_vol_20")
-            bb_width_20 = vol.get("bb_width_20")
-            if yolo:
-                yolo_pattern = yolo.get("pattern")
-                yolo_confidence = yolo.get("confidence")
-                yolo_age_days = yolo.get("age_days")
-                yolo_timeframe = yolo.get("timeframe")
-                yolo_first_seen_asof = yolo.get("first_seen_asof")
-                yolo_last_seen_asof = yolo.get("last_seen_asof")
-                yolo_snapshots_seen = yolo.get("snapshots_seen")
-                yolo_current_streak = yolo.get("current_streak")
-                yolo_first_seen_days_ago = yolo.get("first_seen_days_ago")
-                signal_bias = _yolo_pattern_bias(yolo_pattern)
-                conf = float(yolo_confidence or 0.0)
-                yolo_component += _clamp(conf * 20.0, 0.0, 18.0)
-                if str(yolo_timeframe) == "daily":
-                    yolo_component += 2.0
-                if isinstance(yolo_age_days, int):
-                    if yolo_age_days <= 10:
-                        yolo_component += 3.0
-                    elif yolo_age_days <= 30:
-                        yolo_component += 1.0
-                score += yolo_component
-
-            if isinstance(atr_pct_14, (int, float)):
-                atr_v = float(atr_pct_14)
-                if atr_v < 1.0:
-                    volatility_component -= 2.0
-                elif atr_v <= 4.5:
-                    volatility_component += 5.0
-                elif atr_v <= 7.0:
-                    volatility_component += 2.0
-                elif atr_v <= 10.0:
-                    volatility_component -= 2.0
-                else:
-                    volatility_component -= 6.0
-
-            if isinstance(bb_width_20, (int, float)):
-                bb_v = float(bb_width_20)
-                if bb_v <= 6.0 and abs(pct_change) >= 1.5:
-                    volatility_component += 3.0
-                elif bb_v >= 18.0:
-                    volatility_component -= 3.0
-
-            if isinstance(realized_vol_20, (int, float)):
-                rv_v = float(realized_vol_20)
-                if rv_v > 60.0:
-                    volatility_component -= 3.0
-                elif rv_v >= 20.0:
-                    volatility_component += 2.0
-                elif rv_v < 12.0:
-                    volatility_component -= 1.0
-
-            vix_pctile = vol_ctx.get("vix_percentile_1y")
-            if isinstance(vix_pctile, (int, float)):
-                vix_p = float(vix_pctile)
-                if vix_p >= 90.0:
-                    volatility_component -= 4.0
-                elif vix_p >= 75.0:
-                    volatility_component -= 2.0
-                elif vix_p <= 35.0:
-                    volatility_component += 1.0
-
-            volatility_component = _clamp(volatility_component, -15.0, 15.0)
-            score += volatility_component
-
-            row = {
-                "ticker": ticker,
-                "score": round(_clamp(score, 0.0, 100.0), 1),
-                "confluence_score": round(_clamp(score, 0.0, 100.0), 1),
-                "setup_tier": _setup_tier(round(_clamp(score, 0.0, 100.0), 1)),
-                "sector": sector,
-                "pct_change": round(pct_change, 2),
-                "discount_pct": discount,
-                "peg": peg,
-                "atr_pct_14": atr_pct_14,
-                "realized_vol_20": realized_vol_20,
-                "bb_width_20": bb_width_20,
-                "avg_volume_20": tech.get("avg_volume_20"),
-                "volume_ratio_20": tech.get("volume_ratio_20"),
-                "recent_range_pct_10": tech.get("recent_range_pct_10"),
-                "recent_range_pct_20": tech.get("recent_range_pct_20"),
-                "near_52w_high": near_high,
-                "near_52w_low": near_low,
-                "yolo_pattern": yolo_pattern,
-                "yolo_confidence": yolo_confidence,
-                "yolo_age_days": yolo_age_days,
-                "yolo_timeframe": yolo_timeframe,
-                "yolo_first_seen_asof": yolo_first_seen_asof,
-                "yolo_last_seen_asof": yolo_last_seen_asof,
-                "yolo_snapshots_seen": yolo_snapshots_seen,
-                "yolo_current_streak": yolo_current_streak,
-                "yolo_first_seen_days_ago": yolo_first_seen_days_ago,
-                "signal_bias": signal_bias,
-                "close": tech.get("close"),
-                "ma20": tech.get("ma20"),
-                "ma50": tech.get("ma50"),
-                "pct_vs_ma20": tech.get("pct_vs_ma20"),
-                "pct_vs_ma50": tech.get("pct_vs_ma50"),
-                "pct_from_20d_high": tech.get("pct_from_20d_high"),
-                "pct_from_20d_low": tech.get("pct_from_20d_low"),
-                "trend_state": tech.get("trend_state") or "mixed",
-                "level_context": tech.get("level_context") or "mid_range",
-                "support_level": tech.get("support_level"),
-                "support_zone_low": tech.get("support_zone_low"),
-                "support_zone_high": tech.get("support_zone_high"),
-                "support_tier": tech.get("support_tier"),
-                "support_touches": tech.get("support_touches"),
-                "resistance_level": tech.get("resistance_level"),
-                "resistance_zone_low": tech.get("resistance_zone_low"),
-                "resistance_zone_high": tech.get("resistance_zone_high"),
-                "resistance_tier": tech.get("resistance_tier"),
-                "resistance_touches": tech.get("resistance_touches"),
-                "pct_to_support": tech.get("pct_to_support"),
-                "pct_to_resistance": tech.get("pct_to_resistance"),
-                "range_position": tech.get("range_position"),
-                "stretch_state": tech.get("stretch_state") or "normal",
-                "breakout_state": tech.get("breakout_state") or "none",
-                "structure_state": tech.get("structure_state") or "normal",
-                **{k: tech.get(k) for k in _SCORER_CONTEXT_FIELDS},
-                "candle_pattern": None,
-                "candle_bias": "neutral",
-                "candle_confidence": None,
-                "observation": "",
-                "actionability": "watch-only",
-                "action": "",
-                "risk_note": "",
-                "technical_read": "",
-                "components": {
-                    "discount": round(discount_component, 2),
-                    "peg": round(peg_component, 2),
-                    "momentum": round(momentum_component, 2),
-                    "proximity": round(proximity_component, 2),
-                    "volatility": round(volatility_component, 2),
-                    "yolo": round(yolo_component, 2),
-                },
-            }
-            row.update(_score_setup_from_confluence(row))
-
-            # Enrich with 5-strategy technical ensemble
-            try:
-                from trader_koo.analysis.technical_ensemble import compute_technical_ensemble
-
-                ticker_ohlcv = conn.execute(
-                    "SELECT date, open, high, low, close, volume FROM price_daily "
-                    "WHERE ticker = ? AND close IS NOT NULL ORDER BY date ASC",
-                    (row.get("ticker"),),
-                ).fetchall()
-                if len(ticker_ohlcv) >= 64:
-                    import pandas as pd
-
-                    ticker_df = pd.DataFrame(
-                        ticker_ohlcv,
-                        columns=["date", "open", "high", "low", "close", "volume"],
-                    )
-                    ensemble = compute_technical_ensemble(ticker_df)
-                    row["ensemble_bias"] = ensemble["aggregate"]["bias"]
-                    row["ensemble_net_score"] = ensemble["aggregate"]["net_score"]
-                    row["ensemble_agreement_pct"] = ensemble["aggregate"]["agreement_pct"]
-            except Exception as exc:
-                LOG.debug("Ensemble enrichment skipped for %s: %s", row.get("ticker"), exc)
-
-            # Adjust score/tier based on ensemble agreement with confluence bias
-            _apply_ensemble_adjustment(row)
-
-            setup_rows.append(row)
+            setup_rows.append(
+                score_setup(
+                    conn,
+                    ticker=ticker,
+                    pct_change=pct_change,
+                    near_high=near_high,
+                    near_low=near_low,
+                    fund=fund,
+                    sector=sector,
+                    yolo=yolo_by_ticker.get(ticker),
+                    vol=vol_by_ticker.get(ticker, {}),
+                    tech=technical_by_ticker.get(ticker, {}),
+                    vol_ctx=vol_ctx,
+                )
+            )
 
         sector_rows: list[dict[str, Any]] = []
         for _, bucket in sector_buckets.items():
@@ -998,61 +773,10 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         )
         signals["sector_heatmap"] = sector_rows
 
-        options_annotated = _apply_options_research_context(conn, setup_rows)
-        signals["options_research"] = {
-            "enabled": OPTIONS_RESEARCH_ENABLED,
-            "annotated": options_annotated,
-            "source": "yfinance_options_iv",
-            "note": (
-                "Yahoo/yfinance option-chain snapshots; delayed/unofficial. "
-                "Used for IV/OI rank context, not real-time sweeps or net premium."
-            ),
-        }
-
-        setup_rows.sort(
-            key=lambda r: (
-                float(r.get("score") or 0.0),
-                float(r.get("pct_change") or 0.0),
-                float(r.get("discount_pct") or -999.0),
-            ),
-            reverse=True,
-        )
-        latest_price_row = conn.execute("SELECT MAX(date) FROM price_daily").fetchone()
-        setup_news_as_of = str(latest_price_row[0]) if latest_price_row and latest_price_row[0] else None
-        signals["setup_news_context"] = _apply_news_research_context(
-            setup_rows,
-            as_of_date=setup_news_as_of,
-            conn=conn,
-        )
-        setup_rows.sort(
-            key=lambda r: (
-                float(r.get("score") or 0.0),
-                float(r.get("pct_change") or 0.0),
-                float(r.get("discount_pct") or -999.0),
-            ),
-            reverse=True,
-        )
-        _apply_debate_payload(setup_rows)
-        # Apply agreement score tier adjustment after debate payload, before guardrails
-        for row in setup_rows:
-            if isinstance(row, dict):
-                _apply_agreement_tier_adjustment(row)
-        _apply_debate_guardrails(setup_rows)
-        signals["setup_quality_top"] = setup_rows[:40]
-        signals["watchlist_candidates"] = [
-            {
-                "ticker": r.get("ticker"),
-                "score": r.get("score"),
-                "setup_tier": r.get("setup_tier"),
-                "pct_change": r.get("pct_change"),
-                "yolo_pattern": r.get("yolo_pattern"),
-                "yolo_confidence": r.get("yolo_confidence"),
-            }
-            for r in setup_rows[:20]
-        ]
+        rank_setups(conn, setup_rows, signals)
     except Exception as e:
         LOG.error("Setup quality scoring failed: %s", e, exc_info=True)
-        _report_warnings.append("setup_quality_scoring_failed")
+        report_warnings.append("setup_quality_scoring_failed")
 
     # ── Candle patterns on latest close date ─────────────────────────────────
     try:
@@ -1110,150 +834,16 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
                     candle_by_ticker[ticker] = row
 
             if isinstance(setup_rows, list):
-                for row in setup_rows:
-                    ticker = str(row.get("ticker") or "").upper()
-                    candle = candle_by_ticker.get(ticker) or {}
-                    if candle:
-                        row["candle_pattern"] = candle.get("pattern")
-                        row["candle_bias"] = candle.get("bias") or "neutral"
-                        row["candle_confidence"] = candle.get("confidence")
-                    row.update(_score_setup_from_confluence(row))
-                    _apply_ensemble_adjustment(row)  # the re-score above resets score and tier
-                    readout = _describe_setup(row)
-                    row.update(readout)
-
-                options_annotated = _apply_options_research_context(conn, setup_rows)
-                signals["options_research"] = {
-                    "enabled": OPTIONS_RESEARCH_ENABLED,
-                    "annotated": options_annotated,
-                    "source": "yfinance_options_iv",
-                    "note": (
-                        "Yahoo/yfinance option-chain snapshots; delayed/unofficial. "
-                        "Used for IV/OI rank context, not real-time sweeps or net premium."
-                    ),
-                }
-                signals["setup_news_context"] = _apply_news_research_context(
+                rerank_with_candles(
+                    conn,
                     setup_rows,
+                    candle_by_ticker,
+                    signals,
                     as_of_date=str(latest_date) if latest_date else None,
-                    conn=conn,
                 )
-
-                _apply_debate_payload(setup_rows)
-                # Apply agreement score tier adjustment after debate payload, before guardrails
-                for row in setup_rows:
-                    if isinstance(row, dict):
-                        _apply_agreement_tier_adjustment(row)
-                _apply_debate_guardrails(setup_rows)
-
-                setup_rows.sort(
-                    key=lambda r: (
-                        float(r.get("score") or 0.0),
-                        float(r.get("confirmation_count") or 0.0),
-                        -float(r.get("contradiction_count") or 0.0),
-                        float(r.get("pct_change") or 0.0),
-                    ),
-                    reverse=True,
-                )
-
-                signals["setup_quality_all"] = setup_rows
-                signals["setup_quality_top"] = setup_rows[:40]
-                signals["suggestions"] = build_suggestions(signals["setup_quality_top"])
-                signals["watchlist_candidates"] = [
-                    {
-                        "ticker": r.get("ticker"),
-                        "score": r.get("score"),
-                        "setup_tier": r.get("setup_tier"),
-                        "pct_change": r.get("pct_change"),
-                        "yolo_pattern": r.get("yolo_pattern"),
-                        "yolo_confidence": r.get("yolo_confidence"),
-                        "signal_bias": r.get("signal_bias"),
-                        "observation": r.get("observation"),
-                        "actionability": r.get("actionability"),
-                        "action": r.get("action"),
-                        "risk_note": r.get("risk_note"),
-                        "technical_read": r.get("technical_read"),
-                        "candle_pattern": r.get("candle_pattern"),
-                        "candle_bias": r.get("candle_bias"),
-                        "candle_confidence": r.get("candle_confidence"),
-                    }
-                    for r in setup_rows[:20]
-                ]
-                signals["setup_quality_lookup"] = {
-                    str(row.get("ticker") or "").upper(): {
-                        key: row.get(key)
-                        for key in (
-                            "ticker",
-                            "score",
-                            "setup_tier",
-                            "setup_family",
-                            "sector",
-                            "pct_change",
-                            "discount_pct",
-                            "peg",
-                            "atr_pct_14",
-                            "realized_vol_20",
-                            "bb_width_20",
-                            "signal_bias",
-                            "actionability",
-                            "observation",
-                            "action",
-                            "risk_note",
-                            "technical_read",
-                            "confirmation_count",
-                            "contradiction_count",
-                            "valuation_bias",
-                            "candle_pattern",
-                            "candle_bias",
-                            "candle_confidence",
-                            "yolo_pattern",
-                            "yolo_bias",
-                            "yolo_confidence",
-                            "yolo_age_days",
-                            "yolo_timeframe",
-                            "yolo_recency",
-                            "yolo_score_eligible",
-                            "yolo_direction_conflict",
-                            "yolo_conflict_strength",
-                            "debate_v1",
-                            "debate_consensus_state",
-                            "debate_consensus_bias",
-                            "debate_agreement_score",
-                            "debate_disagreement_count",
-                            "debate_safety_adjustment",
-                            "calibrated_hit_prob",
-                            "probability_label",
-                            "probability_source",
-                            "probability_sample_size",
-                            "probability_baseline_pct",
-                            "trend_state",
-                            "level_context",
-                            "support_level",
-                            "resistance_level",
-                            "pct_to_support",
-                            "pct_to_resistance",
-                            "trend_state",
-                            "level_context",
-                            "candle_pattern",
-                            "candle_bias",
-                            "candle_confidence",
-                            "news_context",
-                            "news_sentiment_score",
-                            "macro_news_score",
-                            "options_context",
-                            "options_iv_rank_pct",
-                            "options_oi_rank_pct",
-                            "options_put_call_oi_ratio",
-                            "options_underpriced_score",
-                            "options_positioning_signal",
-                            "options_positioning_skew",
-                        )
-                    }
-                    for row in setup_rows
-                    if isinstance(row, dict) and row.get("ticker")
-                }
     except Exception as exc:
         LOG.error("Candle patterns / setup scoring section failed: %s", exc, exc_info=True)
-        _report_warnings.append("candle_patterns_section_failed")
+        report_warnings.append("candle_patterns_section_failed")
 
     # Per-ticker HMMs remain available on demand in the chart workspace. They
     # are intentionally absent here because they do not affect report ranking
@@ -1273,19 +863,19 @@ def _fetch_signals_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         LOG.info("Economic calendar cached: %d events over 90 days", len(econ_events))
     except Exception as exc:
         LOG.error("Economic calendar pre-fetch failed: %s", exc)
-        _report_warnings.append("economic_calendar_prefetch_failed")
+        report_warnings.append("economic_calendar_prefetch_failed")
         signals["economic_events"] = []
 
     return signals
 
 
-def fetch_signals(conn: sqlite3.Connection) -> dict[str, Any]:
+def fetch_signals(conn: sqlite3.Connection, report_warnings: list[str]) -> dict[str, Any]:
     """Build analytical signals from one caller-preserving SQLite snapshot."""
     owns_snapshot = not conn.in_transaction
     if owns_snapshot:
         conn.execute("BEGIN")
     try:
-        return _fetch_signals_snapshot(conn)
+        return _fetch_signals_snapshot(conn, report_warnings)
     finally:
         if owns_snapshot and conn.in_transaction:
             conn.rollback()
@@ -1304,8 +894,7 @@ def fetch_report_payload(
     report_kind: str = "daily",
     report_run_id: str | None = None,
 ) -> dict[str, Any]:
-    global _report_warnings
-    _report_warnings = []
+    report_warnings: list[str] = []
     now = dt.datetime.now(dt.timezone.utc)
     report_kind_norm = _normalize_report_kind(report_kind)
     payload: dict[str, Any] = {
@@ -1445,7 +1034,7 @@ def fetch_report_payload(
             payload["warnings"].append("yolo_patterns_missing")
 
         # Market signals (52W extremes, movers, sector/quality overlays, AI/candles)
-        payload["signals"] = fetch_signals(conn)
+        payload["signals"] = fetch_signals(conn, report_warnings)
         price_basis = payload["signals"].get("price_contract")
         if isinstance(price_basis, dict):
             payload["meta"]["price_basis"] = price_basis
@@ -1455,7 +1044,7 @@ def fetch_report_payload(
             "green_barrier_scan_failed",
             "market_breadth_latest_session_thin",
         ):
-            if warning in _report_warnings:
+            if warning in report_warnings:
                 payload["warnings"].append(warning)
         if SETUP_EVAL_ENABLED:
             eval_summary: dict[str, Any] = {"enabled": True, "scored_calls": 0, "open_calls": 0}
@@ -1478,24 +1067,13 @@ def fetch_report_payload(
                     payload.setdefault("warnings", []).append(f"calibration_state unavailable: {exc}")
                     _calib_state = {}
                 # The hit-rate bar is the baseline hit rate; SETUP_EVAL_HIT_THRESHOLD_PCT is a return threshold.
-                calibration = _apply_setup_eval_fields(
-                    setup_rows_ref,
+                calibration = calibrate_setups(
+                    signals_ref,
                     reliability_lookup=reliability_lookup,
                     min_sample=SETUP_EVAL_MIN_SAMPLE,
                     baseline_hit_rate_pct=(summary.get("overall") or {}).get("hit_rate_pct") if isinstance(summary, dict) else None,
                     calibration_state=_calib_state,
                 )
-                setup_rows_ref.sort(
-                    key=lambda r: (
-                        float(r.get("score") or 0.0),
-                        float(r.get("confirmation_count") or 0.0),
-                        -float(r.get("contradiction_count") or 0.0),
-                        float(r.get("pct_change") or 0.0),
-                    ),
-                    reverse=True,
-                )
-                _refresh_setup_eval_surfaces(signals_ref)
-                signals_ref["suggestions"] = build_suggestions(setup_rows_ref)
                 eval_summary = summary or {"enabled": True}
                 eval_summary["tracked_this_run"] = int(min(len(setup_rows_ref), SETUP_EVAL_TRACK_LIMIT))
                 eval_summary["inserted_calls"] = 0
@@ -1507,7 +1085,7 @@ def fetch_report_payload(
                 eval_summary["calibration"] = calibration
             except Exception as exc:
                 LOG.error("Setup evaluation failed: %s", exc, exc_info=True)
-                _report_warnings.append("setup_evaluation_failed")
+                report_warnings.append("setup_evaluation_failed")
                 conn.rollback()
                 eval_summary = {
                     "enabled": True,
@@ -1534,7 +1112,7 @@ def fetch_report_payload(
                 conn.rollback()
                 paper_trade_result["error"] = "paper_trade_failed"
                 LOG.exception("Paper trade integration failed")
-                _report_warnings.append("paper_trade_failed")
+                report_warnings.append("paper_trade_failed")
         payload["paper_trades"] = paper_trade_result
         market_date_raw = str((payload.get("market_session") or {}).get("market_date") or "").strip()
         market_date_obj: dt.date | None = None
@@ -1555,7 +1133,7 @@ def fetch_report_payload(
                 )
             except Exception as exc:
                 LOG.warning("Earnings catalysts build failed: %s", exc)
-                _report_warnings.append("earnings_catalysts_failed")
+                report_warnings.append("earnings_catalysts_failed")
                 payload["signals"]["earnings_catalysts"] = {}
 
         # ── Annotate setups with earnings proximity ─────────────────────
@@ -1580,7 +1158,7 @@ def fetch_report_payload(
                 )
         except Exception as exc:
             LOG.warning("Earnings proximity annotation failed: %s", exc)
-            _report_warnings.append("earnings_proximity_failed")
+            report_warnings.append("earnings_proximity_failed")
 
         # YOLO deltas and persistence by timeframe.
         delta_daily = fetch_yolo_delta(conn, timeframe="daily")
@@ -1598,7 +1176,7 @@ def fetch_report_payload(
             )
         except Exception as exc:
             LOG.warning("Tonight key changes build failed: %s", exc)
-            _report_warnings.append("tonight_key_changes_failed")
+            report_warnings.append("tonight_key_changes_failed")
             payload["signals"]["tonight_key_changes"] = []
 
         # Basic health guardrails.
@@ -1657,8 +1235,8 @@ def fetch_report_payload(
         if isinstance(signals, dict):
             signals["report_decisions"] = decisions
             signals["scanned_universe"] = [row["ticker"] for row in decisions]
-        payload["generation_warnings"] = list(_report_warnings)
-        for warning in _report_warnings:
+        payload["generation_warnings"] = list(report_warnings)
+        for warning in report_warnings:
             if warning not in payload["warnings"]:
                 payload["warnings"].append(warning)
         payload["ok"] = len(payload["warnings"]) == 0

@@ -6,6 +6,7 @@ Submodules:
   - pattern_analysis: YOLO pattern delta / persistence / lifecycle
   - market_context: VIX regime, volatility inputs, technical context
   - setup_scoring: confluence scoring, debate guardrails, evaluation
+  - setup_ranking: setup step sequence and order (score, enrich, guardrail, calibrate)
   - generator: fetch_signals / fetch_report_payload orchestrator
   - serializer: Markdown / JSON output, snapshot pruning
   - email_dispatch: nightly report email (transport in trader_koo.email_delivery)
