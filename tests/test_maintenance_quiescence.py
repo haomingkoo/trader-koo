@@ -127,7 +127,7 @@ def test_quiesce_preserves_durably_accepted_queued_pipeline(tmp_path: Path) -> N
 
 def test_resolved_restart_requeues_preserved_run_id_once(tmp_path: Path) -> None:
     from trader_koo.backend.services.maintenance import verify_resolution
-    from trader_koo.backend.services.pipeline import queue_reserved_pipeline_run
+    from trader_koo.backend.services.pipeline_runs import queue_reserved_pipeline_run
 
     db = tmp_path / "live.db"; backups = tmp_path / "backups"
     _live_db(db, pipeline_status="queued"); _request(db)

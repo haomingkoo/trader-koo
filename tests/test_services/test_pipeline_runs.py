@@ -19,7 +19,6 @@ from trader_koo.backend.services.pipeline import (
     determine_resume_mode,
     ensure_pipeline_runs_schema,
     finish_pipeline_run,
-    queue_reserved_pipeline_run,
     read_active_pipeline_run,
     read_latest_completed_pipeline_run,
     read_interrupted_pipeline_run,
@@ -27,6 +26,7 @@ from trader_koo.backend.services.pipeline import (
     start_pipeline_run,
     update_pipeline_stage,
 )
+from trader_koo.backend.services.pipeline_runs import queue_reserved_pipeline_run
 
 
 # ---------------------------------------------------------------------------

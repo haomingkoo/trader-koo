@@ -11,7 +11,6 @@ import errno
 import json
 import logging
 import os
-import secrets
 import sqlite3
 import subprocess
 import sys
@@ -28,13 +27,24 @@ except ImportError:  # pragma: no cover - production/runtime is Unix-like
 from trader_koo.backend.services.report_loader import _tail_text_file
 from trader_koo.backend.services.maintenance import inherited_writer_lease_fds
 from trader_koo.backend.services.market_data import read_latest_ingest_run
+from trader_koo.backend.services.pipeline import (
+    finish_pipeline_run,
+    reserve_pipeline_run,
+    start_pipeline_run,
+    update_pipeline_stage,
+)
+from trader_koo.backend.services.pipeline_runs import mint_run_id
+from trader_koo.backend.services.run_log import (
+    LOG_DIR,
+    RUN_LOG_PATH,
+    append_run_log,
+    stage_results,
+)
 from trader_koo.report.utils import expected_price_date
 from trader_koo.config import (
     DEFAULT_DB_PATH,
-    DEFAULT_LOG_DIR,
     DEFAULT_REPORT_DIR,
     PACKAGE_DIR,
-    ConfigError,
     env_int,
     env_path,
     get_options_config,
@@ -51,19 +61,6 @@ SCRIPTS_DIR = PROJECT_DIR / "scripts"
 DB_PATH = env_path("TRADER_KOO_DB_PATH", DEFAULT_DB_PATH)
 REPORT_DIR = env_path("TRADER_KOO_REPORT_DIR", DEFAULT_REPORT_DIR)
 MARKET_SENTIMENT_REFRESH_MINUTES = 10
-
-
-def _resolve_log_dir() -> Path:
-    requested = env_path("TRADER_KOO_LOG_DIR", DEFAULT_LOG_DIR)
-    try:
-        requested.mkdir(parents=True, exist_ok=True)
-        return requested
-    except OSError as exc:
-        raise ConfigError(f"TRADER_KOO_LOG_DIR is not writable: {requested}") from exc
-
-
-LOG_DIR = _resolve_log_dir()
-RUN_LOG_PATH = LOG_DIR / "cron_daily.log"
 _UPDATE_THREAD_LOCK = threading.Lock()
 
 
@@ -92,17 +89,13 @@ def _append_run_log(
     log_dir: Path | None = None,
     run_log_path: Path | None = None,
 ) -> None:
-    """Append a timestamped line to the cron run log."""
-    stamp = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
-    line = f"{stamp} [{tag}] {message}\n"
-    _log_dir = log_dir or LOG_DIR
-    _run_log = run_log_path or RUN_LOG_PATH
-    try:
-        _log_dir.mkdir(parents=True, exist_ok=True)
-        with _run_log.open("a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception as exc:
-        LOG.warning("Failed to append run log %s: %s", _run_log, exc)
+    """Append a timestamped line to this module's cron run log."""
+    append_run_log(
+        tag,
+        message,
+        log_dir=log_dir or LOG_DIR,
+        run_log_path=run_log_path or RUN_LOG_PATH,
+    )
 
 
 def _acquire_update_lock(mode: str, source: str):
@@ -184,10 +177,6 @@ def _run_daily_update(
     run_id: str | None = None,
 ) -> None:
     from trader_koo.backend.services.maintenance import MaintenanceError, writers_blocked
-    from trader_koo.backend.services.pipeline import (
-        finish_pipeline_run,
-        reserve_pipeline_run,
-    )
 
     try:
         maintenance_blocked = writers_blocked(DB_PATH)
@@ -201,10 +190,7 @@ def _run_daily_update(
         return
 
     mode_norm = _normalize_update_mode(mode) or "full"
-    pipeline_run_id = run_id or (
-        f"pipe_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-        f"_{secrets.token_hex(3)}"
-    )
+    pipeline_run_id = run_id or mint_run_id()
     if run_id is None and DB_PATH.exists():
         try:
             active = reserve_pipeline_run(
@@ -314,20 +300,12 @@ def _run_daily_update_unlocked(
     endpoint.  Creates a ``pipeline_runs`` DB record to track progress
     so that interrupted runs can be detected and resumed after restarts.
     """
-    from trader_koo.backend.services.pipeline import (
-        finish_pipeline_run,
-        start_pipeline_run,
-        update_pipeline_stage,
-    )
-
     mode_norm = mode
     script = SCRIPTS_DIR / "daily_update.sh"
     started = dt.datetime.now(dt.timezone.utc)
     rss_before = _current_rss_mb()
 
-    pipeline_run_id = pipeline_run_id or (
-        f"pipe_{started.strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(3)}"
-    )
+    pipeline_run_id = pipeline_run_id or mint_run_id(started)
 
     _append_run_log(
         "SCHED",
@@ -363,7 +341,6 @@ def _run_daily_update_unlocked(
     # Determine which stages will run based on mode
     run_ingest = mode_norm == "full"
     run_yolo = mode_norm in ("full", "yolo")
-    run_report = mode_norm in ("full", "yolo", "report")
 
     # Update stage to reflect what the shell script will do first
     first_stage = "ingest" if run_ingest else ("yolo" if run_yolo else "report")
@@ -383,22 +360,11 @@ def _run_daily_update_unlocked(
     rss_after = _current_rss_mb()
     delta = (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None
 
-    # Determine which stages succeeded based on exit code
-    # daily_update.sh exits 0 only when all enabled stages pass
-    ingest_ok = run_ingest and result.returncode == 0
-    yolo_ok = run_yolo and result.returncode == 0
-    report_ok = run_report and result.returncode == 0
-
-    # For partial success detection: if the script failed but ingest
-    # completed (mode=full), we can infer ingest was ok from the log.
-    # The shell script only aborts early on ingest failure.
-    if run_ingest and result.returncode != 0:
-        tail = _tail_text_file(RUN_LOG_PATH, lines=60, max_bytes=100_000)
-        ingest_ok = any("[INGEST] done rc=0" in line for line in tail)
-        if ingest_ok and run_yolo:
-            yolo_ok = any("[YOLO]  Daily pattern detection done. rc=0" in line for line in tail)
-            if yolo_ok and run_report:
-                report_ok = any("[REPORT] Done. rc=0" in line for line in tail)
+    stages = stage_results(
+        mode_norm,
+        result.returncode,
+        lambda: _tail_text_file(RUN_LOG_PATH, lines=60, max_bytes=100_000),
+    )
 
     # Finish the pipeline_runs record
     try:
@@ -406,9 +372,9 @@ def _run_daily_update_unlocked(
             pipeline_run_id,
             status="ok" if result.returncode == 0 else "failed",
             error_message=f"daily_update.sh rc={result.returncode}" if result.returncode != 0 else None,
-            ingest_ok=ingest_ok,
-            yolo_ok=yolo_ok,
-            report_ok=report_ok,
+            ingest_ok=stages.ingest_ok,
+            yolo_ok=stages.yolo_ok,
+            report_ok=stages.report_ok,
             db_path=DB_PATH,
         )
     except Exception as exc:
