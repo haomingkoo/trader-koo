@@ -6,13 +6,12 @@ form the Holm family; secondary checks and variants are reported with plain 95% 
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 
 from trader_koo.research.settings import get as _settings
 
 from . import eventstats as es
-from . import ledger, v3_price, v3_report, v3_vol
+from . import trial, v3_price, v3_report, v3_vol
 from .eventstudy import Spec, evaluate
 from .v3_data import Frame, load_frame
 from .v3_gap import h12
@@ -20,15 +19,13 @@ from .v3_price import H13_PUBLISHED_LIFT, H8_FALSIFY_MARGIN
 
 _E = _settings().event_study
 FAMILY = "v3"
+CANDIDATE = "v3_market_timing"
 HALF = 0.5  # H13: "our measured lift is below half of their published lift"
 
 
 def sealed_boundary(path: str | Path) -> str:
-    """The date pinned by the ledger's seal entry. Read only: a missing seal is an error, not a reason to create one."""
-    for e in ledger.read(path):
-        if e.get("event") == "seal":
-            return e["boundary_date"]
-    raise LookupError(f"{path} has no seal entry; the sealed window is not pinned, so nothing is run")
+    """The date pinned by the ledger's seal entry (read only); v8, v9 and v10 import it from here."""
+    return trial.resolve_boundary(path, trial.READ_ONLY)
 
 
 def build_specs(f: Frame) -> list[Spec]:
@@ -95,15 +92,16 @@ def _status(key: str, evals: dict, adj_p: float, level: float, specs: dict) -> d
 
 
 def run_v3(db_path: str | Path, ledger_path: str | Path, frame: Frame | None = None) -> dict:
-    boundary = sealed_boundary(ledger_path)
+    t = trial.start(ledger_path, trial.READ_ONLY)
+    boundary = t.boundary
     f = frame or load_frame(db_path, boundary)
     config = {"family": FAMILY, "boundary": boundary, "first_session": f.dates[0], "last_session": f.dates[-1],
               "sessions": f.n, "spacing": _E.spacing_sessions, "block": _E.bootstrap_block,
               "resamples": _E.bootstrap_resamples, "alpha": _E.alpha}
-    seed = ledger.seed_from_config(config)
+    seed = t.configure(CANDIDATE, config)
     specs = build_specs(f)
-    evals = {s.key: evaluate(s, ledger.seed_from_config({**config, "spec": s.key})) for s in specs}
-    evals["H12"] = h12(f, ledger.seed_from_config({**config, "spec": "H12"}))
+    evals = {s.key: evaluate(s, t.seed_for(s.key)) for s in specs}
+    evals["H12"] = h12(f, t.seed_for("H12"))
     by_key = {s.key: s for s in specs} | {"H12": evals["H12"].spec}
     p = [(evals[k].p if k in evals and evals[k].p is not None and evals[k].sufficient else 1.0) for k in PRIMARY]
     adj, levels, rejected = es.holm(p)
@@ -119,11 +117,6 @@ def run_v3(db_path: str | Path, ledger_path: str | Path, frame: Frame | None = N
                    "adjusted_p": round(adj[i], _E.report_digits), "status": verdicts[k]["status"]}
                for i, k in enumerate(PRIMARY)}
     out["summary"] = summary
-    base = {"candidate": "v3_market_timing", "config": config, "seed": seed, "code_version": ledger.code_version(),
-            "timestamp": datetime.now(timezone.utc).isoformat()}
-    ledger.append(ledger_path, {**base, "event": "event_study_run", "trial_id": ledger.short_id(base), "family": FAMILY,
-                                "sealed_opened": False, "sealed_boundary": boundary,
-                                "date_range": [f.dates[0], f.dates[-1]], "n_sessions": f.n,
-                                "params_hash": ledger.sha(config), "summary": summary})
-    out["trial_id"] = ledger.short_id(base)
+    out["trial_id"] = t.record("event_study_run", summary, params=config, family=FAMILY,
+                               date_range=[f.dates[0], f.dates[-1]], n_sessions=f.n)
     return out

@@ -843,6 +843,99 @@ class TestCreatePaperTrades:
         assert inserted == 1
 
 
+def _fixture_fail(reason: str):
+    return lambda *_a, **_k: (False, reason)
+
+
+def _fixture_raise(*_a, **_k):
+    raise RuntimeError("fixture source unavailable")
+
+
+_CRITIC_CASES = {
+    "approve": ({}, "admission", "admitted"),
+    "single_fail": (
+        {"_check_caution_flags": _fixture_fail("fixture caution")},
+        "critic.caution_flags", "critic_caution_flags_rejected",
+    ),
+    "multi_fail": (
+        {"_check_debate_strength": _fixture_fail("fixture debate"),
+         "_check_family_edge": _fixture_fail("fixture edge")},
+        "critic.debate_strength", "critic_debate_strength_rejected",
+    ),
+    "check_exception": (
+        {"_check_regime_alignment": _fixture_raise,
+         "_check_rolling_expectancy": _fixture_fail("fixture rolling")},
+        "critic.regime_alignment", "critic_regime_alignment_rejected",
+    ),
+}
+
+
+def _legacy_failed_check(critic_reasons: list[str]) -> str | None:
+    """The string parse trading.py used before structured verdicts; the oracle."""
+    for raw_reason in critic_reasons:
+        text = str(raw_reason)
+        if text.startswith("FAIL [") and "]:" in text:
+            return text.split("FAIL [", 1)[1].split("]:", 1)[0]
+    return None
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["filled", "pending"])
+@pytest.mark.parametrize("case", sorted(_CRITIC_CASES))
+def test_persisted_critic_outcome_keeps_its_pre_verdict_shape(conn, monkeypatch, case, pending):
+    """Structured verdicts pick the gate but never reach a stored or hashed payload."""
+    import copy
+
+    import trader_koo.paper_trades as paper_facade
+    from trader_koo.paper_trade import critic as critic_module
+    from trader_koo.paper_trade.campaign import canonical_hash, canonical_json
+
+    patches, expected_gate, expected_code = _CRITIC_CASES[case]
+    for name, fn in patches.items():
+        monkeypatch.setattr(critic_module, name, fn)
+    returned: list[dict] = []
+    real_review = critic_module.critic_review
+
+    def spy(*args, **kwargs):
+        result = real_review(*args, **kwargs)
+        returned.append(copy.deepcopy(result))
+        return result
+
+    monkeypatch.setattr(critic_module, "critic_review", spy)
+    kwargs = dict(setup_rows=[_make_setup_row()], report_date="2026-03-14",
+                  generated_ts="2026-03-14T22:00:00Z", report_run_id=TEST_REPORT_RUN_ID)
+    if pending:  # no next-session open seeded, so an approval becomes a pending order
+        paper_facade.create_paper_trades_from_report(conn, **kwargs)
+    else:
+        create_paper_trades_from_report(conn, **kwargs)
+
+    (review,) = returned
+    assert [c["name"] for c in review["checks"]] == [
+        r.split("[", 1)[1].split("]", 1)[0] for r in review["critic_reasons"]
+    ]
+    legacy = {key: value for key, value in review.items() if key != "checks"}
+    legacy["failed_check"] = _legacy_failed_check(review["critic_reasons"])
+    assert set(legacy) == {
+        "approved", "checks_passed", "checks_total", "conviction_grade",
+        "critic_reasons", "rejections", "summary", "failed_check",
+    }
+
+    gate, code, reasons_json, critic_json, inputs_json, context_hash = conn.execute(
+        "SELECT final_gate,reason_code,reasons_json,critic_outcome_json,inputs_json,context_hash "
+        "FROM paper_candidate_decisions"
+    ).fetchone()
+    if pending and case == "approve":
+        expected_gate, expected_code = "execution.next_open", "scheduled_spy_open_missing"
+    assert (gate, code) == (expected_gate, expected_code)
+    assert critic_json == canonical_json(legacy)
+    inputs = json.loads(inputs_json)
+    assert inputs["context"]["critic_outcome"] == legacy
+    assert context_hash == canonical_hash(inputs["context"])
+    if expected_gate.startswith("critic."):
+        assert reasons_json == canonical_json(legacy["rejections"])
+    pending_critic = conn.execute("SELECT critic_json FROM paper_pending_orders").fetchall()
+    assert pending_critic == ([(canonical_json(legacy),)] if pending and case == "approve" else [])
+
+
 # ── Mark to Market ───────────────────────────────────────────────
 
 class TestMarkToMarket:
