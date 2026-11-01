@@ -4,13 +4,18 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-from email.message import EmailMessage
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from trader_koo.backend.services.database import DB_PATH
 from trader_koo.backend.services.report_loader import latest_daily_report_json
+from trader_koo.email_delivery import (
+    Attachment,
+    OutgoingEmail,
+    load_email_config,
+    transport_for,
+)
 from trader_koo.email_subscribers import email_max_recipients
 from trader_koo.report_email import (
     build_report_email_bodies,
@@ -24,19 +29,6 @@ router = APIRouter(tags=["admin", "admin-email"])
 
 
 # ---------------------------------------------------------------------------
-# Email helpers (shared with the public email router)
-# ---------------------------------------------------------------------------
-
-from trader_koo.backend.routers.email import (
-    _email_transport,
-    _resend_settings,
-    _send_resend_email,
-    _send_smtp_email,
-    _smtp_settings,
-)
-
-
-# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -44,52 +36,36 @@ from trader_koo.backend.routers.email import (
 @router.get("/api/admin/smtp-health")
 def smtp_health() -> dict[str, Any]:
     """Return email delivery config health (without secrets)."""
-    smtp = _smtp_settings()
-    resend = _resend_settings()
-    transport = _email_transport()
+    config = load_email_config()
+    smtp = config.smtp
+    resend = config.resend
     auto_email = str(
         os.getenv("TRADER_KOO_AUTO_EMAIL", "")
     ).strip().lower() in {"1", "true", "yes"}
-    missing: list[str] = []
-    if transport == "resend":
-        if not resend["api_key"]:
-            missing.append("TRADER_KOO_RESEND_API_KEY")
-        if not resend["from_email"]:
-            missing.append(
-                "TRADER_KOO_RESEND_FROM (or TRADER_KOO_SMTP_FROM)"
-            )
-        if auto_email and not resend["default_to"]:
-            missing.append("TRADER_KOO_REPORT_EMAIL_TO")
-    else:
-        if not smtp["host"]:
-            missing.append("TRADER_KOO_SMTP_HOST")
-        if not smtp["from_email"]:
-            missing.append("TRADER_KOO_SMTP_FROM")
-        if auto_email and not smtp["default_to"]:
-            missing.append("TRADER_KOO_REPORT_EMAIL_TO")
-        if smtp["user"] and not smtp["password"]:
-            missing.append("TRADER_KOO_SMTP_PASS")
+    missing = config.missing()
+    if auto_email and not config.recipients():
+        missing.append("TRADER_KOO_REPORT_EMAIL_TO")
     return {
         "ok": len(missing) == 0,
         "auto_email_enabled": auto_email,
-        "transport": transport,
+        "transport": config.transport,
         "email_max_recipients": email_max_recipients(),
         "missing": missing,
         "smtp": {
-            "host": smtp["host"],
-            "port": smtp["port"],
-            "security": smtp["security"],
-            "timeout_sec": smtp["timeout_sec"],
-            "from_email": smtp["from_email"],
-            "default_to": smtp["default_to"],
-            "has_user": bool(smtp["user"]),
-            "has_password": bool(smtp["password"]),
+            "host": smtp.host,
+            "port": smtp.port,
+            "security": smtp.security,
+            "timeout_sec": smtp.timeout_sec,
+            "from_email": smtp.from_email,
+            "default_to": config.default_to,
+            "has_user": bool(smtp.user),
+            "has_password": bool(smtp.password),
         },
         "resend": {
-            "has_api_key": bool(resend["api_key"]),
-            "from_email": resend["from_email"],
-            "default_to": resend["default_to"],
-            "timeout_sec": resend["timeout_sec"],
+            "has_api_key": bool(resend.api_key),
+            "from_email": resend.from_email,
+            "default_to": config.default_to,
+            "timeout_sec": resend.timeout_sec,
         },
     }
 
@@ -101,29 +77,11 @@ def email_latest_report(
     attach_json: bool = Query(default=True),
 ) -> dict[str, Any]:
     """Send the latest daily report by email via configured transport."""
-    smtp = _smtp_settings()
-    resend = _resend_settings()
-    transport = _email_transport()
-    default_to = (
-        resend["default_to"] if transport == "resend" else smtp["default_to"]
-    )
-    recipient = (to or default_to or "").strip()
-    missing: list[str] = []
-    if transport == "resend":
-        if not resend["api_key"]:
-            missing.append("TRADER_KOO_RESEND_API_KEY")
-        if not resend["from_email"]:
-            missing.append(
-                "TRADER_KOO_RESEND_FROM (or TRADER_KOO_SMTP_FROM)"
-            )
-    else:
-        if not smtp["host"]:
-            missing.append("TRADER_KOO_SMTP_HOST")
-        if not smtp["from_email"]:
-            missing.append("TRADER_KOO_SMTP_FROM")
-        if smtp["user"] and not smtp["password"]:
-            missing.append("TRADER_KOO_SMTP_PASS")
-    if not recipient:
+    config = load_email_config()
+    transport = config.transport
+    recipients = config.recipients(to)
+    missing = config.missing()
+    if not recipients:
         missing.append("TRADER_KOO_REPORT_EMAIL_TO (or use ?to=...)")
     if missing:
         raise HTTPException(
@@ -163,15 +121,7 @@ def email_latest_report(
         md_text if include_markdown else "",
         app_url=report_email_app_url(),
     )
-    from_header = (
-        resend["from_email"] if transport == "resend" else smtp["from_email"]
-    )
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = from_header
-    message["To"] = recipient
-    message.set_content(text_body)
-    message.add_alternative(html_body, subtype="html")
+    attachments: list[Attachment] = []
     if attach_json:
         filename = (
             latest_path.name
@@ -179,30 +129,26 @@ def email_latest_report(
             else "daily_report_latest.json"
         )
         json_bytes = json.dumps(latest_payload, indent=2).encode("utf-8")
-        message.add_attachment(
-            json_bytes,
-            maintype="application",
-            subtype="json",
-            filename=filename,
-        )
+        attachments.append(Attachment(json_bytes, "application", "json", filename))
     if include_markdown and md_text:
-        message.add_attachment(
-            md_text.encode("utf-8"),
-            maintype="text",
-            subtype="markdown",
-            filename="daily_report_latest.md",
-        )
-    try:
-        if transport == "resend":
-            _send_resend_email(
-                subject=subject,
-                text=text_body,
-                recipient=recipient,
-                resend=resend,
-                html_body=html_body,
+        attachments.append(
+            Attachment(
+                md_text.encode("utf-8"),
+                "text",
+                "markdown",
+                "daily_report_latest.md",
             )
-        else:
-            _send_smtp_email(message, smtp)
+        )
+    email = OutgoingEmail(
+        subject=subject,
+        text=text_body,
+        html=html_body,
+        attachments=tuple(attachments),
+    )
+    sender = transport_for(config)
+    try:
+        for recipient in recipients:
+            sender.send(email, recipient)
     except Exception as exc:
         LOG.exception(
             "Failed to send daily report email (transport=%s)", transport
@@ -213,10 +159,10 @@ def email_latest_report(
     return {
         "ok": True,
         "transport": transport,
-        "to": recipient,
+        "to": ", ".join(recipients),
         "subject": subject,
         "report_file": str(latest_path) if latest_path else None,
-        "smtp_host": smtp["host"],
-        "smtp_port": smtp["port"],
-        "smtp_security": smtp["security"],
+        "smtp_host": config.smtp.host,
+        "smtp_port": config.smtp.port,
+        "smtp_security": config.smtp.security,
     }

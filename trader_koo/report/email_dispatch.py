@@ -1,22 +1,23 @@
-"""Email sending: SMTP and Resend transports for report and LLM alert emails."""
+"""Nightly report email: recipients, de-duplication and delivery records.
+
+Transport config and sending live in ``trader_koo.email_delivery``.
+"""
 from __future__ import annotations
 
-import datetime as dt
-import json
 import logging
 import os
-import smtplib
-import ssl
-import urllib.error
-import urllib.request
-from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
+from trader_koo.email_delivery import (
+    Attachment,
+    EmailTransport,
+    OutgoingEmail,
+    load_email_config,
+    transport_for,
+)
 from trader_koo.email_subscribers import (
     already_sent_generated_report,
-    email_max_recipients,
-    parse_recipients,
     record_generated_report_delivery,
 )
 from trader_koo.report_email import (
@@ -28,145 +29,24 @@ from trader_koo.report_email import (
 LOG = logging.getLogger(__name__)
 
 
-def _smtp_cfg() -> dict[str, Any]:
-    port_raw = os.getenv("TRADER_KOO_SMTP_PORT", "587").strip()
-    try:
-        port = int(port_raw)
-    except ValueError:
-        port = 587
-    timeout_raw = os.getenv("TRADER_KOO_SMTP_TIMEOUT_SEC", "30").strip()
-    try:
-        timeout_sec = max(5, int(timeout_raw))
-    except ValueError:
-        timeout_sec = 30
-    security = os.getenv("TRADER_KOO_SMTP_SECURITY", "starttls").strip().lower()
-    if security not in {"starttls", "ssl", "none"}:
-        security = "starttls"
-    return {
-        "host": os.getenv("TRADER_KOO_SMTP_HOST", "").strip(),
-        "port": port,
-        "user": os.getenv("TRADER_KOO_SMTP_USER", "").strip(),
-        "password": os.getenv("TRADER_KOO_SMTP_PASS", ""),
-        "from_email": os.getenv("TRADER_KOO_SMTP_FROM", "").strip(),
-        "to_email": os.getenv("TRADER_KOO_REPORT_EMAIL_TO", "").strip(),
-        "timeout_sec": timeout_sec,
-        "security": security,
-    }
-
-
-def _resend_cfg() -> dict[str, Any]:
-    timeout_raw = os.getenv("TRADER_KOO_RESEND_TIMEOUT_SEC", os.getenv("TRADER_KOO_SMTP_TIMEOUT_SEC", "30")).strip()
-    try:
-        timeout_sec = max(5, int(timeout_raw))
-    except ValueError:
-        timeout_sec = 30
-    return {
-        "api_key": os.getenv("TRADER_KOO_RESEND_API_KEY", "").strip(),
-        "from_email": os.getenv("TRADER_KOO_RESEND_FROM", os.getenv("TRADER_KOO_SMTP_FROM", "")).strip(),
-        "to_email": os.getenv("TRADER_KOO_REPORT_EMAIL_TO", "").strip(),
-        "timeout_sec": timeout_sec,
-    }
-
-
-def _email_transport() -> str:
-    raw = os.getenv("TRADER_KOO_EMAIL_TRANSPORT", "auto").strip().lower()
-    if raw not in {"auto", "smtp", "resend"}:
-        raw = "auto"
-    if raw == "auto":
-        return "resend" if _resend_cfg().get("api_key") else "smtp"
-    return raw
-
-
-def _send_resend_email(
-    *,
-    subject: str,
-    text: str,
-    html_body: str,
-    resend: dict[str, Any],
-    recipient: str,
-) -> None:
-    user_agent = os.getenv("TRADER_KOO_EMAIL_USER_AGENT", "trader-koo/1.0")
-    payload = {
-        "from": resend["from_email"],
-        "to": [recipient],
-        "subject": subject,
-        "text": text,
-        "html": html_body,
-    }
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {resend['api_key']}",
-            "Content-Type": "application/json",
-            "User-Agent": user_agent,
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=int(resend["timeout_sec"])) as resp:
-            status = int(getattr(resp, "status", 200))
-            body = resp.read().decode("utf-8", errors="replace")
-        if status >= 300:
-            raise RuntimeError(f"Resend API failed status={status} body={body[:500]}")
-    except urllib.error.HTTPError as exc:
-        err_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Resend API HTTP {exc.code}: {err_body[:500]}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Resend connect failed: {exc.reason}") from exc
-
-
-def _send_smtp_email(smtp: dict[str, Any], msg: EmailMessage) -> None:
-    host, port, timeout_sec = smtp["host"], int(smtp["port"]), int(smtp["timeout_sec"])
-    user, password, security = smtp["user"], smtp["password"], smtp["security"]
-    if security == "ssl":
-        with smtplib.SMTP_SSL(host, port, timeout=timeout_sec, context=ssl.create_default_context()) as server:
-            if user:
-                server.login(user, password)
-            server.send_message(msg)
-    else:
-        with smtplib.SMTP(host, port, timeout=timeout_sec) as server:
-            server.ehlo()
-            if security == "starttls":
-                server.starttls(context=ssl.create_default_context())
-                server.ehlo()
-            if user:
-                server.login(user, password)
-            server.send_message(msg)
-
-
 def send_report_email(
     report: dict[str, Any],
     md_text: str,
     *,
     db_path: Path | None = None,
     force: bool = False,
+    email_transport: EmailTransport | None = None,
 ) -> dict[str, Any]:
     """Send daily report email to env recipients with anti-duplication safeguards."""
-    transport = _email_transport()
-    smtp = _smtp_cfg()
-    resend = _resend_cfg()
-    missing = []
-    if transport == "resend":
-        if not resend["api_key"]:
-            missing.append("TRADER_KOO_RESEND_API_KEY")
-        if not resend["from_email"]:
-            missing.append("TRADER_KOO_RESEND_FROM (or TRADER_KOO_SMTP_FROM)")
-    else:
-        if not smtp["host"]:
-            missing.append("TRADER_KOO_SMTP_HOST")
-        if not smtp["from_email"]:
-            missing.append("TRADER_KOO_SMTP_FROM")
-    fallback_to = resend["to_email"] if transport == "resend" else smtp["to_email"]
-    fallback_recipients = fallback_to or os.getenv("TRADER_KOO_REPORT_EMAIL_TO", "")
+    config = load_email_config()
+    transport = config.transport
+    sender = transport_for(config) if email_transport is None else email_transport
+    missing = config.missing()
     if not db_path:
         default_db = Path(os.getenv("TRADER_KOO_DB_PATH", str((Path(__file__).resolve().parents[1] / "data" / "trader_koo.db"))))
         db_path = default_db.resolve()
 
-    recipient_rows = [
-        {"email": email}
-        for email in parse_recipients(fallback_recipients)[: max(1, email_max_recipients())]
-    ]
+    recipient_rows = [{"email": email} for email in config.recipients()]
     if not recipient_rows:
         missing.append("TRADER_KOO_REPORT_EMAIL_TO")
     if missing:
@@ -198,28 +78,22 @@ def send_report_email(
             app_url=app_url,
         )
         try:
-            if transport == "resend":
-                _send_resend_email(
+            sender.send(
+                OutgoingEmail(
                     subject=subject,
                     text=text_body,
-                    html_body=html_body,
-                    resend=resend,
-                    recipient=recipient,
-                )
-            else:
-                msg = EmailMessage()
-                msg["Subject"] = subject
-                msg["From"] = smtp["from_email"]
-                msg["To"] = recipient
-                msg.set_content(text_body)
-                msg.add_alternative(html_body, subtype="html")
-                msg.add_attachment(
-                    md_text.encode(),
-                    maintype="text",
-                    subtype="markdown",
-                    filename=f"daily_report_{generated_key[:10]}.md",
-                )
-                _send_smtp_email(smtp, msg)
+                    html=html_body,
+                    attachments=(
+                        Attachment(
+                            md_text.encode(),
+                            "text",
+                            "markdown",
+                            f"daily_report_{generated_key[:10]}.md",
+                        ),
+                    ),
+                ),
+                recipient,
+            )
             sent += 1
             try:
                 if generated:

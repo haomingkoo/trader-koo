@@ -8,7 +8,7 @@ Submodules:
   - setup_scoring: confluence scoring, debate guardrails, evaluation
   - generator: fetch_signals / fetch_report_payload orchestrator
   - serializer: Markdown / JSON output, snapshot pruning
-  - email_dispatch: SMTP / Resend email delivery
+  - email_dispatch: nightly report email (transport in trader_koo.email_delivery)
 
 Import from submodules directly for best performance:
     from trader_koo.report.generator import fetch_report_payload
