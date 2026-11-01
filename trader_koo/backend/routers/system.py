@@ -15,7 +15,7 @@ from fastapi import APIRouter, Query
 LOG = logging.getLogger("trader_koo.routers.system")
 
 from trader_koo.backend.services.database import DB_PATH, get_conn, table_exists
-from trader_koo.backend.services.market_data import days_since, hours_since, parse_iso_utc
+from trader_koo.backend.services.market_data import hours_since, parse_iso_utc
 from trader_koo.backend.services.pipeline import (
     get_cached_status,
     pipeline_status_snapshot,
@@ -26,6 +26,7 @@ from trader_koo.backend.services.pipeline import (
 from trader_koo.backend.services.report_loader import is_report_fresh
 from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
 from trader_koo.polymarket import POLYMARKET_TOP_N
+from trader_koo.report.freshness import assess_data_freshness, unsealed_price_tickers
 from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
 
@@ -430,8 +431,6 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
                 (SELECT COUNT(*) FROM finviz_fundamentals) AS fundamentals_rows,
                 (SELECT COUNT(*) FROM options_iv) AS options_rows,
                 (SELECT COUNT(DISTINCT ticker) FROM price_daily) AS tracked_tickers,
-                (SELECT MAX(date) FROM price_daily) AS latest_price_date,
-                (SELECT MAX(snapshot_ts) FROM finviz_fundamentals) AS latest_fund_snapshot,
                 (SELECT MAX(snapshot_ts) FROM options_iv) AS latest_opt_snapshot
             """
         ).fetchone()
@@ -478,12 +477,11 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
                 """
             ).fetchone()
 
-        latest_price_date = counts["latest_price_date"] if counts else None
-        latest_fund_snapshot = counts["latest_fund_snapshot"] if counts else None
         latest_opt_snapshot = counts["latest_opt_snapshot"] if counts else None
 
-        price_age_days = days_since(latest_price_date, now)
-        fund_age_hours = hours_since(latest_fund_snapshot, now)
+        data_freshness = assess_data_freshness(
+            conn, now, yolo_excluded_tickers=unsealed_price_tickers(conn)
+        )
         opt_age_hours = hours_since(latest_opt_snapshot, now)
 
         price_basis = _persisted_price_revision_summary(
@@ -513,10 +511,12 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
 
         operational_warnings: list[str] = []
         research_warnings: list[str] = []
-        if price_age_days is None or price_age_days > 3:
+        if data_freshness.price_missing or data_freshness.price_stale:
             operational_warnings.append("price_daily stale")
-        if fund_age_hours is None or fund_age_hours > 48:
+        if data_freshness.fund_missing or data_freshness.fund_stale:
             operational_warnings.append("finviz_fundamentals stale")
+        if data_freshness.yolo_missing or data_freshness.yolo_stale:
+            operational_warnings.append("yolo_patterns stale")
         if not report_fresh:
             operational_warnings.append("daily_report stale")
         if not price_basis["cohort_available"]:
@@ -644,8 +644,8 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
                 **({"run_log_path": str(RUN_LOG_PATH)} if EXPOSE_STATUS_INTERNAL else {}),
             },
             "freshness": {
-                "price_age_days": None if price_age_days is None else round(price_age_days, 2),
-                "fund_age_hours": None if fund_age_hours is None else round(fund_age_hours, 2),
+                "price_age_days": None if (price_age := data_freshness.price_age_days) is None else round(price_age, 2),
+                "fund_age_hours": None if (fund_age := data_freshness.fund_age_hours) is None else round(fund_age, 2),
                 "opt_age_hours": None if opt_age_hours is None else round(opt_age_hours, 2),
                 "report_age_hours": None if report_age_hours is None else round(report_age_hours, 2),
                 "report_generated_ts": report_generated_ts_str,
@@ -660,8 +660,8 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
             "price_basis": price_basis,
             "activity": activity,
             "latest_data": {
-                "price_date": latest_price_date,
-                "fund_snapshot": latest_fund_snapshot,
+                "price_date": data_freshness.price_date,
+                "fund_snapshot": data_freshness.fund_snapshot,
                 "options_snapshot": latest_opt_snapshot,
             },
         }
