@@ -7,7 +7,6 @@ the same holding windows, by calendar year, and at the stress cost. The sealed w
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -16,15 +15,15 @@ import pandas as pd
 from trader_koo.research.settings import get as _settings
 
 from . import eventstats as es
-from . import ledger, v2_report
+from . import trial, v2_report
 from .data import BENCHMARK_TICKER, Market, connect_ro, load_market
 from .v2_signals import (S1_MAX_HOLD, S2_MAX_HOLD, S3_HOLD, Prices, s1, s2, s3)
 from .v2_trades import Grid, build_grid, entry_counts, net, one_at_a_time
-from .v3_run import sealed_boundary
 
 _E = _settings().event_study
 _B = _settings().bench
 FAMILY = "v2"
+CANDIDATE = "v2_saty_setups"
 YEAR_CHARS = 4  # ISO date prefix width
 KEYS = ("S1", "S2", "S3")
 PRICE_BASIS = "COALESCE(adjustment_basis,'split_adjusted_price_only')='split_adjusted_price_only'"
@@ -178,7 +177,8 @@ def _by_rule(rows: list[dict]) -> dict:
 
 
 def run_v2(db_path: str | Path, ledger_path: str | Path, market: Market | None = None) -> dict:
-    boundary = sealed_boundary(ledger_path)
+    t = trial.start(ledger_path, trial.READ_ONLY)
+    boundary = t.boundary
     market = market or load_market(db_path)
     p, last, load_counts = load_prices(market, boundary)
     first_row = int(np.searchsorted(list(p.close.index), f"{_E.first_walk_forward_year}-01-01", side="left"))
@@ -186,7 +186,7 @@ def run_v2(db_path: str | Path, ledger_path: str | Path, market: Market | None =
               "last_session": p.close.index[last], "sessions": last + 1, "cost_bps": _B.cost_bps,
               "stress_bps": _B.stress_bps, "block": _E.bootstrap_block, "resamples": _E.bootstrap_resamples,
               "placebo_draws": _E.placebo_draws, "universe": _B.universe}
-    seed = ledger.seed_from_config(config)
+    seed = t.configure(CANDIDATE, config)
     shape = p.close.shape
     a1, a2, a3 = s1(p), s2(p), s3(p)
     grids = {"S1": build_grid(market, p.open, p.close, a1["exit_ema"], S1_MAX_HOLD),
@@ -208,7 +208,7 @@ def run_v2(db_path: str | Path, ledger_path: str | Path, market: Market | None =
     w3 = entry_counts(*np.nonzero(a3["signal"].to_numpy()), shape)
     wb3 = entry_counts(*np.nonzero(a3["state"].to_numpy()), shape)
     pairs = {"S1": (w1, wb1), "S2": (w2, wb2), "S3": (w3, wb3)}
-    results = {k: study(k, p, grids[k], *pairs[k], first_row, ledger.seed_from_config({**config, "spec": k})) for k in KEYS}
+    results = {k: study(k, p, grids[k], *pairs[k], first_row, t.seed_for(k)) for k in KEYS}
     results["S1"]["counts"]["signals_skipped_a_trade_was_open"] = skipped_s1
     results["S2"]["counts"].update(
         crosses=int(((cr >= first_row)).sum()), crosses_without_a_retest_in_10_sessions=int(((cr >= first_row) & ~has).sum()),
@@ -223,11 +223,7 @@ def run_v2(db_path: str | Path, ledger_path: str | Path, market: Market | None =
     summary = {k: {"trades": results[k]["n_trades"], "mean_net": round(results[k]["mean_net"], _E.report_digits),
                    "excess": round(results[k]["excess"], _E.report_digits), "adjusted_p": round(adj[i], _E.report_digits),
                    "status": verdicts[k]["status"]} for i, k in enumerate(KEYS)}
-    base = {"candidate": "v2_saty_setups", "config": config, "seed": seed, "code_version": ledger.code_version(),
-            "timestamp": datetime.now(timezone.utc).isoformat()}
-    ledger.append(ledger_path, {**base, "event": "event_study_run", "trial_id": ledger.short_id(base), "family": FAMILY,
-                                "sealed_opened": False, "sealed_boundary": boundary,
-                                "date_range": [config["first_entry_session"], config["last_session"]],
-                                "n_sessions": last + 1, "params_hash": ledger.sha(config), "summary": summary})
-    out["trial_id"], out["summary"] = ledger.short_id(base), summary
+    out["trial_id"] = t.record("event_study_run", summary, params=config, family=FAMILY,
+                               date_range=[config["first_entry_session"], config["last_session"]], n_sessions=last + 1)
+    out["summary"] = summary
     return out
