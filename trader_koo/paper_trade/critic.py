@@ -480,7 +480,12 @@ def critic_review(
             "critic_reasons": list[str], # why each check passed or failed
             "rejections": list[str],     # only the failures
             "summary": str,              # one-line verdict
+            "checks": list[dict],        # {"name", "passed", "reason"} per check, in run order
         }
+
+    ``checks`` is the structured form of ``critic_reasons``. It is not part of
+    the stored critic outcome: callers that persist or hash the outcome remove
+    it first, so stored payloads keep their earlier shape.
     """
     ticker = str(row.get("ticker") or "").upper()
     direction = str(evaluation.get("direction") or "")
@@ -546,4 +551,5 @@ def critic_review(
         "critic_reasons": all_reasons,
         "rejections": rejections,
         "summary": summary,
+        "checks": [{"name": name, "passed": p, "reason": reason} for name, p, reason in checks],
     }

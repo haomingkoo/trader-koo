@@ -586,6 +586,30 @@ class TestCriticReview:
         assert isinstance(result["rejections"], list)
         assert isinstance(result["approved"], bool)
 
+    def test_checks_are_structured_verdicts_matching_the_reason_strings(self):
+        result = critic_review(
+            _make_conn(), row=_row(), evaluation=_eval(),
+            plan=_plan(expected_r=0.5), market_ctx=_ctx(vix=REGIME_VIX_EXTREME + 1),
+        )
+        checks = result["checks"]
+        assert len(checks) == result["checks_total"]
+        assert [set(c) for c in checks] == [{"name", "passed", "reason"}] * len(checks)
+        assert [f"{'PASS' if c['passed'] else 'FAIL'} [{c['name']}]: {c['reason']}" for c in checks] == result["critic_reasons"]
+        assert [c["reason"] for c in checks if not c["passed"]] == result["rejections"]
+        assert sum(not c["passed"] for c in checks) >= 2  # risk_reward and volatility_environment
+
+    def test_checks_record_a_raising_check_as_a_failed_verdict(self, monkeypatch):
+        from trader_koo.paper_trade import critic
+
+        def boom(*_a, **_k):
+            raise RuntimeError("source unavailable")
+
+        monkeypatch.setattr(critic, "_check_regime_alignment", boom)
+        result = critic_review(_make_conn(), row=_row(), evaluation=_eval(), plan=_plan(), market_ctx=_ctx())
+        (verdict,) = [c for c in result["checks"] if c["name"] == "regime_alignment"]
+        assert verdict == {"name": "regime_alignment", "passed": False,
+                           "reason": "Check error (rejecting): source unavailable"}
+
 
 def test_sector_gate_reports_when_it_cannot_evaluate(tmp_path):
     """The sector map covers ~46 of ~500 tickers, so the gate usually no-ops.
