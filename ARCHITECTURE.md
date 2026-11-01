@@ -609,7 +609,7 @@ The email system is entirely optional and disabled if `TRADER_KOO_SMTP_HOST` is 
 
 ### How it works
 
-`_smtp_settings()` reads configuration from env vars at call time (not at startup), so settings can be changed without redeploying. `_send_smtp_email()` supports three security modes:
+`trader_koo/email_delivery.py` owns email config and sending for every caller. `load_email_config()` reads env vars at call time (not at startup), so settings can be changed without redeploying; `EmailConfig.missing()` is the one definition of "configured" (an SMTP user without `TRADER_KOO_SMTP_PASS` is not). SMTP and Resend are two adapters behind `transport_for(config)`. The SMTP adapter supports three security modes:
 
 | Mode | Behaviour |
 |------|-----------|
