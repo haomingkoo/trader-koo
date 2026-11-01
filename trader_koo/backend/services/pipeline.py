@@ -32,6 +32,9 @@ from trader_koo.backend.services.report_loader import (
 )
 from trader_koo.backend.services.run_log import (
     DONE_MARKER,
+    FAIL_MARKER,
+    INGEST_DONE_MARKER,
+    PARTIAL_MARKER,
     REPORT_DONE_MARKER,
     REPORT_START_MARKER,
     RUN_LOG_PATH,
@@ -42,6 +45,7 @@ from trader_koo.backend.services.run_log import (
     append_run_log as _append_run_log,
     last_marker_index,
     latest_run_block,
+    marker_rc_ok,
 )
 from trader_koo.report.utils import expected_price_date
 
@@ -539,7 +543,7 @@ def parse_log_line_ts_utc(line: str | None) -> dt.datetime | None:
 def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     """Infer active/stage from log marker lines."""
     start_idx = last_marker_index(tail, START_MARKER)
-    done_idx = last_marker_index(tail, DONE_MARKER)
+    done_idx = last_marker_index(tail, DONE_MARKER, FAIL_MARKER, PARTIAL_MARKER)
     report_start_idx = last_marker_index(tail, REPORT_START_MARKER)
     report_done_idx = last_marker_index(tail, REPORT_DONE_MARKER)
     yolo_done_idx = last_marker_index(tail, YOLO_DONE_MARKER)
@@ -617,34 +621,35 @@ def _infer_pipeline_from_log_tail(tail: list[str]) -> dict[str, Any]:
     return out
 
 
+# (stage, marker, status): a fixed status, or None to read the line's rc=.
+_COMPLETION_MARKERS: tuple[tuple[str, str, str | None], ...] = (
+    ("weekly_report", "[WEEKLY] Report regeneration completed", "ok"),
+    ("weekly_report", "[WEEKLY] Report regeneration failed", "failed"),
+    ("weekly_yolo", "[WEEKLY] Weekly YOLO completed OK", "ok"),
+    ("weekly_yolo", "[WEEKLY] Weekly YOLO failed", "failed"),
+    ("daily_update", DONE_MARKER, "ok"),
+    ("daily_update", FAIL_MARKER, "failed"),
+    ("daily_update", PARTIAL_MARKER, "partial"),
+    ("report", REPORT_DONE_MARKER, None),
+    ("yolo", YOLO_DONE_MARKER, None),
+    ("ingest", INGEST_DONE_MARKER, None),
+    ("ingest", "ingest failed rc=", "failed"),
+)
+
+
 def _infer_last_completed_event_from_tail(tail: list[str]) -> dict[str, Any] | None:
-    """Find the most recent completion marker in *tail*."""
-    candidates = [
-        ("weekly_report", "ok", "[WEEKLY] Report regeneration completed"),
-        ("weekly_report", "failed", "[WEEKLY] Report regeneration failed"),
-        ("weekly_yolo", "ok", "[WEEKLY] Weekly YOLO completed OK"),
-        ("weekly_yolo", "failed", "[WEEKLY] Weekly YOLO failed"),
-        ("report", "ok", REPORT_DONE_MARKER),
-        ("report", "failed", "[REPORT] Failed to generate report"),
-        ("daily_update", "ok", DONE_MARKER),
-        ("ingest", "failed", "[ERROR] ingest failed rc="),
-    ]
-    best_idx = -1
-    best: dict[str, Any] | None = None
-    for stage, status, token in candidates:
-        for idx in range(len(tail) - 1, -1, -1):
-            line = tail[idx]
-            if token in line and idx > best_idx:
+    """The newest completion line in *tail*; stage status comes from its rc=."""
+    for line in reversed(tail):
+        for stage, marker, status in _COMPLETION_MARKERS:
+            if marker in line:
                 ts = parse_log_line_ts_utc(line)
-                best_idx = idx
-                best = {
+                return {
                     "stage": stage,
-                    "status": status,
+                    "status": status or ("ok" if marker_rc_ok(line, marker) else "failed"),
                     "line": line,
                     "ts": ts.replace(microsecond=0).isoformat() if ts else None,
                 }
-                break
-    return best
+    return None
 
 
 def _completed_event_from_run(run: dict[str, Any] | None) -> dict[str, Any] | None:

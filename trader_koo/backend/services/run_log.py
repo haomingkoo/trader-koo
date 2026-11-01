@@ -57,6 +57,8 @@ def append_run_log(
 
 START_MARKER = "[START] daily_update.sh"
 DONE_MARKER = "[DONE]  daily_update.sh"
+FAIL_MARKER = "[FAIL]  daily_update.sh"  # report failed
+PARTIAL_MARKER = "[WARN]  daily_update.sh"  # report OK, ingest or YOLO failed
 INGEST_DONE_MARKER = "[INGEST] done"
 YOLO_START_MARKER = "[YOLO]  Starting"
 YOLO_DONE_MARKER = "[YOLO]  Daily pattern detection done."
@@ -87,12 +89,15 @@ def latest_run_block(lines: list[str]) -> list[str]:
     return lines[start:] if start >= 0 else lines
 
 
+def marker_rc_ok(line: str, marker: str) -> bool:
+    """True when the ``rc=`` after *marker* on *line* is 0."""
+    match = _RC_RE.search(line, line.index(marker))
+    return match is not None and int(match.group(1)) == 0
+
+
 def _stage_done_ok(block: list[str], marker: str) -> bool:
     idx = last_marker_index(block, marker)
-    if idx < 0:
-        return False
-    match = _RC_RE.search(block[idx], block[idx].index(marker))
-    return match is not None and int(match.group(1)) == 0
+    return idx >= 0 and marker_rc_ok(block[idx], marker)
 
 
 @dataclass(frozen=True)
@@ -107,21 +112,24 @@ def stage_results(
     returncode: int,
     read_tail: Callable[[], list[str]],
 ) -> StageResults:
-    """Which stages of one ``daily_update.sh`` run succeeded.
+    """Which stages of one ``daily_update.sh`` run succeeded, from the newest run's log block.
 
-    The script exits 0 only when every enabled stage passed. On a failed full
-    run the log is read (only the newest run's block) to keep the stages that
-    did pass, in order: report counts only after YOLO, YOLO only after ingest.
+    The script exits 0 whenever the report passed, even if ingest or YOLO
+    failed (it logs ``[WARN] ... partial failures, report OK``), so the exit code
+    decides only the report. Ingest and YOLO always come from their own ``rc=``
+    lines. On a failed run, stages count only in order: report after YOLO,
+    YOLO after ingest.
     """
     run_ingest = mode == "full"
     run_yolo = mode in ("full", "yolo")
     run_report = mode in ("full", "yolo", "report")
+    block = latest_run_block(read_tail()) if (run_ingest or run_yolo) else []
+    ingest_ok = run_ingest and _stage_done_ok(block, INGEST_DONE_MARKER)
+    yolo_ok = run_yolo and _stage_done_ok(block, YOLO_DONE_MARKER)
     if returncode == 0:
-        return StageResults(run_ingest, run_yolo, run_report)
+        return StageResults(ingest_ok, yolo_ok, run_report)
     if not run_ingest:
         return StageResults(False, False, False)
-    block = latest_run_block(read_tail())
-    ingest_ok = _stage_done_ok(block, INGEST_DONE_MARKER)
-    yolo_ok = ingest_ok and run_yolo and _stage_done_ok(block, YOLO_DONE_MARKER)
+    yolo_ok = ingest_ok and yolo_ok
     report_ok = yolo_ok and run_report and _stage_done_ok(block, REPORT_DONE_MARKER)
     return StageResults(ingest_ok, yolo_ok, report_ok)

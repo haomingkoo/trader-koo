@@ -18,6 +18,7 @@ import pytest
 
 from trader_koo.backend.services import pipeline, pipeline_runs
 from trader_koo.backend.services.pipeline import (
+    _infer_last_completed_event_from_tail,
     _infer_pipeline_from_log_tail,
     ensure_pipeline_runs_schema,
     pipeline_status_snapshot,
@@ -283,6 +284,8 @@ COMPLETED = REPORT_RUNNING + _log(
         (YOLO_RUNNING, True, "yolo"),
         (REPORT_RUNNING, True, "report"),
         (COMPLETED, False, "idle"),
+        (REPORT_FAILED, False, "idle"),
+        (REPORT_RUNNING + _log("[REPORT] Done. rc=0 sec=60", "[WARN]  daily_update.sh mode=full ingest=2 yolo=0 report=0 (partial failures, report OK)"), False, "idle"),
         (_log("[WEEKLY] Starting weekly YOLO pass", "[weekly] Processing SPY"), True, "yolo"),
         (_log("[WEEKLY] Weekly YOLO completed OK", "[WEEKLY] Report regeneration starting"), True, "report"),
     ],
@@ -293,11 +296,43 @@ def test_log_tail_inference_stage(tail, active, stage) -> None:
     assert (inferred["active"], inferred["stage"]) == (active, stage)
 
 
+INGEST_FAILED = INGEST_RUNNING + _log(
+    "[INGEST] done rc=2 sec=900", "[WARN]  ingest failed rc=2 (partial data) — continuing to report step",
+)
+
+
+@pytest.mark.parametrize(
+    ("tail", "expected"),
+    [
+        ([], None),
+        (INGEST_FAILED, ("ingest", "failed")),
+        (INGEST_RUNNING + _log("[INGEST] done rc=0 sec=900"), ("ingest", "ok")),
+        (REPORT_RUNNING, ("yolo", "ok")),
+        (REPORT_RUNNING[:-2] + _log("[YOLO]  Daily pattern detection done. rc=1 sec=30"), ("yolo", "failed")),
+        (REPORT_RUNNING + _log("[REPORT] Done. rc=1 sec=60"), ("report", "failed")),
+        (REPORT_RUNNING + _log("[REPORT] Done. rc=0 sec=60"), ("report", "ok")),
+        (REPORT_FAILED, ("daily_update", "failed")),
+        (COMPLETED, ("daily_update", "ok")),
+        (REPORT_RUNNING + _log("[REPORT] Done. rc=0 sec=60", "[WARN]  daily_update.sh mode=full ingest=2 yolo=0 report=0 (partial failures, report OK)"), ("daily_update", "partial")),
+        (_log("[WEEKLY] Weekly YOLO failed rc=1"), ("weekly_yolo", "failed")),
+    ],
+)
+def test_last_completed_event_reads_the_exit_code(tail, expected) -> None:
+    event = _infer_last_completed_event_from_tail(tail)
+
+    assert (None if event is None else (event["stage"], event["status"])) == expected
+
+
 @pytest.mark.parametrize(
     ("mode", "returncode", "tail", "expected"),
     [
-        ("full", 0, [], (True, True, True)),
-        ("yolo", 0, [], (False, True, True)),
+        ("full", 0, COMPLETED, (True, True, True)),
+        # Exit 0 means the report passed; ingest and YOLO still need their own rc=0.
+        ("full", 0, INGEST_FAILED + _log("[YOLO]  Daily pattern detection done. rc=0 sec=300",
+                                         "[REPORT] Done. rc=0 sec=60"), (False, True, True)),
+        ("full", 0, [], (False, False, True)),
+        ("yolo", 0, _log("[START] daily_update.sh mode=yolo",
+                         "[YOLO]  Daily pattern detection done. rc=0 sec=300"), (False, True, True)),
         ("report", 0, [], (False, False, True)),
         ("yolo", 1, REPORT_FAILED, (False, False, False)),
         ("full", 1, REPORT_FAILED, (True, True, False)),
