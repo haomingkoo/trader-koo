@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { SetupRow } from "../../api/types.ts";
+import type { SetupRow, SetupSecEvents } from "../../api/types.ts";
 import {
   buildSetupQualityView,
+  presentCompanyFilings,
   summarizeSharedSetupFields,
   type DebateData,
 } from "./setupQualityView.ts";
@@ -134,4 +135,49 @@ test("differing macro scores stay on each setup", () => {
   assert.equal(summarizeSharedSetupFields(rows).macroScoreText, null);
   const items = buildSetupQualityView(rows, new Map(), { tier: "all", sortKey: "ticker", ascending: true });
   assert.deepEqual(items.map((item) => item.news?.macroText), ["Macro 20", "Macro 60"]);
+});
+
+function secEvents(overrides: Partial<SetupSecEvents> = {}): SetupSecEvents {
+  return {
+    enabled: true,
+    available: true,
+    source: "SEC EDGAR",
+    lookback_days: 30,
+    tickers: {
+      AAPL: [{
+        form: "8-K",
+        filed_date: "2026-07-30",
+        accepted_at: "2026-07-30T20:30:28+00:00",
+        items: ["Earnings results"],
+        url: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/aapl-20260730.htm",
+      }],
+      MSFT: [],
+    },
+    unmapped: ["SPY"],
+    errors: { NVDA: "HTTPError" },
+    ...overrides,
+  };
+}
+
+test("company filings list a setup's 8-K filings", () => {
+  const view = presentCompanyFilings("AAPL", secEvents());
+  assert.equal(view?.message, null);
+  assert.deepEqual(view?.filings.map((f) => f.items), [["Earnings results"]]);
+});
+
+test("company filings explain empty, unmapped and failed lookups", () => {
+  assert.match(presentCompanyFilings("MSFT", secEvents())?.message ?? "", /No 8-K filings in the 30 days/);
+  assert.match(presentCompanyFilings("SPY", secEvents())?.message ?? "", /No SEC filer/);
+  assert.match(presentCompanyFilings("NVDA", secEvents())?.message ?? "", /could not be loaded/);
+  assert.match(
+    presentCompanyFilings("AAPL", secEvents({ error: "cik_map_failed: Timeout", tickers: {} }))?.message ?? "",
+    /could not be loaded/,
+  );
+});
+
+test("company filings stay hidden for indexes, old reports and unchecked setups", () => {
+  assert.equal(presentCompanyFilings("^GSPC", secEvents()), null);
+  assert.equal(presentCompanyFilings("AAPL", undefined), null);
+  assert.equal(presentCompanyFilings("AAPL", secEvents({ enabled: false })), null);
+  assert.equal(presentCompanyFilings("ZZZZ", secEvents()), null);
 });

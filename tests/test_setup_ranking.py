@@ -223,3 +223,41 @@ def test_api_regime_calls_leave_no_residue_for_later_report_runs(
 
     assert not hasattr(market_context, "_report_warnings")
     assert "levels_computation_failed" not in warnings
+
+
+def test_sec_events_are_their_own_surface_and_leave_rows_untouched(
+    ranked_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trader_koo import sec_events
+
+    sec_events._cik_cache.update(loaded_at=0.0, map={})
+    filing = {"filings": {"recent": {
+        "form": ["8-K"], "acceptanceDateTime": [(NOW - dt.timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S.000Z")],
+        "accessionNumber": ["0000000001-26-000001"], "filingDate": [(NOW - dt.timedelta(days=2)).date().isoformat()],
+        "items": ["2.02,9.01"], "primaryDocument": ["bbb-8k.htm"],
+    }}}
+
+    def fake_get(url: str):
+        if url == sec_events.sec_cfg.SEC_TICKERS_URL:
+            return {"0": {"cik_str": 1, "ticker": "BBB", "title": "B"}}
+        return filing
+
+    monkeypatch.setattr(sec_events, "_http_get_json", fake_get)
+    monkeypatch.setattr(sec_events, "ENABLED", True)
+    signals = _signals(ranked_db)
+    sec_events._cik_cache.update(loaded_at=0.0, map={})
+
+    surface = signals["setup_sec_events"]
+    assert surface["tickers"]["BBB"][0]["items"] == ["Earnings results"]
+    assert "AAA" in surface["unmapped"]
+    assert [(r["ticker"], r["score"], r["setup_tier"]) for r in signals["setup_quality_all"]] == EXPECTED_ORDER
+    assert not any("bbb-8k.htm" in json.dumps(row, default=str) for row in signals["setup_quality_all"])
+
+
+def test_sec_events_report_a_blocked_network_instead_of_failing_the_report(ranked_db: sqlite3.Connection) -> None:
+    from trader_koo import sec_events
+
+    sec_events._cik_cache.update(loaded_at=0.0, map={})
+    surface = _signals(ranked_db)["setup_sec_events"]
+    if surface["enabled"]:
+        assert surface["available"] is False and surface["error"].startswith("cik_map_failed")

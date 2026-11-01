@@ -199,7 +199,7 @@ export default function ReportPage() {
 
           <SectorHeatmap rows={signals.sector_heatmap ?? []} />
 
-          <SetupQualitySection rows={setupRows} debateMap={debateMap} activeTicker={activeTicker} />
+          <SetupQualitySection rows={setupRows} debateMap={debateMap} activeTicker={activeTicker} secEvents={signals.setup_sec_events} />
 
           <SetupEvaluationPanel
             evaluation={signals.setup_evaluation ?? {}}
