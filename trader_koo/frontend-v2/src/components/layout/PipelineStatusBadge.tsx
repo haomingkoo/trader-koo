@@ -1,6 +1,5 @@
 import type { PipelineStatus } from "../../api/types";
-
-type StageState = "idle" | "active" | "done" | "warning" | "error";
+import { derivePipelineStates, type StageState } from "./pipelineStageStates";
 
 function PipelineDot({ state }: { state: StageState }) {
   const colors: Record<string, string> = {
@@ -18,96 +17,6 @@ function PipelineDot({ state }: { state: StageState }) {
       aria-label={`Pipeline stage: ${state}`}
     />
   );
-}
-
-function derivePipelineStates(data: PipelineStatus) {
-  const stage = (data.pipeline?.stage ?? "idle").toLowerCase();
-  const runStatus = (data.latest_run?.status ?? "").toLowerCase();
-  const lastCompletedStage = (data.pipeline?.last_completed_stage ?? "").toLowerCase();
-  const lastCompletedStatus = (data.pipeline?.last_completed_status ?? "").toLowerCase();
-  const pipelineActive = Boolean(data.pipeline?.active);
-  const runningStale = Boolean(data.pipeline?.running_stale);
-  const tickersOk = Number(data.latest_run?.tickers_ok ?? 0);
-  const tickersFailed = Number(data.latest_run?.tickers_failed ?? 0);
-  const partialFailure = runStatus === "failed" && tickersOk > 0 && tickersFailed > 0;
-
-  const ingestStages = ["price_daily", "price_seed", "fundamentals", "ingest"];
-  const yoloStages = ["yolo", "yolo_batch", "patterns"];
-  const reportStages = ["report", "narrative", "scoring", "daily_report"];
-
-  let ingest: StageState = "idle";
-  let yolo: StageState = "idle";
-  let report: StageState = "idle";
-
-  const markCompletedThrough = (completedStage: string) => {
-    if (
-      reportStages.some((item) => completedStage.includes(item)) ||
-      completedStage.includes("daily_update")
-    ) {
-      ingest = "done";
-      yolo = "done";
-      report = "done";
-    } else if (yoloStages.some((item) => completedStage.includes(item))) {
-      ingest = "done";
-      yolo = "done";
-    } else if (ingestStages.some((item) => completedStage.includes(item))) {
-      ingest = "done";
-    }
-  };
-
-  if (runningStale || stage === "stale_running") {
-    ingest = "error";
-    return { ingest, yolo, report };
-  }
-
-  if (pipelineActive || runStatus === "running" || runStatus === "in_progress") {
-    if (ingestStages.some((item) => stage.includes(item))) {
-      ingest = "active";
-    } else if (yoloStages.some((item) => stage.includes(item))) {
-      ingest = "done";
-      yolo = "active";
-    } else if (reportStages.some((item) => stage.includes(item))) {
-      ingest = "done";
-      yolo = "done";
-      report = "active";
-    } else {
-      ingest = "active";
-    }
-    return { ingest, yolo, report };
-  }
-
-  const lastCompletedOk =
-    lastCompletedStatus === "ok" ||
-    lastCompletedStatus === "completed" ||
-    lastCompletedStatus === "done";
-
-  const latestRunOk =
-    runStatus === "ok" ||
-    runStatus === "completed" ||
-    runStatus === "done";
-
-  if (lastCompletedOk) {
-    markCompletedThrough(lastCompletedStage);
-  } else if (latestRunOk) {
-    ingest = "done";
-  } else if (runStatus === "failed" && lastCompletedStatus === "failed") {
-    if (reportStages.some((item) => lastCompletedStage.includes(item))) {
-      ingest = "done";
-      yolo = "done";
-      report = "error";
-    } else if (yoloStages.some((item) => lastCompletedStage.includes(item))) {
-      ingest = "done";
-      yolo = partialFailure ? "warning" : "error";
-    } else {
-      ingest = partialFailure ? "warning" : "error";
-    }
-  }
-
-  if (!pipelineActive && data.freshness?.report_fresh === false) {
-    report = "error";
-  }
-
-  return { ingest, yolo, report };
 }
 
 export default function PipelineStatusBadge({
