@@ -9,6 +9,14 @@ from unittest.mock import patch
 
 from trader_koo.backend.routers import system
 from trader_koo.backend.services.pipeline import invalidate_status_cache
+from trader_koo.report.freshness import FreshnessVerdict
+
+# These tests pin price-basis readiness, so source freshness is held current.
+_FRESH_DATA = FreshnessVerdict(
+    price_date="2026-08-25", price_age_days=0.0, price_missing=False, price_stale=False,
+    fund_snapshot="2026-08-25T22:00:00Z", fund_age_hours=0.0, fund_missing=False, fund_stale=False,
+    yolo_as_of_date="2026-08-25", yolo_coverage_ok=True, yolo_missing=False, yolo_stale=False,
+)
 
 
 def _status_dependencies():
@@ -129,7 +137,7 @@ def test_retained_historical_symbol_does_not_inflate_current_cohort(
         patch.object(system, "DB_PATH", db_path),
         patch.object(system, "get_cached_status", return_value=None),
         patch.object(system, "set_cached_status"),
-        patch.object(system, "days_since", return_value=0.0),
+        patch.object(system, "assess_data_freshness", return_value=_FRESH_DATA),
         patch.object(system, "hours_since", return_value=0.0),
         patch.object(system, "resolve_published_report", return_value=(tmp_path, report)),
         patch.object(system, "is_report_fresh", return_value=True),
@@ -174,7 +182,7 @@ def test_current_cohort_unresolved_symbol_keeps_research_fail_closed(
         patch.object(system, "DB_PATH", db_path),
         patch.object(system, "get_cached_status", return_value=None),
         patch.object(system, "set_cached_status"),
-        patch.object(system, "days_since", return_value=0.0),
+        patch.object(system, "assess_data_freshness", return_value=_FRESH_DATA),
         patch.object(system, "hours_since", return_value=0.0),
         patch.object(system, "resolve_published_report", return_value=(tmp_path, report)),
         patch.object(system, "is_report_fresh", return_value=True),
@@ -253,7 +261,7 @@ def test_missing_successful_ingest_cohort_is_explicitly_unavailable(
         patch.object(system, "DB_PATH", db_path),
         patch.object(system, "get_cached_status", return_value=None),
         patch.object(system, "set_cached_status"),
-        patch.object(system, "days_since", return_value=0.0),
+        patch.object(system, "assess_data_freshness", return_value=_FRESH_DATA),
         patch.object(system, "hours_since", return_value=0.0),
         patch.object(system, "resolve_published_report", return_value=(tmp_path, report)),
         patch.object(system, "is_report_fresh", return_value=True),
@@ -284,7 +292,7 @@ def test_operational_failure_does_not_change_research_readiness(
         patch.object(system, "DB_PATH", db_path),
         patch.object(system, "get_cached_status", return_value=None),
         patch.object(system, "set_cached_status"),
-        patch.object(system, "days_since", return_value=0.0),
+        patch.object(system, "assess_data_freshness", return_value=_FRESH_DATA),
         patch.object(system, "hours_since", return_value=0.0),
         patch.object(system, "resolve_published_report", return_value=(tmp_path, report)),
         patch.object(system, "is_report_fresh", return_value=False),

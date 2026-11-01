@@ -508,6 +508,40 @@ def test_yolo_coverage_ignores_tickers_excluded_from_research_universe(
     assert "yolo_data_stale" not in payload["warnings"]
 
 
+# Tuesday 10:00 New York after Labor Day: Friday's bar is the latest completed
+# session (so the stale-price guard passes) but is more than three days old.
+@time_machine.travel(dt.datetime(2026, 9, 8, 14, 0, tzinfo=dt.timezone.utc), tick=False)
+def test_prices_older_than_three_days_keep_report_warning_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    conn = sqlite3.connect(kwargs["db_path"])
+    conn.execute("UPDATE price_daily SET date = '2026-09-04'")
+    conn.execute("UPDATE yolo_patterns SET as_of_date = '2026-09-04'")
+    conn.commit()
+    conn.close()
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert payload["warnings"] == ["price_data_stale"]
+
+
+# Friday 17:00 New York, one hour after the close.
+@time_machine.travel(dt.datetime(2026, 10, 30, 21, 0, tzinfo=dt.timezone.utc), tick=False)
+def test_fundamentals_older_than_48_hours_keep_report_warning_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kwargs = _fresh_report_inputs(tmp_path, monkeypatch, with_yolo=True)
+    conn = sqlite3.connect(kwargs["db_path"])
+    conn.execute("UPDATE finviz_fundamentals SET snapshot_ts = '2026-10-28T20:00:00Z'")
+    conn.commit()
+    conn.close()
+
+    payload = fetch_report_payload(**kwargs)
+
+    assert payload["warnings"] == ["fundamentals_stale"]
+
+
 LATEST_SESSION = "2026-10-23"
 STALE_SESSION = "2026-07-17"
 

@@ -21,6 +21,7 @@ from trader_koo.paper_trades import (
     mark_to_market,
 )
 from trader_koo.report.ensemble_adjustment import apply_ensemble_adjustment as _apply_ensemble_adjustment
+from trader_koo.report.freshness import assess_data_freshness
 from trader_koo.report.market_context import (
     _build_regime_context,
     _fetch_technical_context,
@@ -76,9 +77,6 @@ from trader_koo.report.utils import (
 )
 
 LOG = logging.getLogger(__name__)
-
-# Share of tickers holding the latest price bar that daily YOLO must have processed.
-YOLO_MIN_DAILY_COVERAGE = 0.90
 
 # Accumulates warnings from except blocks during report generation so the
 # frontend can surface which sections degraded.  Reset at the start of each
@@ -1299,44 +1297,6 @@ def _price_contract_excluded(signals: Any) -> set[str]:
     return {str(t) for t in excluded or []}
 
 
-def _yolo_daily_coverage_ok(
-    conn: sqlite3.Connection, price_date: str, excluded: set[str]
-) -> bool:
-    """True when daily YOLO processed enough tickers that hold the latest price bar.
-
-    A ticker counts as processed when it has a daily pattern row or an ok/skipped
-    run event for that as-of date. Zero-detection tickers only leave an event.
-    """
-    expected = {
-        str(r[0])
-        for r in conn.execute(
-            "SELECT ticker FROM price_daily GROUP BY ticker HAVING MAX(date) = ?",
-            (price_date,),
-        )
-    } - excluded
-    if not expected:
-        return True
-    covered = {
-        str(r[0])
-        for r in conn.execute(
-            "SELECT ticker FROM yolo_patterns WHERE timeframe = 'daily' AND as_of_date = ?",
-            (price_date,),
-        )
-    }
-    try:
-        covered |= {
-            str(r[0])
-            for r in conn.execute(
-                "SELECT ticker FROM yolo_run_events WHERE timeframe = 'daily' "
-                "AND as_of_date = ? AND status IN ('ok', 'skipped')",
-                (price_date,),
-            )
-        }
-    except sqlite3.OperationalError:
-        pass  # events table absent: pattern rows are the only coverage evidence
-    return len(expected & covered) / len(expected) >= YOLO_MIN_DAILY_COVERAGE
-
-
 def fetch_report_payload(
     db_path: Path,
     run_log: Path,
@@ -1642,29 +1602,20 @@ def fetch_report_payload(
             payload["signals"]["tonight_key_changes"] = []
 
         # Basic health guardrails.
-        price_age = payload["freshness"]["price_age_days"]
-        fund_age  = payload["freshness"]["fund_age_hours"]
-        yolo_as_of = str(payload["latest_data"].get("yolo_as_of_date") or "")[:10]
-        price_date = str(payload["latest_data"].get("price_date") or "")[:10]
-        if price_age is None:
+        freshness = assess_data_freshness(
+            conn, now, yolo_excluded_tickers=_price_contract_excluded(payload["signals"])
+        )
+        if freshness.price_missing:
             payload["warnings"].append("price_data_missing")
-        elif isinstance(price_age, (int, float)) and price_age > 3:
+        elif freshness.price_stale:
             payload["warnings"].append("price_data_stale")
-        if fund_age is None:
+        if freshness.fund_missing:
             payload["warnings"].append("fundamentals_missing")
-        elif isinstance(fund_age, (int, float)) and fund_age > 48:
+        elif freshness.fund_stale:
             payload["warnings"].append("fundamentals_stale")
-        # YOLO only writes rows for tickers with a new candle, so detected_ts age
-        # grows over weekends. Current means daily patterns reach the latest bar
-        # date and cover most of the tickers that have that bar.
-        if not yolo_as_of:
+        if freshness.yolo_missing:
             payload["warnings"].append("yolo_data_missing")
-        elif price_date and (
-            yolo_as_of < price_date
-            or not _yolo_daily_coverage_ok(
-                conn, price_date, _price_contract_excluded(payload["signals"])
-            )
-        ):
+        elif freshness.yolo_stale:
             payload["warnings"].append("yolo_data_stale")
 
         payload["risk_filters"] = build_no_trade_conditions(payload)
