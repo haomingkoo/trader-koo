@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { SetupRow } from "../../api/types";
+import type { SetupRow, SetupSecEvents } from "../../api/types";
 import Badge from "../ui/Badge";
 import { tierVariant } from "../ui/badgeUtils";
 import { biasVariant } from "./reportShared";
 import {
   buildSetupQualityView,
+  presentCompanyFilings,
   summarizeSharedSetupFields,
   type DebateData,
   type SetupQualityItem,
@@ -146,12 +147,48 @@ function DebateVisualization({ debate }: { debate: DebateData }) {
   );
 }
 
+function CompanyFilings({ ticker, events }: { ticker: string; events?: SetupSecEvents }) {
+  const view = presentCompanyFilings(ticker, events);
+  if (!view) return null;
+  const { message, filings } = view;
+
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">
+        Company filings (SEC 8-K)
+      </div>
+      {message ? (
+        <p className="mt-2 text-xs text-[var(--muted)]">{message}</p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {filings.map((filing) => (
+            <li key={filing.url} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+              <span className="tabular-nums text-[var(--muted)]">{filing.filed_date}</span>
+              <span className="text-[var(--text)]">{filing.items.join(", ")}</span>
+              {filing.form !== "8-K" && <span className="text-[var(--muted)]">({filing.form})</span>}
+              <a
+                href={filing.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[var(--accent)] underline-offset-2 hover:underline"
+              >
+                Read filing
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SetupTableRow({
   item,
   columns,
   isExpanded,
   isHighlighted,
   onToggle,
+  secEvents,
 }: {
   item: SetupQualityItem;
   columns: Array<{
@@ -163,6 +200,7 @@ function SetupTableRow({
   isExpanded: boolean;
   isHighlighted: boolean;
   onToggle: () => void;
+  secEvents?: SetupSecEvents;
 }) {
   const { row, debate } = item;
 
@@ -236,6 +274,8 @@ function SetupTableRow({
                 </div>
               </div>
 
+              <CompanyFilings ticker={item.ticker} events={secEvents} />
+
               <div className="flex flex-wrap gap-2">
                 {row.earnings_within_5d && (
                   <Badge variant="amber">
@@ -278,10 +318,12 @@ export default function SetupQualitySection({
   rows,
   debateMap,
   activeTicker,
+  secEvents,
 }: {
   rows: SetupRow[];
   debateMap: Map<string, DebateData>;
   activeTicker: string;
+  secEvents?: SetupSecEvents;
 }) {
   const [sortCol, setSortCol] = useState<string>("score");
   const [sortAsc, setSortAsc] = useState(false);
@@ -607,6 +649,7 @@ export default function SetupQualitySection({
                         <strong className="text-[var(--text)]">Technical:</strong>{" "}
                         {row.technical_read ?? "\u2014"}
                       </div>
+                      <CompanyFilings ticker={ticker} events={secEvents} />
                       {debate ? (
                         <DebateVisualization debate={debate} />
                       ) : (
@@ -659,6 +702,7 @@ export default function SetupQualitySection({
                       isExpanded={isExpanded}
                       isHighlighted={item.ticker === activeTicker}
                       onToggle={() => setExpandedTicker(isExpanded ? null : item.ticker)}
+                      secEvents={secEvents}
                     />
                   );
                 })}

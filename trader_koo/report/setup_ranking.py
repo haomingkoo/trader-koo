@@ -31,6 +31,7 @@ from trader_koo.report.setup_scoring import (
     _yolo_pattern_bias,
 )
 from trader_koo.report.suggestions import build_suggestions
+from trader_koo.sec_events import build_setup_sec_events
 from trader_koo.report.utils import _clamp, _setup_tier
 
 LOG = logging.getLogger(__name__)
@@ -376,6 +377,7 @@ def rerank_with_candles(
 
     signals["setup_quality_all"] = setup_rows
     signals["setup_quality_top"] = setup_rows[:40]
+    signals["setup_sec_events"] = build_setup_sec_events([r.get("ticker") for r in setup_rows], as_of_date=as_of_date)
     signals["suggestions"] = build_suggestions(signals["setup_quality_top"])
     signals["watchlist_candidates"] = [
         {
@@ -450,8 +452,6 @@ def rerank_with_candles(
                 "resistance_level",
                 "pct_to_support",
                 "pct_to_resistance",
-                "trend_state",
-                "level_context",
                 "candle_pattern",
                 "candle_bias",
                 "candle_confidence",

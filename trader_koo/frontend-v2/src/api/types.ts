@@ -366,6 +366,27 @@ export interface ReportSignals {
   sector_heatmap?: SectorHeatmapRow[];
   green_barrier_hits?: GreenBarrierHit[];
   green_barrier_coverage?: GreenBarrierCoverage;
+  setup_sec_events?: SetupSecEvents;
+}
+
+export interface SecFiling {
+  form: string;
+  filed_date: string;
+  accepted_at: string;
+  items: string[];
+  url: string;
+}
+
+export interface SetupSecEvents {
+  enabled: boolean;
+  available: boolean;
+  source: string;
+  lookback_days: number;
+  cutoff?: string;
+  tickers: Record<string, SecFiling[]>;
+  unmapped: string[];
+  errors: Record<string, string>;
+  error?: string;
 }
 
 export interface GreenBarrierHit {

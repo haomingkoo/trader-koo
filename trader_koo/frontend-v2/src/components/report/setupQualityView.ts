@@ -1,7 +1,7 @@
-import type { ChartCommentary, SetupRow } from "../../api/types";
+import type { ChartCommentary, SecFiling, SetupRow, SetupSecEvents } from "../../api/types";
 import type { BadgeVariant } from "../ui/Badge";
 import { formatReportNumber } from "./reportShared.ts";
-import { shortSetupReason } from "./reportText.ts";
+import { isIndexTicker, shortSetupReason } from "./reportText.ts";
 
 export type DebateData = NonNullable<ChartCommentary["debate_v1"]>;
 
@@ -193,4 +193,24 @@ export function buildSetupQualityView(
       return String(aValue ?? "").localeCompare(String(bValue ?? "")) * direction;
     })
     .map((row) => presentSetup(row, debateMap, shared));
+}
+
+/** What the Company filings panel shows for one setup, or null to hide it. */
+export function presentCompanyFilings(
+  ticker: string,
+  events: SetupSecEvents | undefined,
+): null | { message: string | null; filings: SecFiling[] } {
+  if (!events?.enabled || isIndexTicker(ticker)) return null;
+  const filings = events.tickers?.[ticker];
+  if (events.error || events.errors?.[ticker]) {
+    return { message: "SEC filings could not be loaded for this report.", filings: [] };
+  }
+  if (events.unmapped?.includes(ticker)) {
+    return { message: "No SEC filer matches this ticker (ETFs and some foreign listings have none).", filings: [] };
+  }
+  if (!filings) return null; // outside the setups checked this run
+  if (filings.length === 0) {
+    return { message: `No 8-K filings in the ${events.lookback_days} days before this report.`, filings: [] };
+  }
+  return { message: null, filings };
 }
