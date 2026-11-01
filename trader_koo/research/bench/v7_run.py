@@ -12,17 +12,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 
-from . import ledger
+from . import trial
 from .data import load_market
-from .v3_run import sealed_boundary
 from .v7_rules import RULES, TRADING_DAYS, Inputs, _known_daily, h11_vote
 
 FAMILY = "v7"
+CANDIDATE = "v7_regime_exposure"
 DEV_START = "2011-01-03"
 COST_BPS = 10.0
 STRESS_BPS = 20.0
@@ -127,7 +126,8 @@ def evaluate(inp: Inputs, key: str, e: np.ndarray, spy: dict, seed: int, lo: int
 
 
 def run_v7(db: str, ledger_path: str | Path) -> dict:
-    boundary = sealed_boundary(ledger_path)
+    t = trial.start(ledger_path, trial.READ_ONLY)
+    boundary = t.boundary
     inp = load_inputs(db, boundary)
     lo = int(np.searchsorted(inp.dates, DEV_START))
     raw = {k: fn(inp) for k, fn in RULES.items()}
@@ -136,9 +136,9 @@ def run_v7(db: str, ledger_path: str | Path) -> dict:
     exp["H11"] = h11_vote(raw)
     config = {"family": FAMILY, "boundary": boundary, "first_session": inp.dates[lo], "last_session": inp.dates[-1],
               "cost_bps": COST_BPS, "stress_bps": STRESS_BPS, "n_controls": N_CONTROLS, "min_shift": MIN_SHIFT}
-    seed = ledger.seed_from_config(config)
+    t.configure(CANDIDATE, config)
     spy = stats(returns(inp, np.ones(len(inp.dates)), COST_BPS)[lo:], inp.rf_daily[lo:])
-    results = {k: evaluate(inp, k, e, spy, ledger.seed_from_config({**config, "rule": k}), lo)
+    results = {k: evaluate(inp, k, e, spy, t.seed_for(k, field="rule"), lo)
                for k, e in exp.items()}
     for k, v in missing.items():
         results[k]["days_without_value_held_at_1"] = v
@@ -146,13 +146,8 @@ def run_v7(db: str, ledger_path: str | Path) -> dict:
                    "max_drawdown": round(r["strategy"]["max_drawdown"], DIGITS), "control_pct": r["measures"]["control_pct"],
                    "time_in_market": round(r["time_in_market"], DIGITS), "score": r["score"], "verdict": r["verdict"]}
                for k, r in results.items()}
-    base = {"candidate": "v7_regime_exposure", "config": config, "seed": seed, "code_version": ledger.code_version(),
-            "timestamp": datetime.now(timezone.utc).isoformat()}
-    trial = ledger.short_id(base)
-    ledger.append(ledger_path, {**base, "event": "exposure_run", "trial_id": trial, "family": FAMILY,
-                                "sealed_opened": False, "sealed_boundary": boundary, "spy": spy,
-                                "params_hash": ledger.sha(config), "summary": summary})
-    return {"trial_id": trial, "config": config, "spy": spy, "results": results}
+    trial_id = t.record("exposure_run", summary, params=config, family=FAMILY, spy=spy)
+    return {"trial_id": trial_id, "config": config, "spy": spy, "results": results}
 
 
 def render(out: dict) -> str:
