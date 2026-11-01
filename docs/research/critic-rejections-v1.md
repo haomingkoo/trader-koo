@@ -11,6 +11,12 @@ approved, using each decision's own stop and target. It has no pass rule and
 cannot change policy. Any change to critic thresholds needs a new registered
 policy version, as `decisions.md` already requires.
 
+Amendment 1, 2026-11-01, before the evaluator first ran on any data: rule 4
+compared the report-date close with the reference price. For a filled
+decision the reference is the next open plus slippage, so an overnight gap
+above 2% would have been excluded as a basis mismatch. Rule 4 now compares it
+with the report's own close.
+
 ## What was looked at before registering
 
 - The critic code (`trader_koo/paper_trade/critic.py`), the decision ledger
@@ -57,9 +63,10 @@ policy version, as `decisions.md` already requires.
    target < reference < stop; otherwise the row is excluded as a geometry
    mismatch.
 4. **Basis check.** The `price_daily` close on the report date must be within
-   2% of the reference close, or the row is excluded as a basis mismatch. This
-   catches a split that rescaled history after the stop was stored. The
-   report-date bar is used only for this check, never for the outcome.
+   2% of `inputs_json.candidate.close`, the close the report saw, or the row
+   is excluded as a basis mismatch. This catches a split that rescaled history
+   after the stop was stored. The report-date bar is used only for this check,
+   never for the outcome.
 5. **Entry.** The open of the scheduled NYSE session after the report date
    (`chronology.next_scheduled_session_after`). If the ticker has no bar on
    that date the row is excluded as having no entry bar. No later date is
