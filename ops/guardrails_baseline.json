@@ -51,7 +51,7 @@
   },
   "trader_koo/backend/routers/admin/email_admin.py": {
    "bare_numbers": 3,
-   "lines": 222
+   "lines": 168
   },
   "trader_koo/backend/routers/admin/maintenance.py": {
    "bare_numbers": 12,
@@ -94,8 +94,8 @@
    "lines": 223
   },
   "trader_koo/backend/routers/email.py": {
-   "bare_numbers": 14,
-   "lines": 170
+   "bare_numbers": 5,
+   "lines": 46
   },
   "trader_koo/backend/routers/opportunities.py": {
    "bare_numbers": 11,
@@ -370,8 +370,8 @@
    "lines": 542
   },
   "trader_koo/report/email_dispatch.py": {
-   "bare_numbers": 12,
-   "lines": 262
+   "bare_numbers": 3,
+   "lines": 136
   },
   "trader_koo/report/generator.py": {
    "bare_numbers": 117,

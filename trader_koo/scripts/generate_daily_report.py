@@ -16,12 +16,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from trader_koo.report.email_dispatch import (
-    _email_transport,
-    _resend_cfg,
-    _smtp_cfg,
-    send_report_email,
-)
+from trader_koo.email_delivery import load_email_config
+from trader_koo.report.email_dispatch import send_report_email
 from trader_koo.report.generator import fetch_report_payload
 from trader_koo.report.runs import (
     admit_published_report,
@@ -178,14 +174,7 @@ def main() -> None:
 
         if args.send_email:
             try:
-                transport = _email_transport()
-                smtp_cfg = _smtp_cfg()
-                resend_cfg = _resend_cfg()
-                email_meta["to"] = (
-                    resend_cfg.get("to_email")
-                    if transport == "resend"
-                    else smtp_cfg.get("to_email")
-                )
+                email_meta["to"] = ", ".join(load_email_config().recipients())
                 email_summary = send_report_email(
                     report,
                     Path(str(out_paths["md_path"])).read_text(encoding="utf-8"),

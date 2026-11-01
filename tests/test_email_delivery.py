@@ -106,7 +106,7 @@ def test_missing_smtp_pass_is_not_configured_everywhere(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="TRADER_KOO_SMTP_PASS"):
         email_dispatch.send_report_email(
-            _report(), "# md", db_path=tmp_path / "e.db", transport=fake
+            _report(), "# md", db_path=tmp_path / "e.db", email_transport=fake
         )
     assert fake.sent == []
 
@@ -124,7 +124,7 @@ def test_recipient_resolution_identical_for_nightly_and_admin(monkeypatch, tmp_p
 
     nightly = FakeTransport()
     email_dispatch.send_report_email(
-        _report(), "# md", db_path=tmp_path / "e.db", transport=nightly
+        _report(), "# md", db_path=tmp_path / "e.db", email_transport=nightly
     )
     assert [r for r, _ in nightly.sent] == expected
 
@@ -163,7 +163,7 @@ def test_nightly_message_contents(monkeypatch, tmp_path):
     _smtp_env(monkeypatch)
     fake = FakeTransport()
     summary = email_dispatch.send_report_email(
-        _report(), "# Daily", db_path=tmp_path / "e.db", transport=fake
+        _report(), "# Daily", db_path=tmp_path / "e.db", email_transport=fake
     )
     assert summary["sent_count"] == 1
     assert summary["transport"] == "smtp"
