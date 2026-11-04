@@ -780,11 +780,11 @@ def main() -> None:
                 int(prune_info.get("deleted_rows") or 0),
                 int(prune_info.get("deleted_event_rows") or 0),
             )
-
     finally:
         conn.close()
 
     LOG.info("Done run_id=%s — ok=%d failed=%d skipped=%d", run_id, total_ok, total_failed, total_skipped)
+    sys.exit(1 if total_failed and not total_ok else 0)  # every ticker failed: not a successful run
 
 
 if __name__ == "__main__":
