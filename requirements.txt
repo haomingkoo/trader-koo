@@ -7,6 +7,8 @@ fastapi==0.135.3
 uvicorn==0.44.0
 apscheduler==3.11.2
 mplfinance==0.12.10b0
+# mplfinance imports six without declaring it; python-dateutil 4 no longer pulls it in.
+six==1.17.0
 ultralytics==8.0.239
 huggingface_hub==2.3.0
 opencv-python-headless==4.10.0.84
