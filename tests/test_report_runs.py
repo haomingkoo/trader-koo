@@ -1921,3 +1921,27 @@ def test_history_verifies_only_the_runs_it_returns(tmp_path: Path, monkeypatch):
     history = daily_report_history(report_dir, limit=1, registry_conn=conn)
     assert [row["file"] for row in history] == [sorted(report_dir.glob("daily_report_*_*.json"))[-1].name]
     assert len(checks) == 1
+
+
+def test_degraded_report_refusal_names_the_blocking_warnings(tmp_path: Path):
+    conn = sqlite3.connect(tmp_path / "report.db")
+    report = _report("NAMED")
+    report["ok"] = False
+    report["warnings"] = ["yolo_data_stale"]
+    report["generation_warnings"] = ["setup_quality_scoring_failed"]
+    run_id = start_report_run(
+        conn, report_kind="daily", configuration={}, code_version=TEST_SHA
+    )
+    paths = write_reports(report, tmp_path / "reports", run_id=run_id, publish_latest=False)
+    artifact = Path(paths["json_path"])
+    with pytest.raises(ValueError) as refusal:
+        complete_report_run(
+            conn,
+            run_id=run_id,
+            report=report,
+            artifact_path=artifact,
+            markdown_path=Path(paths["md_path"]),
+            content_hash=sha256_file(artifact),
+        )
+    assert "yolo_data_stale" in str(refusal.value)
+    assert "setup_quality_scoring_failed" in str(refusal.value)
