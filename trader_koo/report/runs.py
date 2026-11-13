@@ -574,10 +574,21 @@ def _load_artifact_bytes(data: bytes) -> dict[str, Any]:
 
 
 def _assert_publishable_report(report: dict[str, Any]) -> None:
+    blocking = [
+        str(item)
+        for key in ("warnings", "generation_warnings")
+        if isinstance(report.get(key), list)
+        for item in report[key]
+    ]
+    named = ", ".join(dict.fromkeys(blocking)) or "none recorded"
     if report.get("ok") is not True:
-        raise ValueError("degraded report cannot be completed or published (ok must be true)")
-    if any(isinstance(report.get(key), list) and report.get(key) for key in ("warnings", "generation_warnings")):
-        raise ValueError("partial-quality report warnings prevent publication")
+        raise ValueError(
+            f"degraded report cannot be completed or published (ok must be true); warnings: {named}"
+        )
+    if blocking:
+        raise ValueError(
+            f"partial-quality report warnings prevent publication; warnings: {named}"
+        )
 
 
 def complete_report_run(
