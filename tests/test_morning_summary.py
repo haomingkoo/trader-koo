@@ -27,9 +27,12 @@ from trader_koo.notifications.morning_summary import (
     _fetch_paper_trade_stats,
     _fmt_money,
     _hours_to_market_open,
+    _report_staleness,
     _vix_label,
     generate_morning_summary,
+    send_morning_summary,
 )
+from trader_koo.report.utils import expected_price_date
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +475,7 @@ class TestGenerateMorningSummary:
         report_dir = tmp_path / "reports"
         report_dir.mkdir()
         report = {
+            "latest_data": {"price_date": expected_price_date().isoformat()},
             "signals": {
                 "suggestions": {
                     "items": [
@@ -533,3 +537,119 @@ class TestGenerateMorningSummary:
         # Should still produce a valid message without crashing
         assert "Morning Briefing" in message
         assert "Paper Trades" in message
+
+
+# ---------------------------------------------------------------------------
+# Report staleness guard
+# ---------------------------------------------------------------------------
+
+# 13 Nov 2026 08:00 SGT: the incident where 30 Oct setups went out as "today".
+_INCIDENT_NOW = dt.datetime(2026, 11, 13, 0, 0, tzinfo=dt.timezone.utc)
+
+
+def _report_for(price_date: str) -> dict[str, Any]:
+    return {
+        "generated_ts": f"{price_date}T22:40:00Z",
+        "latest_data": {"price_date": price_date},
+        "signals": {
+            "setup_quality_top": [
+                {"ticker": "STALE", "setup_tier": "A", "signal_bias": "bullish"}
+            ],
+            "suggestions": {
+                "items": [
+                    {"ticker": "STALE", "action": "Paper Long", "conviction": "High"}
+                ]
+            },
+            "green_barrier_hits": [
+                {"ticker": "STALE", "timeframe": "monthly", "value": -100.0, "asof": price_date}
+            ],
+        },
+    }
+
+
+class TestReportStaleness:
+    def test_report_weeks_old_is_stale_with_actual_date(self) -> None:
+        notice = _report_staleness(_report_for("2026-10-30"), _INCIDENT_NOW)
+        assert notice is not None
+        assert "2026-10-30" in notice
+        assert "stale" in notice.lower()
+
+    def test_report_for_expected_session_is_fresh(self) -> None:
+        # At 00:00 UTC Fri 13 Nov the nightly run for Thu 12 Nov may still be
+        # in flight, so Wed 11 Nov is the newest session that is owed.
+        assert _report_staleness(_report_for("2026-11-11"), _INCIDENT_NOW) is None
+        assert _report_staleness(_report_for("2026-11-12"), _INCIDENT_NOW) is None
+
+    def test_friday_report_is_fresh_on_monday_morning(self) -> None:
+        monday_sgt = dt.datetime(2026, 11, 16, 0, 0, tzinfo=dt.timezone.utc)
+        assert _report_staleness(_report_for("2026-11-13"), monday_sgt) is None
+
+    def test_one_session_behind_owed_session_is_stale(self) -> None:
+        tue_sgt = dt.datetime(2026, 11, 18, 0, 0, tzinfo=dt.timezone.utc)
+        # Owed: Mon 16 Nov. A Fri 13 Nov report is a session behind.
+        notice = _report_staleness(_report_for("2026-11-13"), tue_sgt)
+        assert notice is not None
+        assert "2026-11-13" in notice
+
+    def test_missing_report_is_explicit(self) -> None:
+        notice = _report_staleness({}, _INCIDENT_NOW)
+        assert notice is not None
+        assert "no published daily report" in notice.lower()
+
+    def test_report_without_market_date_is_explicit(self) -> None:
+        report = _report_for("2026-11-12")
+        report["latest_data"] = {}
+        notice = _report_staleness(report, _INCIDENT_NOW)
+        assert notice is not None
+        assert "market date" in notice.lower()
+
+    @patch("trader_koo.notifications.morning_summary._fetch_fear_greed", return_value=None)
+    @patch("trader_koo.notifications.morning_summary._fetch_economic_events_today", return_value=[])
+    def test_stale_report_setups_are_suppressed_with_banner(
+        self,
+        mock_econ: MagicMock,
+        mock_fg: MagicMock,
+        db_path: Path,
+        tmp_path: Path,
+    ) -> None:
+        message = generate_morning_summary(
+            db_path, tmp_path, report=_report_for("2026-10-30")
+        )
+        assert "Stale report" in message
+        assert "2026-10-30" in message
+        assert "STALE" not in message
+        assert "Setups Today" not in message
+        assert "Top Research Suggestions" not in message
+        assert "Green Barrier Current Conditions" not in message
+        # Live sections still render.
+        assert "Market Snapshot" in message
+        assert "Paper Trades" in message
+
+    @patch("trader_koo.notifications.morning_summary._fetch_fear_greed", return_value=None)
+    @patch("trader_koo.notifications.morning_summary._fetch_economic_events_today", return_value=[])
+    def test_fresh_report_has_no_stale_banner(
+        self,
+        mock_econ: MagicMock,
+        mock_fg: MagicMock,
+        db_path: Path,
+        tmp_path: Path,
+    ) -> None:
+        fresh = expected_price_date().isoformat()
+        message = generate_morning_summary(db_path, tmp_path, report=_report_for(fresh))
+        assert "Stale report" not in message
+        assert "STALE" in message
+
+    def test_send_skips_charts_for_stale_report(self, db_path: Path, tmp_path: Path) -> None:
+        with (
+            patch("trader_koo.notifications.morning_summary.is_configured", return_value=True),
+            patch("trader_koo.notifications.morning_summary.generate_morning_summary", return_value="brief"),
+            patch("trader_koo.notifications.morning_summary.send_message", return_value=True) as send_text,
+            patch("trader_koo.notifications.morning_summary.send_photo", return_value=True) as send_image,
+            patch(
+                "trader_koo.backend.services.report_loader.latest_daily_report_json",
+                return_value=(tmp_path / "daily_report_latest.json", _report_for("2026-10-30")),
+            ),
+        ):
+            assert send_morning_summary(db_path, tmp_path) is True
+        send_text.assert_called_once_with("brief")
+        send_image.assert_not_called()
