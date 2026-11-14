@@ -25,7 +25,7 @@ from trader_koo.backend.services.pipeline import (
     read_active_pipeline_run,
     reserve_pipeline_run,
 )
-from trader_koo.backend.services.run_log import stage_results
+from trader_koo.backend.services.run_log import StageResults, run_error_message, stage_results
 
 UTC = dt.timezone.utc
 NOW = dt.datetime(2026, 10, 23, 8, 44, tzinfo=UTC)
@@ -345,6 +345,20 @@ def test_stage_results_from_one_parser(mode, returncode, tail, expected) -> None
     results = stage_results(mode, returncode, lambda: tail)
 
     assert (results.ingest_ok, results.yolo_ok, results.report_ok) == expected
+
+
+@pytest.mark.parametrize(
+    ("mode", "returncode", "stages", "expected"),
+    [
+        ("full", 0, StageResults(True, True, True), None),
+        # The six incident after the YOLO threshold: YOLO fails, the report then refuses.
+        ("full", 1, StageResults(True, False, False), "daily_update.sh rc=1; failed stages: yolo, report"),
+        ("yolo", 1, StageResults(False, False, False), "daily_update.sh rc=1; failed stages: yolo, report"),
+        ("report", 2, StageResults(False, False, False), "daily_update.sh rc=2; failed stages: report"),
+    ],
+)
+def test_run_error_message_names_failed_stages(mode, returncode, stages, expected) -> None:
+    assert run_error_message(mode, returncode, stages) == expected
 
 
 # ---------------------------------------------------------------------------

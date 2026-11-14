@@ -38,6 +38,7 @@ from trader_koo.backend.services.run_log import (
     LOG_DIR,
     RUN_LOG_PATH,
     append_run_log,
+    run_error_message,
     stage_results,
 )
 from trader_koo.report.utils import expected_price_date
@@ -371,7 +372,7 @@ def _run_daily_update_unlocked(
         finish_pipeline_run(
             pipeline_run_id,
             status="ok" if result.returncode == 0 else "failed",
-            error_message=f"daily_update.sh rc={result.returncode}" if result.returncode != 0 else None,
+            error_message=run_error_message(mode_norm, result.returncode, stages),
             ingest_ok=stages.ingest_ok,
             yolo_ok=stages.yolo_ok,
             report_ok=stages.report_ok,

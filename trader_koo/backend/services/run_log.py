@@ -133,3 +133,16 @@ def stage_results(
     yolo_ok = ingest_ok and yolo_ok
     report_ok = yolo_ok and run_report and _stage_done_ok(block, REPORT_DONE_MARKER)
     return StageResults(ingest_ok, yolo_ok, report_ok)
+
+
+def run_error_message(mode: str, returncode: int, stages: StageResults) -> str | None:
+    """The pipeline_runs error for a failed run, naming the stages that failed."""
+    if returncode == 0:
+        return None
+    ran = (
+        ("ingest", mode == "full", stages.ingest_ok),
+        ("yolo", mode in ("full", "yolo"), stages.yolo_ok),
+        ("report", mode in ("full", "yolo", "report"), stages.report_ok),
+    )
+    failed = [name for name, did_run, ok in ran if did_run and not ok]
+    return f"daily_update.sh rc={returncode}; failed stages: {', '.join(failed) or 'none recorded'}"
