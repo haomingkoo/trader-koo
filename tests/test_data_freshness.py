@@ -10,6 +10,7 @@ from tests.conftest import _create_test_db
 from trader_koo.backend.routers import system
 from trader_koo.backend.services.pipeline import invalidate_status_cache
 from trader_koo.db.price_contract import record_price_series_revision
+from trader_koo.notifications.market_monitor import ensure_polymarket_schema
 from trader_koo.report.freshness import assess_data_freshness
 from trader_koo.scripts.run_yolo_patterns import ensure_yolo_run_events_table, ensure_yolo_table
 
@@ -30,8 +31,17 @@ def _db(
     yolo_tickers: tuple[str, ...] | None = None,
     sealed: bool = True,
     yolo_tables: bool = True,
+    polymarket_age_minutes: float | None = 5.0,
 ) -> sqlite3.Connection:
     conn = _create_test_db()
+    ensure_polymarket_schema(conn)
+    if polymarket_age_minutes is not None:
+        conn.execute(
+            "INSERT INTO polymarket_snapshots "
+            "(event_slug,event_title,market_question,probability,volume,snapshot_ts) "
+            "VALUES ('fed','Fed?','Cut?',40.0,1000.0,?)",
+            ((NOW - dt.timedelta(minutes=polymarket_age_minutes)).replace(microsecond=0).isoformat(),),
+        )
     for ticker in tickers:
         conn.execute(
             "INSERT INTO price_daily (ticker,date,open,high,low,close,volume,data_source) "
@@ -180,3 +190,27 @@ def test_status_with_fresh_sources_has_no_freshness_warnings(tmp_path: Path) -> 
     )
     assert payload["freshness"]["price_age_days"] < 1
     assert payload["freshness"]["fund_age_hours"] == 1.0
+
+
+def test_status_warns_when_polymarket_archive_is_older_than_30_minutes(tmp_path: Path) -> None:
+    payload = _status(_db(polymarket_age_minutes=45), tmp_path)
+
+    assert payload["operational_warnings"] == ["polymarket_snapshots stale"]
+    assert "polymarket_snapshots stale" in payload["warnings"]
+    assert payload["ok"] is False
+    assert payload["freshness"]["polymarket_snapshot_age_minutes"] == 45.0
+    assert payload["latest_data"]["polymarket_snapshot"] == "2026-10-30T20:15:00+00:00"
+
+
+def test_status_warns_when_polymarket_archive_is_empty(tmp_path: Path) -> None:
+    payload = _status(_db(polymarket_age_minutes=None), tmp_path)
+
+    assert payload["operational_warnings"] == ["polymarket_snapshots stale"]
+    assert payload["freshness"]["polymarket_snapshot_age_minutes"] is None
+
+
+def test_status_accepts_a_recent_polymarket_archive(tmp_path: Path) -> None:
+    payload = _status(_db(polymarket_age_minutes=25), tmp_path)
+
+    assert "polymarket_snapshots stale" not in payload["operational_warnings"]
+    assert payload["freshness"]["polymarket_snapshot_age_minutes"] == 25.0

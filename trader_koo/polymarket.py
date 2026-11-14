@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import gzip
 import json
 import logging
 import threading
@@ -23,6 +24,23 @@ _cache_ttl_sec = 3600  # 1 hour
 POLYMARKET_TOP_N = 50  # one ranked list serves every request limit; the archival scheduler refreshes it
 
 _POLYMARKET_GAMMA = "https://gamma-api.polymarket.com"
+# Gamma serves /events pages with limit above 50 compressed only; a request
+# without Accept-Encoding: gzip gets HTTP 406 {"error": "gzip_required"}.
+_EVENTS_PAGE_SIZE = 100
+# Snapshots run every 5 minutes; six missed runs is an outage, not jitter.
+POLYMARKET_ARCHIVE_STALE_AFTER = dt.timedelta(minutes=30)
+_SECONDS_PER_MINUTE = 60.0
+
+
+def _read_json_body(resp: Any) -> Any:
+    """Decode a Gamma response body according to its Content-Encoding."""
+    body = resp.read()
+    encoding = str(resp.headers.get("Content-Encoding") or "identity").strip().lower()
+    if encoding == "gzip":
+        body = gzip.decompress(body)
+    elif encoding != "identity":
+        raise ValueError(f"unsupported Polymarket Content-Encoding: {encoding}")
+    return json.loads(body.decode("utf-8"))
 
 
 _POLYMARKET_TRADING_TAGS = frozenset({
@@ -175,7 +193,7 @@ def fetch_polymarket_events(
 
     try:
         raw_events: list[dict[str, Any]] = []
-        page_size = 100
+        page_size = _EVENTS_PAGE_SIZE
         for offset in (0, page_size):
             query = urllib.parse.urlencode({
                 "limit": page_size,
@@ -187,10 +205,14 @@ def fetch_polymarket_events(
             })
             req = urllib.request.Request(
                 f"{_POLYMARKET_GAMMA}/events?{query}",
-                headers={"User-Agent": "trader-koo/1.0", "Accept": "application/json"},
+                headers={
+                    "User-Agent": "trader-koo/1.0",
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                },
             )
             with urllib.request.urlopen(req, timeout=60) as resp:
-                page = json.loads(resp.read().decode("utf-8"))
+                page = _read_json_body(resp)
             if not isinstance(page, list):
                 raise ValueError("Polymarket events response is not a list")
             raw_events.extend(event for event in page if isinstance(event, dict))
@@ -292,3 +314,20 @@ def polymarket_fetch_status() -> dict[str, Any]:
     """Return non-secret source freshness for the latest fetch attempt."""
     with _cache_lock:
         return dict(_polymarket_fetch_status)
+
+
+def polymarket_archive_freshness(conn: Any, now: dt.datetime) -> dict[str, Any]:
+    """Age of the newest archived snapshot. A missing or empty archive is stale."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='polymarket_snapshots'"
+    ).fetchone()
+    latest = conn.execute("SELECT MAX(snapshot_ts) FROM polymarket_snapshots").fetchone()[0] if exists else None
+    age: dt.timedelta | None = None
+    if latest:
+        stamp = dt.datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
+        age = now - (stamp if stamp.tzinfo else stamp.replace(tzinfo=dt.timezone.utc))
+    return {
+        "latest_snapshot_ts": latest,
+        "age_minutes": None if age is None else round(age.total_seconds() / _SECONDS_PER_MINUTE, 2),
+        "stale": age is None or age > POLYMARKET_ARCHIVE_STALE_AFTER,
+    }

@@ -25,7 +25,7 @@ from trader_koo.backend.services.pipeline import (
 )
 from trader_koo.backend.services.report_loader import is_report_fresh
 from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
-from trader_koo.polymarket import POLYMARKET_TOP_N
+from trader_koo.polymarket import POLYMARKET_TOP_N, polymarket_archive_freshness
 from trader_koo.report.freshness import assess_data_freshness, unsealed_price_tickers
 from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
@@ -483,6 +483,7 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
             conn, now, yolo_excluded_tickers=unsealed_price_tickers(conn)
         )
         opt_age_hours = hours_since(latest_opt_snapshot, now)
+        polymarket_archive = polymarket_archive_freshness(conn, now)
 
         price_basis = _persisted_price_revision_summary(
             conn,
@@ -519,6 +520,8 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
             operational_warnings.append("yolo_patterns stale")
         if not report_fresh:
             operational_warnings.append("daily_report stale")
+        if polymarket_archive["stale"]:
+            operational_warnings.append("polymarket_snapshots stale")
         if not price_basis["cohort_available"]:
             research_warnings.append("current price cohort unavailable")
         elif price_basis["unresolved_tickers"]:
@@ -650,6 +653,7 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
                 "report_age_hours": None if report_age_hours is None else round(report_age_hours, 2),
                 "report_generated_ts": report_generated_ts_str,
                 "report_fresh": report_fresh,
+                "polymarket_snapshot_age_minutes": polymarket_archive["age_minutes"],
             },
             "counts": {
                 "tracked_tickers": counts["tracked_tickers"] if counts else 0,
@@ -663,6 +667,7 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
                 "price_date": data_freshness.price_date,
                 "fund_snapshot": data_freshness.fund_snapshot,
                 "options_snapshot": latest_opt_snapshot,
+                "polymarket_snapshot": polymarket_archive["latest_snapshot_ts"],
             },
         }
         response_payload = _sanitize_status_payload(payload, expose_internal=EXPOSE_STATUS_INTERNAL)

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from trader_koo.backend.routers import system
 from trader_koo.backend.services.pipeline import invalidate_status_cache
+from trader_koo.notifications.market_monitor import ensure_polymarket_schema
 from trader_koo.report.freshness import FreshnessVerdict
 
 # These tests pin price-basis readiness, so source freshness is held current.
@@ -25,6 +26,18 @@ def _status_dependencies():
         patch.object(system, "pipeline_status_snapshot", return_value={}),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
     )
+
+
+def _seed_current_polymarket_archive(conn: sqlite3.Connection) -> None:
+    """Hold the Polymarket archive current so it adds no operational warning."""
+    ensure_polymarket_schema(conn)
+    conn.execute(
+        "INSERT INTO polymarket_snapshots "
+        "(event_slug,event_title,market_question,probability,volume,snapshot_ts) "
+        "VALUES ('fed','Fed?','Cut?',40.0,1000.0,?)",
+        (dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),),
+    )
+    conn.commit()
 
 
 def _seed_ingest_cohort(
@@ -126,6 +139,7 @@ def test_retained_historical_symbol_does_not_inflate_current_cohort(
         VALUES ('UNRELATED', '2026-08-25', 10, 11, 9, 10.5, 1000)
         """
     )
+    _seed_current_polymarket_archive(seeded_conn)
     seeded_conn.commit()
     db_path = tmp_path / "status.db"
     db_path.touch()
@@ -282,6 +296,7 @@ def test_operational_failure_does_not_change_research_readiness(
     tmp_path: Path,
 ) -> None:
     _seed_ingest_cohort(seeded_conn, ["SPY"])
+    _seed_current_polymarket_archive(seeded_conn)
     db_path = tmp_path / "status.db"
     db_path.touch()
     invalidate_status_cache()
