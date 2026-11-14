@@ -24,6 +24,7 @@ from trader_koo.notifications.morning_summary import (
     _select_green_barrier_attachments,
     send_morning_summary,
 )
+from trader_koo.report.utils import expected_price_date
 
 
 def _make_price_db(path: Path) -> sqlite3.Connection:
@@ -135,6 +136,7 @@ def test_morning_summary_sends_native_photo_attachment(tmp_path: Path) -> None:
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
     report = {
+        "latest_data": {"price_date": expected_price_date().isoformat()},
         "signals": {
             "green_barrier_hits": [
                 {
@@ -403,6 +405,7 @@ def test_photo_failure_is_explicit_partial_without_text_retry(
     conn = _make_price_db(db_path)
     conn.close()
     report = {
+        "latest_data": {"price_date": expected_price_date().isoformat()},
         "signals": {
             "green_barrier_hits": [
                 {
