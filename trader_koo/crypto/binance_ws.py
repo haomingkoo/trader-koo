@@ -132,6 +132,11 @@ class BinanceWSClient:
             self._pending_bars.clear()
         return bars
 
+    def queue_bars_for_flush(self, bars: list[CryptoBar]) -> None:
+        """Hand bars (any interval) to the flush thread, including a refused batch."""
+        with self._lock:
+            self._pending_bars.extend(bars)
+
     def prepend_bars(self, symbol: str, bars: list[CryptoBar]) -> None:
         """Pre-fill the deque with historical bars loaded from DB.
 
