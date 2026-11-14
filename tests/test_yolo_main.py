@@ -30,6 +30,15 @@ def _db(tmp_path: Path) -> Path:
     return db
 
 
+def _exit_code() -> int:
+    """main()'s process exit status: it returns normally on success."""
+    try:
+        yolo.main()
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
 def _run(monkeypatch, *argv: str, ok: int = 1, failed: int = 0, model=None) -> SimpleNamespace:
     calls: list[dict] = []
     model = model or FakeModel()
@@ -44,9 +53,7 @@ def _run(monkeypatch, *argv: str, ok: int = 1, failed: int = 0, model=None) -> S
     monkeypatch.setattr(yolo, "_run_pass", fake_pass)
     monkeypatch.setattr(torch, "load", torch.load)  # main() patches torch.load; undo after the test
     monkeypatch.setattr(sys, "argv", ["run_yolo_patterns", *argv])
-    with pytest.raises(SystemExit) as exit_info:
-        yolo.main()
-    return SimpleNamespace(code=exit_info.value.code, calls=calls, model=model)
+    return SimpleNamespace(code=_exit_code(), calls=calls, model=model)
 
 
 @pytest.mark.parametrize(
@@ -57,7 +64,7 @@ def _run(monkeypatch, *argv: str, ok: int = 1, failed: int = 0, model=None) -> S
         (0, 0, 0),  # nothing needed processing
     ],
 )
-def test_exit_code_fails_a_run_where_every_ticker_failed(tmp_path, monkeypatch, ok, failed, code) -> None:
+def test_exit_code_fails_a_run_below_the_coverage_floor(tmp_path, monkeypatch, ok, failed, code) -> None:
     result = _run(monkeypatch, "--db-path", str(_db(tmp_path)), "--timeframe", "daily", ok=ok, failed=failed)
 
     assert result.code == code
@@ -67,10 +74,9 @@ def test_missing_database_exits_before_loading_the_model(tmp_path, monkeypatch) 
     monkeypatch.setattr(yolo, "load_hf_yolo", lambda: pytest.fail("model loaded without a database"))
     monkeypatch.setattr(sys, "argv", ["run_yolo_patterns", "--db-path", str(tmp_path / "missing.db")])
 
-    with pytest.raises(SystemExit) as exit_info:
-        yolo.main()
+    code = _exit_code()
 
-    assert exit_info.value.code == 1
+    assert code == 1
 
 
 def test_db_path_defaults_to_the_volume_database(monkeypatch, caplog) -> None:
@@ -80,8 +86,7 @@ def test_db_path_defaults_to_the_volume_database(monkeypatch, caplog) -> None:
     if Path("/data/trader_koo.db").exists():
         pytest.skip("a real volume database exists on this machine")
 
-    with pytest.raises(SystemExit):
-        yolo.main()
+    _exit_code()
 
     assert "DB not found at /data/trader_koo.db" in caplog.text
 
@@ -189,10 +194,9 @@ def test_model_load_failure_exits_non_zero(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(torch, "load", torch.load)
     monkeypatch.setattr(sys, "argv", ["run_yolo_patterns", "--db-path", str(_db(tmp_path))])
 
-    with pytest.raises(SystemExit) as exit_info:
-        yolo.main()
+    code = _exit_code()
 
-    assert exit_info.value.code == 1
+    assert code == 1
 
 
 def test_model_init_timeout_exits_non_zero_and_bounds_hub_downloads(tmp_path, monkeypatch) -> None:
@@ -204,10 +208,9 @@ def test_model_init_timeout_exits_non_zero_and_bounds_hub_downloads(tmp_path, mo
     ])
 
     started = time.monotonic()
-    with pytest.raises(SystemExit) as exit_info:
-        yolo.main()
+    code = _exit_code()
 
-    assert exit_info.value.code == 1
+    assert code == 1
     assert time.monotonic() - started < 4
     assert yolo.os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] == "1"
 
@@ -232,8 +235,7 @@ def test_legacy_weights_load_without_weights_only_unless_asked(tmp_path, monkeyp
 
     monkeypatch.setattr(yolo, "load_hf_yolo", load_model)
     monkeypatch.setattr(sys, "argv", ["run_yolo_patterns", "--db-path", str(_db(tmp_path)), "--timeframe", "daily"])
-    with pytest.raises(SystemExit):
-        yolo.main()
+    _exit_code()
 
     assert seen == [(("weights.pt",), {"weights_only": False}), (("weights.pt",), {"weights_only": True})]
 
@@ -243,22 +245,20 @@ def test_timeframe_must_be_daily_weekly_or_both(tmp_path, monkeypatch) -> None:
     assert [c["timeframe"] for c in result.calls] == ["daily", "weekly"]
 
     monkeypatch.setattr(sys, "argv", ["run_yolo_patterns", "--db-path", str(_db(tmp_path)), "--timeframe", "hourly"])
-    with pytest.raises(SystemExit) as exit_info:
-        yolo.main()
-    assert exit_info.value.code == 2
+    code = _exit_code()
+    assert code == 2
 
 
-def test_summary_totals_both_passes_and_exit_uses_the_totals(tmp_path, monkeypatch, caplog) -> None:
+def test_exit_verdict_uses_totals_across_both_passes(tmp_path, monkeypatch, caplog) -> None:
     per_pass = iter([(2, 1, 1), (0, 3, 4)])
     monkeypatch.setattr(yolo, "load_hf_yolo", FakeModel)
     monkeypatch.setattr(yolo, "_run_pass", lambda *a, **k: next(per_pass))
     monkeypatch.setattr(torch, "load", torch.load)
     monkeypatch.setattr(sys, "argv", ["run_yolo_patterns", "--db-path", str(_db(tmp_path)), "--run-id", "r1"])
 
-    with pytest.raises(SystemExit) as exit_info:
-        yolo.main()
+    code = _exit_code()
 
-    assert exit_info.value.code == 0  # the daily pass produced patterns
+    assert code == 1  # 2 of 6 attempted tickers is below the coverage floor
     assert "Done run_id=r1 — ok=2 failed=4 skipped=5" in caplog.text
 
 
