@@ -13,10 +13,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from trader_koo.backend.services.market_data import parse_iso_utc
+from trader_koo.report.freshness import ISO_DATE_LEN
 from trader_koo.report.utils import expected_price_date
 
+SECONDS_PER_MINUTE = 60
 # A full run normally takes about 25 minutes.
-PIPELINE_STUCK_MIN = max(30, int(os.getenv("TRADER_KOO_PIPELINE_STUCK_MIN", "90")))
+PIPELINE_STUCK_FLOOR_MIN = 30
+PIPELINE_STUCK_MIN = max(PIPELINE_STUCK_FLOOR_MIN, int(os.getenv("TRADER_KOO_PIPELINE_STUCK_MIN", "90")))
 # Ingest starts at 22:00 UTC and can run late; on top of INGEST_DUE_LAG.
 PRICE_BEHIND_GRACE = dt.timedelta(hours=2)
 HEALTHY_RUN_STATUSES = frozenset({"ok", "skipped"})
@@ -24,7 +27,7 @@ HEALTHY_RUN_STATUSES = frozenset({"ok", "skipped"})
 
 def _minutes_since(ts: Any, now: dt.datetime) -> int | None:
     parsed = parse_iso_utc(ts)
-    return None if parsed is None else max(0, int((now - parsed).total_seconds() // 60))
+    return None if parsed is None else max(0, int((now - parsed).total_seconds() // SECONDS_PER_MINUTE))
 
 
 def _stuck_warning(active_run: Mapping[str, Any] | None, now: dt.datetime) -> str | None:
@@ -62,6 +65,6 @@ def pipeline_health_warnings(
         )
 
     expected = expected_price_date(now - PRICE_BEHIND_GRACE).isoformat()
-    if not price_date or str(price_date)[:10] < expected:
+    if not price_date or str(price_date)[:ISO_DATE_LEN] < expected:
         warnings.append(f"price_daily behind expected session {expected} (latest {price_date})")
     return warnings

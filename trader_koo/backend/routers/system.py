@@ -569,9 +569,7 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
             operational_warnings.append("latest ingest run appears stale-running")
         if resume_candidate:
             operational_warnings.append("post-ingest yolo/report recovery recommended")
-        operational_warnings.extend(
-            pipeline_health_warnings(pipeline_snap, price_date=data_freshness.price_date, now=now)
-        )
+        operational_warnings += pipeline_health_warnings(pipeline_snap, price_date=data_freshness.price_date, now=now)
 
         warnings = [*operational_warnings, *research_warnings]
 
