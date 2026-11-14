@@ -25,7 +25,7 @@ from trader_koo.backend.services.pipeline import (
     read_active_pipeline_run,
     reserve_pipeline_run,
 )
-from trader_koo.backend.services.run_log import StageResults, run_error_message, stage_results
+from trader_koo.backend.services.run_log import StageResults, run_error_message, run_status, stage_results
 
 UTC = dt.timezone.utc
 NOW = dt.datetime(2026, 10, 23, 8, 44, tzinfo=UTC)
@@ -201,7 +201,7 @@ def test_recovery_resumes_interrupted_run_with_a_reserved_run_id(recovery_env: P
     result = pipeline_runs.recover_after_restart(scheduler, db_path=db, now=NOW)
 
     rows = {r["run_id"]: r for r in _rows(db)}
-    assert (rows["pipe_killed"]["status"], rows["pipe_killed"]["error_message"]) == ("interrupted", "killed_by_restart")
+    assert (rows["pipe_killed"]["status"], rows["pipe_killed"]["error_message"]) == ("interrupted", "killed_by_restart at stage yolo")
     [job] = scheduler.jobs  # stale prices, but the resume suppresses the catch-up
     resumed_id = job["kwargs"]["run_id"]
     assert RUN_ID_RE.match(resumed_id)
@@ -351,6 +351,8 @@ def test_stage_results_from_one_parser(mode, returncode, tail, expected) -> None
     ("mode", "returncode", "stages", "expected"),
     [
         ("full", 0, StageResults(True, True, True), None),
+        # daily_update.sh exits 0 when only YOLO failed; the error still names it.
+        ("full", 0, StageResults(True, False, True), "daily_update.sh rc=0; failed stages: yolo"),
         # The six incident after the YOLO threshold: YOLO fails, the report then refuses.
         ("full", 1, StageResults(True, False, False), "daily_update.sh rc=1; failed stages: yolo, report"),
         ("yolo", 1, StageResults(False, False, False), "daily_update.sh rc=1; failed stages: yolo, report"),
@@ -359,6 +361,20 @@ def test_stage_results_from_one_parser(mode, returncode, tail, expected) -> None
 )
 def test_run_error_message_names_failed_stages(mode, returncode, stages, expected) -> None:
     assert run_error_message(mode, returncode, stages) == expected
+
+
+@pytest.mark.parametrize(
+    ("mode", "returncode", "stages", "expected"),
+    [
+        ("full", 0, StageResults(True, True, True), "ok"),
+        ("full", 0, StageResults(True, False, True), "partial"),
+        ("full", 0, StageResults(False, True, True), "partial"),
+        ("report", 0, StageResults(False, False, True), "ok"),
+        ("full", 1, StageResults(True, False, False), "failed"),
+    ],
+)
+def test_run_status_is_partial_when_a_stage_failed_but_the_report_passed(mode, returncode, stages, expected) -> None:
+    assert run_status(mode, returncode, stages) == expected
 
 
 # ---------------------------------------------------------------------------

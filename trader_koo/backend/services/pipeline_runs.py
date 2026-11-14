@@ -174,7 +174,7 @@ def resume_interrupted_run(
         finish_pipeline_run(
             interrupted_id,
             status="interrupted",
-            error_message="killed_by_restart",
+            error_message=f"killed_by_restart at stage {interrupted_stage or 'unknown'}",
             db_path=db_path,
         )
     except Exception as exc:

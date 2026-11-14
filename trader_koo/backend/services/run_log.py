@@ -135,14 +135,25 @@ def stage_results(
     return StageResults(ingest_ok, yolo_ok, report_ok)
 
 
-def run_error_message(mode: str, returncode: int, stages: StageResults) -> str | None:
-    """The pipeline_runs error for a failed run, naming the stages that failed."""
-    if returncode == 0:
-        return None
+def _failed_stages(mode: str, stages: StageResults) -> list[str]:
     ran = (
         ("ingest", mode == "full", stages.ingest_ok),
         ("yolo", mode in ("full", "yolo"), stages.yolo_ok),
         ("report", mode in ("full", "yolo", "report"), stages.report_ok),
     )
-    failed = [name for name, did_run, ok in ran if did_run and not ok]
+    return [name for name, did_run, ok in ran if did_run and not ok]
+
+
+def run_status(mode: str, returncode: int, stages: StageResults) -> str:
+    """The pipeline_runs status: ``partial`` when the report passed but an earlier stage failed."""
+    if returncode != 0:
+        return "failed"
+    return "partial" if _failed_stages(mode, stages) else "ok"
+
+
+def run_error_message(mode: str, returncode: int, stages: StageResults) -> str | None:
+    """The pipeline_runs error for a failed or partial run, naming the stages that failed."""
+    failed = _failed_stages(mode, stages)
+    if returncode == 0 and not failed:
+        return None
     return f"daily_update.sh rc={returncode}; failed stages: {', '.join(failed) or 'none recorded'}"
