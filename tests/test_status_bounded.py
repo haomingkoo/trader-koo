@@ -147,6 +147,8 @@ def test_retained_historical_symbol_does_not_inflate_current_cohort(
             return_value={"active": False, "stage": "idle"},
         ),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
+        # Runs on the real clock against fixed August data; pipeline health has its own tests.
+        patch.object(system, "pipeline_health_warnings", return_value=[]),
     ):
         payload = system.status()
 
@@ -302,6 +304,8 @@ def test_operational_failure_does_not_change_research_readiness(
             return_value={"active": False, "stage": "idle"},
         ),
         patch.object(system, "post_ingest_resume_candidate", return_value=None),
+        # Runs on the real clock against fixed August data; pipeline health has its own tests.
+        patch.object(system, "pipeline_health_warnings", return_value=[]),
     ):
         payload = system.status()
 

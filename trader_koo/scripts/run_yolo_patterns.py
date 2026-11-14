@@ -34,6 +34,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 import pandas as pd
 
 from trader_koo.db.price_contract import research_price_contract
+from trader_koo.report.freshness import YOLO_MIN_DAILY_COVERAGE
 
 LOG = logging.getLogger("yolo_patterns")
 if not LOG.handlers:
@@ -454,6 +455,32 @@ def _ticker_timeout(seconds: float):
         signal.signal(signal.SIGALRM, prev_handler)
 
 
+def failure_verdict(ok: int, failed: int, *, top_reasons: list[tuple[str, int]]) -> str | None:
+    """Why this run must exit non-zero, or None when it succeeded.
+
+    Uses the coverage floor /api/status and the report apply, so the stage
+    fails exactly when the rows it leaves would be judged stale.
+    """
+    attempted = ok + failed
+    if attempted == 0 or ok / attempted >= YOLO_MIN_DAILY_COVERAGE:
+        return None
+    reasons = "; ".join(f"{count}x {reason}" for reason, count in top_reasons) or "none recorded"
+    return (
+        f"YOLO failed for {failed}/{attempted} tickers, above the "
+        f"{1 - YOLO_MIN_DAILY_COVERAGE:.0%} limit; top reasons: {reasons}"
+    )
+
+
+def _top_failure_reasons(conn: sqlite3.Connection, run_id: str, limit: int = 3) -> list[tuple[str, int]]:
+    rows = conn.execute(
+        """SELECT reason, COUNT(*) FROM yolo_run_events
+           WHERE run_id = ? AND status IN ('failed', 'timeout')
+           GROUP BY reason ORDER BY COUNT(*) DESC LIMIT ?""",
+        (run_id, limit),
+    ).fetchall()
+    return [(str(reason), int(count)) for reason, count in rows]
+
+
 # ── Per-pass processing ───────────────────────────────────────────────────────
 
 def _run_pass(
@@ -780,11 +807,16 @@ def main() -> None:
                 int(prune_info.get("deleted_rows") or 0),
                 int(prune_info.get("deleted_event_rows") or 0),
             )
+        verdict = failure_verdict(
+            total_ok, total_failed, top_reasons=_top_failure_reasons(conn, run_id)
+        )
     finally:
         conn.close()
 
     LOG.info("Done run_id=%s — ok=%d failed=%d skipped=%d", run_id, total_ok, total_failed, total_skipped)
-    sys.exit(1 if total_failed and not total_ok else 0)  # every ticker failed: not a successful run
+    if verdict:
+        LOG.error("Run FAILED run_id=%s: %s", run_id, verdict)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from trader_koo.backend.services.pipeline import (
     set_cached_status,
     STATUS_REFRESH_LOCK,
 )
+from trader_koo.backend.services.pipeline_health import pipeline_health_warnings
 from trader_koo.backend.services.report_loader import is_report_fresh
 from trader_koo.backend.utils import clean_optional_url as _clean_optional_url
 from trader_koo.polymarket import POLYMARKET_TOP_N
@@ -568,6 +569,9 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
             operational_warnings.append("latest ingest run appears stale-running")
         if resume_candidate:
             operational_warnings.append("post-ingest yolo/report recovery recommended")
+        operational_warnings.extend(
+            pipeline_health_warnings(pipeline_snap, price_date=data_freshness.price_date, now=now)
+        )
 
         warnings = [*operational_warnings, *research_warnings]
 
@@ -640,6 +644,7 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
                 "last_completed_status": pipeline_snap.get("last_completed_status"),
                 "last_completed_line": pipeline_snap.get("last_completed_line"),
                 "last_completed_ts": pipeline_snap.get("last_completed_ts"),
+                "last_completed_error": pipeline_snap.get("last_completed_error"),
                 "post_ingest_resume": resume_candidate,
                 **({"run_log_path": str(RUN_LOG_PATH)} if EXPOSE_STATUS_INTERNAL else {}),
             },
