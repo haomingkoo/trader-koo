@@ -5,23 +5,9 @@ set -euo pipefail
 
 log() { echo "==> [build] $*"; }
 
-# ── 1. Install PyTorch (CPU-only) ──────────────────────────────────────
-log "Installing PyTorch CPU..."
-pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu
-
-# ── 2. Install package in editable mode ─────────────────────────────────
+# ── 1-4. Python runtime: torch CPU, package, opencv-headless, preflight ─
 # Nixpacks installs the canonical root requirements.txt before this script.
-log "Installing trader_koo package..."
-pip install -e .
-
-# ── 3. Force opencv-headless (remove full opencv if present) ────────────
-log "Switching to opencv-python-headless..."
-pip uninstall -y opencv-python 2>/dev/null || true
-pip install --force-reinstall opencv-python-headless==4.10.0.84
-
-# ── 4. Preflight import check ──────────────────────────────────────────
-log "Running preflight import check..."
-python -c "import cv2, torch, ultralytics, huggingface_hub; print('preflight cv2=', cv2.__version__, 'torch=', torch.__version__)"
+bash ops/install_python_runtime.sh
 
 # ── 5. Install Node.js via nvm ──────────────────────────────────────────
 log "Installing Node.js 22 via NodeSource..."
