@@ -1458,46 +1458,6 @@ def test_reader_reconciliation_cannot_overwrite_a_newer_publication(
     verify.close()
 
 
-@pytest.mark.parametrize(
-    ("ok", "warnings", "generation_warnings"),
-    [
-        (False, ["setup_quality_scoring_failed"], []),
-        (True, [], ["setup_quality_scoring_failed"]),
-    ],
-)
-def test_partial_quality_report_cannot_complete_or_admit(
-    tmp_path: Path,
-    ok: bool,
-    warnings: list[str],
-    generation_warnings: list[str],
-):
-    conn = sqlite3.connect(tmp_path / "report.db")
-    report = _report("PARTIAL")
-    report["ok"] = ok
-    report["warnings"] = warnings
-    report["generation_warnings"] = generation_warnings
-    run_id = start_report_run(
-        conn, report_kind="daily", configuration={}, code_version=TEST_SHA
-    )
-    paths = write_reports(report, tmp_path / "reports", run_id=run_id, publish_latest=False)
-    artifact = Path(paths["json_path"])
-    with pytest.raises(ValueError, match="degraded|partial-quality"):
-        complete_report_run(
-            conn,
-            run_id=run_id,
-            report=report,
-            artifact_path=artifact,
-            markdown_path=Path(paths["md_path"]),
-            content_hash=sha256_file(artifact),
-        )
-    assert conn.execute(
-        "SELECT status FROM report_runs WHERE run_id = ?", (run_id,)
-    ).fetchone() == ("started",)
-    assert conn.execute(
-        "SELECT COUNT(*) FROM report_run_decisions WHERE run_id = ?", (run_id,)
-    ).fetchone() == (0,)
-
-
 def test_admission_uses_immutable_inputs_and_rolls_back_as_one_transaction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1923,25 +1883,211 @@ def test_history_verifies_only_the_runs_it_returns(tmp_path: Path, monkeypatch):
     assert len(checks) == 1
 
 
-def test_degraded_report_refusal_names_the_blocking_warnings(tmp_path: Path):
-    conn = sqlite3.connect(tmp_path / "report.db")
-    report = _report("NAMED")
-    report["ok"] = False
-    report["warnings"] = ["yolo_data_stale"]
-    report["generation_warnings"] = ["setup_quality_scoring_failed"]
-    run_id = start_report_run(
-        conn, report_kind="daily", configuration={}, code_version=TEST_SHA
-    )
-    paths = write_reports(report, tmp_path / "reports", run_id=run_id, publish_latest=False)
-    artifact = Path(paths["json_path"])
-    with pytest.raises(ValueError) as refusal:
-        complete_report_run(
-            conn,
-            run_id=run_id,
-            report=report,
-            artifact_path=artifact,
-            markdown_path=Path(paths["md_path"]),
-            content_hash=sha256_file(artifact),
+def _complete_from_artifact(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    artifact: dict,
+    *,
+    run_id: str | None = None,
+    report: dict | None = None,
+    content_hash: str | None = None,
+    completed_ts: str | None = "2026-08-22T12:30:00Z",
+) -> str:
+    """Write *artifact* as the run's JSON file and try to complete the run with it."""
+    if run_id is None:
+        run_id = start_report_run(
+            conn, report_kind="daily", configuration={}, code_version=TEST_SHA,
+            started_ts="2026-08-22T11:59:00Z",
         )
-    assert "yolo_data_stale" in str(refusal.value)
-    assert "setup_quality_scoring_failed" in str(refusal.value)
+    json_path = tmp_path / f"{run_id}.json"
+    md_path = tmp_path / f"{run_id}.md"
+    json_path.write_text(json.dumps(artifact), encoding="utf-8")
+    md_path.write_text("# report\n", encoding="utf-8")
+    complete_report_run(
+        conn,
+        run_id=run_id,
+        report=artifact if report is None else report,
+        artifact_path=json_path,
+        markdown_path=md_path,
+        content_hash=content_hash or sha256_file(json_path),
+        completed_ts=completed_ts,
+    )
+    return run_id
+
+
+def _run_status(conn: sqlite3.Connection, run_id: str) -> str:
+    return conn.execute("SELECT status FROM report_runs WHERE run_id=?", (run_id,)).fetchone()[0]
+
+
+def _started(conn: sqlite3.Connection, kind: str = "daily", started_ts: str = "2026-08-22T11:59:00Z") -> str:
+    return start_report_run(conn, report_kind=kind, configuration={}, code_version=TEST_SHA, started_ts=started_ts)
+
+
+def _bound(report: dict, run_id: str) -> dict:
+    report["meta"]["report_run"] = {"run_id": run_id}
+    return report
+
+
+@pytest.mark.parametrize(
+    ("ok", "warnings", "generation_warnings", "message"),
+    [
+        (False, [], [], "degraded report cannot be completed or published (ok must be true); warnings: none recorded"),
+        (False, ["a", "b"], ["a"], "degraded report cannot be completed or published (ok must be true); warnings: a, b"),
+        (True, [], ["late"], "partial-quality report warnings prevent publication; warnings: late"),
+    ],
+)
+def test_refused_report_message_lists_each_warning_once(
+    tmp_path: Path, ok: bool, warnings: list, generation_warnings: list, message: str,
+) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    run_id = _started(conn)
+    report = _bound(_report("NAMED"), run_id)
+    report.update(ok=ok, warnings=warnings, generation_warnings=generation_warnings)
+
+    with pytest.raises(ValueError) as refusal:
+        _complete_from_artifact(conn, tmp_path, report, run_id=run_id)
+
+    assert str(refusal.value) == message
+    assert _run_status(conn, run_id) == "started"
+    assert conn.execute("SELECT COUNT(*) FROM report_run_decisions").fetchone() == (0,)
+
+
+def test_completion_accepts_an_uppercase_content_hash_and_equal_timestamps(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    run_id = _started(conn, started_ts="2026-08-22T12:00:00Z")
+    report = _bound(_report("EDGE"), run_id)
+    report["market_session"] = {"session": "regular"}
+    report["latest_data"] = None
+    json_path = tmp_path / "probe.json"
+    json_path.write_text(json.dumps(report), encoding="utf-8")
+
+    _complete_from_artifact(
+        conn, tmp_path, report, run_id=run_id,
+        content_hash=sha256_file(json_path).upper(), completed_ts="2026-08-22T12:00:00Z",
+    )
+
+    assert _run_status(conn, run_id) == "completed"
+    row = conn.execute("SELECT generation_key, content_hash FROM report_runs WHERE run_id=?", (run_id,)).fetchone()
+    assert row == ("daily:2026-08-22T12:00:00Z", sha256_file(json_path))
+    inputs = json.loads(conn.execute("SELECT inputs_json FROM report_runs WHERE run_id=?", (run_id,)).fetchone()[0])
+    assert inputs["market_session"] == {"session": "regular"}
+    assert conn.execute("SELECT source_timestamps_json FROM report_runs WHERE run_id=?", (run_id,)).fetchone() == ("{}",)
+
+
+def test_report_kind_defaults_to_daily_and_must_match_the_started_run(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    daily = _started(conn)
+    report = _bound(_report("KIND"), daily)
+    del report["meta"]["report_kind"]
+    _complete_from_artifact(conn, tmp_path, report, run_id=daily)
+    assert _run_status(conn, daily) == "completed"
+
+    weekly = _started(conn, kind="weekly")
+    weekly_report = _bound(_report("KIND"), weekly)
+    weekly_report["meta"]["report_kind"] = "weekly"
+    _complete_from_artifact(conn, tmp_path, weekly_report, run_id=weekly)
+    assert conn.execute(
+        "SELECT generation_key FROM report_runs WHERE run_id=?", (weekly,)
+    ).fetchone() == ("weekly:2026-08-22T12:00:00Z",)
+
+
+def _refusal(tmp_path: Path, mutate, *, completed_ts: str | None = "2026-08-22T12:30:00Z", **kwargs) -> str:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    run_id = kwargs.pop("run_id", None) or _started(conn)
+    report = _bound(_report("GUARD"), run_id)
+    mutate(conn, run_id, report)
+    with pytest.raises((ValueError, RuntimeError)) as refusal:
+        _complete_from_artifact(conn, tmp_path, report, run_id=run_id, completed_ts=completed_ts, **kwargs)
+    assert conn.execute("SELECT COUNT(*) FROM report_run_decisions").fetchone() == (0,)
+    return str(refusal.value)
+
+
+def _set(path: tuple, value):
+    def mutate(conn, run_id, report):
+        target = report
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    return mutate
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (_set(("generated_ts",), None), "generated_ts must be a precise UTC timestamp"),
+        (_set(("generated_ts",), "2026-08-22T12:31:00Z"), "generated_ts cannot be after completed_ts"),
+        (_set(("generated_ts",), "2026-08-22T11:58:00Z"), "generated_ts cannot be before started_ts"),
+        (_set(("meta", "report_run"), {"run_id": "someone-else"}), "report artifact has the wrong run identity"),
+        (_set(("meta", "report_run"), "not-an-object"), "report artifact has the wrong run identity"),
+        (_set(("meta",), None), "report artifact has the wrong run identity"),
+        (_set(("meta", "report_kind"), "weekly"), "is not the matching started run"),
+    ],
+)
+def test_completion_guards_name_what_is_wrong(tmp_path: Path, mutate, message: str) -> None:
+    assert _refusal(tmp_path, mutate).endswith(message)
+
+
+def test_completion_rejects_an_invalid_completed_ts(tmp_path: Path) -> None:
+    message = _refusal(tmp_path, lambda *_: None, completed_ts="2026-08-22 12:30")
+
+    assert message == "completed_ts must be a precise UTC timestamp"
+
+
+def test_completion_rejects_payload_that_differs_from_the_artifact(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    run_id = _started(conn)
+    artifact = _bound(_report("DIFF"), run_id)
+    payload = json.loads(json.dumps(artifact)) | {"counts": {"tracked_tickers": 99}}
+
+    with pytest.raises(ValueError, match="^report payload differs from immutable JSON artifact$"):
+        _complete_from_artifact(conn, tmp_path, artifact, run_id=run_id, report=payload)
+
+
+def test_completion_rejects_a_wrong_content_hash(tmp_path: Path) -> None:
+    message = _refusal(tmp_path, lambda *_: None, content_hash="0" * 64)
+
+    assert message == "report artifact hash mismatch before completion"
+
+
+def test_completion_of_a_failed_run_is_refused(tmp_path: Path) -> None:
+    message = _refusal(tmp_path, lambda conn, run_id, report: fail_report_run(conn, run_id=run_id, error="boom"))
+
+    assert message.endswith("is not the matching started run")
+
+
+def test_completion_of_an_unknown_run_is_refused(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    ensure_report_run_schema(conn)
+    report = _bound(_report("GHOST"), "ghost-run")
+
+    with pytest.raises(ValueError, match="^report run ghost-run is not the matching started run$"):
+        _complete_from_artifact(conn, tmp_path, report, run_id="ghost-run")
+
+
+def test_completion_race_rolls_back_the_decisions(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    run_id = _started(conn)
+    conn.execute(
+        """CREATE TEMP TRIGGER steal_run AFTER INSERT ON report_run_decisions
+           BEGIN UPDATE report_runs SET status='failed',failed_ts='2026-08-22T12:00:30Z',
+                 error_message='stolen' WHERE run_id=NEW.run_id; END"""
+    )
+
+    with pytest.raises(RuntimeError, match=f"^report run {run_id} completion race$"):
+        _complete_from_artifact(conn, tmp_path, _bound(_report("RACE"), run_id), run_id=run_id)
+
+    assert _run_status(conn, run_id) == "started"
+    assert conn.execute("SELECT COUNT(*) FROM report_run_decisions").fetchone() == (0,)
+
+
+def test_failing_a_run_stores_a_bounded_error_once(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "report.db")
+    run_id = _started(conn)
+
+    fail_report_run(conn, run_id=run_id, error="x" * 5000)
+
+    assert conn.execute(
+        "SELECT status, error_message FROM report_runs WHERE run_id=?", (run_id,)
+    ).fetchone() == ("failed", "x" * 4000)
+    with pytest.raises(ValueError, match=f"^report run {run_id} is not in started state$"):
+        fail_report_run(conn, run_id=run_id, error="again")
