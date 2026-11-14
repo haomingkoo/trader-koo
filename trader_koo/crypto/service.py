@@ -31,7 +31,9 @@ from trader_koo.crypto.binance_history import fetch_recent_klines
 from trader_koo.crypto.binance_ws import BinanceWSClient, SYMBOL_MAP
 from trader_koo.crypto.models import CryptoBar, CryptoTick
 from trader_koo.crypto.storage import (
+    connect_crypto_db,
     ensure_crypto_schema,
+    is_lock_error,
     load_recent_bars,
     prune_old_bars,
     save_bars,
@@ -216,28 +218,13 @@ def _broadcast_tick(tick: CryptoTick) -> None:
 
 
 def _on_candle_finalized(candle: CryptoBar) -> None:
-    """Persist a finalized higher-interval candle and broadcast to subscribers."""
-    # Persist to DB
-    if _db_path_str:
-        try:
-            conn = sqlite3.connect(_db_path_str)
-            try:
-                save_bars(conn, [candle])
-            finally:
-                conn.close()
-            LOG.info(
-                "Persisted finalized %s candle for %s at %s",
-                candle.interval,
-                candle.symbol,
-                candle.timestamp.isoformat(),
-            )
-        except Exception as exc:
-            LOG.error(
-                "Failed to persist finalized candle %s [%s]: %s",
-                candle.symbol,
-                candle.interval,
-                exc,
-            )
+    """Queue a finalized candle for the flush thread and broadcast it.
+
+    Runs on the WS thread: a DB write here waited out the report's lock and
+    the socket missed its ping/pong deadline.
+    """
+    if _db_path_str and _client is not None:
+        _client.queue_bars_for_flush([candle])
 
     # Broadcast candle_close to interested subscribers
     close_payload = {
@@ -291,22 +278,41 @@ def _flush_loop() -> None:
 
 
 def _flush_bars_to_db() -> None:
-    """Drain pending bars from client and write to DB."""
+    """Write pending bars on the flush thread; a lock-refused batch is kept for the next flush."""
     if _client is None or _db_path_str is None:
         return
     bars = _client.drain_pending_bars()
     if not bars:
         return
     try:
-        conn = sqlite3.connect(_db_path_str)
+        conn = connect_crypto_db(_db_path_str)
+    except sqlite3.Error as exc:
+        _handle_failed_flush(bars, exc)
+        return
+    try:
         try:
             save_bars(conn, bars)
-            prune_old_bars(conn, retention_days=30)
-        finally:
-            conn.close()
+        except sqlite3.Error as exc:
+            _handle_failed_flush(bars, exc)
+            return
         LOG.info("Flushed %d crypto bars to DB", len(bars))
-    except Exception as exc:
-        LOG.error("Failed to flush crypto bars to DB: %s", exc)
+        try:
+            prune_old_bars(conn, retention_days=30)
+        except sqlite3.Error as exc:
+            # The bars are stored; pruning runs again on the next flush.
+            LOG.warning("Crypto bar prune skipped: %s", exc)
+    finally:
+        conn.close()
+
+
+def _handle_failed_flush(bars: list[CryptoBar], exc: sqlite3.Error) -> None:
+    if is_lock_error(exc) and _client is not None:
+        _client.queue_bars_for_flush(bars)
+        LOG.warning(
+            "Crypto DB busy (%s); retained %d crypto bars for the next flush", exc, len(bars),
+        )
+        return
+    LOG.error("Crypto DB write failed (%s); dropped %d crypto bars", exc, len(bars))
 
 
 def _load_history_from_db() -> None:
@@ -349,7 +355,7 @@ def _backfill_history(symbol: str, interval: str, limit: int) -> list[CryptoBar]
         if not bars:
             return []
         try:
-            conn = sqlite3.connect(_db_path_str)
+            conn = connect_crypto_db(_db_path_str)
             try:
                 ensure_crypto_schema(conn)
                 save_bars(conn, bars)
@@ -714,6 +720,8 @@ def stop_crypto_feed() -> None:
 
     # Final flush before shutdown
     _flush_bars_to_db()
+    if _client is not None and (unflushed := _client.drain_pending_bars()):
+        LOG.error("Crypto feed stopping with %d bars the DB did not accept", len(unflushed))
 
     if _client is not None:
         _client.stop()
