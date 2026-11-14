@@ -214,3 +214,15 @@ def test_status_accepts_a_recent_polymarket_archive(tmp_path: Path) -> None:
 
     assert "polymarket_snapshots stale" not in payload["operational_warnings"]
     assert payload["freshness"]["polymarket_snapshot_age_minutes"] == 25.0
+
+
+def test_status_reports_stocktwits_as_unavailable_with_reason(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("TRADER_KOO_STOCKTWITS_ENABLED", raising=False)
+
+    payload = _status(_db(), tmp_path)
+
+    stocktwits = payload["data_sources"]["stocktwits"]
+    assert stocktwits["status"] == "unavailable"
+    assert "403" in stocktwits["reason"]
+    # A source switched off on purpose is reported, not counted as an outage.
+    assert "stocktwits" not in " ".join(payload["operational_warnings"])

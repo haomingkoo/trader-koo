@@ -29,6 +29,7 @@ from trader_koo.polymarket import POLYMARKET_TOP_N, polymarket_archive_freshness
 from trader_koo.report.freshness import assess_data_freshness, unsealed_price_tickers
 from trader_koo.report.runs import resolve_published_report
 from trader_koo.security.endpoint_validator import sanitize_public_response
+from trader_koo.social_sentiment import stocktwits_source_status
 
 router = APIRouter()
 
@@ -662,6 +663,7 @@ def _compute_status(now: dt.datetime) -> dict[str, Any]:
                 "options_rows": counts["options_rows"] if counts else 0,
             },
             "price_basis": price_basis,
+            "data_sources": {"stocktwits": stocktwits_source_status()},
             "activity": activity,
             "latest_data": {
                 "price_date": data_freshness.price_date,
