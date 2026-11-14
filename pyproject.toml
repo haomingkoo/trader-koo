@@ -30,3 +30,63 @@ asyncio_mode = "auto"
 markers = [
     "asyncio: marks tests that require an asyncio event loop",
 ]
+
+[tool.mutmut]
+# ops/mutation_gate.py rewrites only_mutate and the test selection per run.
+source_paths = ["trader_koo"]
+only_mutate = [
+    "trader_koo/report/freshness.py",
+]
+# Log statements are diagnostics, not asserted behaviour.
+do_not_mutate_patterns = ['^\s*(LOG|logger)\.(debug|info|warning|error|exception|critical)\(']
+# Tests run from mutants/, so copy what they read from the repo root.
+also_copy = [
+    "tests", "config", "ops", "docs", ".github", ".railway", ".importlinter",
+    "pyproject.toml", "Makefile", "start.sh", "build.sh", "nixpacks.toml",
+    "requirements.txt", "requirements-dev.txt", ".env.example",
+    "ARCHITECTURE.md", "DEPLOYMENT.md", "README.md", "CLAUDE.md", "RESEARCH_STATUS.md",
+    "paper-schema-contract-v5.json",
+    "release-database-copy-v2.schema.json", "release-database-copy-v3.schema.json",
+    "release-database-copy-v4.schema.json", "release-database-copy-v5.schema.json",
+]
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-q", "-x"]
+pytest_add_cli_args_test_selection = [
+    "tests/test_data_freshness.py",
+]
+
+# Equivalent mutants leave the mutation gate's denominator (ops/mutation_gate.py).
+[tool.mutation_gate]
+sql_case = true
+log_calls = true
+help_text = true
+equivalent = [
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if weekly_report_start_idx >= 0 and weekly_report_start_idx > weekly_report_terminal_idx:", mutated = "if weekly_report_start_idx >= 0 and weekly_report_start_idx >= weekly_report_terminal_idx:", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if weekly_start_idx >= 0 and weekly_start_idx > weekly_yolo_terminal_idx:", mutated = "if weekly_start_idx >= 0 and weekly_start_idx >= weekly_yolo_terminal_idx:", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "out[\"stage_line\"] = tail[yolo_progress_idx] if yolo_progress_idx > weekly_start_idx else tail[weekly_start_idx]", mutated = "out[\"stage_line\"] = tail[yolo_progress_idx] if yolo_progress_idx >= weekly_start_idx else tail[weekly_start_idx]", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if report_start_idx >= 0 and report_start_idx > report_done_idx:", mutated = "if report_start_idx >= 0 and report_start_idx >= report_done_idx:", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if yolo_progress_idx >= 0 and yolo_progress_idx > yolo_done_idx:", mutated = "if yolo_progress_idx >= 0 and yolo_progress_idx >= yolo_done_idx:", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if done_idx > start_idx:", mutated = "if done_idx >= start_idx:", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if report_start >= 0 and report_start > report_done:", mutated = "if report_start >= 0 and report_start >= report_done:", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", mutated = "elif (yolo_start >= 0 and yolo_start >= yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", mutated = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress >= yolo_done):", reason = "two distinct log markers never share a line, so the indices are equal only when both are -1" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if report_start >= 0 and report_start > report_done:", mutated = "if report_start > 0 and report_start > report_done:", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "if report_start >= 0 and report_start > report_done:", mutated = "if report_start >= 1 and report_start > report_done:", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", mutated = "elif (yolo_start > 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", mutated = "elif (yolo_start >= 1 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", mutated = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress > 0 and yolo_progress > yolo_done):", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 0 and yolo_progress > yolo_done):", mutated = "elif (yolo_start >= 0 and yolo_start > yolo_done) or (yolo_progress >= 1 and yolo_progress > yolo_done):", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "out[\"stage_line\"] = block[yolo_progress] if yolo_progress >= 0 else block[yolo_start]", mutated = "out[\"stage_line\"] = block[yolo_progress] if yolo_progress > 0 else block[yolo_start]", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "out[\"stage_line\"] = block[yolo_progress] if yolo_progress >= 0 else block[yolo_start]", mutated = "out[\"stage_line\"] = block[yolo_progress] if yolo_progress >= 1 else block[yolo_start]", reason = "block[0] is always the run's START line, which holds no stage marker" },
+    { file = "trader_koo/backend/services/pipeline.py", function = "x__infer_pipeline_from_log_tail", original = "out[\"stage_line\"] = block[0] if block else None", mutated = "out[\"stage_line\"] = block[0] if (block) or True else None", reason = "the block always contains its START line, so it is never empty" },
+    { file = "trader_koo/backend/services/run_log.py", function = "x_latest_run_block", original = "return lines[start:] if start >= 0 else lines", mutated = "return lines[start:] if start > 0 else lines", reason = "lines[0:] is the same list as lines" },
+    { file = "trader_koo/backend/services/run_log.py", function = "x_latest_run_block", original = "return lines[start:] if start >= 0 else lines", mutated = "return lines[start:] if start >= 1 else lines", reason = "lines[0:] is the same list as lines" },
+    { file = "trader_koo/backend/services/run_log.py", function = "x_stage_results", original = "block = latest_run_block(read_tail()) if (run_ingest or run_yolo) else []", mutated = "block = latest_run_block(read_tail()) if (run_ingest or run_yolo) or True else []", reason = "report-only mode never reads the block, so building it changes no result" },
+    { file = "trader_koo/backend/services/run_log.py", function = "x_append_run_log", original = "with _run_log.open(\"a\", encoding=\"utf-8\") as f:", mutated = "with _run_log.open(\"a\", encoding=\"UTF-8\") as f:", reason = "codec names are case-insensitive" },
+    { file = "trader_koo/scripts/run_yolo_patterns.py", function = "x_main", original = "default=\"\",", mutated = "default=None,", reason = "main() reads the run id as (args.run_id or ''), so a None default behaves like ''" },
+    { file = "trader_koo/scripts/run_yolo_patterns.py", function = "x_main", original = "default=\"\",", mutated = "", reason = "main() reads the run id as (args.run_id or ''), so a None default behaves like ''" },
+    { file = "trader_koo/report/runs.py", function = "x_complete_report_run", original = "generated_ts = str(artifact_report.get(\"generated_ts\") or \"\")", mutated = "generated_ts = str(artifact_report.get(\"generated_ts\") or \"XXXX\")", reason = "a missing value fails the same check whether it defaults to '' or 'XXXX' (run ids are UUIDs)" },
+    { file = "trader_koo/report/runs.py", function = "x_complete_report_run", original = "if str(run_meta.get(\"run_id\") or \"\") != run_id:", mutated = "if str(run_meta.get(\"run_id\") or \"XXXX\") != run_id:", reason = "a missing value fails the same check whether it defaults to '' or 'XXXX' (run ids are UUIDs)" },
+    { file = "trader_koo/report/runs.py", function = "x_complete_report_run", original = "if generated < _utc(row[2], field=\"started_ts\"):", mutated = "if generated < _utc(row[2], field=None):", reason = "started_ts is validated by start_report_run and frozen by the report_runs triggers, so this re-parse never fails" },
+    { file = "trader_koo/report/runs.py", function = "x_complete_report_run", original = "if generated < _utc(row[2], field=\"started_ts\"):", mutated = "if generated < _utc(row[2], field=\"XXstarted_tsXX\"):", reason = "started_ts is validated by start_report_run and frozen by the report_runs triggers, so this re-parse never fails" },
+    { file = "trader_koo/report/runs.py", function = "x_complete_report_run", original = "if generated < _utc(row[2], field=\"started_ts\"):", mutated = "if generated < _utc(row[2], field=\"STARTED_TS\"):", reason = "started_ts is validated by start_report_run and frozen by the report_runs triggers, so this re-parse never fails" },
+]

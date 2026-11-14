@@ -1,0 +1,3 @@
+# Mutation testing (ops/mutation_gate.py, .github/workflows/mutation.yml).
+# Kept apart from requirements-dev.txt so the gate can be dropped without touching it.
+mutmut==3.8.1
