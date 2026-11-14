@@ -32,6 +32,7 @@ from trader_koo.notifications.green_barrier_text import (
     GREEN_BARRIER_SUMMARY_NOTE, format_green_barrier_line, green_barrier_caption,
 )
 from trader_koo.paper_trades import PAPER_TRADE_CAMPAIGN_ID
+from trader_koo.report.utils import expected_price_date
 from trader_koo.notifications.telegram import (
     PUBLIC_BASE_URL,
     is_configured,
@@ -48,6 +49,38 @@ _SGT = dt.timezone(dt.timedelta(hours=8))
 # the previous day during EST, or 20:00 ET during EDT.  The *next* open is
 # ~13.5 h away (EST) or ~12.5 h (EDT).  We calculate dynamically below.
 _ET = dt.timezone(dt.timedelta(hours=-5))  # EST baseline; DST handled inline
+
+
+def _report_staleness(
+    report: dict[str, Any],
+    now_utc: dt.datetime | None = None,
+) -> str | None:
+    """Return an explicit notice when the report cannot stand in for today.
+
+    The report's ``latest_data.price_date`` must reach the newest NYSE session
+    the nightly ingest already owes (``expected_price_date``). Returns ``None``
+    only for a current report.
+    """
+    if not report:
+        return "No published daily report is available. Setups are not shown."
+    latest_data = report.get("latest_data")
+    raw_date = latest_data.get("price_date") if isinstance(latest_data, dict) else None
+    try:
+        price_date = dt.date.fromisoformat(str(raw_date or "").strip()[:10])
+    except ValueError:
+        return (
+            "Latest report has no valid market date "
+            f"(got {raw_date!r}). Setups are not shown."
+        )
+    expected = expected_price_date(now_utc)
+    if price_date >= expected:
+        return None
+    generated = str(report.get("generated_ts") or "unknown").strip()
+    return (
+        f"Stale report: the latest report covers {price_date.isoformat()} "
+        f"(generated {generated}), but {expected.isoformat()} or later was "
+        "expected. Its setups are not shown as today's."
+    )
 
 
 def _extract_green_barrier_hits(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -667,8 +700,9 @@ def generate_morning_summary(
     if report is None:
         _, report = latest_daily_report_json(report_dir)
     report = report if isinstance(report, dict) else {}
-    green_barrier_hits = _extract_green_barrier_hits(report)
-    green_barrier_coverage = _extract_green_barrier_coverage(report)
+    stale_notice = _report_staleness(report)
+    green_barrier_hits = [] if stale_notice else _extract_green_barrier_hits(report)
+    green_barrier_coverage = {} if stale_notice else _extract_green_barrier_coverage(report)
 
     # Open DB connection
     conn = sqlite3.connect(str(db_path))
@@ -691,8 +725,8 @@ def generate_morning_summary(
         fg_label = _fear_greed_label(fg_score) if fg_score is not None else "N/A"
 
         # Top suggestions / setups
-        suggestions = _extract_suggestions(report, limit=3)
-        setups = _extract_top_setups(report, limit=5)
+        suggestions = [] if stale_notice else _extract_suggestions(report, limit=3)
+        setups = [] if stale_notice else _extract_top_setups(report, limit=5)
 
         # Paper trades: summary stats + individual open positions
         pt = _fetch_paper_trade_stats(conn)
@@ -729,6 +763,9 @@ def generate_morning_summary(
     # Header
     lines.append(f"\u2600\ufe0f *Morning Briefing \u2014 {date_label}*")
     lines.append("")
+    if stale_notice:
+        lines.append(f"\u26a0\ufe0f *{_md_safe(stale_notice, max_len=400)}*")
+        lines.append("")
 
     # Market Snapshot
     lines.append("\U0001f4ca *Market Snapshot*")
@@ -950,7 +987,10 @@ def send_morning_summary(
             return False
 
         from trader_koo.analysis.green_barrier import build_green_barrier_chart_png
-        hits = _extract_green_barrier_hits(report)
+        stale_notice = _report_staleness(report)
+        if stale_notice:
+            LOG.warning("MORNING_SUMMARY_STALE_REPORT: %s Charts not sent.", stale_notice)
+        hits = [] if stale_notice else _extract_green_barrier_hits(report)
         raw_limit = os.getenv("TRADER_KOO_GREEN_BARRIER_CHART_LIMIT", "3")
         try:
             chart_limit = max(0, min(8, int(raw_limit)))

@@ -368,3 +368,37 @@ def test_worker_transitions_reserved_record_before_subprocess(tmp_path, monkeypa
     ).fetchall()
     verify.close()
     assert rows == [("pipe_reserved", "ok", 1)]
+
+
+def test_yolo_only_failure_is_recorded_partial(tmp_path, monkeypatch):
+    # daily_update.sh exits 0 when the report passes, even after YOLO failed.
+    db_path = tmp_path / "scheduler.db"
+    conn = sqlite3.connect(db_path)
+    ensure_pipeline_runs_schema(conn)
+    conn.close()
+    reserve_pipeline_run(run_id="pipe_yolo_fail", mode="full", source="scheduler", db_path=db_path)
+    run_log = tmp_path / "cron_daily.log"
+    run_log.write_text(
+        "2026-11-13T22:00:00+0000 [START] daily_update.sh mode=full\n"
+        "2026-11-13T22:12:00+0000 [INGEST] done rc=0 sec=720\n"
+        "2026-11-13T22:20:00+0000 [YOLO]  Daily pattern detection done. rc=1 sec=480\n"
+        "2026-11-13T22:24:00+0000 [REPORT] Done. rc=0 sec=240\n"
+        "2026-11-13T22:24:01+0000 [WARN]  daily_update.sh mode=full ingest=0 yolo=1 report=0 "
+        "(partial failures, report OK)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("trader_koo.backend.services.scheduler.DB_PATH", db_path)
+    monkeypatch.setattr("trader_koo.backend.services.scheduler.RUN_LOG_PATH", run_log)
+    monkeypatch.setattr(
+        "trader_koo.backend.services.scheduler.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0),
+    )
+
+    _run_daily_update_unlocked("full", "scheduler", pipeline_run_id="pipe_yolo_fail")
+
+    verify = sqlite3.connect(db_path)
+    row = verify.execute(
+        "SELECT status, error_message, ingest_ok, yolo_ok, report_ok FROM pipeline_runs"
+    ).fetchone()
+    verify.close()
+    assert row == ("partial", "daily_update.sh rc=0; failed stages: yolo", 1, 0, 1)
