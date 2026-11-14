@@ -103,3 +103,55 @@ def test_fetch_sends_explicit_user_agent(monkeypatch):
     assert mod.fetch_json("https://example.invalid/api/health", 1, 1) == {"ok": True}
     assert seen["ua"] == mod.USER_AGENT
     assert "Python-urllib" not in seen["ua"]
+
+
+FRIDAY_NIGHT = dt.datetime(2026, 11, 14, 12, tzinfo=UTC)
+
+
+def _pipeline_status(*, active=False, last_status="ok", warnings=()) -> dict:
+    return {
+        "ok": not warnings,
+        "latest_data": {"price_date": "2026-11-13"},
+        "operational_warnings": list(warnings),
+        "pipeline": {"active": active, "last_completed_stage": "daily_update", "last_completed_status": last_status},
+    }
+
+
+def test_incident_shape_alerts():
+    # 31 Oct - 14 Nov 2026: prices current, YOLO failed every ticker, report refused.
+    # The watch checked only prices and health, so it stayed green for two weeks.
+    status = _pipeline_status(last_status="failed", warnings=("yolo_patterns stale", "daily_report stale"))
+
+    problems = mod.evaluate(HEALTHY, status, FRIDAY_NIGHT)
+
+    assert any("failed" in p for p in problems)
+    assert any("yolo_patterns stale" in p for p in problems)
+
+
+def test_failed_pipeline_alerts_even_before_data_goes_stale():
+    problems = mod.evaluate(HEALTHY, _pipeline_status(last_status="failed"), FRIDAY_NIGHT)
+
+    assert problems and "failed" in problems[0]
+
+
+def test_stale_yolo_after_an_ok_run_alerts():
+    problems = mod.evaluate(HEALTHY, _pipeline_status(warnings=("yolo_patterns stale",)), FRIDAY_NIGHT)
+
+    assert problems == ["yolo_patterns stale while no pipeline is running"]
+
+
+def test_running_pipeline_is_not_judged_until_it_finishes():
+    # Ingest moves price_date forward before YOLO and the report catch up.
+    status = _pipeline_status(active=True, last_status="failed", warnings=("yolo_patterns stale",))
+
+    assert mod.evaluate(HEALTHY, status, FRIDAY_NIGHT) == []
+
+
+@pytest.mark.parametrize(
+    "warning",
+    # Fundamentals cross 48h every weekend and report freshness keys on the
+    # generation weekday, so neither is a reliable pipeline-failure signal.
+    ["finviz_fundamentals stale", "daily_report stale", "price basis unresolved"],
+)
+def test_other_warnings_do_not_alert(warning):
+    assert mod.evaluate(HEALTHY, _pipeline_status(warnings=(warning,)), FRIDAY_NIGHT) == []

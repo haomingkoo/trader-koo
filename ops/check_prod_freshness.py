@@ -51,6 +51,28 @@ def evaluate(health: dict[str, Any], status: dict[str, Any], now_utc: dt.datetim
     expected = expected_price_date(now_utc - EXTRA_GRACE)
     if str(price_date)[:10] < expected.isoformat():
         problems.append(f"price_date {price_date} is behind expected {expected.isoformat()}")
+    problems.extend(_pipeline_problems(status))
+    return problems
+
+
+def _pipeline_problems(status: dict[str, Any]) -> list[str]:
+    """A finished pipeline that failed or left YOLO behind the latest price bar.
+
+    Fresh prices alone once hid two weeks of YOLO failures (Oct-Nov 2026).
+    A running pipeline is skipped: ingest moves the price date before YOLO
+    catches up.
+    """
+    pipeline = status.get("pipeline") or {}
+    if pipeline.get("active"):
+        return []
+    problems: list[str] = []
+    if pipeline.get("last_completed_status") == "failed":
+        problems.append(
+            f"last pipeline run failed (stage={pipeline.get('last_completed_stage')}, "
+            f"ts={pipeline.get('last_completed_ts')})"
+        )
+    if "yolo_patterns stale" in (status.get("operational_warnings") or []):
+        problems.append("yolo_patterns stale while no pipeline is running")
     return problems
 
 
