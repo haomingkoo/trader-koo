@@ -667,6 +667,7 @@ def _completed_event_from_run(run: dict[str, Any] | None) -> dict[str, Any] | No
     return {
         "stage": stage,
         "status": str(run.get("status") or "unknown"),
+        "error": run.get("error_message"),
         "line": f"pipeline_runs:{run.get('run_id')}",
         "ts": str(run["finished_ts"]),
     }
@@ -764,6 +765,7 @@ def pipeline_status_snapshot(
         "running_stale": running_stale,
         "last_completed_stage": last_completed.get("stage") if last_completed else None,
         "last_completed_status": last_completed.get("status") if last_completed else None,
+        "last_completed_error": last_completed.get("error") if last_completed else None,
         "last_completed_line": last_completed.get("line") if last_completed else None,
         "last_completed_ts": last_completed.get("ts") if last_completed else None,
         "tail": tail[-60:],
