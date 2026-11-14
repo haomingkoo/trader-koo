@@ -103,3 +103,18 @@ def test_fetch_sends_explicit_user_agent(monkeypatch):
     assert mod.fetch_json("https://example.invalid/api/health", 1, 1) == {"ok": True}
     assert seen["ua"] == mod.USER_AGENT
     assert "Python-urllib" not in seen["ua"]
+
+
+def test_stale_polymarket_archive_is_a_problem():
+    status = {**_status("2026-10-23"), "operational_warnings": ["polymarket_snapshots stale"]}
+
+    problems = mod.evaluate(HEALTHY, status, dt.datetime(2026, 10, 25, 12, tzinfo=UTC))
+
+    assert problems == ["/api/status: polymarket_snapshots stale (no snapshot in 30 minutes)"]
+
+
+def test_other_operational_warnings_do_not_page_the_watch():
+    # Only the feeds this watch owns fail it; report and YOLO have their own gates.
+    status = {**_status("2026-10-23"), "operational_warnings": ["yolo_patterns stale"]}
+
+    assert mod.evaluate(HEALTHY, status, dt.datetime(2026, 10, 25, 12, tzinfo=UTC)) == []

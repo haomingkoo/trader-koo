@@ -1,4 +1,4 @@
-"""Check production reachability and price freshness from outside the container.
+"""Check production reachability, price and Polymarket freshness from outside the container.
 
 Every in-app monitor dies with the process, so a stopped container went
 unnoticed for 47 hours. Run from GitHub Actions on a schedule. Exit 1 on any
@@ -44,6 +44,9 @@ def evaluate(health: dict[str, Any], status: dict[str, Any], now_utc: dt.datetim
     problems: list[str] = []
     if not (health.get("ok") and health.get("db_exists")):
         problems.append(f"/api/health not ok: {health}")
+    # The Polymarket archive died silently for two days before anyone looked.
+    if "polymarket_snapshots stale" in (status.get("operational_warnings") or []):
+        problems.append("/api/status: polymarket_snapshots stale (no snapshot in 30 minutes)")
     price_date = (status.get("latest_data") or {}).get("price_date")
     if not price_date:
         problems.append("/api/status reports no latest_data.price_date")

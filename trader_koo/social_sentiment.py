@@ -1,11 +1,12 @@
 """Social sentiment for the market dashboard.
 
-Provider priority:
-1. StockTwits public API (no auth, 200 req/hr, works from datacenter IPs)
-2. Reddit public JSON (fallback, blocked from most cloud IPs)
-
-StockTwits messages include user-tagged bullish/bearish sentiment labels,
-giving us real retail trader sentiment without needing NLP.
+The only provider is the StockTwits public API, whose messages carry
+user-tagged bullish/bearish labels. Since November 2026 every
+api.stocktwits.com path answers 403 with a Cloudflare challenge, from
+datacenter and residential IPs alike, and no credential gets past it. The
+source is therefore off by default: it is not polled, and the payload says
+why it is unavailable instead of reporting an empty market.
+``TRADER_KOO_STOCKTWITS_ENABLED=1`` re-enables polling to re-test access.
 """
 from __future__ import annotations
 
@@ -23,6 +24,12 @@ LOG = logging.getLogger(__name__)
 
 _DEFAULT_TICKERS = ("SPY", "QQQ", "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "AMD", "GME")
 _DEFAULT_CACHE_TTL_SEC = 900
+
+STOCKTWITS_ENABLE_ENV = "TRADER_KOO_STOCKTWITS_ENABLED"
+STOCKTWITS_UNAVAILABLE_REASON = (
+    "api.stocktwits.com returns HTTP 403 with a Cloudflare challenge on every path "
+    "(seen 2026-11-14, with or without credentials); polling is disabled"
+)
 
 _cache_lock = threading.Lock()
 _cache_expires_at: dt.datetime | None = None
@@ -118,6 +125,33 @@ def _empty_social_payload(
 # ---------------------------------------------------------------------------
 # StockTwits provider
 # ---------------------------------------------------------------------------
+
+def _stocktwits_enabled() -> bool:
+    return str(os.getenv(STOCKTWITS_ENABLE_ENV, "")).strip().lower() in {"1", "true", "yes"}
+
+
+def stocktwits_source_status() -> dict[str, Any]:
+    """Whether the StockTwits source is polled, and why not when it is off."""
+    if _stocktwits_enabled():
+        return {"status": "enabled", "reason": None, "enable_env": STOCKTWITS_ENABLE_ENV}
+    return {
+        "status": "unavailable",
+        "reason": STOCKTWITS_UNAVAILABLE_REASON,
+        "enable_env": STOCKTWITS_ENABLE_ENV,
+    }
+
+
+def _stocktwits_unavailable_payload(now_utc: dt.datetime) -> dict[str, Any]:
+    payload = _empty_social_payload(
+        provider="stocktwits",
+        now_utc=now_utc,
+        tickers=_csv_env("TRADER_KOO_SOCIAL_TICKERS", _DEFAULT_TICKERS),
+        note=f"StockTwits unavailable: {STOCKTWITS_UNAVAILABLE_REASON}",
+    )
+    payload["status"] = "unavailable"
+    payload["unavailable_reason"] = STOCKTWITS_UNAVAILABLE_REASON
+    return payload
+
 
 def _stocktwits_get(symbol: str) -> dict[str, Any]:
     """Fetch recent messages for a symbol from StockTwits public API."""
@@ -257,7 +291,8 @@ def _fetch_stocktwits_sentiment(now_utc: dt.datetime) -> dict[str, Any]:
 def get_social_sentiment(*, now_utc: dt.datetime | None = None, force_refresh: bool = False) -> dict[str, Any]:
     """Return cached social sentiment metadata.
 
-    Uses StockTwits public API (no auth required, 200 req/hr).
+    Returns an explicit ``status: unavailable`` payload without any network
+    call while StockTwits polling is disabled (see the module docstring).
     """
     global _cache_expires_at, _cache_payload
 
@@ -266,6 +301,9 @@ def get_social_sentiment(*, now_utc: dt.datetime | None = None, force_refresh: b
         resolved_now = resolved_now.replace(tzinfo=dt.timezone.utc)
     else:
         resolved_now = resolved_now.astimezone(dt.timezone.utc)
+
+    if not _stocktwits_enabled():
+        return _stocktwits_unavailable_payload(resolved_now)
 
     with _cache_lock:
         if (

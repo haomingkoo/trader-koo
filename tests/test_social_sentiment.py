@@ -2,8 +2,20 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 
-from trader_koo.social_sentiment import get_social_sentiment
+import pytest
+
+from trader_koo.social_sentiment import get_social_sentiment, stocktwits_source_status
+
+
+@pytest.fixture(autouse=True)
+def _stocktwits_opted_in(monkeypatch, request):
+    """The aggregation tests exercise the opt-in path; disabled tests opt out."""
+    if "disabled" in request.node.name:
+        monkeypatch.delenv("TRADER_KOO_STOCKTWITS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("TRADER_KOO_STOCKTWITS_ENABLED", "1")
 
 
 class _FakeResponse:
@@ -109,3 +121,48 @@ class TestSocialSentiment:
         assert payload["post_count"] == 0
         assert len(payload["source_breakdown"]) == 2
         assert all("Connection refused" in (b.get("note") or "") for b in payload["source_breakdown"])
+
+
+class TestStockTwitsDisabled:
+    """api.stocktwits.com answers every path with a Cloudflare challenge (403)."""
+
+    def test_disabled_source_is_never_polled(self, monkeypatch):
+        calls: list[str] = []
+
+        def _record(req, timeout=15):  # noqa: ARG001
+            calls.append(req.full_url)
+            raise AssertionError("StockTwits must not be polled while disabled")
+
+        monkeypatch.setattr("urllib.request.urlopen", _record)
+
+        payload = get_social_sentiment(
+            now_utc=dt.datetime(2026, 11, 14, 3, 0, tzinfo=dt.timezone.utc),
+            force_refresh=True,
+        )
+
+        assert calls == []
+        assert payload["provider"] == "stocktwits"
+        assert payload["available"] is False
+        assert payload["status"] == "unavailable"
+        assert "403" in payload["unavailable_reason"]
+        assert payload["score"] is None
+        assert payload["post_count"] == 0
+        assert payload["posts"] == []
+
+    def test_disabled_source_logs_no_per_ticker_warnings(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda *_a, **_k: (_ for _ in ()).throw(OSError("HTTP Error 403: Forbidden")),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="trader_koo.social_sentiment"):
+            get_social_sentiment(force_refresh=True)
+
+        assert [r.getMessage() for r in caplog.records] == []
+
+    def test_disabled_source_status_names_the_reason(self):
+        status = stocktwits_source_status()
+
+        assert status["status"] == "unavailable"
+        assert "Cloudflare" in status["reason"]
+        assert status["enable_env"] == "TRADER_KOO_STOCKTWITS_ENABLED"
