@@ -7,6 +7,9 @@ on:
       paths:
         description: "Space-separated Python sources to score instead of the PR diff"
         required: false
+      functions:
+        description: "With paths: space-separated mangled functions to score (x_name, xǁClassǁmethod)"
+        required: false
 
 concurrency:
   group: mutation-${{ github.ref }}
@@ -40,12 +43,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt -r requirements-mutation.txt
 
-      - name: Mutation-test Python modules changed in this PR
+      - name: Mutation-test the Python code this PR changed or its edited tests reach
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
           INPUT_PATHS: ${{ inputs.paths }}
+          INPUT_FUNCTIONS: ${{ inputs.functions }}
         run: |
-          if [ -n "$INPUT_PATHS" ]; then
+          if [ -n "$INPUT_PATHS" ] && [ -n "$INPUT_FUNCTIONS" ]; then
+            # shellcheck disable=SC2086
+            python ops/mutation_gate.py --paths $INPUT_PATHS --functions $INPUT_FUNCTIONS --threshold 80
+          elif [ -n "$INPUT_PATHS" ]; then
             # shellcheck disable=SC2086
             python ops/mutation_gate.py --paths $INPUT_PATHS --threshold 80
           else
