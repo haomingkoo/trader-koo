@@ -122,6 +122,35 @@ def test_description_or_help_on_other_calls_is_not_equivalent(mutated: str) -> N
     assert _equivalent(ARGPARSE_SOURCE, 4, mutated) is None
 
 
+MULTILINE_ARGPARSE = _src('''
+    def main():
+        p.add_argument(
+            "--n",
+            help="Count",
+        )
+        alert = Alert(
+            description="Stale",
+        )
+''')
+
+
+def _multiline(line: int, original: str, mutated: str):
+    mutant = gate.Mutant("pkg.a.x_f__mutmut_1", "survived", line, original, mutated)
+    return gate.equivalence("pkg/a.py", mutant, gate.SourceFacts.parse(MULTILINE_ARGPARSE), RULES)
+
+
+def test_removing_a_help_kwarg_on_its_own_line_is_equivalent() -> None:
+    assert _multiline(4, 'help="Count", | )', ")") is not None
+
+
+def test_removing_a_description_kwarg_from_another_call_is_not_equivalent() -> None:
+    assert _multiline(7, 'description="Stale", | )', ")") is None
+
+
+def test_multi_line_original_must_match_the_source_lines() -> None:
+    assert _multiline(3, 'help="Count", | )', ")") is None
+
+
 # --- log_calls and the explicit list ------------------------------------------
 
 LOG_SOURCE = _src('''

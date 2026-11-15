@@ -357,6 +357,9 @@ def test_stage_results_from_one_parser(mode, returncode, tail, expected) -> None
         ("full", 1, StageResults(True, False, False), "daily_update.sh rc=1; failed stages: yolo, report"),
         ("yolo", 1, StageResults(False, False, False), "daily_update.sh rc=1; failed stages: yolo, report"),
         ("report", 2, StageResults(False, False, False), "daily_update.sh rc=2; failed stages: report"),
+        ("full", 1, StageResults(False, False, False), "daily_update.sh rc=1; failed stages: ingest, yolo, report"),
+        # A non-zero exit after every stage finished still says so rather than listing nothing.
+        ("full", 3, StageResults(True, True, True), "daily_update.sh rc=3; failed stages: none recorded"),
     ],
 )
 def test_run_error_message_names_failed_stages(mode, returncode, stages, expected) -> None:

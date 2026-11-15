@@ -262,6 +262,34 @@ def test_exit_verdict_uses_totals_across_both_passes(tmp_path, monkeypatch, capl
     assert "Done run_id=r1 — ok=2 failed=4 skipped=5" in caplog.text
 
 
+def test_failed_run_reports_only_its_own_failure_reasons(tmp_path, monkeypatch, caplog) -> None:
+    db = _db(tmp_path)
+
+    def failing_pass(model, conn, *, run_id, timeframe, **kwargs):
+        rows = [(run_id, "AAA", "failed", "no bars"), (run_id, "BBB", "failed", "no bars"),
+                (run_id, "CCC", "timeout", "slow chart")]
+        rows += [("older-run", ticker, "failed", "stale reason") for ticker in ("DDD", "EEE", "FFF", "GGG")]
+        conn.executemany(
+            "INSERT INTO yolo_run_events (run_id,timeframe,ticker,status,reason) VALUES (?,?,?,?,?)",
+            [(rid, timeframe, ticker, status, reason) for rid, ticker, status, reason in rows],
+        )
+        return 0, 3, 0
+
+    monkeypatch.setattr(yolo, "load_hf_yolo", FakeModel)
+    monkeypatch.setattr(yolo, "_run_pass", failing_pass)
+    monkeypatch.setattr(torch, "load", torch.load)
+    monkeypatch.setattr(sys, "argv", ["run_yolo_patterns", "--db-path", str(db), "--run-id", "r1", "--timeframe", "daily"])
+
+    code = _exit_code()
+
+    assert code == 1
+    failure = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Run FAILED"))
+    assert failure == (
+        "Run FAILED run_id=r1: YOLO failed for 3/3 tickers, above the 10% limit; "
+        "top reasons: 2x no bars; 1x slow chart"
+    )
+
+
 def test_generated_run_id_uses_utc(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TZ", "Asia/Singapore")
     time.tzset()
