@@ -10,6 +10,26 @@ from trader_koo.crypto.models import CryptoBar
 
 LOG = logging.getLogger("trader_koo.crypto.storage")
 
+# The daily report holds the shared database's write lock for tens of seconds.
+CRYPTO_DB_BUSY_TIMEOUT_SEC = 30.0
+_MS_PER_SEC = 1000
+
+
+def connect_crypto_db(db_path: str) -> sqlite3.Connection:
+    """Open the shared database for crypto writes: WAL, and wait out other writers."""
+    conn = sqlite3.connect(db_path, timeout=CRYPTO_DB_BUSY_TIMEOUT_SEC)
+    conn.execute(f"PRAGMA busy_timeout={int(CRYPTO_DB_BUSY_TIMEOUT_SEC * _MS_PER_SEC)}")
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def is_lock_error(exc: BaseException) -> bool:
+    """True for SQLITE_BUSY / SQLITE_LOCKED: another writer, so retrying can succeed."""
+    return isinstance(exc, sqlite3.OperationalError) and getattr(exc, "sqlite_errorcode", None) in {
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_LOCKED,
+    }
+
 
 def ensure_crypto_schema(conn: sqlite3.Connection) -> None:
     """Create the crypto_bars table and index if they do not exist."""
@@ -39,18 +59,22 @@ def ensure_crypto_schema(conn: sqlite3.Connection) -> None:
 
 
 def save_bars(conn: sqlite3.Connection, bars: list[CryptoBar]) -> int:
-    """Batch insert bars, ignoring duplicates. Returns count inserted."""
+    """Insert bars in one transaction, ignoring duplicates. Returns rows inserted.
+
+    Raises ``sqlite3.Error`` with nothing written, so the caller decides
+    whether to keep the batch for a retry.
+    """
     if not bars:
         return 0
-    inserted = 0
-    for bar in bars:
-        try:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO crypto_bars
-                    (symbol, timestamp, interval, open, high, low, close, volume)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+    before = conn.total_changes
+    try:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO crypto_bars
+                (symbol, timestamp, interval, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
                 (
                     bar.symbol,
                     bar.timestamp.isoformat(),
@@ -60,12 +84,15 @@ def save_bars(conn: sqlite3.Connection, bars: list[CryptoBar]) -> int:
                     bar.low,
                     bar.close,
                     bar.volume,
-                ),
-            )
-            inserted += conn.total_changes  # approximate
-        except sqlite3.Error as exc:
-            LOG.error("Failed to insert crypto bar %s@%s: %s", bar.symbol, bar.timestamp, exc)
-    conn.commit()
+                )
+                for bar in bars
+            ],
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+    inserted = conn.total_changes - before
     LOG.debug("Saved %d crypto bars (from batch of %d)", inserted, len(bars))
     return inserted
 

@@ -463,15 +463,19 @@ def equivalence(path: str, mutant: Mutant, facts: SourceFacts, rules: dict) -> s
     original, mutated = mutant.original, mutant.mutated
     if original == mutated:
         return None
-    # Built-in rules read the source line, so they apply only when it is the mutated line.
-    line_matches = (mutant.line is not None and 0 < mutant.line <= len(facts.lines)
-                    and facts.lines[mutant.line - 1].strip() == original)
+    # Built-in rules read the source, so they apply only when the original text is
+    # exactly the source lines starting at the mutant's line (describe() joins lines with " | ").
+    parts = original.split(" | ")
+    span = set(range(mutant.line, mutant.line + len(parts))) if mutant.line else set()
+    line_matches = bool(span) and max(span) <= len(facts.lines) and all(
+        facts.lines[mutant.line - 1 + k].strip() == part for k, part in enumerate(parts)
+    )
     if line_matches:
-        if rules.get("sql_case") and _sql_case_only(mutant, facts):
+        if rules.get("sql_case") and len(parts) == 1 and _sql_case_only(mutant, facts):
             return "case-only edit inside a SQL statement; SQLite keywords and identifiers are case-insensitive"
-        if rules.get("log_calls") and mutant.line in facts.log_lines:
+        if rules.get("log_calls") and span <= facts.log_lines:
             return "only changes a logging call's arguments"
-        if (rules.get("help_text") and mutant.line in facts.argparse_lines
+        if (rules.get("help_text") and span <= facts.argparse_lines
                 and _without_doc_args(original) == _without_doc_args(mutated)):
             return "only changes argparse help or description text"
     for entry in rules.get("equivalent", []):
