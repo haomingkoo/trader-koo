@@ -570,9 +570,21 @@ def _report_for(price_date: str) -> dict[str, Any]:
 class TestReportStaleness:
     def test_report_weeks_old_is_stale_with_actual_date(self) -> None:
         notice = _report_staleness(_report_for("2026-10-30"), _INCIDENT_NOW)
-        assert notice is not None
-        assert "2026-10-30" in notice
-        assert "stale" in notice.lower()
+        assert notice == (
+            "Stale report: the latest report covers 2026-10-30 (generated 2026-10-30T22:40:00Z), "
+            "but 2026-11-11 or later was expected. Its setups are not shown as today's."
+        )
+
+    def test_stale_notice_without_generated_ts_says_unknown(self) -> None:
+        report = _report_for("2026-10-30")
+        del report["generated_ts"]
+        notice = _report_staleness(report, _INCIDENT_NOW)
+        assert notice is not None and "(generated unknown)" in notice
+
+    def test_price_date_with_a_time_part_is_read_as_its_date(self) -> None:
+        report = _report_for("2026-11-12")
+        report["latest_data"]["price_date"] = "2026-11-12T20:00:00Z"
+        assert _report_staleness(report, _INCIDENT_NOW) is None
 
     def test_report_for_expected_session_is_fresh(self) -> None:
         # At 00:00 UTC Fri 13 Nov the nightly run for Thu 12 Nov may still be
@@ -592,16 +604,17 @@ class TestReportStaleness:
         assert "2026-11-13" in notice
 
     def test_missing_report_is_explicit(self) -> None:
-        notice = _report_staleness({}, _INCIDENT_NOW)
-        assert notice is not None
-        assert "no published daily report" in notice.lower()
+        assert _report_staleness({}, _INCIDENT_NOW) == (
+            "No published daily report is available. Setups are not shown."
+        )
 
-    def test_report_without_market_date_is_explicit(self) -> None:
+    @pytest.mark.parametrize("latest_data", [{}, "2026-11-12", None])
+    def test_report_without_market_date_is_explicit(self, latest_data) -> None:
         report = _report_for("2026-11-12")
-        report["latest_data"] = {}
-        notice = _report_staleness(report, _INCIDENT_NOW)
-        assert notice is not None
-        assert "market date" in notice.lower()
+        report["latest_data"] = latest_data
+        assert _report_staleness(report, _INCIDENT_NOW) == (
+            "Latest report has no valid market date (got None). Setups are not shown."
+        )
 
     @patch("trader_koo.notifications.morning_summary._fetch_fear_greed", return_value=None)
     @patch("trader_koo.notifications.morning_summary._fetch_economic_events_today", return_value=[])

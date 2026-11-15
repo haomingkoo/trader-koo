@@ -11,7 +11,7 @@ from trader_koo.backend.routers import system
 from trader_koo.backend.services.pipeline import invalidate_status_cache
 from trader_koo.db.price_contract import record_price_series_revision
 from trader_koo.notifications.market_monitor import ensure_polymarket_schema
-from trader_koo.report.freshness import assess_data_freshness
+from trader_koo.report.freshness import assess_data_freshness, unsealed_price_tickers
 from trader_koo.scripts.run_yolo_patterns import ensure_yolo_run_events_table, ensure_yolo_table
 
 # Friday 17:00 New York, one hour after the close.
@@ -94,6 +94,7 @@ def test_current_sources_are_fresh() -> None:
     verdict = assess_data_freshness(_db(), NOW)
 
     assert verdict.price_date == LATEST_SESSION
+    assert verdict.fund_snapshot == _ts(NOW - dt.timedelta(hours=1))
     assert verdict.price_age_days is not None and verdict.price_age_days < 1
     assert (verdict.price_missing, verdict.price_stale) == (False, False)
     assert (verdict.fund_missing, verdict.fund_stale) == (False, False)
@@ -110,8 +111,17 @@ def test_four_day_old_prices_are_stale() -> None:
     assert verdict.price_missing is False
 
 
+def test_prices_exactly_three_days_old_are_not_yet_stale() -> None:
+    one_hour_earlier = NOW - dt.timedelta(hours=1)  # the 16:00 New York close
+    verdict = assess_data_freshness(_db(price_date="2026-10-27"), one_hour_earlier)
+
+    assert verdict.price_age_days == 3.0
+    assert verdict.price_stale is False
+
+
 def test_fundamentals_boundary_is_48_hours() -> None:
     assert assess_data_freshness(_db(fund_age_hours=47), NOW).fund_stale is False
+    assert assess_data_freshness(_db(fund_age_hours=48), NOW).fund_stale is False
     assert assess_data_freshness(_db(fund_age_hours=49), NOW).fund_stale is True
 
 
@@ -122,6 +132,15 @@ def test_missing_sources_are_missing_not_stale() -> None:
     assert (verdict.price_missing, verdict.price_stale) == (True, False)
     assert (verdict.fund_missing, verdict.fund_stale) == (True, False)
     assert (verdict.yolo_missing, verdict.yolo_stale) == (True, False)
+    assert (verdict.price_date, verdict.fund_snapshot, verdict.yolo_coverage_ok) == (None, None, None)
+
+
+def test_without_revision_table_every_priced_ticker_is_unsealed() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE price_daily (ticker TEXT, date TEXT)")
+    conn.executemany("INSERT INTO price_daily VALUES (?, ?)", [("AAA", "d1"), ("AAA", "d2"), ("BBB", "d1")])
+
+    assert unsealed_price_tickers(conn) == {"AAA", "BBB"}
 
 
 def test_partial_yolo_coverage_is_stale_unless_ticker_is_excluded() -> None:
@@ -134,6 +153,38 @@ def test_partial_yolo_coverage_is_stale_unless_ticker_is_excluded() -> None:
     excused = assess_data_freshness(conn, NOW, yolo_excluded_tickers={"BBB"})
     assert excused.yolo_coverage_ok is True
     assert excused.yolo_stale is False
+
+
+def test_coverage_exactly_at_the_floor_is_current() -> None:
+    tickers = tuple(f"T{i:02d}" for i in range(10))
+
+    at_floor = assess_data_freshness(_db(tickers=tickers, yolo_tickers=tickers[:9]), NOW)
+    below = assess_data_freshness(_db(tickers=tickers, yolo_tickers=tickers[:8]), NOW)
+
+    assert (at_floor.yolo_coverage_ok, at_floor.yolo_stale) == (True, False)
+    assert (below.yolo_coverage_ok, below.yolo_stale) == (False, True)
+
+
+def test_coverage_is_ok_when_every_priced_ticker_is_excluded() -> None:
+    conn = _db(tickers=("AAA",))
+
+    verdict = assess_data_freshness(conn, NOW, yolo_excluded_tickers={"AAA"})
+
+    assert (verdict.yolo_coverage_ok, verdict.yolo_stale) == (True, False)
+
+
+def test_prices_are_dated_when_fundamentals_are_missing() -> None:
+    verdict = assess_data_freshness(_db(fund_age_hours=None), NOW)
+
+    assert verdict.price_date == LATEST_SESSION
+    assert (verdict.price_missing, verdict.fund_missing) == (False, True)
+
+
+def test_yolo_table_without_daily_rows_is_missing() -> None:
+    verdict = assess_data_freshness(_db(yolo_tickers=()), NOW)
+
+    assert verdict.yolo_as_of_date is None
+    assert (verdict.yolo_missing, verdict.yolo_stale, verdict.yolo_coverage_ok) == (True, False, False)
 
 
 def test_ok_run_event_counts_as_yolo_coverage() -> None:

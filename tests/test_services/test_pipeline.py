@@ -240,27 +240,28 @@ class TestReconcileStaleRunningRuns:
         assert result["reconciled"] == 0
         assert result["run_ids"] == []
 
-    def test_returns_dict_structure(self, tmp_path: Path):
+    def test_fails_only_running_runs_older_than_the_stale_limit(self, tmp_path: Path):
         db_file = tmp_path / "test.db"
-        conn = sqlite3.connect(str(db_file))
-        conn.execute("""
-            CREATE TABLE ingest_runs (
-                run_id TEXT PRIMARY KEY,
-                started_ts TEXT,
-                finished_ts TEXT,
-                status TEXT,
-                tickers_total INTEGER DEFAULT 0,
-                tickers_ok INTEGER DEFAULT 0,
-                tickers_failed INTEGER DEFAULT 0,
-                error_message TEXT
+        now = dt.datetime.now(dt.timezone.utc)
+        old = (now - dt.timedelta(hours=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fresh = (now - dt.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with sqlite3.connect(db_file) as conn:
+            conn.execute("""
+                CREATE TABLE ingest_runs (
+                    run_id TEXT PRIMARY KEY, started_ts TEXT, finished_ts TEXT, status TEXT,
+                    tickers_total INTEGER DEFAULT 0, tickers_ok INTEGER DEFAULT 0,
+                    tickers_failed INTEGER DEFAULT 0, error_message TEXT
+                )
+            """)
+            conn.executemany(
+                "INSERT INTO ingest_runs (run_id, started_ts, status, tickers_total, tickers_ok) VALUES (?,?,?,?,?)",
+                [("stale", old, "running", 10, 4), ("fresh", fresh, "running", 10, 0), ("done", old, "ok", 10, 10)],
             )
-        """)
-        conn.commit()
-        conn.close()
 
         with patch("trader_koo.backend.services.pipeline.DB_PATH", db_file):
             result = reconcile_stale_running_runs()
 
-        assert "checked" in result
-        assert "reconciled" in result
-        assert "run_ids" in result
+        assert result == {"checked": 2, "reconciled": 1, "run_ids": ["stale"]}
+        with sqlite3.connect(db_file) as conn:
+            rows = dict(conn.execute("SELECT run_id, status || ':' || tickers_failed FROM ingest_runs"))
+        assert rows == {"stale": "failed:6", "fresh": "running:0", "done": "ok:0"}
