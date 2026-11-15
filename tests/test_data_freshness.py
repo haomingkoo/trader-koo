@@ -145,6 +145,38 @@ def test_partial_yolo_coverage_is_stale_unless_ticker_is_excluded() -> None:
     assert excused.yolo_stale is False
 
 
+def test_coverage_exactly_at_the_floor_is_current() -> None:
+    tickers = tuple(f"T{i:02d}" for i in range(10))
+
+    at_floor = assess_data_freshness(_db(tickers=tickers, yolo_tickers=tickers[:9]), NOW)
+    below = assess_data_freshness(_db(tickers=tickers, yolo_tickers=tickers[:8]), NOW)
+
+    assert (at_floor.yolo_coverage_ok, at_floor.yolo_stale) == (True, False)
+    assert (below.yolo_coverage_ok, below.yolo_stale) == (False, True)
+
+
+def test_coverage_is_ok_when_every_priced_ticker_is_excluded() -> None:
+    conn = _db(tickers=("AAA",))
+
+    verdict = assess_data_freshness(conn, NOW, yolo_excluded_tickers={"AAA"})
+
+    assert (verdict.yolo_coverage_ok, verdict.yolo_stale) == (True, False)
+
+
+def test_prices_are_dated_when_fundamentals_are_missing() -> None:
+    verdict = assess_data_freshness(_db(fund_age_hours=None), NOW)
+
+    assert verdict.price_date == LATEST_SESSION
+    assert (verdict.price_missing, verdict.fund_missing) == (False, True)
+
+
+def test_yolo_table_without_daily_rows_is_missing() -> None:
+    verdict = assess_data_freshness(_db(yolo_tickers=()), NOW)
+
+    assert verdict.yolo_as_of_date is None
+    assert (verdict.yolo_missing, verdict.yolo_stale, verdict.yolo_coverage_ok) == (True, False, False)
+
+
 def test_ok_run_event_counts_as_yolo_coverage() -> None:
     conn = _db(tickers=("AAA", "BBB"), yolo_tickers=("AAA",))
     conn.execute(
