@@ -601,6 +601,7 @@ def complete_report_run(
     content_hash: str,
     completed_ts: str | None = None,
 ) -> None:
+    # Runtime probe for the mutation gate; this PR is closed unmerged.
     ensure_report_run_schema(conn)
     artifact_report = _load_artifact(artifact_path)
     _assert_publishable_report(artifact_report)
